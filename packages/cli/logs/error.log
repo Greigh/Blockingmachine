@@ -1,0 +1,37 @@
+2025-06-10 09:53:38 [31merror[39m: [31mImport failed: Cannot read properties of undefined (reading 'priority')[39m
+2025-06-10 09:54:21 [31merror[39m: [31mExport failed:[39m
+2025-06-10 09:55:59 [31merror[39m: [31mImport failed: Cannot read properties of undefined (reading 'priority')[39m
+2025-06-10 09:56:16 [31merror[39m: [31mImport failed: Cannot read properties of undefined (reading 'priority')[39m
+2025-06-10 09:56:56 [31merror[39m: [31mImport failed: Invalid configuration:[39m
+[31m  - sources.0.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.2.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.6.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.11.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.12.url: Invalid url[39m
+2025-06-10 09:56:56 [31merror[39m: [31mExport failed:[39m
+2025-06-10 09:58:21 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 09:58:58 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 10:01:11 [31merror[39m: [31mImport failed: Invalid configuration:[39m
+[31m  - sources.0.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.2.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.6.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.11.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+2025-06-10 10:02:55 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 10:04:55 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 10:07:54 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 10:08:57 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 10:10:38 [31merror[39m: [31m✗ EasyList: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: 'third-party' } ]" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:10:38 [31merror[39m: [31m✗ EasyPrivacy: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[\n' +[39m
+[31m  "  { type: 'script' },\n" +[39m
+[31m  "  { type: 'xmlhttprequest' },\n" +[39m
+[31m  '  {\n' +[39m
+[31m  "    type: 'domain',\n" +[39m
+[31m  "    domains: [ '~biletomat.pl', '~facebook.com', '~jobscore.com' ]\n" +[39m
+[31m  '  }\n' +[39m
+[31m  ']" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:10:39 [31merror[39m: [31m✗ AdGuard Base: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: 'third-party' } ]" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:10:39 [31merror[39m: [31m✗ AdGuard Mobile: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: 'domain', domains: [ '~not.dns' ] } ]" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:10:40 [31merror[39m: [31m✗ Fanboy Annoyance: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: '~stylesheet' } ]" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:10:46 [31merror[39m: [31m✗ AdGuard DNS Filter: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: 'important' } ]" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-11 22:52:16 [31merror[39m: [31m✗ Error processing AdGuard DNS Filter: Maximum call stack size exceeded[39m
+2025-06-11 22:52:16 [31merror[39m: [31m✗ Error processing Blockingmachine Rules: HTTP 404: Not Found[39m

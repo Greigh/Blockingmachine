@@ -1,0 +1,154 @@
+! Brave (brave.com) Browser Fixes
+@@||brave.com^$important
+! US Bank Fixes
+@@||tracking.sp.sofi.com^$important
+@@||usbank.com.ssl.d2.sc.omtrdc.net^$important
+@@||ally.tt.omtrdc.net^$important
+@@||ally.com.ssl.d1.sc.omtrdc.net^$important
+@@||analytics.chase.com^$important
+@@||smetrics.usbank.com^$important
+@@||zn6vxkyqywaf9f1t7-usbank.siteintercept.qualtrics.com^$important
+@@||usbank.demdex.net^$important
+@@||usbank-sync.quantummetric.com^$important
+! Roku Mobile App Fix
+@@||mobile.logs.roku.com^$important
+! Affiliate Linking Fixes
+@@||click.linksynergy.com^$important
+@@||ctrk.klclick1.com^$important
+@@||bestbuy.7tiv.net^$important
+@@||onelink.me^$important
+! Cellular Carrier Fixes
+@@||tmobile.sc.omtrdc.net^$important
+@@||verizontelecom.sc.omtrdc.net^$important
+@@||zn9nssxmv9itcz7nq-verizoncx.siteintercept.qualtrics.com^$important
+@@||sanalytics.verizon.com^$important
+@@||engage.vzw.com^$important
+@@||verizon.inq.com^$important
+! Google Cal Widget Fixes
+@@||reminders-pa.clients6.google.com^$important
+@@||calendar.google.com^$important
+@@||ssl.gstatic.com^$important
+! Home Depot App Fixes
+@@||homedepot.tt.omtrdc.net^$important
+@@||homedepot.com.ssl.d2.sc.omtrdc.net^$important
+@@||h-homedepot.online-metrix.net^$important
+@@||zn_42v6draxyafsjmv-homedepot.siteintercept.qualtrics.com^$important
+@@||customer.homedepot.com^$important
+@@||swasc.homedepot.com^$important
+! Amazon Fixes
+@@||aan.amazon.com^$important
+@@||aax-us-iad.amazon.com^$important
+@@||fls-na.amazon.com^$important
+@@||device-metrics-us-2.amazon.com^$important
+! FedEx Fixes
+@@||fedex.sc.omtrdc.net^$important
+@@||fedex.tt.omtrdc.net^$important
+||fedex.com/content/dam/fedex-com/visibility^$important
+! CVS App Fixes
+@@||cvshealth.tt.omtrdc.net^$important
+! Target Red Card Fixes
+@@||img9.target.com^$important
+! Plex TV Personal Analytics Fix
+@@||analytics.plex.tv^$important
+! Job Market Fixes
+@@||gdc.indeed.com^$important
+@@||click.appcast.io^$important
+! iOS/Android Redirect Fixes
+@@||smart.link^$important
+@@||r.bttn.io^$important
+@@||open.homey.app^$important
+! Trello Fixes
+@@||xp.atlassian.com^$important
+! GTA RP Fixes
+@@||echorp.net^$important
+@@||footprintdns.com^$important
+@@||cfx.re^$important
+@@||fivem.net^$important
+! TikTok Fix
+@@||tiktokv.us^$important
+! Discovery+ Loading Fixes
+@@||ssa.hgtv.com^$important
+@@||ssa.tlc.com^$important
+@@||ssa.foodnetwork.com^$important
+@@||*.akstat.io^$important
+@@||scripps.demdex.net^$important
+@@||receive.wmcdp.io^$important
+||s.skimresources.com^
+||cdn-magiclinks.trackonomics.net^
+! Paramount+ Fixes
+@@||saa.paramountplus.com^$important
+@@||saa.cbsi.com^$important
+@@||vod-gcs-cedexis.cbsaavideo.com^$important
+@@||cbsinteractive.hb.omtrdc.net^$important
+@@||tags.tiqcdn.com^$important
+@@||splice.amlg.io^$important
+@@||thumbnails.cbsig.net^$important
+@@||cbsi.com.ssl.sc.omtrdc.net^$important
+@@||vod-gcs-cedexis.cbsaavideo.com^$important
+! VS Code Fix
+@@||dc.services.visualstudio.com^$important
+! Random fixes on the Internet
+@@||yeggzb.clicks.mlsend.com^$important
+@@||servedby.flashtalking.com^$important
+@@||akamai.net^$important
+@@||mparticle.map.fastly.net^$important
+@@||auth.split.io^$important
+@@||app.engage.redhat.com^$important
+@@||js-agent.newrelic.com^$important
+@@||assets.adobedtm.com^$important
+@@||media.evolv.ai^$important
+@@||c.go-mpulse.net^$important
+@@||nexus.ensighten.com^$important
+@@||scripps.tt.omtrdc.net^$important
+@@||dc.services.visualstudio.com^$important
+@@||a46060.actonservice.com^$important
+! Hulu adblock
+||dpm.demdex.net^$important
+! Random Blocks
+twitch.tv##+js(vaft-ublock-origin)
+! Premium “Free” Photo Ads
+||plus.unsplash.com^$important
+||istockphoto.com^$important
+! iPhone Games Fix
+||ads-a.unity3d.com^$important
+! Admiral Anti-Adblock
+||credential.net^$important
+||decklibrary.com^$important
+! Allow Reverse DNS lookup
+@@||*.in-addr.arpa^$important
+! Unblock Focus Train Your Brain app
+@@||config.uca.cloud.unity3d.com^$important
+@@||cdp.cloud.unity3d.com^$important
+
+! Other Fixes (Not yet sorted)
+||api-us.temu.com^$important
+||images.psp.alert.ally.com^$important
+||email.snsrewards.steaknshake.com^$important
+||e.dhgate.com^$important
+@@||static.cloudflareinsights.com^$important
+@@||securemetrics.apple.com^$important
+||shutterstock.7eer.net^$important
+||image.shutterstock.com^$important
+@@||mobile.events.data.microsoft.com^$important
+@@||firebaselogging-pa.googleapis.com^$important
+@@||display.ravm.tv^$important
+@@||config.sdk.kochava.com^$important
+@@||browser-intake-datadoghq.com^$important
+||drivetime.hrzn-nxt.com^$important
+||servedby.flashtalking.com^$important
+||themes-service.sr.roku.com^$important
+||7e14d.v.fwmrm.net^$important
+||tvspix.com^$important
+||servetime.tvs-pix.com^$important
+@@||onelink.soundcloud.com^$important
+@@||eventlogger.soundcloud.com^$important
+@@||prodregistryv2.org^$important
+@@||sb.scorecardresearch.com^$important
+@@||api-v2.soundcloud.com^$important
+@@||bam.nr-data.net^$important
+@@||o4505708692307968.ingest.us.sentry.io^$important
+@@||bclog.usa.experian.com^$important
+@@||usa.experian.com^$important
+@@||eventbus.intuit.com^$important
+@@||static.wixstatic.com^$important
+@@||frog.wix.com^$important

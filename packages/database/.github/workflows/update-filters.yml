@@ -1,0 +1,53 @@
+name: Update Filter Lists
+
+on:
+  schedule:
+    # Run daily at 2pm EST (7pm UTC / 6pm UTC depending on DST)
+    - cron: '0 19 * * *' # 2pm EST (during Standard Time)
+    - cron: '0 18 * * *' # 2pm EST (during Daylight Time)
+  workflow_dispatch: # Allows manual trigger
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  update-filters:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run Blockingmachine update
+        run: npm start
+        env:
+          NODE_ENV: production
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name 'Blockingmachine Bot'
+          git config --global user.email 'bot@blockingmachine.dev'
+
+          # Add all filter files
+          git add filters/ README.md
+
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "🤖 Update filter lists - $(date +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi

@@ -1,0 +1,110 @@
+{
+  "name": "blockingmachine",
+  "version": "1.0.0-beta.7",
+  "description": "An application to generate filter lists for Adguard Home and more.",
+  "license": "BSD-3-Clause",
+  "main": ".webpack/main",
+  "icon": "assets/Blockingmachine.icns",
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "clean": "rimraf dist && rimraf .webpack && rimraf out && rimraf node_modules && npm install",
+    "rebuild": "node scripts/rebuild.js",
+    "build": "webpack --config webpack.main.config.cjs && webpack --config webpack.renderer.config.cjs",
+    "deploy": "cd ../core && npm run build && cd ../electron-app && npm run make",
+    "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix"
+  },
+  "author": {
+    "name": "Daniel Hipskind",
+    "email": "me@danielhipskind.com",
+    "url": "https://danielhipskind.com"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.10.2",
+    "@electron-forge/maker-deb": "^7.10.2",
+    "@electron-forge/maker-dmg": "^7.10.2",
+    "@electron-forge/maker-rpm": "^7.10.2",
+    "@electron-forge/maker-squirrel": "^7.10.2",
+    "@electron-forge/maker-zip": "^7.10.2",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.10.2",
+    "@electron-forge/plugin-webpack": "^7.10.2",
+    "@electron-forge/shared-types": "^7.10.2",
+    "@electron/rebuild": "^4.0.1",
+    "@electron/typescript-definitions": "^9.1.5",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "copy-webpack-plugin": "^13.0.1",
+    "css-loader": "^7.1.2",
+    "electron": "^39.2.6",
+    "esbuild": "^0.27.1",
+    "esbuild-register": "^3.6.0",
+    "html-webpack-plugin": "^5.6.5",
+    "path-browserify": "^1.0.1",
+    "process": "^0.11.10",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.5.4",
+    "ts-node": "^11.0.0-beta.1",
+    "typescript": "^5.9.3",
+    "util": "^0.12.5",
+    "webpack": "^5.103.0",
+    "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "@blockingmachine/core": "^1.0.0-beta.7",
+    "electron-devtools-installer": "^4.0.0",
+    "electron-is-dev": "^3.0.1",
+    "electron-log": "^5.4.3",
+    "electron-squirrel-startup": "^1.0.1",
+    "electron-store": "^11.0.2",
+    "electron-updater": "^6.6.2",
+    "fs-extra": "^11.3.2",
+    "graceful-fs": "^4.2.11",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "recharts": "^3.5.1",
+    "universalify": "^2.0.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/greigh/Blockingmachine.git"
+  },
+  "homepage": "https://github.com/greigh/Blockingmachine",
+  "bugs": {
+    "url": "https://github.com/greigh/Blockingmachine/issues"
+  },
+  "files": [
+    "dist",
+    "filters",
+    "README.md",
+    "LICENSE"
+  ],
+  "typeRoots": [
+    "./node_modules/@types",
+    "./src/types"
+  ],
+  "build": {
+    "appId": "com.blockingmachine.app",
+    "productName": "Blockingmachine",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "target": [
+        "dmg"
+      ],
+      "icon": "assets/Blockingmachine.icns",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "sign": true
+    },
+    "asarUnpack": [
+      "node_modules/electron-store/**/*"
+    ]
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "mongodb": {
+    "uri": "mongodb://localhost:27017/blockingmachine"
+  },
+  "output": {
+    "directory": "./filters/output"
+  },
+  "sources": [
+    {
+      "name": "EasyList",
+      "url": "https://easylist.to/easylist/easylist.txt",
+      "category": "advertising",
+      "enabled": true
+    },
+    {
+      "name": "EasyPrivacy",
+      "url": "https://easylist.to/easylist/easyprivacy.txt",
+      "category": "privacy",
+      "enabled": true
+    },
+    {
+      "name": "AdGuard Base",
+      "url": "https://filters.adtidy.org/extension/ublock/filters/2.txt",
+      "category": "advertising",
+      "enabled": true
+    },
+    {
+      "name": "AdGuard Mobile",
+      "url": "https://raw.githubusercontent.com/AdguardTeam/AdguardFilters/master/MobileFilter/sections/adservers.txt",
+      "category": "mobile",
+      "enabled": true
+    },
+    {
+      "name": "AWAvenue Ads",
+      "url": "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
+      "category": "mobile",
+      "enabled": true
+    },
+    {
+      "name": "Fanboy Annoyance",
+      "url": "https://secure.fanboy.co.nz/fanboy-annoyance.txt",
+      "category": "annoyances",
+      "enabled": true
+    },
+    {
+      "name": "GetAdmiral Domains",
+      "url": "https://raw.githubusercontent.com/LanikSJ/ubo-filters/main/filters/getadmiral-domains.txt",
+      "category": "advertising",
+      "enabled": true
+    },
+    {
+      "name": "AdGuard DNS Filter",
+      "url": "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt",
+      "category": "dns",
+      "enabled": true
+    },
+    {
+      "name": "AdAway Default Blocklist",
+      "url": "https://adguardteam.github.io/HostlistsRegistry/assets/filter_5.txt",
+      "category": "mobile",
+      "enabled": true
+    },
+    {
+      "name": "Game Console Adblock List",
+      "url": "https://adguardteam.github.io/HostlistsRegistry/assets/filter_45.txt",
+      "category": "gaming",
+      "enabled": true
+    },
+    {
+      "name": "Anti-Facebook List",
+      "url": "https://adguardteam.github.io/HostlistsRegistry/assets/filter_59.txt",
+      "category": "privacy",
+      "enabled": true
+    },
+    {
+      "name": "uBlock Origin Filters",
+      "url": "https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/filters.txt",
+      "category": "advertising",
+      "enabled": true
+    }
+  ]
+}
