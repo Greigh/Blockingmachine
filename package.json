@@ -1,6 +1,6 @@
 {
   "name": "blockingmachine",
-  "version": "1.0.0-beta.5",
+  "version": "1.0.0-beta.7",
   "description": "An application to generate filter lists for Adguard Home and more.",
   "license": "BSD-3-Clause",
   "main": ".webpack/main",
