@@ -1,0 +1,88 @@
+2025-06-10 09:53:38 [31merror[39m: [31mImport failed: Cannot read properties of undefined (reading 'priority')[39m
+2025-06-10 09:54:21 [31merror[39m: [31mExport failed:[39m
+2025-06-10 09:55:59 [31merror[39m: [31mImport failed: Cannot read properties of undefined (reading 'priority')[39m
+2025-06-10 09:56:16 [31merror[39m: [31mImport failed: Cannot read properties of undefined (reading 'priority')[39m
+2025-06-10 09:56:56 [31merror[39m: [31mImport failed: Invalid configuration:[39m
+[31m  - sources.0.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.2.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.6.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.11.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.12.url: Invalid url[39m
+2025-06-10 09:56:56 [31merror[39m: [31mExport failed:[39m
+2025-06-10 09:58:21 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 09:58:58 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 10:01:11 [31merror[39m: [31mImport failed: Invalid configuration:[39m
+[31m  - sources.0.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.2.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.6.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+[31m  - sources.11.category: Invalid enum value. Expected 'ADVERTISING' | 'TRACKING' | 'MALICIOUS' | 'SOCIAL' | 'UTILITY' | 'CUSTOM' | 'blockingmachine' | 'privacy' | 'security' | 'mobile' | 'gaming' | 'dns' | 'annoyances' | 'custom', received 'advertising'[39m
+2025-06-10 10:02:55 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 10:04:55 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 10:07:54 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 10:08:57 [31merror[39m: [31mInvalid category: ADVERTISING[39m
+2025-06-10 10:10:38 [31merror[39m: [31m✗ EasyList: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: 'third-party' } ]" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:10:38 [31merror[39m: [31m✗ EasyPrivacy: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[\n' +[39m
+[31m  "  { type: 'script' },\n" +[39m
+[31m  "  { type: 'xmlhttprequest' },\n" +[39m
+[31m  '  {\n' +[39m
+[31m  "    type: 'domain',\n" +[39m
+[31m  "    domains: [ '~biletomat.pl', '~facebook.com', '~jobscore.com' ]\n" +[39m
+[31m  '  }\n' +[39m
+[31m  ']" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:10:39 [31merror[39m: [31m✗ AdGuard Base: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: 'third-party' } ]" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:10:39 [31merror[39m: [31m✗ AdGuard Mobile: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: 'domain', domains: [ '~not.dns' ] } ]" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:10:40 [31merror[39m: [31m✗ Fanboy Annoyance: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: '~stylesheet' } ]" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:10:46 [31merror[39m: [31m✗ AdGuard DNS Filter: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: 'important' } ]" (type string) at path "modifiers.0" because of "CastError"[39m
+2025-06-10 10:21:10 [32minfo[39m: [32mStarting import process...[39m
+2025-06-10 10:21:10 [32minfo[39m: [32mProcessing source: EasyList[39m
+2025-06-10 10:21:14 [32minfo[39m: [32m✓ Successfully processed: EasyList[39m
+2025-06-10 10:21:14 [32minfo[39m: [32mProcessing source: EasyPrivacy[39m
+2025-06-10 10:21:17 [32minfo[39m: [32m✓ Successfully processed: EasyPrivacy[39m
+2025-06-10 10:21:17 [32minfo[39m: [32mProcessing source: AdGuard Base[39m
+2025-06-11 22:52:13 [32minfo[39m: [32mStarting import process...[39m
+2025-06-11 22:52:13 [32minfo[39m: [32mProcessing source: EasyList[39m
+2025-06-11 22:52:13 [32minfo[39m: [32mDownloading from: https://easylist.to/easylist/easylist.txt[39m
+2025-06-11 22:52:14 [32minfo[39m: [32m✓ Successfully processed: EasyList (49336 rules)[39m
+2025-06-11 22:52:14 [32minfo[39m: [32mProcessing source: EasyPrivacy[39m
+2025-06-11 22:52:14 [32minfo[39m: [32mDownloading from: https://easylist.to/easylist/easyprivacy.txt[39m
+2025-06-11 22:52:14 [32minfo[39m: [32m✓ Successfully processed: EasyPrivacy (53795 rules)[39m
+2025-06-11 22:52:14 [32minfo[39m: [32mProcessing source: AdGuard Base[39m
+2025-06-11 22:52:14 [32minfo[39m: [32mDownloading from: https://filters.adtidy.org/extension/ublock/filters/2.txt[39m
+2025-06-11 22:52:15 [32minfo[39m: [32m✓ Successfully processed: AdGuard Base (105507 rules)[39m
+2025-06-11 22:52:15 [32minfo[39m: [32mProcessing source: AdGuard Mobile[39m
+2025-06-11 22:52:15 [32minfo[39m: [32mDownloading from: https://raw.githubusercontent.com/AdguardTeam/AdguardFilters/master/MobileFilter/sections/adservers.txt[39m
+2025-06-11 22:52:15 [32minfo[39m: [32m✓ Successfully processed: AdGuard Mobile (914 rules)[39m
+2025-06-11 22:52:15 [32minfo[39m: [32mProcessing source: AWAvenue Ads[39m
+2025-06-11 22:52:15 [32minfo[39m: [32mDownloading from: https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt[39m
+2025-06-11 22:52:15 [32minfo[39m: [32m✓ Successfully processed: AWAvenue Ads (846 rules)[39m
+2025-06-11 22:52:15 [32minfo[39m: [32mProcessing source: Fanboy Annoyance[39m
+2025-06-11 22:52:15 [32minfo[39m: [32mDownloading from: https://secure.fanboy.co.nz/fanboy-annoyance.txt[39m
+2025-06-11 22:52:16 [32minfo[39m: [32m✓ Successfully processed: Fanboy Annoyance (23822 rules)[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mProcessing source: GetAdmiral Domains[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mDownloading from: https://raw.githubusercontent.com/LanikSJ/ubo-filters/main/filters/getadmiral-domains.txt[39m
+2025-06-11 22:52:16 [32minfo[39m: [32m✓ Successfully processed: GetAdmiral Domains (1772 rules)[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mProcessing source: AdGuard DNS Filter[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mDownloading from: https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt[39m
+2025-06-11 22:52:16 [31merror[39m: [31m✗ Error processing AdGuard DNS Filter: Maximum call stack size exceeded[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mProcessing source: AdAway Default Blocklist[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mDownloading from: https://adguardteam.github.io/HostlistsRegistry/assets/filter_5.txt[39m
+2025-06-11 22:52:16 [32minfo[39m: [32m✓ Successfully processed: AdAway Default Blocklist (42382 rules)[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mProcessing source: Game Console Adblock List[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mDownloading from: https://adguardteam.github.io/HostlistsRegistry/assets/filter_45.txt[39m
+2025-06-11 22:52:16 [32minfo[39m: [32m✓ Successfully processed: Game Console Adblock List (489 rules)[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mProcessing source: Anti-Facebook List[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mDownloading from: https://adguardteam.github.io/HostlistsRegistry/assets/filter_59.txt[39m
+2025-06-11 22:52:16 [32minfo[39m: [32m✓ Successfully processed: Anti-Facebook List (1382 rules)[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mProcessing source: uBlock Origin Filters[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mDownloading from: https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/filters.txt[39m
+2025-06-11 22:52:16 [32minfo[39m: [32m✓ Successfully processed: uBlock Origin Filters (6740 rules)[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mProcessing source: Blockingmachine Rules[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mDownloading from: https://raw.githubusercontent.com/danielhipskind/blockingmachine/main/filters/input/blockingmachine-rules.txt[39m
+2025-06-11 22:52:16 [31merror[39m: [31m✗ Error processing Blockingmachine Rules: HTTP 404: Not Found[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mSaved 286985 rules to: /Users/hipskind/Coding/Blockingmachine/packages/cli/filters/output/imported-rules.txt[39m
+2025-06-11 22:52:16 [32minfo[39m: [32mImport completed: 11/13 sources processed successfully[39m
+2025-06-11 22:52:36 [32minfo[39m: [32mStarting export process...[39m
+2025-06-11 22:52:36 [32minfo[39m: [32mLoaded 286985 rules from: /Users/hipskind/Coding/Blockingmachine/packages/cli/filters/output/imported-rules.txt[39m
+2025-06-11 22:52:36 [32minfo[39m: [32mExporting to: /Users/hipskind/Coding/Blockingmachine/packages/cli/filters/output[39m
+2025-06-11 22:52:36 [32minfo[39m: [32m✓ Generated adguard format: filter-list.txt[39m
+2025-06-11 22:52:36 [32minfo[39m: [32mExport completed successfully[39m

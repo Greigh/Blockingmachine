@@ -1,0 +1,55 @@
+# Development files
+src/
+tests/
+__tests__/
+coverage/
+.nyc_output/
+jest.config.js
+tsconfig.json
+tsconfig.*.json
+tsconfig.tsbuildinfo
+.eslintrc.js
+.eslintrc.json
+.eslintignore
+.prettierrc
+.prettierrc.js
+.prettier.config.js
+prettier.config.js
+.prettierignore
+.vscode/
+.idea/
+.editorconfig
+.huskyrc
+.huskyrc.js
+.lintstagedrc
+.lintstagedrc.js
+
+# GitHub specific files
+.github/
+CONTRIBUTING.md
+CHANGELOG.md
+.gitattributes
+
+# CI/CD configs
+.travis.yml
+.gitlab-ci.yml
+azure-pipelines.yml
+appveyor.yml
+.circleci/
+
+# Build artifacts
+*.tsbuildinfo
+*.tgz
+*.log
+*.tmp
+*.bak
+
+# Temporary files
+tmp/
+temp/
+
+# Misc
+.DS_Store
+Thumbs.db
+*.swp
+*~

@@ -1,0 +1,29 @@
+{
+  "name": "blockingmachine-database",
+  "version": "1.0.0-beta.7",
+  "type": "module",
+  "license": "BSD-3-Clause",
+  "description": "An application for GitHub to generate filter lists for Adguard Home and more.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Greigh/Blockingmachine-database.git"
+  },
+  "homepage": "https://github.com/Greigh/Blockingmachine-database",
+  "author": {
+    "name": "Daniel Hipskind aka Greigh",
+    "email": "me@danielhipskind.com",
+    "url": "https://danielhipskind.com"
+  },
+  "scripts": {
+    "start": "node scripts/update.js"
+  },
+  "dependencies": {
+    "@adguard/aglint": "^3.0.0",
+    "@blockingmachine/cli": "^1.0.0-beta.7",
+    "@blockingmachine/core": "^1.0.0-beta.7",
+    "dotenv": "^17.2.3"
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "name": "@blockingmachine/core",
+  "version": "1.0.0-beta.7",
+  "type": "module",
+  "author": {
+    "name": "Daniel Hipskind",
+    "email": "me@danielhipskind.com",
+    "url": "https://danielhipskind.com"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "license": "BSD-3-Clause",
+  "scripts": {
+    "build": "tsc --skipLibCheck",
+    "test": "node --experimental-vm-modules ../../node_modules/.bin/jest",
+    "type-check": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format-check": "prettier --check .",
+    "lint": "eslint . --ext .ts,.tsx",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run build",
+    "publish": "node ../../scripts/publish-npm.js core"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "adguard",
+    "filtering",
+    "blocking"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/greigh/Blockingmachine-core.git"
+  },
+  "bugs": {
+    "url": "https://github.com/greigh/Blockingmachine-core/issues"
+  },
+  "homepage": "https://github.com/greigh/Blockingmachine-core#readme",
+  "dependencies": {
+    "@adguard/aglint": "^3.0.0",
+    "chalk": "^5.6.2",
+    "debug": "^4.4.3",
+    "node-fetch": "^3.3.2",
+    "only": "^0.0.2",
+    "progress": "^2.0.3",
+    "winston": "^3.18.3"
+  },
+  "devDependencies": {
+    "@types/debug": "^4.1.12",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.10.1",
+    "@types/progress": "^2.0.7",
+    "@typescript-eslint/eslint-plugin": "^8.48.1",
+    "@typescript-eslint/parser": "^8.48.1",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "jest": "^30.2.0",
+    "prettier": "^3.7.4",
+    "rimraf": "^6.1.2",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.1"
+  },
+  "engines": {
+    "npm": ">=11.3.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "scope": "@blockingmachine"
+  }
+}
