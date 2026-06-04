@@ -21,9 +21,9 @@
     "start": "node scripts/update.js"
   },
   "dependencies": {
-    "@adguard/aglint": "^3.0.0",
+    "@adguard/aglint": "^3.0.2",
     "@blockingmachine/cli": "^1.0.0-beta.7",
     "@blockingmachine/core": "^1.0.0-beta.7",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.4.2"
   }
 }
