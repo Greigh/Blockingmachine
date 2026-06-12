@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/core",
-  "version": "1.0.0-beta.8",
+  "version": "1.0.0-beta.9",
   "type": "module",
   "author": {
     "name": "Daniel Hipskind",
@@ -23,8 +23,7 @@
     "format-check": "prettier --check .",
     "lint": "eslint . --ext .ts,.tsx",
     "clean": "rimraf dist",
-    "prepublishOnly": "npm run build",
-    "publish": "node ../../scripts/publish-npm.js core"
+    "prepublishOnly": "npm run build"
   },
   "files": [
     "dist",

@@ -1,6 +1,6 @@
 {
   "name": "blockingmachine-database",
-  "version": "1.0.0-beta.8",
+  "version": "1.0.0-beta.9",
   "type": "module",
   "license": "BSD-3-Clause",
   "description": "An application for GitHub to generate filter lists for Adguard Home and more.",
@@ -23,7 +23,7 @@
   "dependencies": {
     "@adguard/aglint": "^3.0.2",
     "@blockingmachine/cli": "^1.0.0-beta.8",
-    "@blockingmachine/core": "^1.0.0-beta.8",
+    "@blockingmachine/core": "^1.0.0-beta.9",
     "dotenv": "^17.4.2"
   },
   "allowScripts": {
