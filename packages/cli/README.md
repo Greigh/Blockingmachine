@@ -41,7 +41,7 @@ blockingmachine export adguard
 
 ## Timeline
 
-### Current Release (v1.0.0-beta.7)
+### Current Release (v1.0.0-beta.8)
 
 - 🚀 Full integration with @blockingmachine/core
 - 💪 TypeScript support
