@@ -1,6 +1,6 @@
 {
   "name": "blockingmachine",
-  "version": "1.0.0-beta.7",
+  "version": "1.0.0-beta.8",
   "description": "An application to generate filter lists for Adguard Home and more.",
   "license": "BSD-3-Clause",
   "main": ".webpack/main",
@@ -56,7 +56,7 @@
     "webpack-cli": "^7.0.3"
   },
   "dependencies": {
-    "@blockingmachine/core": "1.0.0-beta.7",
+    "@blockingmachine/core": "1.0.0-beta.8",
     "electron-devtools-installer": "^4.0.0",
     "electron-is-dev": "^3.0.1",
     "electron-log": "^5.4.4",
