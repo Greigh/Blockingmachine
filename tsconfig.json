@@ -1,19 +1,19 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
+    "module": "Node16",
     "lib": ["DOM", "DOM.Iterable", "ESNext"],
     "allowJs": true,
     "esModuleInterop": true,
     "strict": true,
     "skipLibCheck": true,
     "jsx": "react",
-    "moduleResolution": "node",
+    "moduleResolution": "node16",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": false,
-    "outDir": ".webpack",
-    "baseUrl": ".",
+    "outDir": "/.webpack",
+    "baseUrl": "./",
     "paths": {
       "*": ["node_modules/*"],
       "@/*": ["src/*"]
