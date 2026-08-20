@@ -35,3 +35,6 @@
 2025-06-10 10:10:46 [31merror[39m: [31m✗ AdGuard DNS Filter: Rule validation failed: variants.0.modifiers.0: Cast to [string] failed for value "[ { type: 'important' } ]" (type string) at path "modifiers.0" because of "CastError"[39m
 2025-06-11 22:52:16 [31merror[39m: [31m✗ Error processing AdGuard DNS Filter: Maximum call stack size exceeded[39m
 2025-06-11 22:52:16 [31merror[39m: [31m✗ Error processing Blockingmachine Rules: HTTP 404: Not Found[39m
+2026-06-12 19:05:23 [31merror[39m: [31m✗ Error processing AdGuard Base: Maximum call stack size exceeded[39m
+2026-06-12 19:05:23 [31merror[39m: [31m✗ Error processing AdGuard DNS Filter: Maximum call stack size exceeded[39m
+2026-06-12 19:05:24 [31merror[39m: [31m✗ Error processing Blockingmachine Rules: HTTP 404: Not Found[39m
