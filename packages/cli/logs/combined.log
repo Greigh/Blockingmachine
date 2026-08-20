@@ -86,3 +86,50 @@
 2025-06-11 22:52:36 [32minfo[39m: [32mExporting to: /Users/hipskind/Coding/Blockingmachine/packages/cli/filters/output[39m
 2025-06-11 22:52:36 [32minfo[39m: [32m✓ Generated adguard format: filter-list.txt[39m
 2025-06-11 22:52:36 [32minfo[39m: [32mExport completed successfully[39m
+2026-06-12 19:05:22 [32minfo[39m: [32mStarting import process...[39m
+2026-06-12 19:05:22 [32minfo[39m: [32mProcessing source: EasyList[39m
+2026-06-12 19:05:22 [32minfo[39m: [32mDownloading from: https://easylist.to/easylist/easylist.txt[39m
+2026-06-12 19:05:22 [32minfo[39m: [32m✓ Successfully processed: EasyList (68583 rules)[39m
+2026-06-12 19:05:22 [32minfo[39m: [32mProcessing source: EasyPrivacy[39m
+2026-06-12 19:05:22 [32minfo[39m: [32mDownloading from: https://easylist.to/easylist/easyprivacy.txt[39m
+2026-06-12 19:05:22 [32minfo[39m: [32m✓ Successfully processed: EasyPrivacy (55419 rules)[39m
+2026-06-12 19:05:22 [32minfo[39m: [32mProcessing source: AdGuard Base[39m
+2026-06-12 19:05:22 [32minfo[39m: [32mDownloading from: https://filters.adtidy.org/extension/ublock/filters/2.txt[39m
+2026-06-12 19:05:23 [31merror[39m: [31m✗ Error processing AdGuard Base: Maximum call stack size exceeded[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mProcessing source: AdGuard Mobile[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mDownloading from: https://raw.githubusercontent.com/AdguardTeam/AdguardFilters/master/MobileFilter/sections/adservers.txt[39m
+2026-06-12 19:05:23 [32minfo[39m: [32m✓ Successfully processed: AdGuard Mobile (986 rules)[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mProcessing source: AWAvenue Ads[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mDownloading from: https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt[39m
+2026-06-12 19:05:23 [32minfo[39m: [32m✓ Successfully processed: AWAvenue Ads (911 rules)[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mProcessing source: Fanboy Annoyance[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mDownloading from: https://secure.fanboy.co.nz/fanboy-annoyance.txt[39m
+2026-06-12 19:05:23 [32minfo[39m: [32m✓ Successfully processed: Fanboy Annoyance (25779 rules)[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mProcessing source: GetAdmiral Domains[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mDownloading from: https://raw.githubusercontent.com/LanikSJ/ubo-filters/main/filters/getadmiral-domains.txt[39m
+2026-06-12 19:05:23 [32minfo[39m: [32m✓ Successfully processed: GetAdmiral Domains (1684 rules)[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mProcessing source: AdGuard DNS Filter[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mDownloading from: https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt[39m
+2026-06-12 19:05:23 [31merror[39m: [31m✗ Error processing AdGuard DNS Filter: Maximum call stack size exceeded[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mProcessing source: AdAway Default Blocklist[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mDownloading from: https://adguardteam.github.io/HostlistsRegistry/assets/filter_5.txt[39m
+2026-06-12 19:05:23 [32minfo[39m: [32m✓ Successfully processed: AdAway Default Blocklist (59281 rules)[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mProcessing source: Game Console Adblock List[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mDownloading from: https://adguardteam.github.io/HostlistsRegistry/assets/filter_45.txt[39m
+2026-06-12 19:05:23 [32minfo[39m: [32m✓ Successfully processed: Game Console Adblock List (917 rules)[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mProcessing source: Anti-Facebook List[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mDownloading from: https://adguardteam.github.io/HostlistsRegistry/assets/filter_59.txt[39m
+2026-06-12 19:05:23 [32minfo[39m: [32m✓ Successfully processed: Anti-Facebook List (1110 rules)[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mProcessing source: uBlock Origin Filters[39m
+2026-06-12 19:05:23 [32minfo[39m: [32mDownloading from: https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/filters.txt[39m
+2026-06-12 19:05:24 [32minfo[39m: [32m✓ Successfully processed: uBlock Origin Filters (6142 rules)[39m
+2026-06-12 19:05:24 [32minfo[39m: [32mProcessing source: Blockingmachine Rules[39m
+2026-06-12 19:05:24 [32minfo[39m: [32mDownloading from: https://raw.githubusercontent.com/greigh/blockingmachine/main/filters/input/blockingmachine-rules.txt[39m
+2026-06-12 19:05:24 [31merror[39m: [31m✗ Error processing Blockingmachine Rules: HTTP 404: Not Found[39m
+2026-06-12 19:05:24 [32minfo[39m: [32mSaved 220812 rules to: /Users/hipskind/Coding/Blockingmachine/packages/cli/filters/output/imported-rules.txt[39m
+2026-06-12 19:05:24 [32minfo[39m: [32mImport completed: 10/13 sources processed successfully[39m
+2026-06-12 19:05:33 [32minfo[39m: [32mStarting export process...[39m
+2026-06-12 19:05:33 [32minfo[39m: [32mLoaded 220812 rules from: /Users/hipskind/Coding/Blockingmachine/packages/cli/filters/output/imported-rules.txt[39m
+2026-06-12 19:05:33 [32minfo[39m: [32mExporting to: /Users/hipskind/Coding/Blockingmachine/packages/cli/filters/output[39m
+2026-06-12 19:05:33 [32minfo[39m: [32m✓ Generated adguard format: filter-list.txt[39m
+2026-06-12 19:05:33 [32minfo[39m: [32mExport completed successfully[39m

@@ -37,7 +37,7 @@
     "@types/progress": "^2.0.7",
     "jest": "^30.4.2",
     "ts-jest": "^29.4.11",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "build": {
     "publish": {
@@ -64,8 +64,12 @@
     "LICENSE"
   ],
   "allowScripts": {
-    "core-js-pure@3.49.0": true,
+    "core-js-pure@3.50.0": true,
     "fsevents@2.3.3": true,
-    "unrs-resolver@1.12.2": true
+    "unrs-resolver@1.12.2": true,
+    "electron-winstaller@5.4.4": true,
+    "esbuild@0.28.1": true,
+    "fs-xattr@0.3.1": true,
+    "macos-alias@0.2.12": true
   }
 }
