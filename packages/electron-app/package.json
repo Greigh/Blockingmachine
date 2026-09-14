@@ -1,5 +1,5 @@
 {
-  "name": "blockingmachine",
+  "name": "@blockingmachine/electron-app",
   "version": "1.0.0-beta.9",
   "description": "An application to generate filter lists for Adguard Home and more.",
   "license": "BSD-3-Clause",
@@ -10,12 +10,12 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
-    "clean": "rimraf dist && rimraf .webpack && rimraf out && rimraf node_modules && npm install",
+    "clean": "rimraf dist .webpack out node_modules",
     "rebuild": "node scripts/rebuild.js",
     "build": "webpack --config webpack.main.config.cjs && webpack --config webpack.renderer.config.cjs",
-    "deploy": "cd ../core && npm run build && cd ../electron-app && npm run make",
-    "lint": "eslint . --ext .ts,.tsx",
-    "lint:fix": "eslint . --ext .ts,.tsx --fix"
+    "deploy": "npm run build --workspace=@blockingmachine/core && npm run make",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "author": {
     "name": "Daniel Hipskind",
@@ -24,49 +24,31 @@
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",
-    "@electron-forge/maker-deb": "^7.11.2",
     "@electron-forge/maker-dmg": "^7.11.2",
-    "@electron-forge/maker-rpm": "^7.11.2",
-    "@electron-forge/maker-squirrel": "^7.11.2",
-    "@electron-forge/maker-zip": "^7.11.2",
-    "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
-    "@electron-forge/plugin-webpack": "7.11.2",
+    "@electron-forge/plugin-webpack": "^7.11.2",
     "@electron-forge/shared-types": "^7.11.2",
     "@electron/rebuild": "^4.2.0",
-    "@electron/typescript-definitions": "^9.2.0",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "copy-webpack-plugin": "^14.0.0",
     "css-loader": "^7.1.4",
     "electron": "^43.4.1",
-    "esbuild": "^0.28.2",
-    "esbuild-register": "^3.6.0",
+    "electron-devtools-installer": "^4.0.0",
     "html-webpack-plugin": "^5.6.8",
-    "path-browserify": "^1.0.1",
-    "process": "^0.11.10",
+    "rimraf": "^6.1.3",
     "style-loader": "^4.0.0",
     "ts-loader": "^9.6.2",
-    "ts-node": "^11.0.0-beta.1",
-    "typescript": "^7.0.2",
-    "util": "^0.12.5",
+    "typescript": "~5.8.2",
     "webpack": "^5.109.2",
     "webpack-cli": "^7.2.2"
   },
   "dependencies": {
     "@blockingmachine/core": "^1.0.0-beta.9",
-    "electron-devtools-installer": "^4.0.0",
     "electron-is-dev": "^3.0.1",
-    "electron-log": "^5.4.4",
-    "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^11.0.2",
-    "electron-updater": "^6.8.9",
-    "fs-extra": "^11.4.0",
-    "graceful-fs": "^4.2.11",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "recharts": "^3.10.1",
-    "universalify": "^2.0.1"
+    "recharts": "^3.10.1"
   },
   "repository": {
     "type": "git",
@@ -106,15 +88,5 @@
     "asarUnpack": [
       "node_modules/electron-store/**/*"
     ]
-  },
-  "allowScripts": {
-    "core-js-pure@3.49.0": true,
-    "electron-winstaller@5.4.0": true,
-    "esbuild@0.28.1": true,
-    "fs-xattr@0.3.1": true,
-    "macos-alias@0.2.12": true,
-    "uglifyjs-webpack-plugin@0.4.6": true,
-    "es5-ext@0.10.64": true,
-    "fsevents@2.3.3": true
   }
 }

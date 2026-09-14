@@ -1,4 +1,4 @@
-import { loadConfig } from "../lib/config.ts";
+import { loadConfig } from "../lib/config.js";
 
 describe("loadConfig", () => {
   it("should load and validate config", async () => {

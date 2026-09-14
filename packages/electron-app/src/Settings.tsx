@@ -52,6 +52,18 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
     loadSavePath();
   }, []);
 
+  const handleExternalLink = async (
+    e: React.MouseEvent<HTMLAnchorElement, MouseEvent>,
+    url: string
+  ) => {
+    e.preventDefault();
+    try {
+      await window.electron.openExternal(url);
+    } catch (error) {
+      console.error('Failed to open link:', error);
+    }
+  };
+
   const handleFormatChange = async (
     e: React.ChangeEvent<HTMLSelectElement>
   ) => {
@@ -60,27 +72,45 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
     setIsSavingFormat(true);
 
     try {
-      await window.electron.setExportFormat(format);
+      const res = await window.electron.setExportFormat(format);
+      if (res && !res.success) {
+        throw new Error(res.error || 'Failed to save format');
+      }
       showTemporaryMessage('Format updated successfully', 'success', setFormatMessage);
     } catch (error) {
       console.error('Error saving format:', error);
-      showTemporaryMessage('Failed to save format', 'error', setFormatMessage);
+      const msg = error instanceof Error ? error.message : 'Failed to save format';
+      showTemporaryMessage(msg, 'error', setFormatMessage);
     } finally {
       setIsSavingFormat(false);
     }
   };
 
   const handlePathChange = async () => {
-    const selectedPath = await window.electron.selectSavePath();
-    if (selectedPath && typeof selectedPath === 'string') {
-      setSavePath(selectedPath);
-      await window.electron.setSavePath(selectedPath);
-      setPathMessage('Path updated successfully!');
+    setIsSavingPath(true);
+    try {
+      const selectedPath = await window.electron.selectSavePath();
+      if (selectedPath && typeof selectedPath === 'string') {
+        setSavePath(selectedPath);
+        const res = await window.electron.setSavePath(selectedPath);
+        if (res && !res.success) {
+          throw new Error(res.error || 'Failed to set save path');
+        }
+        setPathMessage('Path updated successfully!');
+        setTimeout(() => {
+          setPathMessage('');
+        }, 3000);
+      } else {
+        setPathMessage('No path selected.');
+      }
+    } catch (error) {
+      console.error('Error saving path:', error);
+      setPathMessage('Failed to update save path.');
       setTimeout(() => {
         setPathMessage('');
       }, 3000);
-    } else {
-      setPathMessage('No path selected.');
+    } finally {
+      setIsSavingPath(false);
     }
   };
 
@@ -283,8 +313,8 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
                 </svg>
               </span>
               <a
-                href="https://danielhipskind.com"
-                target="_blank"
+                href="#"
+                onClick={(e) => handleExternalLink(e, 'https://danielhipskind.com')}
                 rel="noopener noreferrer"
               >
                 danielhipskind.com
@@ -301,8 +331,8 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
                 </svg>
               </span>
               <a
-                href="https://github.com/greigh/blockingmachine"
-                target="_blank"
+                href="#"
+                onClick={(e) => handleExternalLink(e, 'https://github.com/greigh/blockingmachine')}
                 rel="noopener noreferrer"
               >
                 github.com/greigh/blockingmachine
@@ -319,8 +349,8 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
                 </svg>
               </span>
               <a
-                href="https://twitter.com/danielhipskind_"
-                target="_blank"
+                href="#"
+                onClick={(e) => handleExternalLink(e, 'https://twitter.com/danielhipskind_')}
                 rel="noopener noreferrer"
               >
                 @danielhipskind_
@@ -340,8 +370,8 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
                 </svg>
               </span>
               <a
-                href="https://mastodon.social/@danielhipskind"
-                target="_blank"
+                href="#"
+                onClick={(e) => handleExternalLink(e, 'https://mastodon.social/@danielhipskind')}
                 rel="me noopener noreferrer"
               >
                 @danielhipskind@mastodon.social
@@ -363,8 +393,8 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
                 </svg>
               </span>
               <a
-                href="https://bsky.app/profile/danielhipskind"
-                target="_blank"
+                href="#"
+                onClick={(e) => handleExternalLink(e, 'https://bsky.app/profile/danielhipskind')}
                 rel="noopener noreferrer"
               >
                 @danielhipskind.com
@@ -392,7 +422,12 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
                   />
                 </svg>
               </span>
-              <a href="mailto:me@danielhipskind.com">me@danielhipskind.com</a>
+              <a
+                href="#"
+                onClick={(e) => handleExternalLink(e, 'mailto:me@danielhipskind.com')}
+              >
+                me@danielhipskind.com
+              </a>
             </li>
           </ul>
         </div>

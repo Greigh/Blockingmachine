@@ -1,4 +1,4 @@
-import { defaultFilterMeta } from "../config/meta.ts";
+import { defaultFilterMeta } from "../config/meta.js";
 
 describe("defaultFilterMeta", () => {
   test("exports required fields", () => {

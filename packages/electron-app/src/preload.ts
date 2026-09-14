@@ -1,24 +1,24 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 import type { FilterSource, ThemeType, FilterFormat } from './types/index';
-import type { UpdateInfo, ProcessProgress, UpdateProgress } from './types/index';
+import type { UpdateInfo, ProcessProgress, UpdateProgress, ProcessingResult } from './types/index';
 
 // Define the API type
 interface ElectronAPI {
   getFilterSources: () => Promise<FilterSource[]>;
-  setFilterSources: (sources: FilterSource[]) => Promise<void>;
+  setFilterSources: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
   getSources: () => Promise<FilterSource[]>;
-  setSources: (sources: FilterSource[]) => Promise<void>;
+  setSources: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
   saveSources: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
   getCustomRules: () => Promise<string>;
-  setCustomRules: (rules: string) => Promise<void>;
+  setCustomRules: (rules: string) => Promise<{ success: boolean; error?: string }>;
   getSavePath: () => Promise<string>;
-  setSavePath: (path: string) => Promise<void>;
+  setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;
   selectSavePath: () => Promise<string>;
   getExportFormat: () => Promise<FilterFormat>;
   setExportFormat: (format: FilterFormat) => Promise<{ success: boolean; error?: string }>;
   getTheme: () => Promise<ThemeType>;
-  setTheme: (theme: ThemeType) => Promise<void>;
+  setTheme: (theme: ThemeType) => Promise<{ success: boolean; error?: string }>;
   onUpdateAvailable: (callback: (event: IpcRendererEvent, info: UpdateInfo) => void) => void;
   onUpdateDownloaded: (callback: (event: IpcRendererEvent, info: UpdateInfo) => void) => void;
   onUpdateError: (callback: (event: IpcRendererEvent, error: Error) => void) => void;
@@ -28,18 +28,18 @@ interface ElectronAPI {
   onUpdateProgress: (callback: (progress: UpdateProgress) => void) => void;
   getLastProcessTime: () => Promise<string>;
   notifyResize: (width: number, height: number) => void;
-  runImportProcess: () => Promise<void>;
+  runImportProcess: () => Promise<ProcessingResult>;
   on: (channel: string, listener: (...args: any[]) => void) => void;
   receive: (channel: string, callback: (...args: unknown[]) => void) => void;
   removeAllListeners: (channel: string) => void;
   showItemInFolder: (path: string) => void;
-  openExternal: (url: string) => Promise<void>;
+  openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 // Expose the API to the renderer process
 contextBridge.exposeInMainWorld('electron', {
-  getFilterSources: () => ipcRenderer.invoke('get-filter-sources') as Promise<FilterSource[]>,
-  setFilterSources: (sources: FilterSource[]) => ipcRenderer.invoke('set-filter-sources', sources),
+  getFilterSources: () => ipcRenderer.invoke('get-sources') as Promise<FilterSource[]>,
+  setFilterSources: (sources: FilterSource[]) => ipcRenderer.invoke('save-sources', sources),
   getSources: () => ipcRenderer.invoke('get-sources') as Promise<FilterSource[]>,
   setSources: (sources: FilterSource[]) => ipcRenderer.invoke('save-sources', sources),
   saveSources: (sources: FilterSource[]) => ipcRenderer.invoke('save-sources', sources),

@@ -1,6 +1,6 @@
 export async function loadStore() {
   try {
-    const Store = require('electron-store');
+    const { default: Store } = await import('electron-store');
     return new Store();
   } catch (error) {
     console.error('Failed to load electron-store:', error);

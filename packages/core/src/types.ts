@@ -9,21 +9,22 @@ export type SupportedFormat =
   | "abp"
   | "all";
 
-// Add the missing properties to the interface
 export interface FilterListMetadata {
   title: string;
   description: string;
   homepage: string;
   version: string;
   lastUpdated: string;
-
-  // Add these new properties
+  expires?: string;
+  author?: string;
   license?: string;
   generatorVersion?: string;
   stats?: {
     totalRules?: number;
+    uniqueRules?: number;
     blockingRules?: number;
     exceptionRules?: number;
+    duplicatesRemoved?: number;
   };
 }
 

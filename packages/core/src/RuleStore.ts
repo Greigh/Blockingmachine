@@ -1,7 +1,6 @@
 import { createRuleMetadata } from "./createMetadata.js";
 import { RuleProcessor } from "./RuleProcessor.js";
 import crypto from "crypto";
-import { performance } from "perf_hooks";
 
 // --- Base Types ---
 export type RuleType =
@@ -211,6 +210,7 @@ export class RuleStore {
         originalRule: originalRule,
         hash: ruleHash,
         type: type as RuleType,
+        domain: metadata.domain || undefined,
         metadata: {
           sources: metadata.sources || [],
           dateAdded: new Date(),
@@ -446,6 +446,7 @@ export class RuleStore {
       originalRule,
       hash: ruleHash,
       type: type,
+      domain: (isHashKey ? undefined : key) || metadata.domain || undefined,
       metadata: {
         sources: metadata.sources || [],
         dateAdded: new Date(),

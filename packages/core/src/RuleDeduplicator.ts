@@ -61,7 +61,6 @@ export class RuleDeduplicator {
   stripRule(rule: string | null | undefined): string {
     if (!rule) return "";
     try {
-      const originalRule = rule;
       let stripped = rule;
       const isException = stripped.startsWith("@@");
       if (isException) {
