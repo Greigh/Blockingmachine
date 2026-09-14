@@ -7,7 +7,6 @@ import { performance } from "perf_hooks";
 import {
   RuleStore,
   RuleClassificationType,
-  type RuleMetadata,
   type StoredRule,
   type RuleType,
 } from "./RuleStore.js";
@@ -16,7 +15,7 @@ import { createRuleMetadata } from "./createMetadata.js";
 
 // --- Regex Definitions ---
 const IPV4_REGEX = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
-const DOMAIN_REGEX =
+const _DOMAIN_REGEX =
   /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
 const DOMAIN_OR_WILDCARD_REGEX =
   /^(\*\.)?[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
@@ -77,7 +76,7 @@ const BROWSER_ONLY_MODIFIERS = new Set([
   "object-subrequest",
   "webrtc",
 ]);
-const SHARED_MODIFIERS = new Set([
+const _SHARED_MODIFIERS = new Set([
   "important",
   "badfilter",
   "denyallow",
@@ -159,6 +158,7 @@ export function parseFilterList(
         hash: "",
         type: ruleType as RuleType,
         isException: trimmedLine.startsWith("@@"),
+        domain: metadata.domain || undefined,
         metadata,
       });
     }
@@ -413,7 +413,7 @@ export class RuleProcessor {
     console.log(`   Fetched in ${(fetchEndTime - startTime).toFixed(2)} ms`);
 
     const lines = content.split("\n");
-    const filterMetadata = this.extractFilterMetadata(lines) || {
+    const _filterMetadata = this.extractFilterMetadata(lines) || {
       name: sourceName,
       sources: [sourceName],
     };
@@ -421,9 +421,7 @@ export class RuleProcessor {
     let processedCount = 0;
     let skippedCount = 0;
     let unrecognizedCount = 0;
-    let lintErrorCount = 0;
     const MAX_UNRECOGNIZED_LOG = 5;
-    const MAX_LINT_ERROR_LOG = 10;
 
     for (const line of lines) {
       const cleanRule = line.trim().replace(/\r$/, "");

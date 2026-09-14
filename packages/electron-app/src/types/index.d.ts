@@ -16,9 +16,12 @@ export interface ElectronStore<T extends Record<string, any>> {
 export type { default as Store } from 'electron-store';
 
 // Re-export types from core
-export type { RuleType, FilterListMetadata } from '@blockingmachine/core';
-export type StoredRule = CoreStoredRule;
-export type FilterFormat = CoreFilterFormat;
+export type {
+  RuleType,
+  FilterListMetadata,
+  StoredRule,
+  FilterFormat,
+} from '@blockingmachine/core';
 export type ThemeType = 'light' | 'dark' | 'system';
 
 // Add ProcessingResult interface

@@ -1,7 +1,6 @@
 import fetch, { RequestInfo, RequestInit, Response } from "node-fetch";
 import { promises as fs } from "fs";
 import path from "path";
-import { dirname } from "path";
 
 // --- Determine Base Directory ---
 const getDirname = () => {

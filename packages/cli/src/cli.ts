@@ -78,8 +78,7 @@ program
       });
     } catch (error) {
       logger.error(
-        "Export failed:",
-        error instanceof Error ? error.message : String(error),
+        `Export failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       process.exit(1);
     }
@@ -95,7 +94,9 @@ program
       const cmd = new ImportCommand({ config, logger });
       await cmd.execute({ force: Boolean(cmdOptions.force) });
     } catch (error) {
-      logger.error("Import failed:", error);
+      logger.error(
+        `Import failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       process.exit(1);
     }
   });
@@ -108,13 +109,21 @@ program
     try {
       const config = await loadConfig();
       const cmd = new ValidateCommand({ config, logger });
-      await cmd.execute({
+      const result = await cmd.execute({
         verbose: Boolean(cmdOptions.verbose),
       });
+      if (result.success) {
+        logger.info(result.message);
+        if (cmdOptions.verbose && result.data) {
+          logger.info(JSON.stringify(result.data, null, 2));
+        }
+      } else {
+        logger.error(result.message);
+        process.exit(1);
+      }
     } catch (error) {
       logger.error(
-        "Validation failed:",
-        error instanceof Error ? error.message : String(error),
+        `Validation failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       process.exit(1);
     }

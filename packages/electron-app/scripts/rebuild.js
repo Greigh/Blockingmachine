@@ -4,12 +4,12 @@ const path = require('path');
 async function main() {
   console.log('Rebuilding native modules...');
   try {
+    const electronVersion = require('electron/package.json').version;
     await rebuild({
       buildPath: path.resolve(__dirname, '..'),
-      electronVersion: '36.2.1',
-      arch: 'arm64',
+      electronVersion,
+      arch: process.arch,
       force: true,
-      onlyModules: ['macos-alias', 'electron-store'],
       useElectronClang: true
     });
     console.log('Rebuild complete!');

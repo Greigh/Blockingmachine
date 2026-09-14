@@ -77,15 +77,15 @@ const BulkImportManager: React.FC<BulkImportManagerProps> = ({
     const urls = bulkUrls
       .split('\n')
       .map((url) => url.trim())
-      .filter((url) => url.length > 0);
+      .filter((url) => url.length > 0 && !url.startsWith('#') && !url.startsWith('!'));
     if (urls.length === 0) {
-      setError('No URLs entered in the bulk import field.');
+      setError('No valid URLs entered in the bulk import field.');
       setIsImporting(false);
       return;
     }
 
-    let newSources: FilterSource[] = [];
-    let importErrors: string[] = [];
+    const newSources: FilterSource[] = [];
+    const importErrors: string[] = [];
     let skippedCount = 0;
 
     urls.forEach((url, lineIndex) => {
@@ -100,7 +100,7 @@ const BulkImportManager: React.FC<BulkImportManagerProps> = ({
         }
 
         let name = parsedUrl.hostname.replace(/^www\./, '');
-        let originalName = name;
+        const originalName = name;
         let counter = 1;
 
         while (currentSources.concat(newSources).some((s) => s.name === name)) {
@@ -108,7 +108,7 @@ const BulkImportManager: React.FC<BulkImportManagerProps> = ({
         }
 
         newSources.push({ name, url, enabled: true });
-      } catch (e) {
+      } catch {
         importErrors.push(`Line ${lineIndex + 1}: Invalid URL "${url}"`);
       }
     });
@@ -200,7 +200,7 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
     // Basic URL validation (consider a more robust library if needed)
     try {
       new URL(newSourceUrl);
-    } catch (_) {
+    } catch {
       setError('Invalid URL format.');
       return;
     }
@@ -222,13 +222,15 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
     };
 
     const updatedSources = [...sources, newSource];
-    saveSources(updatedSources, `Source "${newSource.name}" added.`).then(
-      () => {
+    saveSources(updatedSources, `Source "${newSource.name}" added.`)
+      .then(() => {
         // Clear input fields only on successful save
         setNewSourceName('');
         setNewSourceUrl('');
-      }
-    );
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to add source.');
+      });
   };
 
   const handleRemoveSource = (indexToRemove: number) => {
@@ -236,7 +238,9 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
     const updatedSources = sources.filter(
       (_, index) => index !== indexToRemove
     );
-    saveSources(updatedSources, `"${sourceName}" removed.`);
+    saveSources(updatedSources, `"${sourceName}" removed.`).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to remove source.');
+    });
   };
 
   const handleToggleEnabled = (indexToToggle: number) => {
@@ -246,7 +250,9 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
       }
       return source;
     });
-    saveSources(updatedSources);
+    saveSources(updatedSources).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to update source status.');
+    });
   };
 
   // vvv Handlers for editing vvv
@@ -272,8 +278,8 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
     }
     try {
       new URL(editUrl); // Validate URL
-    } catch (_) {
-      setError('Invalid URL format during edit.');
+    } catch {
+      setError('Invalid URL format.');
       return;
     }
 
@@ -296,14 +302,16 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
       return source;
     });
 
-    saveSources(updatedSources, `Source "${editName.trim()}" updated.`).then(
-      () => {
+    saveSources(updatedSources, `Source "${editName.trim()}" updated.`)
+      .then(() => {
         // Exit edit mode only on successful save
         setEditingIndex(null);
         setEditName('');
         setEditUrl('');
-      }
-    );
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to update source.');
+      });
   };
   // ^^^ Handlers for editing ^^^
 
@@ -326,32 +334,90 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
               index // add index parameter here
             ) => (
               <div className="source-list-item" key={index}>
-                <label className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={source.enabled}
-                    onChange={() => handleToggleEnabled(index)}
-                  />
-                  <span className="toggle-slider"></span>
-                </label>
-                <div className="source-list-content">
-                  <div className="source-name">{source.name}</div>
-                  <div className="source-url">{source.url}</div>
-                </div>
-                <div className="source-actions">
-                  <button
-                    className="source-action-btn secondary"
-                    onClick={() => handleStartEdit(index)}
+                {editingIndex === index ? (
+                  <div
+                    className="source-edit-form"
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      width: '100%',
+                      padding: '8px 0',
+                    }}
                   >
-                    Edit
-                  </button>
-                  <button
-                    className="source-action-btn secondary"
-                    onClick={() => handleRemoveSource(index)}
-                  >
-                    Remove
-                  </button>
-                </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: '8px',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <input
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        placeholder="Source Name"
+                        style={{ flex: 1 }}
+                      />
+                      <input
+                        type="url"
+                        value={editUrl}
+                        onChange={(e) => setEditUrl(e.target.value)}
+                        placeholder="https://example.com/filter.txt"
+                        style={{ flex: 2 }}
+                      />
+                    </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: '8px',
+                        justifyContent: 'flex-end',
+                      }}
+                    >
+                      <button
+                        className="source-action-btn primary"
+                        onClick={handleSaveEdit}
+                      >
+                        Save
+                      </button>
+                      <button
+                        className="source-action-btn secondary"
+                        onClick={handleCancelEdit}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <label className="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={source.enabled}
+                        onChange={() => handleToggleEnabled(index)}
+                      />
+                      <span className="toggle-slider"></span>
+                    </label>
+                    <div className="source-list-content">
+                      <div className="source-name">{source.name}</div>
+                      <div className="source-url">{source.url}</div>
+                    </div>
+                    <div className="source-actions">
+                      <button
+                        className="source-action-btn secondary"
+                        onClick={() => handleStartEdit(index)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="source-action-btn secondary"
+                        onClick={() => handleRemoveSource(index)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )
           )}
@@ -454,7 +520,10 @@ const CustomRulesEditor = () => {
     setError(null);
     setSaveStatus('saving');
     try {
-      await window.electron.setCustomRules(rules);
+      const res = await window.electron.setCustomRules(rules);
+      if (res && !res.success) {
+        throw new Error(res.error || 'Failed to save custom rules.');
+      }
       setSaveStatus('success');
       // Optionally clear success message after a delay
       setTimeout(() => setSaveStatus('idle'), 2000);
@@ -737,7 +806,9 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
             <span role="img" aria-label="finder" style={{ marginRight: 6 }}>
               🗂️
             </span>
-            Show in Finder
+            {navigator.platform.toUpperCase().includes('MAC')
+              ? 'Show in Finder'
+              : 'Show in Folder'}
           </button>
         </div>
       )}
@@ -970,7 +1041,7 @@ function App() {
 
   useEffect(() => {
     window.electron.getSavePath().then(setSavePath);
-  }, []);
+  }, [currentView]);
 
   // Memoize applyTheme (existing)
   const memoizedApplyTheme = useCallback(applyTheme, []);
@@ -985,7 +1056,7 @@ function App() {
           setSelectedTheme(storedTheme);
           memoizedApplyTheme(storedTheme);
         }
-      } catch (error) {
+      } catch {
         if (isMounted) memoizedApplyTheme('system');
       } finally {
         if (isMounted) setIsThemeLoading(false);
@@ -1205,13 +1276,15 @@ function App() {
           onClick={() => setCurrentView('settings')}
         >
           <span className="nav-icon">⚙️</span>
-          <span className="nav-text">Settings</span>
+          <span className="nav-text">
+            Settings {updateAvailable && <span className="update-dot" title="Update Available">●</span>}
+          </span>
         </button>
       </nav>
 
       {/* Global Feedback Area */}
       <div
-        className={`feedback-container ${globalError ? 'error' : globalSuccessMessage ? 'success' : ''}`}
+        className={`feedback-container ${globalError ? 'error' : globalSuccessMessage ? 'success' : updateStatus ? 'info' : ''}`}
       >
         {globalError && (
           <div className="feedback-message error-feedback">
@@ -1223,6 +1296,17 @@ function App() {
           <div className="feedback-message success-feedback">
             <span className="feedback-icon">✅</span>
             <span className="feedback-text">{globalSuccessMessage}</span>
+          </div>
+        )}
+        {updateStatus && !globalError && !globalSuccessMessage && (
+          <div className="feedback-message info-feedback">
+            <span className="feedback-icon">ℹ️</span>
+            <span className="feedback-text">
+              {updateStatus}
+              {updateProgress > 0 && updateProgress < 100
+                ? ` (${Math.round(updateProgress)}%)`
+                : ''}
+            </span>
           </div>
         )}
       </div>

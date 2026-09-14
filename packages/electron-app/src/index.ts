@@ -23,7 +23,6 @@ import type {
   FilterSource,
   ThemeType,
   FilterFormat,
-  ProcessingResult,
   StoredRule,
   FilterListMetadata
 } from './types';
@@ -47,6 +46,22 @@ async function installExtensions() {
       console.error('Failed to install extension:', err);
     }
   }
+}
+
+function isValidFormat(format: unknown): format is FilterFormat {
+  const validFormats: FilterFormat[] = [
+    'adguard',
+    'abp',
+    'hosts',
+    'dnsmasq',
+    'unbound',
+    'domains',
+    'plain',
+  ];
+  return (
+    typeof format === 'string' &&
+    validFormats.includes(format as FilterFormat)
+  );
 }
 
 // Define a minimal custom menu (no Help, no View)
@@ -138,7 +153,11 @@ const store = new Store<StoreSchema>({
     },
     savePath: {
       type: 'string',
-      default: join(app.getPath('documents'), 'processed_rules.txt'),
+      default: join(
+        app.getPath('documents'),
+        'Blockingmachine',
+        'processed_rules.txt'
+      ),
     },
     exportFormat: {
       type: 'string',
@@ -198,6 +217,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       return sources;
     });
 
+    ipcMain.handle('get-filter-sources', async (_event: IpcMainInvokeEvent) => {
+      return store.get('filterSources') || [];
+    });
+
     ipcMain.handle(
       'save-sources',
       async (_event: IpcMainInvokeEvent, sources: FilterSource[]) => {
@@ -208,6 +231,20 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           return { success: true };
         } catch (error) {
           console.error('[IPC Main] Error saving sources:', error);
+          const message =
+            error instanceof Error ? error.message : String(error);
+          return { success: false, error: message };
+        }
+      }
+    );
+
+    ipcMain.handle(
+      'set-filter-sources',
+      async (_event: IpcMainInvokeEvent, sources: FilterSource[]) => {
+        try {
+          store.set('filterSources', sources);
+          return { success: true };
+        } catch (error) {
           const message =
             error instanceof Error ? error.message : String(error);
           return { success: false, error: message };
@@ -326,8 +363,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           status: 'Adding custom rules...',
           percent: 80,
         });
-        const customRulesText = store.get('customRules');
-        if (customRulesText.trim()) {
+        const customRulesText = (store.get('customRules') || '') as string;
+        if (typeof customRulesText === 'string' && customRulesText.trim()) {
           const customRules = parseFilterList(customRulesText, 'custom');
           uniqueRules.push(...customRules);
           console.log(`[IPC Main] Added ${customRules.length} custom rules.`);
@@ -363,23 +400,6 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         };
 
         const generatedList = generateFilterList(uniqueRules, metadata, format);
-
-        // Add this helper function above
-        function isValidFormat(format: unknown): format is FilterFormat {
-          const validFormats: FilterFormat[] = [
-            'adguard',
-            'abp',
-            'hosts',
-            'dnsmasq',
-            'unbound',
-            'domains',
-            'plain',
-          ];
-          return (
-            typeof format === 'string' &&
-            validFormats.includes(format as FilterFormat)
-          );
-        }
 
         sender.send('process-progress', {
           status: 'Saving to file...',
@@ -513,16 +533,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle(
       'set-export-format',
       async (_event: IpcMainInvokeEvent, format: FilterFormat) => {
-        const validFormats: FilterFormat[] = [
-          'adguard',
-          'abp',
-          'hosts',
-          'dnsmasq',
-          'unbound',
-          'domains',
-          'plain',
-        ];
-        if (validFormats.includes(format)) {
+        if (isValidFormat(format)) {
           store.set('exportFormat', format);
           console.log(`[IPC Main] Export format set to: ${format}`);
           return { success: true };
@@ -650,11 +661,6 @@ function setupDefaultFilterSources(): void {
         enabled: true,
       },
       {
-        name: 'uBlock Origin Filters',
-        url: 'https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/filters.txt',
-        enabled: true,
-      },
-      {
         name: 'Peter Lowes List',
         url: 'https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblock&showintro=0&mimetype=plaintext',
         enabled: true,
@@ -665,7 +671,15 @@ function setupDefaultFilterSources(): void {
 
 let mainWindow: BrowserWindow | null = null;
 
+declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
+declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
+
 const createWindow = async () => {
+  const preloadPath =
+    typeof MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY !== 'undefined'
+      ? MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY
+      : join(__dirname, 'preload.js');
+
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 800,
@@ -673,17 +687,27 @@ const createWindow = async () => {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
-      preload: join(__dirname, 'preload.js')  // Use join instead of path.join
+      preload: preloadPath,
     },
-    show: false
+    show: false,
   });
 
-  if (isDev) {
+  // Open external links in user's default browser safely
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http:') || url.startsWith('https:') || url.startsWith('mailto:')) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  if (typeof MAIN_WINDOW_WEBPACK_ENTRY !== 'undefined') {
+    await mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+  } else if (isDev) {
     await mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools();
   } else {
     await mainWindow.loadURL(
-      `file://${join(__dirname, '../renderer/index.html')}`  // Use join instead of path.join
+      `file://${join(__dirname, '../renderer/index.html')}`
     );
   }
 

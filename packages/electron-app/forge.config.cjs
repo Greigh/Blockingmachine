@@ -15,8 +15,7 @@ const config = {
           buildPath,
           electronVersion,
           arch,
-          force: true,
-          onlyModules: ['electron-store']
+          force: true
         }).then(() => callback()).catch((err) => callback(err));
       }
     ],
