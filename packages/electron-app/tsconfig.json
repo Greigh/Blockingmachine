@@ -15,8 +15,8 @@
     "outDir": ".webpack",
     "baseUrl": ".",
     "paths": {
-      "*": ["node_modules/*"],
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@blockingmachine/core": ["../core/src/index.ts"]
     },
     "typeRoots": [
       "./node_modules/@types",
