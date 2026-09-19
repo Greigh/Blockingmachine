@@ -40,7 +40,6 @@ async function fetchWithRetry(
   try {
     // Use the options with the AbortSignal
     const response: Response = await fetch(url, fetchOptions);
-    clearTimeout(timeoutId); // Clear timeout if fetch completes successfully
 
     if (!response.ok) {
       // Specific handling for common non-fatal errors
@@ -52,10 +51,9 @@ async function fetchWithRetry(
       }
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    return await response.text();
+    const text = await response.text();
+    return text;
   } catch (error: any) {
-    clearTimeout(timeoutId); // Clear timeout if fetch fails
-
     // Check if the error was due to the abort signal (timeout)
     if (error.name === "AbortError") {
       console.warn(
@@ -86,6 +84,8 @@ async function fetchWithRetry(
       }
       return null; // Return null after max retries
     }
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -102,7 +102,9 @@ export async function fetchContent(url: string): Promise<string | null> {
   if (!url.startsWith("http:") && !url.startsWith("https:")) {
     try {
       let filePath = url;
-      if (!path.isAbsolute(url)) {
+      if (url.startsWith("file://")) {
+        filePath = fileURLToPath(url);
+      } else if (!path.isAbsolute(url)) {
         const baseCandidate = path.resolve(getBaseDir(), url);
         const cwdCandidate = path.resolve(process.cwd(), url);
         filePath = baseCandidate;

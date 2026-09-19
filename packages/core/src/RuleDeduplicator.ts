@@ -53,6 +53,21 @@ export class RuleDeduplicator {
     };
   }
 
+  clear(): void {
+    this.filteredRules.clear();
+    this.stats = {
+      total: 0,
+      duplicates: 0,
+      merged: 0,
+      conflicts: 0,
+      skipped: 0,
+    };
+  }
+
+  getStats(): DeduplicatorStats {
+    return { ...this.stats };
+  }
+
   /**
    * Normalizes a rule string into a canonical key for deduplication.
    * @param rule The original rule string.

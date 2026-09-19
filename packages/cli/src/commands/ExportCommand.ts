@@ -4,7 +4,7 @@ import {
   type CommandResult,
 } from "./BaseCommand.js";
 import type { ExportOptions } from "../types.js";
-import { createPaths } from "@blockingmachine/core";
+import { createPaths, cleanDomainPattern } from "@blockingmachine/core";
 import type { FilterListMetadata } from "../types.js";
 import fs from "fs/promises";
 import path from "path";
@@ -76,24 +76,44 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
             case "adguard":
               output = header + rules.join("\n");
               break;
-            case "hosts":
-              output =
-                header.replace(/!/g, "#") +
-                rules
-                  .map(
-                    (rule) =>
-                      `0.0.0.0 ${rule.replace(/^\|\|/, "").replace(/\^.*$/, "")}`,
-                  )
-                  .join("\n");
+            case "hosts": {
+              const formattedRules: string[] = [];
+              for (const rule of rules) {
+                const trimmed = rule.trim();
+                if (!trimmed) continue;
+                if (trimmed.startsWith("!") || trimmed.startsWith("#")) {
+                  formattedRules.push(`# ${trimmed.replace(/^[!#]\s*/, "")}`);
+                } else if (trimmed.startsWith("@@")) {
+                  formattedRules.push(`# EXCEPTION: ${trimmed}`);
+                } else {
+                  const domain = cleanDomainPattern(trimmed);
+                  if (domain) {
+                    formattedRules.push(`0.0.0.0 ${domain}`);
+                  }
+                }
+              }
+              output = header.replace(/!/g, "#") + formattedRules.join("\n");
               break;
-            case "dnsmasq":
-              output = rules
-                .map(
-                  (rule) =>
-                    `address=/${rule.replace(/^\|\|/, "").replace(/\^.*$/, "")}/0.0.0.0`,
-                )
-                .join("\n");
+            }
+            case "dnsmasq": {
+              const formattedRules: string[] = [];
+              for (const rule of rules) {
+                const trimmed = rule.trim();
+                if (!trimmed) continue;
+                if (trimmed.startsWith("!") || trimmed.startsWith("#")) {
+                  formattedRules.push(`# ${trimmed.replace(/^[!#]\s*/, "")}`);
+                } else if (trimmed.startsWith("@@")) {
+                  formattedRules.push(`# EXCEPTION: ${trimmed}`);
+                } else {
+                  const domain = cleanDomainPattern(trimmed);
+                  if (domain) {
+                    formattedRules.push(`address=/${domain}/0.0.0.0`);
+                  }
+                }
+              }
+              output = header.replace(/!/g, "#") + formattedRules.join("\n");
               break;
+            }
             default:
               output = header + rules.join("\n");
           }
@@ -101,6 +121,7 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
           const filename = `filter-list.${format === "adguard" ? "txt" : format}`;
           const filepath = path.join(outputPath, filename);
 
+          await fs.mkdir(outputPath, { recursive: true });
           await fs.writeFile(filepath, output);
           this.logger.info(`✓ Generated ${format} format: ${filename}`);
           results.push({ format, filename, rules: rules.length });

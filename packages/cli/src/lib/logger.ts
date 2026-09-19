@@ -38,8 +38,21 @@ const format = winston.format.combine(
   }),
 );
 
-export const createLogger = (debug = false) => {
-  return winston.createLogger({
+let cachedLogger: winston.Logger | null = null;
+let cachedDebug: boolean | null = null;
+
+export function createLogger(debug = false) {
+  if (cachedLogger && cachedDebug === debug) {
+    return cachedLogger;
+  }
+  if (cachedLogger) {
+    cachedLogger.level = debug ? "debug" : "info";
+    cachedDebug = debug;
+    return cachedLogger;
+  }
+
+  cachedDebug = debug;
+  cachedLogger = winston.createLogger({
     level: debug ? "debug" : "info",
     levels,
     format,
@@ -54,6 +67,7 @@ export const createLogger = (debug = false) => {
       }),
     ],
   });
+  return cachedLogger;
 };
 
 export type Logger = ReturnType<typeof createLogger>;

@@ -76,28 +76,34 @@ export interface StoreSchema {
 // Electron API interface
 export interface ElectronAPI {
   getTheme: () => Promise<ThemeType>;
-  setTheme: (theme: ThemeType) => Promise<void>;
+  setTheme: (theme: ThemeType) => Promise<{ success: boolean; error?: string }>;
   getSources: () => Promise<FilterSource[]>;
   saveSources: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
+  getFilterSources?: () => Promise<FilterSource[]>;
+  setFilterSources?: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
+  setSources?: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
   getCustomRules: () => Promise<string>;
   setCustomRules: (rules: string) => Promise<{ success: boolean; error?: string }>;
   getExportFormat: () => Promise<FilterFormat>;
   setExportFormat: (format: FilterFormat) => Promise<{ success: boolean; error?: string }>;
   getSavePath: () => Promise<string>;
-  setSavePath: (path: string) => Promise<void>;
+  setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;
   selectSavePath: () => Promise<string>;
   runImportProcess: () => Promise<ProcessingResult>;
   getLastProcessTime: () => Promise<string>;
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   showItemInFolder: (path: string) => void;
-  onProcessProgress: (callback: (data: { status: string; percent: number }) => void) => void;
+  onProcessProgress: (callback: (data: ProcessProgress) => void) => () => void;
   removeProcessProgressListener: () => void;
-  onUpdateStatus: (callback: (status: string) => void) => void;
-  onUpdateProgress: (callback: (progress: number) => void) => void;
-  onUpdateDownloaded: (callback: () => void) => void;
-  receive: (channel: string, func: (...args: any[]) => void) => void;
-  removeAllListeners: (channel: string) => void;
+  onUpdateStatus: (callback: (status: string) => void) => () => void;
+  onUpdateProgress: (callback: (progress: number) => void) => () => void;
+  onUpdateDownloaded: (callback: () => void) => () => void;
+  onUpdateAvailable?: (callback: (info: UpdateInfo) => void) => () => void;
+  onUpdateError?: (callback: (error: Error) => void) => () => void;
+  onOpenSettings?: (callback: () => void) => () => void;
+  receive?: (channel: string, func: (...args: any[]) => void) => void;
+  removeAllListeners?: (channel: string) => void;
 }
 
 // Global declarations

@@ -1,4 +1,4 @@
-import { join, dirname } from 'path';
+import { join, dirname, isAbsolute } from 'path';
 import {
   app,
   BrowserWindow,
@@ -9,7 +9,7 @@ import {
   shell,
   session,
 } from 'electron';
-import { promises as fs, mkdirSync } from 'fs';
+import { promises as fs } from 'fs';
 import isDev from 'electron-is-dev';
 import Store from 'electron-store';
 import type { ElectronStore, StoreSchema } from './types';
@@ -18,6 +18,7 @@ import {
   parseFilterList,
   RuleDeduplicator,
   generateFilterList,
+  filterLists,
 } from '@blockingmachine/core';
 import type {
   FilterSource,
@@ -366,8 +367,19 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         const customRulesText = (store.get('customRules') || '') as string;
         if (typeof customRulesText === 'string' && customRulesText.trim()) {
           const customRules = parseFilterList(customRulesText, 'custom');
-          uniqueRules.push(...customRules);
-          console.log(`[IPC Main] Added ${customRules.length} custom rules.`);
+          let addedCustom = 0;
+          for (const rule of customRules) {
+            if (!rule || !rule.raw) continue;
+            const stripped = deduplicator.stripRule(rule.raw);
+            if (!uniqueRulesSet.has(stripped)) {
+              uniqueRulesSet.add(stripped);
+              uniqueRules.push(rule);
+              addedCustom++;
+            }
+          }
+          console.log(
+            `[IPC Main] Added ${addedCustom} unique custom rules (${customRules.length} total parsed).`
+          );
         }
 
         const exceptionRuleCount = uniqueRules.filter(
@@ -412,7 +424,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             'Blockingmachine',
             'processed_rules.txt'
           );
-        mkdirSync(dirname(savePath), { recursive: true });
+        await fs.mkdir(dirname(savePath), { recursive: true });
         await fs.writeFile(savePath, generatedList, 'utf8');
         console.log(`[IPC Main] Filter list saved to: ${savePath}`);
 
@@ -550,8 +562,12 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
     });
 
-    ipcMain.on('show-item-in-folder', (_event, path: string) => {
-      shell.showItemInFolder(path);
+    ipcMain.on('show-item-in-folder', (_event, itemPath: string) => {
+      if (typeof itemPath === 'string' && itemPath.trim().length > 0 && isAbsolute(itemPath)) {
+        shell.showItemInFolder(itemPath);
+      } else {
+        console.warn('[IPC Main] Invalid path passed to showItemInFolder:', itemPath);
+      }
     });
 
     ipcMain.handle('open-external', async (_event, url: string) => {
@@ -579,93 +595,7 @@ function setupDefaultFilterSources(): void {
   
   if (!sources || sources.length === 0) {
     console.log('[Main Process] Setting up default filter sources...');
-    store.set('filterSources', [
-      {
-        name: 'AdGuard DNS Filter',
-        url: 'https://filters.adtidy.org/extension/chromium/filters/15.txt',
-        enabled: true,
-      },
-      {
-        name: 'uBlock Origin Filter - Base',
-        url: 'https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.txt',
-        enabled: true,
-      },
-      {
-        name: 'uBlock Origin Filter - Unbreak',
-        url: 'https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/unbreak.txt',
-        enabled: true,
-      },
-      {
-        name: 'AdGuard Base Filter',
-        url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt',
-        enabled: true,
-      },
-      {
-        name: 'AdGuard Annoyances Filter',
-        url: 'https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_14_Annoyances/filter.txt',
-        enabled: true,
-      },
-      {
-        name: 'AdGuard Social Media Filter',
-        url: 'https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_4_Social/filter.txt',
-        enabled: true,
-      },
-      {
-        name: 'AdGuard Mobile Filter',
-        url: 'https://raw.githubusercontent.com/AdguardTeam/AdguardFilters/master/MobileFilter/sections/adservers.txt',
-        enabled: true,
-      },
-      {
-        name: 'AWAvenue Ads Rule',
-        url: 'https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt',
-        enabled: true,
-      },
-      {
-        name: 'AdGuard DNS Popup Hosts filter',
-        url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_59.txt',
-        enabled: true,
-      },
-      {
-        name: 'GetAdmiral Domains',
-        url: 'https://raw.githubusercontent.com/LanikSJ/ubo-filters/main/filters/getadmiral-domains.txt',
-        enabled: true,
-      },
-      {
-        name: 'EasyList',
-        url: 'https://easylist.to/easylist/easylist.txt',
-        enabled: true,
-      },
-      {
-        name: "Fanboy's Annoyance List",
-        url: 'https://secure.fanboy.co.nz/fanboy-annoyance.txt',
-        enabled: true,
-      },
-      {
-        name: "HaGeZi's Allowlist Referral",
-        url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_45.txt',
-        enabled: true,
-      },
-      {
-        name: "HaGeZi's Windows/Office Tracker Blocklist",
-        url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_63.txt',
-        enabled: true,
-      },
-      {
-        name: "MrBukLau's Base Filters",
-        url: 'https://raw.githubusercontent.com/MrBukLau/filter-lists/master/filters/basefilters.txt',
-        enabled: true,
-      },
-      {
-        name: 'OISD Blocklist Small',
-        url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_5.txt',
-        enabled: true,
-      },
-      {
-        name: 'Peter Lowes List',
-        url: 'https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblock&showintro=0&mimetype=plaintext',
-        enabled: true,
-      },
-    ]);
+    store.set('filterSources', filterLists);
   }
 }
 
@@ -698,6 +628,20 @@ const createWindow = async () => {
       shell.openExternal(url);
     }
     return { action: 'deny' };
+  });
+
+  // Intercept in-window navigation to keep renderer safe
+  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+    if (
+      !navigationUrl.startsWith('http://localhost') &&
+      !navigationUrl.startsWith('file://') &&
+      (typeof MAIN_WINDOW_WEBPACK_ENTRY === 'undefined' || !navigationUrl.startsWith(MAIN_WINDOW_WEBPACK_ENTRY))
+    ) {
+      event.preventDefault();
+      if (navigationUrl.startsWith('http:') || navigationUrl.startsWith('https:')) {
+        shell.openExternal(navigationUrl);
+      }
+    }
   });
 
   if (typeof MAIN_WINDOW_WEBPACK_ENTRY !== 'undefined') {
@@ -733,12 +677,28 @@ async function initialize() {
       }
     });
 
-    app.on('web-contents-created', (event, contents) => {
-      contents.on('render-process-gone', (event, details) => {
+    app.on('web-contents-created', (_event, contents) => {
+      contents.on('will-navigate', (event, navigationUrl) => {
+        if (!navigationUrl.startsWith('http://localhost') && !navigationUrl.startsWith('file://')) {
+          event.preventDefault();
+          if (navigationUrl.startsWith('http:') || navigationUrl.startsWith('https:')) {
+            shell.openExternal(navigationUrl);
+          }
+        }
+      });
+
+      contents.setWindowOpenHandler(({ url }) => {
+        if (url.startsWith('http:') || url.startsWith('https:') || url.startsWith('mailto:')) {
+          shell.openExternal(url);
+        }
+        return { action: 'deny' };
+      });
+
+      contents.on('render-process-gone', (_event, details) => {
         console.error('Renderer process crashed:', details);
       });
 
-      contents.on('did-fail-load', (event, errorCode, errorDescription) => {
+      contents.on('did-fail-load', (_event, errorCode, errorDescription) => {
         console.error('Page failed to load:', errorCode, errorDescription);
       });
     });

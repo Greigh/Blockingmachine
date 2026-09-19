@@ -101,7 +101,7 @@ interface LintingError {
   source: string;
   errors: string[];
 }
-interface ProcessorErrors {
+export interface ProcessorErrors {
   unrecognizedRules: UnrecognizedRule[];
   processingErrors: ProcessingError[];
   failedUrls: FailedUrl[];
@@ -233,12 +233,23 @@ export class RuleProcessor {
     // Modifier Analysis
     let hasDnsOnlyModifier = false;
     let hasBrowserOnlyModifier = false;
-    const modifierPattern = /\$([a-z0-9_-]+)(?:=|$)/gi;
-    let match;
-    while ((match = modifierPattern.exec(trimmedRule))) {
-      const mod = match[1].toLowerCase();
-      if (DNS_ONLY_MODIFIERS.has(mod)) hasDnsOnlyModifier = true;
-      if (BROWSER_ONLY_MODIFIERS.has(mod)) hasBrowserOnlyModifier = true;
+    const modifierMap = new Map<string, string>();
+    const dollarIndex = trimmedRule.indexOf("$");
+    if (
+      dollarIndex !== -1 &&
+      !trimmedRule.includes("##") &&
+      !trimmedRule.includes("#?#") &&
+      !trimmedRule.includes("#@#")
+    ) {
+      const modifierString = trimmedRule.slice(dollarIndex + 1);
+      const modifiers = modifierString.split(",");
+      for (const rawMod of modifiers) {
+        const parts = rawMod.split("=");
+        const mod = parts[0].trim().toLowerCase();
+        modifierMap.set(mod, parts.slice(1).join("="));
+        if (DNS_ONLY_MODIFIERS.has(mod)) hasDnsOnlyModifier = true;
+        if (BROWSER_ONLY_MODIFIERS.has(mod)) hasBrowserOnlyModifier = true;
+      }
     }
 
     // 3. HTML Filtering Rules
@@ -270,12 +281,12 @@ export class RuleProcessor {
 
     // 7. Specific Advanced Rules by Modifier (prioritize browser context if applicable)
     if (hasBrowserOnlyModifier) {
-      if (trimmedRule.includes("$csp")) return "csp";
-      if (trimmedRule.includes("$redirect")) return "redirect";
-      if (trimmedRule.includes("$replace")) return "replace";
-      if (trimmedRule.includes("$removeparam")) return "parameter"; // Map to 'parameter' as per RuleStore logic
-      if (trimmedRule.includes("$removeheader")) return "removeheader";
-      if (trimmedRule.includes("$permissions")) return "permissions";
+      if (modifierMap.has("csp")) return "csp";
+      if (modifierMap.has("redirect") || modifierMap.has("redirect-rule")) return "redirect";
+      if (modifierMap.has("replace")) return "replace";
+      if (modifierMap.has("removeparam")) return "parameter"; // Map to 'parameter' as per RuleStore logic
+      if (modifierMap.has("removeheader")) return "removeheader";
+      if (modifierMap.has("permissions")) return "permissions";
       // If it has browser mods but isn't an exception, it's likely a blocking rule
       if (!trimmedRule.startsWith("@@")) return "blocking";
     }
@@ -481,5 +492,23 @@ export class RuleProcessor {
     );
 
     return true;
+  }
+
+  getErrors(): ProcessorErrors {
+    return {
+      unrecognizedRules: [...this.errors.unrecognizedRules],
+      processingErrors: [...this.errors.processingErrors],
+      failedUrls: [...this.errors.failedUrls],
+      lintingErrors: [...this.errors.lintingErrors],
+    };
+  }
+
+  clearErrors(): void {
+    this.errors = {
+      unrecognizedRules: [],
+      processingErrors: [],
+      failedUrls: [],
+      lintingErrors: [],
+    };
   }
 }

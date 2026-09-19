@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './index.css';
 import type { ThemeType, FilterFormat } from './types/';
 
@@ -22,6 +22,25 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
   const [isLoadingPath, setIsLoadingPath] = useState(true);
   const [isSavingPath, setIsSavingPath] = useState(false);
   const [pathMessage, setPathMessage] = useState('');
+
+  // Timer tracking to prevent memory leaks on unmount
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach(clearTimeout);
+      timersRef.current = [];
+    };
+  }, []);
+
+  const safeSetTimeout = (fn: () => void, delay: number) => {
+    const id = setTimeout(() => {
+      timersRef.current = timersRef.current.filter((t) => t !== id);
+      fn();
+    }, delay);
+    timersRef.current.push(id);
+    return id;
+  };
 
   useEffect(() => {
     // Load export format
@@ -97,7 +116,7 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
           throw new Error(res.error || 'Failed to set save path');
         }
         setPathMessage('Path updated successfully!');
-        setTimeout(() => {
+        safeSetTimeout(() => {
           setPathMessage('');
         }, 3000);
       } else {
@@ -106,7 +125,7 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
     } catch (error) {
       console.error('Error saving path:', error);
       setPathMessage('Failed to update save path.');
-      setTimeout(() => {
+      safeSetTimeout(() => {
         setPathMessage('');
       }, 3000);
     } finally {
@@ -123,7 +142,7 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
     >
   ) => {
     setMessage({ text, type });
-    setTimeout(() => {
+    safeSetTimeout(() => {
       setMessage({ text: '', type: null });
     }, 3000);
   };

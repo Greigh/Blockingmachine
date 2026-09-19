@@ -61,4 +61,19 @@ describe("RuleStore", () => {
     expect(rules[0].domain).toBe("adserver.org");
     expect(rules[0].metadata.domain).toBe("adserver.org");
   });
+
+  test("clears all stored rules and resets statistics", () => {
+    store.addRule("||tracker.com^", "source-1");
+    store.addRule("@@||safe.com^", "source-2");
+    store.addRule("site.com##.ad", "source-3");
+    expect(store.getUniqueRules().length).toBeGreaterThan(0);
+
+    store.clear();
+    expect(store.getUniqueRules()).toHaveLength(0);
+    const stats = store.getStats();
+    expect(stats.totalProcessed).toBe(0);
+    expect(stats.blocking).toBe(0);
+    expect(stats.unblocking).toBe(0);
+    expect(stats.cosmetic).toBe(0);
+  });
 });
