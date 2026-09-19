@@ -2,6 +2,15 @@ import type { StoredRule } from "../RuleStore.js";
 import type { SupportedFormat } from "../types.js";
 import { cleanDomainPattern } from "../createMetadata.js";
 
+function isException(rule: StoredRule): boolean {
+  return !!(
+    rule.isException ||
+    rule.type === "unblocking" ||
+    rule.raw.startsWith("@@") ||
+    rule.raw.includes("#@#")
+  );
+}
+
 function getDomain(rule: StoredRule): string | undefined {
   return rule.domain || rule.metadata?.domain || cleanDomainPattern(rule.raw) || undefined;
 }
@@ -34,36 +43,42 @@ export function formatRuleForType(
 }
 
 function formatHostsRule(rule: StoredRule): string {
+  if (isException(rule)) return `# EXCEPTION: ${rule.raw}`;
   const domain = getDomain(rule);
   if (!domain) return "";
   return `0.0.0.0 ${domain}`;
 }
 
 function formatDnsmasqRule(rule: StoredRule): string {
+  if (isException(rule)) return `# EXCEPTION: ${rule.raw}`;
   const domain = getDomain(rule);
   if (!domain) return "";
   return `address=/${domain}/0.0.0.0`;
 }
 
 function formatUnboundRule(rule: StoredRule): string {
+  if (isException(rule)) return `# EXCEPTION: ${rule.raw}`;
   const domain = getDomain(rule);
   if (!domain) return "";
   return `local-zone: "${domain}" static`;
 }
 
 function formatBindRule(rule: StoredRule): string {
+  if (isException(rule)) return `# EXCEPTION: ${rule.raw}`;
   const domain = getDomain(rule);
   if (!domain) return "";
   return `zone "${domain}" { type master; file "null.zone.file"; };`;
 }
 
 function formatPrivoxyRule(rule: StoredRule): string {
+  if (isException(rule)) return `# EXCEPTION: ${rule.raw}`;
   const domain = getDomain(rule);
   if (!domain) return "";
   return `{ +block { ${domain} } }`;
 }
 
 function formatShadowrocketRule(rule: StoredRule): string {
+  if (isException(rule)) return `# EXCEPTION: ${rule.raw}`;
   const domain = getDomain(rule);
   if (!domain) return "";
   return `DOMAIN,${domain},REJECT`;

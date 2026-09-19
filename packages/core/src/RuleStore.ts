@@ -1,4 +1,4 @@
-import { createRuleMetadata } from "./createMetadata.js";
+import { createRuleMetadata, cleanDomainPattern } from "./createMetadata.js";
 import { RuleProcessor } from "./RuleProcessor.js";
 import crypto from "crypto";
 
@@ -211,6 +211,9 @@ export class RuleStore {
         hash: ruleHash,
         type: type as RuleType,
         domain: metadata.domain || undefined,
+        isException:
+          originalRule.startsWith("@@") ||
+          originalRule.includes("#@#"),
         metadata: {
           sources: metadata.sources || [],
           dateAdded: new Date(),
@@ -396,6 +399,8 @@ export class RuleStore {
   ): void {
     let key: string | null;
     let isHashKey = false;
+    const cleanDomain =
+      metadata.domain || cleanDomainPattern(originalRule) || undefined;
 
     // Determine if it should use a hash key (global modifiers, etc.)
     if (
@@ -407,8 +412,7 @@ export class RuleStore {
       key = this.generateHash(originalRule);
       isHashKey = true;
     } else {
-      // Extract domain pattern manually since cleanDomainPattern doesn't exist
-      key = this.extractDomainFromRule(originalRule);
+      key = cleanDomain || this.extractDomainFromRule(originalRule);
     }
 
     if (!key) {
@@ -441,12 +445,15 @@ export class RuleStore {
       // Optionally increment a specific stat for overwrites
     }
 
+    const isException = type === "unblocking" || originalRule.startsWith("@@");
+
     const ruleData: StoredRule = {
       raw: originalRule,
       originalRule,
       hash: ruleHash,
       type: type,
-      domain: (isHashKey ? undefined : key) || metadata.domain || undefined,
+      domain: cleanDomain,
+      isException,
       metadata: {
         sources: metadata.sources || [],
         dateAdded: new Date(),
@@ -459,7 +466,7 @@ export class RuleStore {
           priority: metadata.sourceInfo?.priority || 0,
         },
         tags: [],
-        domain: isHashKey ? undefined : key,
+        domain: cleanDomain,
       },
     };
 
@@ -506,11 +513,14 @@ export class RuleStore {
       );
     }
 
+    const isException = originalRule.includes("#@#");
+
     const ruleData: StoredRule = {
       raw: originalRule,
       originalRule,
       hash: ruleHash,
       type: "cosmetic",
+      isException,
       metadata: {
         sources: metadata.sources || [],
         dateAdded: new Date(),

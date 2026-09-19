@@ -93,9 +93,15 @@ export class RuleDeduplicator {
       stripped = stripped
         .replace(/\$.*$/, "") // Remove modifiers section
         .replace(/(?:##|#@#|#\?#).*$/, "") // Remove cosmetic/extended selectors
-        .replace(/!\s*.*$/, ""); // Remove comments
+        .replace(/[!#]\s*.*$/, ""); // Remove comments
 
       // 3. Refined Normalization of the Core Target String
+      // Strip hosts file IP prefix if present (e.g. 0.0.0.0, 127.0.0.1, ::1)
+      stripped = stripped.replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+/, "").trim();
+
+      // Strip ABP network rule prefixes (|| or |)
+      stripped = stripped.replace(/^(?:\|\||\|)/, "");
+
       stripped = stripped
         .replace(/^(?:https?:\/\/)?(?:www\.)?/, "") // Remove http/https, www.
         .replace(/[?#].*$/, "") // Remove Query String and Anchor

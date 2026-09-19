@@ -1,16 +1,12 @@
 import { fetchContent } from "./fetch.js";
 import { sourceNames } from "./sources.js";
 import { performance } from "perf_hooks";
-// REMOVE aglint import entirely
-// import * as aglint from '@adguard/aglint';
-// vvv Import StoredRule, RuleMetadata, RuleClassificationType vvv
 import {
   RuleStore,
   RuleClassificationType,
   type StoredRule,
   type RuleType,
 } from "./RuleStore.js";
-// vvv Import the external metadata creation function vvv
 import { createRuleMetadata } from "./createMetadata.js";
 
 // --- Regex Definitions ---
@@ -157,7 +153,10 @@ export function parseFilterList(
         originalRule: trimmedLine,
         hash: "",
         type: ruleType as RuleType,
-        isException: trimmedLine.startsWith("@@"),
+        isException:
+          trimmedLine.startsWith("@@") ||
+          trimmedLine.includes("#@#") ||
+          ruleType === "unblocking",
         domain: metadata.domain || undefined,
         metadata,
       });

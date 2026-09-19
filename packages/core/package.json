@@ -47,7 +47,6 @@
   },
   "homepage": "https://github.com/greigh/Blockingmachine-core#readme",
   "dependencies": {
-    "@adguard/aglint": "^3.0.2",
     "chalk": "^6.0.0",
     "node-fetch": "^3.3.2",
     "progress": "^2.0.3"
