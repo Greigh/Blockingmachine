@@ -1,20 +1,22 @@
 import fetch, { RequestInfo, RequestInit, Response } from "node-fetch";
 import { promises as fs } from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
 // --- Determine Base Directory ---
-const getDirname = () => {
-  // In CommonJS
-  if (typeof __dirname !== "undefined") {
-    return __dirname;
+const getBaseDir = (): string => {
+  try {
+    if (typeof __dirname !== "undefined") {
+      return path.resolve(__dirname, "..");
+    }
+    if (typeof import.meta !== "undefined" && import.meta.url) {
+      return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    }
+  } catch {
+    // fallback
   }
-
-  // Fallback to current working directory
   return process.cwd();
 };
-
-const baseDir = path.resolve(getDirname(), ".."); // Go up one level from 'src'
-// ---
 
 const MAX_RETRIES = 3;
 const INITIAL_DELAY = 2000;
@@ -99,17 +101,23 @@ export async function fetchContent(url: string): Promise<string | null> {
   // --- Check if it's a local file path ---
   if (!url.startsWith("http:") && !url.startsWith("https:")) {
     try {
-      // Resolve the path relative to the determined base directory
-      const filePath = path.resolve(baseDir, url);
+      let filePath = url;
+      if (!path.isAbsolute(url)) {
+        const baseCandidate = path.resolve(getBaseDir(), url);
+        const cwdCandidate = path.resolve(process.cwd(), url);
+        filePath = baseCandidate;
+        try {
+          await fs.access(filePath);
+        } catch {
+          filePath = cwdCandidate;
+        }
+      }
       console.log(`Reading local file: ${filePath}`);
       const content = await fs.readFile(filePath, "utf8");
       return content;
     } catch (error: any) {
       console.error(
-        `❌ Error reading local file ${url} (resolved to ${path.resolve(
-          baseDir,
-          url,
-        )}): ${error?.message || error}`,
+        `❌ Error reading local file ${url}: ${error?.message || error}`,
       );
       return null;
     }

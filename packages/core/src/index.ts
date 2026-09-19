@@ -1,28 +1,50 @@
-// Add this explicit export for FilterMetaConfig
-export type { FilterMetaConfig } from "./config/meta.js";
-
-// Make sure other exports are also included
-export { defaultFilterMeta } from "./config/meta.js";
+// Config exports
+export { defaultFilterMeta, type FilterMetaConfig } from "./config/meta.js";
 export { createPaths } from "./config/paths.js";
 export { defaultPerformance } from "./config/performance.js";
-export { exportWithOptions } from "./export/index.js";
-export type { RuleType, RuleModifier, RuleMetadata } from "./RuleStore.js";
-export type { FilterFormat } from "./export/advanced-formatter.js";
-export { generateFilterList } from "./export/advanced-formatter.js";
-export { RuleDeduplicator } from "./RuleDeduplicator.js";
-export { downloadAndParseSource, parseFilterList, RuleProcessor } from "./RuleProcessor.js";
-export { RuleStore } from "./RuleStore.js";
 
-// Other type exports
+// Core RuleStore and Processor
+export {
+  RuleStore,
+  type RuleClassificationType,
+  type StoredRule,
+  type RuleType,
+  type RuleModifier,
+  type RuleMetadata,
+  type RuleStats,
+} from "./RuleStore.js";
+export {
+  RuleProcessor,
+  parseFilterList,
+  downloadAndParseSource,
+} from "./RuleProcessor.js";
+export { RuleDeduplicator } from "./RuleDeduplicator.js";
+export { createRuleMetadata, cleanDomainPattern } from "./createMetadata.js";
+export {
+  filterLists,
+  sourceCategories,
+  sourceNames,
+  type SourceInfo,
+  type FilterListInfo,
+} from "./sources.js";
+export { fetchContent } from "./fetch.js";
+
+// Export / Formatters
+export {
+  generateFilterList,
+  formatRule,
+  generateHeader as generateAdvancedHeader,
+  type FilterFormat,
+  type FilterMetadata,
+} from "./export/advanced-formatter.js";
+export { formatRuleForType } from "./export/formatters.js";
+export { generateHeader } from "./export/headers.js";
+export { exportFormat, exportWithOptions } from "./export/index.js";
+export { filterDNSRules, filterBrowserRules } from "./export/ruleFilters.js";
+
+// Types
 export type {
   ExportOptions,
   FilterListMetadata,
   SupportedFormat,
 } from "./types.js";
-
-// Other existing exports
-export * from "./RuleStore.js";
-export * from "./RuleProcessor.js";
-export * from "./cli-exports.js";
-export * from "./export/advanced-formatter.js";
-export * from "./export/formatters.js";

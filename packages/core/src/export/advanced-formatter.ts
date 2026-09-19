@@ -145,8 +145,14 @@ export function formatRule(rule: StoredRule, format: FilterFormat): string {
   if (!rule.raw) return "";
 
   // For exception rules in formats that don't support exceptions natively
+  const isExcept =
+    rule.isException ||
+    rule.type === "unblocking" ||
+    rule.raw.startsWith("@@") ||
+    rule.raw.includes("#@#");
+
   if (
-    rule.isException &&
+    isExcept &&
     ["hosts", "dnsmasq", "unbound", "domains"].includes(format)
   ) {
     // Skip exception rules for these formats, or handle with a comment

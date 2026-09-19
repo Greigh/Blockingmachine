@@ -159,11 +159,6 @@ export const filterLists: FilterListInfo[] = [
     enabled: true,
   },
   {
-    name: "uBlock Origin Filters",
-    url: "https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/filters.txt",
-    enabled: true,
-  },
-  {
     name: "Peter Lowes List",
     url: "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblock&showintro=0&mimetype=plaintext",
     enabled: true,

@@ -35,12 +35,23 @@ export async function exportWithOptions(
   outputDir: string,
   meta: FilterListMetadata,
   options: ExportOptions = {},
+  rulesInput?: StoredRule[] | RuleStore,
 ): Promise<StoredRule[]> {
-  const ruleProcessor = new RuleProcessor(); // Create a RuleProcessor instance
-  const store = new RuleStore(ruleProcessor); // Pass it to RuleStore
+  let rules: StoredRule[] = [];
 
-  // Use getUniqueRules() instead of getAllRules()
-  const rules = store.getUniqueRules();
+  if (Array.isArray(rulesInput)) {
+    rules = rulesInput;
+  } else if (rulesInput instanceof RuleStore) {
+    rules = rulesInput.getUniqueRules();
+  } else if (Array.isArray(options.rules)) {
+    rules = options.rules;
+  } else if (options.store instanceof RuleStore) {
+    rules = options.store.getUniqueRules();
+  } else {
+    const ruleProcessor = new RuleProcessor();
+    const store = new RuleStore(ruleProcessor);
+    rules = store.getUniqueRules();
+  }
 
   let filteredRules = [...rules]; // Create a copy to avoid modifying the original
 

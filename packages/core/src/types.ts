@@ -1,3 +1,5 @@
+import type { StoredRule, RuleStore } from "./RuleStore.js";
+
 export type SupportedFormat =
   | "hosts"
   | "dnsmasq"
@@ -29,6 +31,8 @@ export interface FilterListMetadata {
 }
 
 export interface ExportOptions {
+  rules?: StoredRule[];
+  store?: RuleStore;
   formats?: SupportedFormat[];
   categories?: string[];
   excludeCategories?: string[];
