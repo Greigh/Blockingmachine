@@ -1,4 +1,4 @@
-import { parseFilterList } from "../RuleProcessor.js";
+import { parseFilterList, RuleProcessor } from "../RuleProcessor.js";
 import { cleanDomainPattern } from "../createMetadata.js";
 
 describe("RuleProcessor & parseFilterList", () => {
@@ -54,5 +54,25 @@ describe("RuleProcessor & parseFilterList", () => {
     expect(cleanDomainPattern("||example.com/ad-banner.js")).toBeNull();
     expect(cleanDomainPattern("##.ad-class")).toBeNull();
     expect(cleanDomainPattern("! comment")).toBeNull();
+  });
+
+  test("classifyRule handles multi-modifier rules with comma separation", () => {
+    const processor = new RuleProcessor();
+
+    // Secondary modifier 'script' should be detected as a browser modifier and classified as blocking
+    const type = processor.classifyRule("||example.com^$domain=example.org,script");
+    expect(type).toBe("blocking");
+
+    // $csp as secondary modifier should be recognized
+    const cspType = processor.classifyRule("||example.com^$third-party,csp=script-src 'none'");
+    expect(cspType).toBe("csp");
+  });
+
+  test("getErrors and clearErrors manage processor errors correctly", () => {
+    const processor = new RuleProcessor();
+
+    expect(processor.getErrors().unrecognizedRules).toHaveLength(0);
+    processor.clearErrors();
+    expect(processor.getErrors().processingErrors).toHaveLength(0);
   });
 });

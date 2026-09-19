@@ -570,6 +570,44 @@ export class RuleStore {
     return { ...this.stats }; // Return a copy
   }
 
+  // Clear all stored rules and reset statistics
+  clear(): void {
+    this.blockingRules.clear();
+    this.unblockingRules.clear();
+    this.cosmeticRules.clear();
+    this.scriptletRules.clear();
+    this.cspRules.clear();
+    this.redirectRules.clear();
+    this.replaceRules.clear();
+    this.removeHeaderRules.clear();
+    this.removeParamRules.clear();
+    this.htmlFilteringRules.clear();
+    this.extendedCssRules.clear();
+    this.permissionsRules.clear();
+
+    this.stats = {
+      totalProcessed: 0,
+      duplicates: 0,
+      merged: 0,
+      skipped: 0,
+      invalid: 0,
+      blocking: 0,
+      unblocking: 0,
+      cosmetic: 0,
+      scriptlet: 0,
+      preprocessor: 0,
+      hint: 0,
+      csp: 0,
+      redirect: 0,
+      replace: 0,
+      removeheader: 0,
+      removeparam: 0,
+      "html-filtering": 0,
+      permissions: 0,
+      "extended-css": 0,
+    };
+  }
+
   // Add these helper methods to RuleStore
   private extractDomainFromRule(rule: string): string | null {
     // Simple domain extraction logic

@@ -515,6 +515,16 @@ const CustomRulesEditor = () => {
     };
   }, []); // Empty dependency array means run once on mount
 
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Add handler to save custom rules
   const handleSaveCustomRules = async () => {
     setError(null);
@@ -525,8 +535,11 @@ const CustomRulesEditor = () => {
         throw new Error(res.error || 'Failed to save custom rules.');
       }
       setSaveStatus('success');
-      // Optionally clear success message after a delay
-      setTimeout(() => setSaveStatus('idle'), 2000);
+      // Clear success message after a delay safely
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      saveTimeoutRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (err) {
       console.error('Failed to save custom rules:', err);
       setError(
@@ -702,10 +715,14 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
       setProgress(data);
     };
 
-    window.electron.onProcessProgress(onProgressUpdate);
+    const unsubscribe = window.electron.onProcessProgress(onProgressUpdate);
 
     return () => {
-      window.electron.removeProcessProgressListener();
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      } else {
+        window.electron.removeProcessProgressListener();
+      }
     };
   }, []);
 
@@ -1199,27 +1216,43 @@ function App() {
 
   // Listen for update events
   useEffect(() => {
-    window.electron.onUpdateStatus((status) => {
-      setUpdateStatus(status);
-      if (status.includes('Update available')) {
-        setUpdateAvailable(true);
+    const unsubStatus = window.electron.onUpdateStatus((status) => {
+      if (typeof status === 'string') {
+        setUpdateStatus(status);
+        if (status.includes('Update available')) {
+          setUpdateAvailable(true);
+        }
       }
     });
 
-    window.electron.onUpdateProgress((progress) => {
+    const unsubProgress = window.electron.onUpdateProgress((progress) => {
       setUpdateProgress(progress);
     });
 
-    window.electron.onUpdateDownloaded(() => {
+    const unsubDownloaded = window.electron.onUpdateDownloaded(() => {
       setUpdateStatus('Update downloaded. Ready to install.');
     });
+
+    return () => {
+      unsubStatus?.();
+      unsubProgress?.();
+      unsubDownloaded?.();
+    };
   }, []);
 
   useEffect(() => {
-    window.electron.receive('open-settings', () => setCurrentView('settings'));
-    return () => {
-      window.electron.removeAllListeners('open-settings');
-    };
+    if (window.electron.onOpenSettings) {
+      const unsubSettings = window.electron.onOpenSettings(() => setCurrentView('settings'));
+      return () => {
+        unsubSettings();
+      };
+    }
+    if (window.electron.receive) {
+      window.electron.receive('open-settings', () => setCurrentView('settings'));
+      return () => {
+        window.electron.removeAllListeners?.('open-settings');
+      };
+    }
   }, []);
 
   useEffect(() => {

@@ -48,5 +48,8 @@ doubleclick.net
     const domains = deduped.map((r) => r.domain);
     expect(domains).toContain("doubleclick.net");
     expect(domains).toContain("analytics.google.com");
+
+    deduplicator.clear();
+    expect(deduplicator.getStats().total).toBe(0);
   });
 });

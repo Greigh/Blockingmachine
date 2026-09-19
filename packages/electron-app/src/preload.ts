@@ -19,22 +19,30 @@ interface ElectronAPI {
   setExportFormat: (format: FilterFormat) => Promise<{ success: boolean; error?: string }>;
   getTheme: () => Promise<ThemeType>;
   setTheme: (theme: ThemeType) => Promise<{ success: boolean; error?: string }>;
-  onUpdateAvailable: (callback: (event: IpcRendererEvent, info: UpdateInfo) => void) => void;
-  onUpdateDownloaded: (callback: (event: IpcRendererEvent, info: UpdateInfo) => void) => void;
-  onUpdateError: (callback: (event: IpcRendererEvent, error: Error) => void) => void;
-  onUpdateStatus: (callback: (event: IpcRendererEvent, info: UpdateInfo) => void) => void;
-  onProcessProgress: (callback: (progress: ProcessProgress) => void) => void;
+  onUpdateAvailable: (callback: (info: UpdateInfo) => void) => () => void;
+  onUpdateDownloaded: (callback: () => void) => () => void;
+  onUpdateError: (callback: (error: Error) => void) => () => void;
+  onUpdateStatus: (callback: (status: string) => void) => () => void;
+  onProcessProgress: (callback: (progress: ProcessProgress) => void) => () => void;
   removeProcessProgressListener: () => void;
-  onUpdateProgress: (callback: (progress: UpdateProgress) => void) => void;
+  onUpdateProgress: (callback: (progress: number) => void) => () => void;
+  onOpenSettings: (callback: () => void) => () => void;
   getLastProcessTime: () => Promise<string>;
   notifyResize: (width: number, height: number) => void;
   runImportProcess: () => Promise<ProcessingResult>;
-  on: (channel: string, listener: (...args: any[]) => void) => void;
-  receive: (channel: string, callback: (...args: unknown[]) => void) => void;
-  removeAllListeners: (channel: string) => void;
   showItemInFolder: (path: string) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+  receive: (channel: string, callback: (...args: unknown[]) => void) => void;
+  removeAllListeners: (channel: string) => void;
 }
+
+const ALLOWED_CHANNELS = new Set([
+  'open-settings',
+  'process-progress',
+  'update-status',
+  'update-progress',
+  'update-downloaded',
+]);
 
 // Expose the API to the renderer process
 contextBridge.exposeInMainWorld('electron', {
@@ -44,29 +52,90 @@ contextBridge.exposeInMainWorld('electron', {
   setSources: (sources: FilterSource[]) => ipcRenderer.invoke('save-sources', sources),
   saveSources: (sources: FilterSource[]) => ipcRenderer.invoke('save-sources', sources),
   getCustomRules: () => ipcRenderer.invoke('get-custom-rules'),
-  setCustomRules: (rules) => ipcRenderer.invoke('save-custom-rules', rules),
+  setCustomRules: (rules: string) => ipcRenderer.invoke('save-custom-rules', rules),
   getSavePath: () => ipcRenderer.invoke('get-save-path'),
-  setSavePath: (path) => ipcRenderer.invoke('set-save-path', path),
+  setSavePath: (path: string) => ipcRenderer.invoke('set-save-path', path),
   selectSavePath: () => ipcRenderer.invoke('select-save-path') as Promise<string>,
   getExportFormat: () => ipcRenderer.invoke('get-export-format'),
-  setExportFormat: (format) => ipcRenderer.invoke('set-export-format', format),
+  setExportFormat: (format: FilterFormat) => ipcRenderer.invoke('set-export-format', format),
   getTheme: () => ipcRenderer.invoke('get-theme'),
-  setTheme: (theme) => ipcRenderer.invoke('set-theme', theme),
-  onUpdateAvailable: (callback) => ipcRenderer.on('update-available', callback),
-  onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', callback),
-  onUpdateError: (callback) => ipcRenderer.on('update-error', callback),
-  onUpdateStatus: (callback) => ipcRenderer.on('update-status', callback),
-  onProcessProgress: (callback: (progress: ProcessProgress) => void) =>
-    ipcRenderer.on('process-progress', (_event: IpcRendererEvent, progress: ProcessProgress) => callback(progress)),
+  setTheme: (theme: ThemeType) => ipcRenderer.invoke('set-theme', theme),
+
+  onUpdateAvailable: (callback: (info: UpdateInfo) => void) => {
+    const handler = (_event: IpcRendererEvent, info: UpdateInfo) => callback(info);
+    ipcRenderer.on('update-available', handler);
+    return () => {
+      ipcRenderer.removeListener('update-available', handler);
+    };
+  },
+  onUpdateDownloaded: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('update-downloaded', handler);
+    return () => {
+      ipcRenderer.removeListener('update-downloaded', handler);
+    };
+  },
+  onUpdateError: (callback: (error: Error) => void) => {
+    const handler = (_event: IpcRendererEvent, error: Error) => callback(error);
+    ipcRenderer.on('update-error', handler);
+    return () => {
+      ipcRenderer.removeListener('update-error', handler);
+    };
+  },
+  onUpdateStatus: (callback: (status: string) => void) => {
+    const handler = (_event: IpcRendererEvent, status: string) => callback(status);
+    ipcRenderer.on('update-status', handler);
+    return () => {
+      ipcRenderer.removeListener('update-status', handler);
+    };
+  },
+  onProcessProgress: (callback: (progress: ProcessProgress) => void) => {
+    const handler = (_event: IpcRendererEvent, progress: ProcessProgress) => callback(progress);
+    ipcRenderer.on('process-progress', handler);
+    return () => {
+      ipcRenderer.removeListener('process-progress', handler);
+    };
+  },
   removeProcessProgressListener: () => ipcRenderer.removeAllListeners('process-progress'),
-  onUpdateProgress: (callback: (progress: UpdateProgress) => void) =>
-    ipcRenderer.on('update-progress', (_event: IpcRendererEvent, progress: UpdateProgress) => callback(progress)),
+  onUpdateProgress: (callback: (progress: number) => void) => {
+    const handler = (_event: IpcRendererEvent, progress: UpdateProgress | number) => {
+      const percent = typeof progress === 'number' ? progress : progress?.percent ?? 0;
+      callback(percent);
+    };
+    ipcRenderer.on('update-progress', handler);
+    return () => {
+      ipcRenderer.removeListener('update-progress', handler);
+    };
+  },
+  onOpenSettings: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('open-settings', handler);
+    return () => {
+      ipcRenderer.removeListener('open-settings', handler);
+    };
+  },
   getLastProcessTime: () => ipcRenderer.invoke('get-last-process-time'),
   notifyResize: (width: number, height: number) => ipcRenderer.send('notify-resize', width, height),
   runImportProcess: () => ipcRenderer.invoke('run-import-process'),
-  on: (channel: string, listener: (...args: any[]) => void) => ipcRenderer.on(channel, listener),
-  receive: (channel: string, callback: (...args: unknown[]) => void) => ipcRenderer.on(channel, callback),
-  removeAllListeners: (channel: string) => ipcRenderer.removeAllListeners(channel),
-  showItemInFolder: (path: string) => ipcRenderer.send('show-item-in-folder', path),
+
+  // Secure channel-checked fallback for legacy listeners
+  receive: (channel: string, callback: (...args: unknown[]) => void) => {
+    if (ALLOWED_CHANNELS.has(channel)) {
+      ipcRenderer.on(channel, (_event: IpcRendererEvent, ...args: unknown[]) => callback(...args));
+    } else {
+      console.warn(`[Preload] Blocked unauthorized receive on channel: ${channel}`);
+    }
+  },
+  removeAllListeners: (channel: string) => {
+    if (ALLOWED_CHANNELS.has(channel)) {
+      ipcRenderer.removeAllListeners(channel);
+    }
+  },
+
+  showItemInFolder: (path: string) => {
+    if (typeof path === 'string' && path.trim().length > 0) {
+      ipcRenderer.send('show-item-in-folder', path);
+    }
+  },
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
 } as ElectronAPI);

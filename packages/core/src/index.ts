@@ -17,6 +17,7 @@ export {
   RuleProcessor,
   parseFilterList,
   downloadAndParseSource,
+  type ProcessorErrors,
 } from "./RuleProcessor.js";
 export { RuleDeduplicator } from "./RuleDeduplicator.js";
 export { createRuleMetadata, cleanDomainPattern } from "./createMetadata.js";

@@ -4,10 +4,9 @@ import {
   type CommandResult,
 } from "./BaseCommand.js";
 import type { ImportOptions } from "./types.js";
-import { createPaths } from "@blockingmachine/core";
+import { createPaths, fetchContent } from "@blockingmachine/core";
 import fs from "fs/promises";
 import path from "path";
-import fetch from "node-fetch";
 
 export class ImportCommand extends BaseCommand<ImportOptions> {
   constructor(options: CommandOptions) {
@@ -23,12 +22,13 @@ export class ImportCommand extends BaseCommand<ImportOptions> {
       const paths = createPaths(baseDir);
 
       // Create output directory if it doesn't exist
-      await fs.mkdir(path.dirname(paths.output.dir), { recursive: true });
+      await fs.mkdir(paths.output.dir, { recursive: true });
 
       // Process each enabled source
       let totalProcessed = 0;
       let totalSources = 0;
       const allRules: string[] = [];
+      const seenRules = new Set<string>();
 
       for (const source of config.sources) {
         if (!source.enabled) {
@@ -40,30 +40,39 @@ export class ImportCommand extends BaseCommand<ImportOptions> {
         this.logger.info(`Processing source: ${source.name}`);
 
         try {
-          // Download the filter list
+          // Download the filter list using robust core fetchContent
           this.logger.info(`Downloading from: ${source.url}`);
-          const response = await fetch(source.url);
+          const content = await fetchContent(source.url);
 
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          if (!content) {
+            this.logger.warn(`⚠ No content returned for: ${source.name}`);
+            continue;
           }
 
-          const content = await response.text();
-
-          // Simple parsing - just extract non-comment lines
+          // Extract non-comment lines
           const rules = content
             .split("\n")
-            .map((line) => line.trim())
+            .map((line: string) => line.trim())
             .filter(
-              (line) => line && !line.startsWith("!") && !line.startsWith("#"),
-            )
-            .filter((line) => line.length > 0);
+              (line: string) =>
+                line &&
+                !line.startsWith("!") &&
+                !line.startsWith("#") &&
+                !line.startsWith("["),
+            );
 
           if (rules && rules.length > 0) {
-            allRules.push(...rules);
+            let newlyAdded = 0;
+            for (const rule of rules) {
+              if (!seenRules.has(rule)) {
+                seenRules.add(rule);
+                allRules.push(rule);
+                newlyAdded++;
+              }
+            }
             totalProcessed++;
             this.logger.info(
-              `✓ Successfully processed: ${source.name} (${rules.length} rules)`,
+              `✓ Successfully processed: ${source.name} (${rules.length} rules, ${newlyAdded} unique added)`,
             );
           } else {
             this.logger.warn(`⚠ No rules found for: ${source.name}`);
@@ -77,7 +86,7 @@ export class ImportCommand extends BaseCommand<ImportOptions> {
       if (allRules.length > 0) {
         const outputFile = path.join(paths.output.dir, "imported-rules.txt");
         await fs.writeFile(outputFile, allRules.join("\n"));
-        this.logger.info(`Saved ${allRules.length} rules to: ${outputFile}`);
+        this.logger.info(`Saved ${allRules.length} unique rules to: ${outputFile}`);
       }
 
       this.logger.info(
