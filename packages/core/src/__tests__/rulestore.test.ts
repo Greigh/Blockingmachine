@@ -62,6 +62,38 @@ describe("RuleStore", () => {
     expect(rules[0].metadata.domain).toBe("adserver.org");
   });
 
+  test("preserves multiple distinct blocking rules for the same domain", () => {
+    store.addRule("||example.com^", "source-1");
+    store.addRule("||example.com/ads/*", "source-2");
+    store.addRule("||example.com/tracker.js", "source-3");
+    const rules = store.getUniqueRules();
+    expect(rules).toHaveLength(3);
+    const rawRules = rules.map((r) => r.raw);
+    expect(rawRules).toContain("||example.com^");
+    expect(rawRules).toContain("||example.com/ads/*");
+    expect(rawRules).toContain("||example.com/tracker.js");
+  });
+
+  test("preserves cosmetic rules with identical selectors across different domains", () => {
+    store.addRule("sitea.com##.ad-banner", "source-1");
+    store.addRule("siteb.com##.ad-banner", "source-2");
+    const rules = store.getUniqueRules();
+    expect(rules).toHaveLength(2);
+    const rawRules = rules.map((r) => r.raw);
+    expect(rawRules).toContain("sitea.com##.ad-banner");
+    expect(rawRules).toContain("siteb.com##.ad-banner");
+  });
+
+  test("merges sources for exact duplicate rules", () => {
+    store.addRule("||doubleclick.net^", "source-alpha");
+    store.addRule("||doubleclick.net^", "source-beta");
+    const rules = store.getUniqueRules();
+    expect(rules).toHaveLength(1);
+    expect(rules[0].metadata.sources).toEqual(
+      expect.arrayContaining(["source-alpha", "source-beta"]),
+    );
+  });
+
   test("clears all stored rules and resets statistics", () => {
     store.addRule("||tracker.com^", "source-1");
     store.addRule("@@||safe.com^", "source-2");

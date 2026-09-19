@@ -25,9 +25,23 @@ describe("RuleDeduplicator", () => {
     expect(keyWithMod).toBe("tracker.org|mods=script,third-party");
   });
 
-  test("stripRule preserves exception marker @@", () => {
-    const exceptionKey = deduplicator.stripRule("@@||safe-site.com^");
-    expect(exceptionKey).toBe("@@safe-site.com");
+  test("stripRule preserves exception marker @@ and #@#", () => {
+    const networkException = deduplicator.stripRule("@@||safe-site.com^");
+    expect(networkException).toBe("@@safe-site.com");
+
+    const cosmeticException = deduplicator.stripRule("example.com#@#.ad-banner");
+    const cosmeticHide = deduplicator.stripRule("example.com##.ad-banner");
+    expect(cosmeticException).toBe("@@example.com|sel=.ad-banner");
+    expect(cosmeticHide).toBe("example.com|sel=.ad-banner");
+    expect(cosmeticException).not.toBe(cosmeticHide);
+  });
+
+  test("stripRule preserves distinct scriptlets on the same domain", () => {
+    const s1 = deduplicator.stripRule("example.com#$#abort-current-inline-script");
+    const s2 = deduplicator.stripRule("example.com#$#set-constant ad true");
+    expect(s1).toBe("example.com|scriptlet=abort-current-inline-script");
+    expect(s2).toBe("example.com|scriptlet=set-constant ad true");
+    expect(s1).not.toBe(s2);
   });
 
   test("processRules deduplicates rules across different source formats", async () => {

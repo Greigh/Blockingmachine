@@ -21,6 +21,7 @@ const getBaseDir = (): string => {
 const MAX_RETRIES = 3;
 const INITIAL_DELAY = 2000;
 const FETCH_TIMEOUT = 30000; // Define timeout duration
+const MAX_PAYLOAD_SIZE = 100 * 1024 * 1024; // 100MB max payload limit
 
 async function fetchWithRetry(
   url: RequestInfo,
@@ -51,6 +52,14 @@ async function fetchWithRetry(
       }
       throw new Error(`HTTP error! status: ${response.status}`);
     }
+
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && parseInt(contentLength, 10) > MAX_PAYLOAD_SIZE) {
+      throw new Error(
+        `Response payload exceeds limit of 100MB: ${contentLength} bytes`,
+      );
+    }
+
     const text = await response.text();
     return text;
   } catch (error: any) {
@@ -114,6 +123,19 @@ export async function fetchContent(url: string): Promise<string | null> {
           filePath = cwdCandidate;
         }
       }
+
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile()) {
+        console.error(`❌ Local path is not a file: ${filePath}`);
+        return null;
+      }
+      if (stat.size > MAX_PAYLOAD_SIZE) {
+        console.error(
+          `❌ Local file exceeds 100MB limit: ${filePath} (${stat.size} bytes)`,
+        );
+        return null;
+      }
+
       console.log(`Reading local file: ${filePath}`);
       const content = await fs.readFile(filePath, "utf8");
       return content;

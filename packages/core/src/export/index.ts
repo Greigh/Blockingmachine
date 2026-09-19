@@ -82,38 +82,38 @@ export async function exportWithOptions(
     );
   }
 
-  // Apply format-specific filters
-  for (const format of options.formats || ["all"]) {
+  const baseRules = [...filteredRules];
+
+  // Export to each format specified with format-specific rules and stats
+  const formatsToExport = options.formats || ["all"];
+  for (const format of formatsToExport) {
+    let formatRules = baseRules;
     if (["hosts", "dnsmasq", "unbound"].includes(format)) {
-      filteredRules = filterDNSRules(filteredRules);
+      formatRules = filterDNSRules(baseRules);
     } else if (["adguard", "abp"].includes(format)) {
-      filteredRules = filterBrowserRules(filteredRules);
+      formatRules = filterBrowserRules(baseRules);
     }
-  }
 
-  // Update metadata with stats from the filtered rules
-  const updatedMeta = {
-    ...meta,
-    lastUpdated: new Date().toISOString(),
-    stats: {
-      totalRules: filteredRules.length,
-      blockingRules: filteredRules.filter((rule) => rule.type === "blocking")
-        .length,
-      exceptionRules: filteredRules.filter((rule) => rule.type === "unblocking")
-        .length,
-    },
-  };
+    const formatMeta: FilterListMetadata = {
+      ...meta,
+      lastUpdated: new Date().toISOString(),
+      stats: {
+        totalRules: formatRules.length,
+        blockingRules: formatRules.filter((rule) => rule.type === "blocking").length,
+        exceptionRules: formatRules.filter(
+          (rule) => rule.type === "unblocking" || rule.isException,
+        ).length,
+      },
+    };
 
-  // Export to each format specified
-  for (const format of options.formats || ["all"]) {
     const outputPath = join(outputDir, `${format}.txt`);
-    await exportFormat(format, outputPath, filteredRules, updatedMeta);
+    await exportFormat(format, outputPath, formatRules, formatMeta);
     console.log(
-      `Exported ${filteredRules.length} rules to ${outputPath} in ${format} format`,
+      `Exported ${formatRules.length} rules to ${outputPath} in ${format} format`,
     );
   }
 
-  return filteredRules;
+  return baseRules;
 }
 
 // Re-export from other files

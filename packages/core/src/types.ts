@@ -9,6 +9,8 @@ export type SupportedFormat =
   | "shadowrocket"
   | "adguard"
   | "abp"
+  | "domains"
+  | "plain"
   | "all";
 
 export interface FilterListMetadata {

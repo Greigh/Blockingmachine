@@ -32,6 +32,12 @@ export function formatRuleForType(
       return formatPrivoxyRule(rule);
     case "shadowrocket":
       return formatShadowrocketRule(rule);
+    case "domains":
+      if (isException(rule)) return `# EXCEPTION: ${rule.raw}`;
+      const domainVal = getDomain(rule);
+      return domainVal || "";
+    case "plain":
+      return rule.raw;
     case "adguard":
     case "abp":
       return rule.raw; // AdGuard and ABP use the original format

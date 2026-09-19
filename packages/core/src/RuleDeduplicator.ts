@@ -77,9 +77,9 @@ export class RuleDeduplicator {
     if (!rule) return "";
     try {
       let stripped = rule;
-      const isException = stripped.startsWith("@@");
-      if (isException) {
-        stripped = stripped.slice(2); // Here the @@ prefix is removed
+      const isException = stripped.startsWith("@@") || stripped.includes("#@#");
+      if (stripped.startsWith("@@")) {
+        stripped = stripped.slice(2); // Remove the @@ prefix
       }
 
       // 1. Extract and Normalize Key Modifiers/Selectors
@@ -88,7 +88,7 @@ export class RuleDeduplicator {
           .toLowerCase()
           .trim(),
         // Ensure modifiers are handled correctly even if no '$' is present
-        modifiers: (stripped.match(/\$([^#]*?)(?:##|#\?#|#@#|$)/)?.[1] || "")
+        modifiers: (stripped.match(/\$([^#]*?)(?:##|#\?#|#@#|#\$#|#\$\?#|#%#|$)/)?.[1] || "")
           .split(",")
           .map((m) => m.split("=")[0].toLowerCase().trim())
           .filter((m) => m && m !== "domain") // Ensure 'domain' modifier itself isn't included here
@@ -102,12 +102,21 @@ export class RuleDeduplicator {
           .toLowerCase()
           .replace(/\s+/g, " ")
           .trim(),
+        scriptlet: (stripped.match(/(?:#\$#|#\$\?#|#%#)(.+)/)?.[1] || "")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim(),
+        htmlFiltering: (stripped.match(/\$\$(.+)/)?.[1] || "")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim(),
       };
 
       // 2. Remove all modifiers, selectors, options from the core rule string
       stripped = stripped
+        .replace(/\$\$.*$/, "") // Remove HTML filtering section
         .replace(/\$.*$/, "") // Remove modifiers section
-        .replace(/(?:##|#@#|#\?#).*$/, "") // Remove cosmetic/extended selectors
+        .replace(/(?:##|#@#|#\?#|#\$#|#\$\?#|#%#).*$/, "") // Remove cosmetic/extended/scriptlet selectors
         .replace(/[!#]\s*.*$/, ""); // Remove comments
 
       // 3. Refined Normalization of the Core Target String
@@ -128,7 +137,7 @@ export class RuleDeduplicator {
       // Handle cases where stripping leaves nothing
       if (
         !stripped &&
-        (parts.modifiers || parts.selector || parts.extendedSelector)
+        (parts.modifiers || parts.selector || parts.extendedSelector || parts.scriptlet || parts.htmlFiltering)
       ) {
         stripped = "modifier_or_selector_rule"; // Use a placeholder key
       } else if (!stripped) {
@@ -143,6 +152,8 @@ export class RuleDeduplicator {
         parts.modifiers && `mods=${parts.modifiers}`, // Keep mods= prefix for clarity
         parts.selector && `sel=${parts.selector}`,
         parts.extendedSelector && `extsel=${parts.extendedSelector}`,
+        parts.scriptlet && `scriptlet=${parts.scriptlet}`,
+        parts.htmlFiltering && `html=${parts.htmlFiltering}`,
       ].filter(Boolean); // Filter out empty strings
 
       // The prefix is added back only at the very end
