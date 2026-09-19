@@ -417,13 +417,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           status: 'Saving to file...',
           percent: 95,
         });
-        const savePath =
-          store.get('savePath') ||
-          join(
+        let savePath = store.get('savePath');
+        if (!savePath || typeof savePath !== 'string' || !isAbsolute(savePath)) {
+          savePath = join(
             app.getPath('documents'),
             'Blockingmachine',
             'processed_rules.txt'
           );
+        }
         await fs.mkdir(dirname(savePath), { recursive: true });
         await fs.writeFile(savePath, generatedList, 'utf8');
         console.log(`[IPC Main] Filter list saved to: ${savePath}`);
@@ -492,7 +493,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle(
       'set-save-path',
       async (_event: IpcMainInvokeEvent, filePath: string) => {
-        if (typeof filePath === 'string' && filePath.trim().length > 0) {
+        if (
+          typeof filePath === 'string' &&
+          filePath.trim().length > 0 &&
+          isAbsolute(filePath)
+        ) {
           try {
             store.set('savePath', filePath);
             console.log(`[IPC Main] Save path set to: ${filePath}`);
@@ -505,7 +510,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             };
           }
         } else {
-          return { success: false, error: 'Invalid file path provided.' };
+          return {
+            success: false,
+            error: 'Invalid or non-absolute file path provided.',
+          };
         }
       }
     );
@@ -572,10 +580,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     ipcMain.handle('open-external', async (_event, url: string) => {
       try {
-        if (!url.startsWith('https://') && !url.startsWith('http://')) {
-          throw new Error('Invalid URL protocol');
+        if (typeof url !== 'string' || !url.trim()) {
+          throw new Error('Invalid URL');
         }
-        await shell.openExternal(url);
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+          throw new Error(`Forbidden protocol: ${parsed.protocol}`);
+        }
+        await shell.openExternal(parsed.href);
         return { success: true };
       } catch (error) {
         console.error('Failed to open external URL:', error);
@@ -660,6 +672,17 @@ const createWindow = async () => {
 
 async function initialize() {
   try {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self';",
+          ],
+        },
+      });
+    });
+
     await installExtensions();
     setupDefaultFilterSources();
     registerIPCHandlers(store);

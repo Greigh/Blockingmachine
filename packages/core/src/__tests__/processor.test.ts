@@ -68,6 +68,20 @@ describe("RuleProcessor & parseFilterList", () => {
     expect(cspType).toBe("csp");
   });
 
+  test("parseFilterList strips UTF-8 BOM correctly", () => {
+    const rawWithBOM = "\uFEFF! Title: BOM List\n||adservice.com^\n";
+    const rules = parseFilterList(rawWithBOM, "bom-source");
+    expect(rules).toHaveLength(1);
+    expect(rules[0].domain).toBe("adservice.com");
+    expect(rules[0].raw).toBe("||adservice.com^");
+  });
+
+  test("classifyRule recognizes IPv6 addresses as blocking", () => {
+    const processor = new RuleProcessor();
+    expect(processor.classifyRule("::1")).toBe("blocking");
+    expect(processor.classifyRule("2001:0db8:85a3:0000:0000:8a2e:0370:7334")).toBe("blocking");
+  });
+
   test("getErrors and clearErrors manage processor errors correctly", () => {
     const processor = new RuleProcessor();
 

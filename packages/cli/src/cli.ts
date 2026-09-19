@@ -73,9 +73,12 @@ program
     try {
       const config = await loadConfig();
       const cmd = new ExportCommand({ config, logger });
-      await cmd.execute({
+      const result = await cmd.execute({
         outputPath: cmdOptions.outputPath,
       });
+      if (!result.success) {
+        process.exit(1);
+      }
     } catch (error) {
       logger.error(
         `Export failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -92,7 +95,10 @@ program
     try {
       const config = await loadConfig();
       const cmd = new ImportCommand({ config, logger });
-      await cmd.execute({ force: Boolean(cmdOptions.force) });
+      const result = await cmd.execute({ force: Boolean(cmdOptions.force) });
+      if (!result.success) {
+        process.exit(1);
+      }
     } catch (error) {
       logger.error(
         `Import failed: ${error instanceof Error ? error.message : String(error)}`,

@@ -3,7 +3,7 @@ import { StoredRuleModel } from "../lib/db.js";
 import { createLogger } from "../lib/logger.js";
 
 interface DBVersion {
-  _id: ObjectId;
+  _id: string | ObjectId;
   version: number;
   updatedAt: Date;
 }
@@ -40,7 +40,7 @@ async function getDBVersion(): Promise<number> {
     }
     const versionDoc = await mongoose.connection.db
       .collection("dbinfo")
-      .findOne<DBVersion>({ _id: new mongoose.Types.ObjectId("version") });
+      .findOne<DBVersion>({ _id: "version" as any });
     return versionDoc?.version || 0;
   } catch {
     return 0;
@@ -54,7 +54,7 @@ async function updateDBVersion(version: number): Promise<void> {
   await mongoose.connection.db
     .collection("dbinfo")
     .updateOne(
-      { _id: new mongoose.Types.ObjectId("version") },
+      { _id: "version" as any },
       { $set: { version, updatedAt: new Date() } },
       { upsert: true },
     );

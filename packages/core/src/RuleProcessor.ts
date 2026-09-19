@@ -11,6 +11,8 @@ import { createRuleMetadata } from "./createMetadata.js";
 
 // --- Regex Definitions ---
 const IPV4_REGEX = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+const IPV6_REGEX =
+  /^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^::$|^(?:[0-9a-fA-F]{1,4}:){1,7}:|^(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}$/;
 const _DOMAIN_REGEX =
   /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
 const DOMAIN_OR_WILDCARD_REGEX =
@@ -126,12 +128,13 @@ export function parseFilterList(
   sourceUrl?: string,
 ): StoredRule[] {
   const rules: StoredRule[] = [];
-  const lines = content.split("\n");
+  const cleanContent = content.replace(/^\uFEFF/, "");
+  const lines = cleanContent.split(/\r?\n/);
   const source = sourceUrl || "unknown";
   const tempProcessor = new RuleProcessor();
 
   for (const line of lines) {
-    const trimmedLine = line.trim().replace(/\r$/, "");
+    const trimmedLine = line.trim();
     if (!trimmedLine) continue;
 
     const ruleType = tempProcessor.classifyRule(trimmedLine);
@@ -348,6 +351,7 @@ export class RuleProcessor {
     // IP Address / Domain/Hostname
     if (
       IPV4_REGEX.test(trimmedRule) ||
+      IPV6_REGEX.test(trimmedRule) ||
       DOMAIN_OR_WILDCARD_REGEX.test(trimmedRule) ||
       (trimmedRule.includes(".") && HOSTNAME_REGEX.test(trimmedRule))
     ) {
@@ -422,7 +426,8 @@ export class RuleProcessor {
     }
     console.log(`   Fetched in ${(fetchEndTime - startTime).toFixed(2)} ms`);
 
-    const lines = content.split("\n");
+    const cleanContent = content.replace(/^\uFEFF/, "");
+    const lines = cleanContent.split(/\r?\n/);
     const _filterMetadata = this.extractFilterMetadata(lines) || {
       name: sourceName,
       sources: [sourceName],
@@ -434,7 +439,7 @@ export class RuleProcessor {
     const MAX_UNRECOGNIZED_LOG = 5;
 
     for (const line of lines) {
-      const cleanRule = line.trim().replace(/\r$/, "");
+      const cleanRule = line.trim();
       if (!cleanRule) continue;
 
       // Basic Comment/Header Skip

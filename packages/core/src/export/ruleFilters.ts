@@ -56,12 +56,16 @@ export function filterDNSRules(rules: StoredRule[]): StoredRule[] {
     if (rule.raw.includes("$$")) return false;
     if (rule.raw.includes("/") && !rule.raw.match(/^(@@)?\|\|/)) return false;
 
-    // Check modifiers
-    const modifierPattern = /\$([a-z0-9_-]+)(?:=|$)/gi;
-    let match;
-    while ((match = modifierPattern.exec(rule.raw))) {
-      if (NETWORK_RULE_BROWSER_MODIFIERS.has(match[1].toLowerCase())) {
-        return false;
+    // Check modifiers (parse all comma-separated modifiers after $)
+    const dollarIdx = rule.raw.indexOf("$");
+    if (dollarIdx !== -1) {
+      const modString = rule.raw.slice(dollarIdx + 1);
+      const mods = modString.split(",");
+      for (const rawMod of mods) {
+        const modName = rawMod.split("=")[0].trim().toLowerCase();
+        if (NETWORK_RULE_BROWSER_MODIFIERS.has(modName)) {
+          return false;
+        }
       }
     }
     return true;

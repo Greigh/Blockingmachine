@@ -177,6 +177,24 @@ export class RuleStore {
     return crypto.createHash("sha256").update(rule).digest("hex");
   }
 
+  // Helper to merge sources between duplicate rules
+  private mergeSources(existingRule: StoredRule, newSources?: string[]): void {
+    if (newSources && Array.isArray(newSources)) {
+      const currentSources = new Set(existingRule.metadata.sources || []);
+      let updated = false;
+      for (const src of newSources) {
+        if (!currentSources.has(src)) {
+          currentSources.add(src);
+          updated = true;
+        }
+      }
+      if (updated) {
+        existingRule.metadata.sources = Array.from(currentSources);
+        this.stats.merged++;
+      }
+    }
+  }
+
   // Generic Handler for Map-based Rules
   // Use the more specific GenericRuleType for the 'type' parameter
   private addGenericRule(
@@ -241,20 +259,7 @@ export class RuleStore {
       }
     } else {
       // Handle duplicate: Merge sources
-      if (metadata?.sources && Array.isArray(metadata.sources)) {
-        const currentSources = new Set(existingRule.metadata.sources || []);
-        let updated = false;
-        for (const src of metadata.sources) {
-          if (!currentSources.has(src)) {
-            currentSources.add(src);
-            updated = true;
-          }
-        }
-        if (updated) {
-          existingRule.metadata.sources = Array.from(currentSources);
-          this.stats.merged++; // Increment merged count
-        }
-      }
+      this.mergeSources(existingRule, metadata?.sources);
       this.stats.duplicates++;
     }
   }
@@ -391,58 +396,26 @@ export class RuleStore {
     }
   }
 
-  // Handles blocking and unblocking rules (domain/pattern or hash keyed)
+  // Handles blocking and unblocking rules (hash keyed to prevent dropping distinct rules on same domain)
   private handleStandardRule(
     originalRule: string,
     type: "blocking" | "unblocking",
     metadata: RuleMetadata,
   ): void {
-    let key: string | null;
-    let isHashKey = false;
     const cleanDomain =
       metadata.domain || cleanDomainPattern(originalRule) || undefined;
-
-    // Determine if it should use a hash key (global modifiers, etc.)
-    if (
-      originalRule.includes("$") &&
-      !originalRule.includes("#") &&
-      !originalRule.includes("##")
-    ) {
-      // Simple check: if '$' is present but not cosmetic/scriptlet markers, assume hash key needed
-      key = this.generateHash(originalRule);
-      isHashKey = true;
-    } else {
-      key = cleanDomain || this.extractDomainFromRule(originalRule);
-    }
-
-    if (!key) {
-      console.warn(
-        `[handleStandardRule] Could not determine key for ${type} rule: ${originalRule}`,
-      );
-      this.stats.invalid++;
-      return;
-    }
+    const ruleHash = this.generateHash(originalRule);
+    const key = ruleHash;
 
     const ruleMap =
       type === "unblocking" ? this.unblockingRules : this.blockingRules;
     const existingRule = ruleMap.get(key);
-    const ruleHash = this.generateHash(originalRule);
 
-    if (existingRule?.hash === ruleHash) {
-      // Exact duplicate based on hash
+    if (existingRule) {
+      // Exact duplicate based on hash: merge sources
+      this.mergeSources(existingRule, metadata?.sources);
       this.stats.duplicates++;
-      // Optionally merge sources if needed (similar to addGenericRule)
       return;
-    }
-
-    // If keys match but hashes differ, it might be a conflict or update.
-    // For simplicity, we'll overwrite if the key isn't a hash,
-    // or add if the key is a hash (allowing multiple hash-keyed rules).
-    if (existingRule && !isHashKey) {
-      console.warn(
-        `[handleStandardRule] Overwriting rule with same key '${key}' but different content. Old: ${existingRule.originalRule}, New: ${originalRule}`,
-      );
-      // Optionally increment a specific stat for overwrites
     }
 
     const isException = type === "unblocking" || originalRule.startsWith("@@");
@@ -474,12 +447,11 @@ export class RuleStore {
     this.stats[type]++; // Increment specific stat
   }
 
-  // Handles cosmetic rules (selector keyed)
+  // Handles cosmetic rules (hash keyed to prevent dropping rules with same selector across sites)
   private handleCosmeticRule(
     originalRule: string,
     metadata: RuleMetadata,
   ): void {
-    // Extract selector manually since extractSelector doesn't exist
     const selector = this.extractSelectorFromRule(originalRule);
 
     if (!selector) {
@@ -497,20 +469,15 @@ export class RuleStore {
       return;
     }
 
-    const key = selector;
     const ruleHash = this.generateHash(originalRule);
+    const key = ruleHash;
     const existingRule = this.cosmeticRules.get(key);
 
-    if (existingRule?.hash === ruleHash) {
-      this.stats.duplicates++;
-      // Optionally merge sources
-      return;
-    }
-
     if (existingRule) {
-      console.warn(
-        `[handleCosmeticRule] Overwriting rule with same selector '${key}' but different content. Old: ${existingRule.originalRule}, New: ${originalRule}`,
-      );
+      // Exact duplicate: merge sources
+      this.mergeSources(existingRule, metadata?.sources);
+      this.stats.duplicates++;
+      return;
     }
 
     const isException = originalRule.includes("#@#");
@@ -521,6 +488,7 @@ export class RuleStore {
       hash: ruleHash,
       type: "cosmetic",
       isException,
+      domain: metadata.domain || undefined,
       metadata: {
         sources: metadata.sources || [],
         dateAdded: new Date(),
@@ -533,7 +501,8 @@ export class RuleStore {
           priority: metadata.sourceInfo?.priority || 0,
         },
         tags: [],
-        selector: key,
+        selector: selector,
+        domain: metadata.domain || undefined,
       },
     };
 
