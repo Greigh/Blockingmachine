@@ -14,7 +14,6 @@ import { defaultMetaConfig } from "./lib/constants.js";
 import { ImportCommand } from "./commands/ImportCommand.js";
 import { ExportCommand } from "./commands/ExportCommand.js";
 import { ValidateCommand } from "./commands/ValidateCommand.js";
-import { ExportOptions } from "./types.js";
 import type { MetaConfig } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
