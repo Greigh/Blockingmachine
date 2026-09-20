@@ -1,6 +1,11 @@
 import type { StoredRule } from "../RuleStore.js";
-import { cleanDomainPattern } from "../createMetadata.js";
 import type { FilterListMetadata } from "../types.js";
+import {
+  isException,
+  isBrowserOnlyRule,
+  getDnsDomain,
+  formatAdguardRule,
+} from "./formatters.js";
 
 export type FilterFormat =
   "adguard" | "abp" | "hosts" | "dnsmasq" | "unbound" | "domains" | "plain";
@@ -143,55 +148,48 @@ export function generateHeader(
 
 export function formatRule(rule: StoredRule, format: FilterFormat): string {
   // Return early if rule isn't valid
-  if (!rule.raw) return "";
+  if (!rule || !rule.raw) return "";
 
-  // For exception rules in formats that don't support exceptions natively
-  const isExcept =
-    rule.isException ||
-    rule.type === "unblocking" ||
-    rule.raw.startsWith("@@") ||
-    rule.raw.includes("#@#");
-
-  if (isExcept && ["hosts", "dnsmasq", "unbound", "domains"].includes(format)) {
-    // Skip exception rules for these formats, or handle with a comment
-    return `# EXCEPTION: ${rule.raw}`;
-  }
-
-  const domain =
-    rule.domain || rule.metadata?.domain || cleanDomainPattern(rule.raw);
+  const isExcept = isException(rule);
 
   switch (format) {
-    case "hosts":
-      if (domain) {
-        return `0.0.0.0 ${domain}`;
+    case "hosts": {
+      if (isExcept) {
+        if (isBrowserOnlyRule(rule)) return "";
+        return `# EXCEPTION: ${rule.raw}`;
       }
-      return "";
-
-    case "dnsmasq":
-      if (domain) {
-        return `address=/${domain}/0.0.0.0`;
+      const domain = getDnsDomain(rule);
+      return domain ? `0.0.0.0 ${domain}` : "";
+    }
+    case "dnsmasq": {
+      if (isExcept) {
+        if (isBrowserOnlyRule(rule)) return "";
+        return `# EXCEPTION: ${rule.raw}`;
       }
-      return "";
-
-    case "unbound":
-      if (domain) {
-        return `  local-zone: "${domain}" always_nxdomain`;
+      const domain = getDnsDomain(rule);
+      return domain ? `address=/${domain}/0.0.0.0` : "";
+    }
+    case "unbound": {
+      if (isExcept) {
+        if (isBrowserOnlyRule(rule)) return "";
+        return `# EXCEPTION: ${rule.raw}`;
       }
-      return "";
-
-    case "domains":
-      if (domain) {
-        return domain;
+      const domain = getDnsDomain(rule);
+      return domain ? `  local-zone: "${domain}" always_nxdomain` : "";
+    }
+    case "domains": {
+      if (isExcept) {
+        if (isBrowserOnlyRule(rule)) return "";
+        return `# EXCEPTION: ${rule.raw}`;
       }
-      return "";
-
-    case "plain":
-      return rule.raw || "";
-
+      const domain = getDnsDomain(rule);
+      return domain || "";
+    }
     case "adguard":
     case "abp":
+      return formatAdguardRule(rule);
+    case "plain":
     default:
-      // For AdGuard/ABP formats, return the raw rule
       return rule.raw;
   }
 }
