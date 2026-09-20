@@ -273,10 +273,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <a
             href="#"
             onClick={(e) =>
-              handleExternalLink(e, 'https://danielhipskind.bio')
+              handleExternalLink(e, 'https://danielhipskind.com')
             }
             className="sidebar-meta-btn"
-            title="Developer Profile: Daniel Hipskind"
+            title="Developer Website: danielhipskind.com"
           >
             <svg
               viewBox="0 0 24 24"
