@@ -64,13 +64,44 @@ export interface FilterSource {
   enabled: boolean;
 }
 
+export interface DomainInspectionResult {
+  domain: string;
+  verdict: 'blocked' | 'exception' | 'not_blocked';
+  matchingRule?: string;
+  sourceName?: string;
+  ruleType?: string;
+  details?: string;
+}
+
+export interface FeedDiagnostic {
+  url: string;
+  status: 'ok' | 'error' | 'pending';
+  statusCode?: number;
+  latencyMs?: number;
+  ruleCount?: number;
+  error?: string;
+}
+
+export interface CompilationSnapshot {
+  timestamp: string;
+  processedRuleCount: number;
+  uniqueRuleCount: number;
+  exceptionRuleCount?: number;
+  duplicatesRemoved: number;
+  exportFormats: FilterFormat[];
+}
+
 export interface StoreSchema {
   filterSources: FilterSource[];
   customRules: string;
   theme: ThemeType;
   savePath: string;
   exportFormat: FilterFormat;
+  additionalFormats?: FilterFormat[];
+  autoSchedule?: 'disabled' | '12h' | '24h' | 'weekly';
+  webhookUrl?: string;
   lastProcessTime: string;
+  compilationHistory?: CompilationSnapshot[];
 }
 
 // Electron API interface
@@ -86,11 +117,20 @@ export interface ElectronAPI {
   setCustomRules: (rules: string) => Promise<{ success: boolean; error?: string }>;
   getExportFormat: () => Promise<FilterFormat>;
   setExportFormat: (format: FilterFormat) => Promise<{ success: boolean; error?: string }>;
+  getAdditionalFormats: () => Promise<FilterFormat[]>;
+  setAdditionalFormats: (formats: FilterFormat[]) => Promise<{ success: boolean; error?: string }>;
+  getAutoSchedule: () => Promise<'disabled' | '12h' | '24h' | 'weekly'>;
+  setAutoSchedule: (schedule: 'disabled' | '12h' | '24h' | 'weekly') => Promise<{ success: boolean; error?: string }>;
+  getWebhookUrl: () => Promise<string>;
+  setWebhookUrl: (url: string) => Promise<{ success: boolean; error?: string }>;
   getSavePath: () => Promise<string>;
   setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;
   selectSavePath: () => Promise<string>;
   runImportProcess: () => Promise<ProcessingResult>;
   getLastProcessTime: () => Promise<string>;
+  getCompilationHistory: () => Promise<CompilationSnapshot[]>;
+  inspectDomain: (domain: string) => Promise<DomainInspectionResult>;
+  testFeedUrl: (url: string) => Promise<FeedDiagnostic>;
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   showItemInFolder: (path: string) => void;
