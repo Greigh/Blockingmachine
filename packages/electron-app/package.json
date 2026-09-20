@@ -13,6 +13,7 @@
     "clean": "rimraf dist .webpack out node_modules",
     "rebuild": "node scripts/rebuild.js",
     "build": "webpack --config webpack.main.config.cjs && webpack --config webpack.renderer.config.cjs",
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
     "deploy": "npm run build --workspace=@blockingmachine/core && npm run make",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
