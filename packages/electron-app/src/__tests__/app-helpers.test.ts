@@ -1,3 +1,4 @@
+import { describe, test, expect } from '@jest/globals';
 import { cleanDomainPattern } from '@blockingmachine/core';
 
 describe('Electron App Core Utilities & IPC Logic', () => {
