@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*" # Only trigger on version tags
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      NPM_TOKEN:
+        required: false
+        description: "NPM token for publishing"
 
 jobs:
   release:
