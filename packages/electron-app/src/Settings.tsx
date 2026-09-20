@@ -155,13 +155,6 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
 
   return (
     <div className="settings-container">
-      <div className="settings-header">
-        <h2>Settings</h2>
-        <p className="settings-description">
-          Configure Blockingmachine's behavior and appearance
-        </p>
-      </div>
-
       <div className="settings-grid">
         {/* Theme Setting */}
         <div className="setting-card">

@@ -632,9 +632,15 @@ const createWindow = async () => {
       ? MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY
       : join(__dirname, 'preload.js');
 
+  const isMac = process.platform === 'darwin';
+
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 800,
+    width: 1060,
+    height: 750,
+    minWidth: 920,
+    minHeight: 600,
+    titleBarStyle: isMac ? 'hiddenInset' : 'default',
+    trafficLightPosition: isMac ? { x: 18, y: 18 } : undefined,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

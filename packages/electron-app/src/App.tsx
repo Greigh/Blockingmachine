@@ -151,25 +151,40 @@ const BulkImportManager: React.FC<BulkImportManagerProps> = ({
     if (isMountedRef.current) setIsImporting(false);
   };
 
+  const lineCount = bulkUrls.split('\n').filter((l) => l.trim()).length;
+
   return (
-    <div className="section">
-      <h2>Bulk Import Sources</h2>
-      <p>
-        Enter one source URL per line. Duplicates based on URL will be skipped.
-      </p>
+    <div className="desktop-card">
+      <div style={{ marginBottom: '16px' }}>
+        <h3 style={{ margin: '0 0 6px 0', fontSize: '15px', fontWeight: 600, color: 'var(--heading-color)' }}>
+          Paste Filter Feed URLs
+        </h3>
+        <p style={{ margin: 0, color: 'var(--secondary-color)', fontSize: '12.5px' }}>
+          Enter one source URL per line. Duplicates based on URL will be detected and skipped automatically.
+        </p>
+      </div>
+
       <textarea
         value={bulkUrls}
         onChange={(e) => setBulkUrls(e.target.value)}
-        placeholder="https://example.com/list1.txt&#10;https://example.org/anotherlist.txt"
-        rows={10}
+        placeholder={`https://example.com/filter-list-1.txt\nhttps://filters.adguard.com/extension/chromium/filters/2.txt\nhttps://easylist.to/easylist/easylist.txt`}
+        rows={12}
         disabled={isImporting}
+        style={{ minHeight: '220px' }}
       />
-      <button
-        onClick={handleBulkImport}
-        disabled={!bulkUrls.trim() || isImporting}
-      >
-        {isImporting ? 'Importing...' : 'Import URLs'}
-      </button>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '14px' }}>
+        <span style={{ fontSize: '12px', color: 'var(--secondary-color)' }}>
+          {lineCount} {lineCount === 1 ? 'URL' : 'URLs'} entered
+        </span>
+        <button
+          className="process-primary-btn"
+          onClick={handleBulkImport}
+          disabled={!bulkUrls.trim() || isImporting}
+        >
+          {isImporting ? 'Importing Feeds...' : `Import ${lineCount > 0 ? `${lineCount} ` : ''}Feeds`}
+        </button>
+      </div>
     </div>
   );
 };
@@ -197,6 +212,7 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editUrl, setEditUrl] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const isMountedRef = useRef(true);
 
   useEffect(() => {
@@ -335,26 +351,74 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
   };
   // ^^^ Handlers for editing ^^^
 
-  // --- Render ---
+  const filteredSources = sources.filter(
+    (s) =>
+      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.url.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <div className="section">
-      <h2>Sources Manager</h2>
-      <p>Add, remove, and enable/disable filter list sources below.</p>
+      {/* Add New Source Card */}
+      <div className="desktop-card" style={{ marginBottom: '18px' }}>
+        <h3 style={{ margin: '0 0 6px 0', fontSize: '14.5px', fontWeight: 600, color: 'var(--heading-color)' }}>
+          Add Filter Feed
+        </h3>
+        <p style={{ margin: '0 0 12px 0', color: 'var(--secondary-color)', fontSize: '12px' }}>
+          Subscribe to a new remote blocklist feed by providing a descriptive name and HTTPS URL.
+        </p>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <input
+            type="text"
+            placeholder="Feed Name (e.g. AdGuard Base)"
+            value={newSourceName}
+            onChange={(e) => setNewSourceName(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          <input
+            type="url"
+            placeholder="https://example.com/filter.txt"
+            value={newSourceUrl}
+            onChange={(e) => setNewSourceUrl(e.target.value)}
+            style={{ flex: 2 }}
+          />
+          <button
+            className="process-primary-btn"
+            onClick={handleAddSource}
+            disabled={!newSourceName.trim() || !newSourceUrl.trim()}
+            style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}
+          >
+            + Add Feed
+          </button>
+        </div>
+      </div>
+
+      {/* Filter / Search Bar */}
+      {sources.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', gap: '12px' }}>
+          <input
+            type="search"
+            placeholder="Search configured feeds by name or URL..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{ maxWidth: '380px' }}
+          />
+          <span style={{ fontSize: '12px', color: 'var(--secondary-color)', whiteSpace: 'nowrap' }}>
+            {filteredSources.length} of {sources.length} feeds
+          </span>
+        </div>
+      )}
 
       {/* List existing sources */}
-      {sources.length > 0 && (
+      {filteredSources.length > 0 && (
         <div className="source-list">
-          <div className="source-list-header">
-            <span>Filter Sources</span>
-            <span>{sources.length} Sources</span>
-          </div>
-          {sources.map(
-            (
-              source,
-              index // add index parameter here
-            ) => (
-              <div className="source-list-item" key={index}>
-                {editingIndex === index ? (
+          {filteredSources.map((source) => {
+            const realIndex = sources.findIndex((s) => s.url === source.url);
+            const isEditing = editingIndex === realIndex;
+
+            return (
+              <div className="source-list-item" key={source.url}>
+                {isEditing ? (
                   <div
                     className="source-edit-form"
                     style={{
@@ -410,11 +474,11 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
                   </div>
                 ) : (
                   <>
-                    <label className="toggle-switch">
+                    <label className="toggle-switch" title={source.enabled ? 'Enabled' : 'Disabled'}>
                       <input
                         type="checkbox"
                         checked={source.enabled}
-                        onChange={() => handleToggleEnabled(index)}
+                        onChange={() => handleToggleEnabled(realIndex)}
                       />
                       <span className="toggle-slider"></span>
                     </label>
@@ -425,13 +489,13 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
                     <div className="source-actions">
                       <button
                         className="source-action-btn secondary"
-                        onClick={() => handleStartEdit(index)}
+                        onClick={() => handleStartEdit(realIndex)}
                       >
                         Edit
                       </button>
                       <button
-                        className="source-action-btn secondary"
-                        onClick={() => handleRemoveSource(index)}
+                        className="source-action-btn danger"
+                        onClick={() => handleRemoveSource(realIndex)}
                       >
                         Remove
                       </button>
@@ -439,57 +503,19 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
                   </>
                 )}
               </div>
-            )
-          )}
+            );
+          })}
         </div>
       )}
       {sources.length === 0 && (
         <div className="empty-state">
-          <div className="empty-state-icon">📋</div>
-          <div className="empty-state-title">No Sources Found</div>
+          <div className="empty-state-icon">🛡️</div>
+          <div className="empty-state-title">No Feeds Configured</div>
           <div className="empty-state-description">
-            Add filter list sources to start building your blocklist.
+            Add filter list feeds above to start generating your blocklist.
           </div>
-          <button
-            onClick={() => {
-              document.getElementById('new-source-name')?.focus();
-            }}
-          >
-            Add First Source
-          </button>
         </div>
       )}
-
-      {/* Add new source form (existing code) */}
-      <div className="setting-item" style={{ marginBottom: '1.5rem' }}>
-        <h3>Add New Source</h3>
-        <div>
-          <label htmlFor="new-source-name">Name:</label>
-          <input
-            type="text"
-            id="new-source-name"
-            value={newSourceName}
-            onChange={(e) => setNewSourceName(e.target.value)}
-            placeholder="e.g., EasyList"
-          />
-        </div>
-        <div>
-          <label htmlFor="new-source-url">URL:</label>
-          <input
-            type="url"
-            id="new-source-url"
-            value={newSourceUrl}
-            onChange={(e) => setNewSourceUrl(e.target.value)}
-            placeholder="https://easylist.to/easylist/easylist.txt"
-          />
-        </div>
-        <button
-          onClick={handleAddSource}
-          disabled={!newSourceName || !newSourceUrl}
-        >
-          Add Source
-        </button>
-      </div>
     </div>
   );
 };
@@ -569,60 +595,74 @@ const CustomRulesEditor = () => {
     }
   };
 
+  const activeRuleCount = rules.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).length;
+
   return (
-    <div className="section">
-      <h2>Custom Rules</h2>
-      <p>Enter custom filter rules below (one per line).</p>
-      <ul style={{ marginBottom: '1rem' }}>
-        <li>
-          For blocking rules, use: <code>||example.com^</code>
-        </li>
-        <li>
-          For exception rules, use: <code>@@||example.com^</code> (note the{' '}
-          <code>@@</code> prefix)
-        </li>
-      </ul>
-      {isLoading && <p>Loading...</p>}
-      {/* Display loading error */}
+    <div className="desktop-card">
+      <div style={{ marginBottom: '14px' }}>
+        <h3 style={{ margin: '0 0 6px 0', fontSize: '15px', fontWeight: 600, color: 'var(--heading-color)' }}>
+          Manual Filter Rules
+        </h3>
+        <p style={{ margin: 0, color: 'var(--secondary-color)', fontSize: '12.5px' }}>
+          Enter manual adblock and DNS blocking rules. One rule per line.
+        </p>
+      </div>
+
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+        <span className="setting-badge primary" style={{ textTransform: 'none', fontFamily: 'monospace' }}>
+          ||example.com^ (Block Domain)
+        </span>
+        <span className="setting-badge secondary" style={{ textTransform: 'none', fontFamily: 'monospace' }}>
+          @@||example.com^ (Allow Domain)
+        </span>
+        <span className="setting-badge secondary" style={{ textTransform: 'none', fontFamily: 'monospace' }}>
+          example.com##.ad-banner (Cosmetic Rule)
+        </span>
+      </div>
+
+      {isLoading && <p style={{ color: 'var(--secondary-color)', fontSize: '12.5px' }}>Loading custom rules...</p>}
       {!isLoading && error && saveStatus !== 'saving' && (
-        <p style={{ color: 'red' }}>Error: {error}</p>
+        <p style={{ color: 'var(--danger-color)', fontSize: '12.5px' }}>Error: {error}</p>
       )}
+
       <textarea
-        placeholder="||example.com^ ← blocking rule
-@@||example.com/ads^ ← exception rule"
+        placeholder={`||example.com^\n@@||allowed-service.com^\nexample.org##.sponsored-post`}
         value={rules}
         onChange={(e) => {
           setRules(e.target.value);
-          // Reset save status if user types after save/error
           if (saveStatus === 'success' || saveStatus === 'error') {
             setSaveStatus('idle');
-            setError(null); // Clear error on type
+            setError(null);
           }
         }}
-        style={{ width: '100%', minHeight: '150px', fontFamily: 'monospace' }}
-        disabled={isLoading || saveStatus === 'saving'} // Disable during initial load or save
+        rows={14}
+        style={{ minHeight: '260px' }}
+        disabled={isLoading || saveStatus === 'saving'}
       />
-      {/* Save button div */}
-      <div
-        style={{
-          marginTop: '0.5rem',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '1rem',
-        }}
-      >
-        <button
-          onClick={handleSaveCustomRules}
-          disabled={isLoading || saveStatus === 'saving'}
-        >
-          {saveStatus === 'saving' ? 'Saving...' : 'Save Custom Rules'}
-        </button>
-        {saveStatus === 'success' && (
-          <span style={{ color: 'green' }}>✅ Saved!</span>
-        )}
-        {saveStatus === 'error' && (
-          <span style={{ color: 'red' }}>❌ Save failed: {error}</span>
-        )}
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '14px' }}>
+        <span style={{ fontSize: '12px', color: 'var(--secondary-color)' }}>
+          {activeRuleCount} active {activeRuleCount === 1 ? 'rule' : 'rules'}
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {saveStatus === 'success' && (
+            <span style={{ color: 'var(--success-color)', fontSize: '12.5px', fontWeight: 500 }}>
+              ✓ Rules saved
+            </span>
+          )}
+          {saveStatus === 'error' && (
+            <span style={{ color: 'var(--danger-color)', fontSize: '12.5px', fontWeight: 500 }}>
+              ✕ Save failed
+            </span>
+          )}
+          <button
+            className="process-primary-btn"
+            onClick={handleSaveCustomRules}
+            disabled={isLoading || saveStatus === 'saving'}
+          >
+            {saveStatus === 'saving' ? 'Saving...' : 'Save Rules'}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -792,20 +832,79 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
     }
   };
 
+  useEffect(() => {
+    const handleKeydown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        if (!isLoading) {
+          handleRunProcess();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  }, [isLoading]);
+
   return (
     <div className="section">
-      <div className="process-header">
-        <h2>Blockingmachine Filter Processor</h2>
-        <p>
-          Combine, deduplicate, and optimize filter lists from your configured
-          sources.
-        </p>
+      {/* Modern Desktop Action Banner */}
+      <div className="process-banner-card">
+        <div className="process-banner-content">
+          <h3>Compile & Export Filter Lists</h3>
+          <p>
+            Fetches enabled filter feeds, parses rules, runs deduplication, and writes clean blocklists to disk.
+          </p>
+          {savePath && (
+            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>Destination:</span>
+              <code style={{ fontFamily: 'ui-monospace, monospace', background: 'rgba(0,0,0,0.18)', padding: '2px 6px', borderRadius: 4 }}>
+                {savePath}
+              </code>
+            </div>
+          )}
+        </div>
+        <button
+          onClick={handleRunProcess}
+          disabled={isLoading}
+          className="process-primary-btn"
+          title="Compile and export blocklists (Cmd+R)"
+        >
+          {isLoading ? (
+            <>
+              <span className="spinner-icon">⟳</span> Compiling...
+            </>
+          ) : (
+            <>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+              </svg>
+              Run Processor
+              <span style={{ opacity: 0.75, fontSize: 11, marginLeft: 4 }}>⌘R</span>
+            </>
+          )}
+        </button>
       </div>
 
-      {/* Dashboard Stats */}
+      {/* Live Compilation Progress */}
+      {isLoading && progress && (
+        <div className="progress-section">
+          <div className="progress-info">
+            <span style={{ fontWeight: 600, color: 'var(--heading-color)' }}>{progress.status}</span>
+            <span>{progress.percent}%</span>
+          </div>
+          <div className="progress-bar-container">
+            <div
+              className="progress-bar-fill"
+              style={{ width: `${progress.percent}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Metric Cards Grid */}
       <div className="dashboard-grid">
         <div className="dashboard-card">
-          <div className="dashboard-icon">📋</div>
+          <div className="dashboard-icon">🛡️</div>
           <div className="dashboard-stat-content">
             <span className="dashboard-stat-value">
               {dashboardStats.enabledSources}/{dashboardStats.totalSources}
@@ -815,7 +914,7 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
         </div>
 
         <div className="dashboard-card">
-          <div className="dashboard-icon">✏️</div>
+          <div className="dashboard-icon">✍️</div>
           <div className="dashboard-stat-content">
             <span className="dashboard-stat-value">
               {dashboardStats.customRulesCount}
@@ -827,75 +926,13 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
         <div className="dashboard-card">
           <div className="dashboard-icon">🕒</div>
           <div className="dashboard-stat-content">
-            <span className="dashboard-stat-value">
-              {dashboardStats.lastProcessedTime ? 'Last Run' : 'Never Run'}
+            <span className="dashboard-stat-value" style={{ fontSize: '1.05rem', marginTop: 3 }}>
+              {dashboardStats.lastProcessedTime ? dashboardStats.lastProcessedTime.split(',')[0] || 'Recently' : 'Never'}
             </span>
             <span className="dashboard-stat-label">
-              {dashboardStats.lastProcessedTime || 'Run your first process'}
+              {dashboardStats.lastProcessedTime ? 'Last Compilation' : 'Not yet compiled'}
             </span>
           </div>
-        </div>
-      </div>
-
-      {/* Last processed info if available */}
-      {dashboardStats.lastProcessedTime && (
-        <div className="last-processed-card">
-          <div className="last-processed-title">Last Processing Time</div>
-          <div className="last-processed-time">
-            {dashboardStats.lastProcessedTime}
-          </div>
-          <button
-            onClick={() => window.electron.showItemInFolder(savePath)}
-            disabled={!savePath}
-            className="process-button show-in-finder-btn"
-            style={{}}
-          >
-            <span role="img" aria-label="finder" style={{ marginRight: 6 }}>
-              🗂️
-            </span>
-            {navigator.platform.toUpperCase().includes('MAC')
-              ? 'Show in Finder'
-              : 'Show in Folder'}
-          </button>
-        </div>
-      )}
-
-      <div className="process-card">
-        <div className="card-content">
-          <h3>Run Processing</h3>
-          <p>
-            Download sources, parse rules, and generate optimized filter lists.
-            This process may take several seconds depending on the number of
-            enabled sources.
-          </p>
-
-          <button
-            onClick={handleRunProcess}
-            disabled={isLoading}
-            className="process-button"
-          >
-            {isLoading ? (
-              <span className="loading-spinner">
-                <span className="spinner-icon">⟳</span> Processing...
-              </span>
-            ) : (
-              'Generate Filter Lists'
-            )}
-          </button>
-          {/* Show item in folder */}
-
-          {isLoading && progress && (
-            <div className="progress-container">
-              <div className="progress-status">{progress.status}</div>
-              <div className="progress-bar-outer">
-                <div
-                  className="progress-bar-inner"
-                  style={{ width: `${progress.percent}%` }}
-                ></div>
-              </div>
-              <div className="progress-percent">{progress.percent}%</div>
-            </div>
-          )}
         </div>
       </div>
 
@@ -912,7 +949,22 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
                 <span className="error-icon">❌ Processing Failed</span>
               )}
             </h3>
-            <span className="timestamp">{lastResult.timestamp || 'N/A'}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {lastResult.success && savePath && (
+                <button
+                  className="header-action-btn"
+                  onClick={() => window.electron.showItemInFolder(savePath)}
+                  title="Reveal exported blocklists in folder"
+                  style={{ fontSize: 12, padding: '4px 10px' }}
+                >
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+                  </svg>
+                  Reveal in Finder
+                </button>
+              )}
+              <span className="timestamp">{lastResult.timestamp || 'N/A'}</span>
+            </div>
           </div>
           <div className="card-content">
             {lastResult.success ? (
@@ -1314,166 +1366,265 @@ function App() {
     }
   }, [selectedTheme]);
 
+  useEffect(() => {
+    const handleGlobalShortcuts = (e: KeyboardEvent) => {
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+      if (isCmdOrCtrl && !e.shiftKey && !e.altKey) {
+        if (e.key === '1') {
+          e.preventDefault();
+          setCurrentView('process');
+        } else if (e.key === '2') {
+          e.preventDefault();
+          setCurrentView('sources');
+        } else if (e.key === '3') {
+          e.preventDefault();
+          setCurrentView('bulkImport');
+        } else if (e.key === '4') {
+          e.preventDefault();
+          setCurrentView('custom');
+        } else if (e.key === '5' || e.key === ',') {
+          e.preventDefault();
+          setCurrentView('settings');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalShortcuts);
+    return () => window.removeEventListener('keydown', handleGlobalShortcuts);
+  }, []);
+
   if (isThemeLoading) {
-    return <div>Loading...</div>;
+    return <div className="app-shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading application...</div>;
   }
 
   return (
-    <div className="container" ref={containerRef}>
-      <h1>Blockingmachine</h1>
-      <nav className="app-navigation">
-        <button
-          className={`nav-button ${currentView === 'process' ? 'active' : ''}`}
-          onClick={() => setCurrentView('process')}
-        >
-          <span className="nav-icon">⚙️</span>
-          <span className="nav-text">Process</span>
-        </button>
-        <button
-          className={`nav-button ${currentView === 'sources' ? 'active' : ''}`}
-          onClick={() => setCurrentView('sources')}
-        >
-          <span className="nav-icon">📋</span>
-          <span className="nav-text">Sources</span>
-        </button>
-        <button
-          className={`nav-button ${currentView === 'bulkImport' ? 'active' : ''}`}
-          onClick={() => setCurrentView('bulkImport')}
-        >
-          <span className="nav-icon">📥</span>
-          <span className="nav-text">Bulk Import</span>
-        </button>
-        <button
-          className={`nav-button ${currentView === 'custom' ? 'active' : ''}`}
-          onClick={() => setCurrentView('custom')}
-        >
-          <span className="nav-icon">✏️</span>
-          <span className="nav-text">Custom Rules</span>
-        </button>
-        <button
-          className={`nav-button ${currentView === 'settings' ? 'active' : ''}`}
-          onClick={() => setCurrentView('settings')}
-        >
-          <span className="nav-icon">⚙️</span>
-          <span className="nav-text">
-            Settings {updateAvailable && <span className="update-dot" title="Update Available">●</span>}
-          </span>
-        </button>
-      </nav>
+    <div className="app-shell" ref={containerRef}>
+      {/* Native macOS Sidebar */}
+      <aside className="app-sidebar">
+        {/* Top window drag region & traffic light spacer */}
+        <div className="sidebar-traffic-lights" />
 
-      {/* Global Feedback Area */}
-      <div
-        className={`feedback-container ${globalError ? 'error' : globalSuccessMessage ? 'success' : updateStatus ? 'info' : ''}`}
-      >
-        {globalError && (
-          <div className="feedback-message error-feedback">
-            <span className="feedback-icon">❌</span>
-            <span className="feedback-text">{globalError}</span>
+        {/* App Branding */}
+        <div className="sidebar-brand">
+          <div className="brand-icon-shield">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+            </svg>
           </div>
-        )}
-        {globalSuccessMessage && !globalError && (
-          <div className="feedback-message success-feedback">
-            <span className="feedback-icon">✅</span>
-            <span className="feedback-text">{globalSuccessMessage}</span>
+          <div className="brand-info">
+            <span className="brand-title">Blockingmachine</span>
+            <span className="brand-version">v1.0.0-beta.9</span>
           </div>
-        )}
-        {updateStatus && !globalError && !globalSuccessMessage && (
-          <div className="feedback-message info-feedback">
-            <span className="feedback-icon">ℹ️</span>
-            <span className="feedback-text">
-              {updateStatus}
-              {updateProgress > 0 && updateProgress < 100
-                ? ` (${Math.round(updateProgress)}%)`
-                : ''}
+        </div>
+
+        {/* Sidebar Navigation Items */}
+        <nav className="sidebar-nav">
+          <div className="sidebar-section-label">Features</div>
+
+          <button
+            className={`sidebar-nav-item ${currentView === 'process' ? 'active' : ''}`}
+            onClick={() => setCurrentView('process')}
+            title="Dashboard & Filter Processor (Cmd+1)"
+          >
+            <span className="sidebar-icon">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+              </svg>
+            </span>
+            <span className="sidebar-label">Process & Stats</span>
+            <span className="sidebar-shortcut">⌘1</span>
+          </button>
+
+          <button
+            className={`sidebar-nav-item ${currentView === 'sources' ? 'active' : ''}`}
+            onClick={() => setCurrentView('sources')}
+            title="Filter Feeds & Subscriptions (Cmd+2)"
+          >
+            <span className="sidebar-icon">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+              </svg>
+            </span>
+            <span className="sidebar-label">Sources</span>
+            <span className="sidebar-badge">{sources.filter((s) => s.enabled).length}/{sources.length}</span>
+          </button>
+
+          <button
+            className={`sidebar-nav-item ${currentView === 'bulkImport' ? 'active' : ''}`}
+            onClick={() => setCurrentView('bulkImport')}
+            title="Bulk Import (Cmd+3)"
+          >
+            <span className="sidebar-icon">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+            </span>
+            <span className="sidebar-label">Bulk Import</span>
+            <span className="sidebar-shortcut">⌘3</span>
+          </button>
+
+          <button
+            className={`sidebar-nav-item ${currentView === 'custom' ? 'active' : ''}`}
+            onClick={() => setCurrentView('custom')}
+            title="Custom Rules (Cmd+4)"
+          >
+            <span className="sidebar-icon">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+              </svg>
+            </span>
+            <span className="sidebar-label">Custom Rules</span>
+            <span className="sidebar-shortcut">⌘4</span>
+          </button>
+
+          <div className="sidebar-section-label" style={{ marginTop: '14px' }}>Preferences</div>
+          <button
+            className={`sidebar-nav-item ${currentView === 'settings' ? 'active' : ''}`}
+            onClick={() => setCurrentView('settings')}
+            title="Settings (Cmd+5 or Cmd+,)"
+          >
+            <span className="sidebar-icon">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </span>
+            <span className="sidebar-label">Settings</span>
+            {updateAvailable && <span className="update-dot" title="Update Available">●</span>}
+          </button>
+        </nav>
+
+        {/* Sidebar Footer */}
+        <div className="sidebar-footer">
+          <div className="sidebar-status-card">
+            <div className="engine-status-row">
+              <span className="status-dot" />
+              <span>Core Engine Ready</span>
+            </div>
+            <div className="sidebar-links-row">
+              <a
+                href="#"
+                onClick={(e) => handleExternalLink(e, 'https://danielhipskind.bio')}
+                className="sidebar-meta-link"
+              >
+                Daniel Hipskind
+              </a>
+              <span>•</span>
+              <a
+                href="#"
+                onClick={(e) => handleExternalLink(e, 'https://github.com/greigh/Blockingmachine')}
+                className="sidebar-meta-link"
+              >
+                GitHub
+              </a>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Workspace Pane */}
+      <main className="app-main-pane">
+        <header className="main-header">
+          <div className="header-left">
+            <h1 className="view-title">
+              {currentView === 'process' && 'Filter Processor'}
+              {currentView === 'sources' && 'Filter Sources'}
+              {currentView === 'bulkImport' && 'Bulk Import'}
+              {currentView === 'custom' && 'Custom Rules'}
+              {currentView === 'settings' && 'Settings'}
+            </h1>
+            <span className="view-subtitle">
+              {currentView === 'process' && 'Generate, deduplicate, and compile your blocklists'}
+              {currentView === 'sources' && 'Manage remote filter subscriptions and feeds'}
+              {currentView === 'bulkImport' && 'Add multiple filter list URLs quickly'}
+              {currentView === 'custom' && 'Manual Adblock Plus and DNS rules'}
+              {currentView === 'settings' && 'Export formats, output directory, and theme'}
             </span>
           </div>
-        )}
-      </div>
 
-      {/* Render current view */}
-      <div className="main-content">
-        {' '}
-        {/* Wrap views for potential flex layout */}
-        {currentView === 'sources' &&
-          (isLoadingSources ? (
-            <p>Loading sources...</p>
-          ) : (
-            <SourcesManager
-              sources={sources}
+          <div className="header-right">
+            {currentView === 'sources' && (
+              <span className="header-badge">{sources.length} feeds configured</span>
+            )}
+            {savePath && (
+              <button
+                className="header-action-btn"
+                onClick={() => window.electron.showItemInFolder(savePath)}
+                title="Show export output folder in Finder"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+                </svg>
+                Output Folder
+              </button>
+            )}
+          </div>
+        </header>
+
+        {/* Global Floating Feedback Toasts */}
+        {(globalError || globalSuccessMessage || updateStatus) && (
+          <div className="toast-banner-container">
+            {globalError && (
+              <div className="desktop-toast toast-error">
+                <span className="toast-icon">⚠️</span>
+                <span className="toast-msg">{globalError}</span>
+                <button className="toast-close" onClick={() => setGlobalError(null)}>✕</button>
+              </div>
+            )}
+            {globalSuccessMessage && !globalError && (
+              <div className="desktop-toast toast-success">
+                <span className="toast-icon">✓</span>
+                <span className="toast-msg">{globalSuccessMessage}</span>
+                <button className="toast-close" onClick={() => setGlobalSuccessMessage(null)}>✕</button>
+              </div>
+            )}
+            {updateStatus && !globalError && !globalSuccessMessage && (
+              <div className="desktop-toast toast-info">
+                <span className="toast-icon">ℹ</span>
+                <span className="toast-msg">
+                  {updateStatus}
+                  {updateProgress > 0 && updateProgress < 100
+                    ? ` (${Math.round(updateProgress)}%)`
+                    : ''}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Scrollable View Content */}
+        <div className="main-content-scroll">
+          {currentView === 'sources' &&
+            (isLoadingSources ? (
+              <p>Loading sources...</p>
+            ) : (
+              <SourcesManager
+                sources={sources}
+                saveSources={saveSources}
+                setError={setGlobalError}
+                setSuccessMessage={setGlobalSuccessMessage}
+              />
+            ))}
+          {currentView === 'bulkImport' && (
+            <BulkImportManager
+              currentSources={sources}
               saveSources={saveSources}
               setError={setGlobalError}
               setSuccessMessage={setGlobalSuccessMessage}
             />
-          ))}
-        {/* vvv Render BulkImportManager vvv */}
-        {currentView === 'bulkImport' && (
-          <BulkImportManager
-            currentSources={sources}
-            saveSources={saveSources}
-            setError={setGlobalError}
-            setSuccessMessage={setGlobalSuccessMessage}
-          />
-        )}
-        {/* ^^^ Render BulkImportManager ^^^ */}
-        {currentView === 'custom' && <CustomRulesEditor />}
-        {currentView === 'process' && (
-          <ProcessingControls savePath={savePath} />
-        )}
-        {currentView === 'settings' && (
-          <Settings
-            currentTheme={selectedTheme}
-            onThemeChange={handleThemeChange}
-          />
-        )}
-      </div>
-
-      {/* --- Footer --- */}
-      <footer className="app-footer">
-        <div className="footer-left">
-          Made with
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="heart-svg"
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-          >
-            <path
-              className="heart-shape"
-              d="M12 4.435c-1.989-5.399-12-4.597-12 3.568 0 4.068 3.06 9.481 12 14.997 8.94-5.516 12-10.929 12-14.997 0-8.118-10-8.999-12-3.568z"
-              fill="#ff5a5f"
-              stroke="#ff5a5f"
-              strokeWidth="1"
+          )}
+          {currentView === 'custom' && <CustomRulesEditor />}
+          {currentView === 'process' && (
+            <ProcessingControls savePath={savePath} />
+          )}
+          {currentView === 'settings' && (
+            <Settings
+              currentTheme={selectedTheme}
+              onThemeChange={handleThemeChange}
             />
-          </svg>
-          by Daniel Hipskind
+          )}
         </div>
-        <div className="footer-donate">
-          <a
-            href="#"
-            onClick={(e) => handleExternalLink(e, 'https://danielhipskind.bio')}
-            rel="noopener noreferrer"
-          >
-            <span className="donate-icon">
-              {/* Money SVG */}
-              <svg
-                className="donate-money"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 512 512"
-                width="22"
-                height="22"
-              >
-                <path
-                  d="M256 416c114.9 0 208-93.1 208-208S370.9 0 256 0 48 93.1 48 208s93.1 208 208 208zM233.8 97.4V80.6c0-9.2 7.4-16.6 16.6-16.6h11.1c9.2 0 16.6 7.4 16.6 16.6v17c15.5 .8 30.5 6.1 43 15.4 5.6 4.1 6.2 12.3 1.2 17.1L306 145.6c-3.8 3.7-9.5 3.8-14 1-5.4-3.4-11.4-5.1-17.8-5.1h-38.9c-9 0-16.3 8.2-16.3 18.3 0 8.2 5 15.5 12.1 17.6l62.3 18.7c25.7 7.7 43.7 32.4 43.7 60.1 0 34-26.4 61.5-59.1 62.4v16.8c0 9.2-7.4 16.6-16.6 16.6h-11.1c-9.2 0-16.6-7.4-16.6-16.6v-17c-15.5-.8-30.5-6.1-43-15.4-5.6-4.1-6.2-12.3-1.2-17.1l16.3-15.5c3.8-3.7 9.5-3.8 14-1 5.4 3.4 11.4 5.1 17.8 5.1h38.9c9 0 16.3-8.2 16.3-18.3 0-8.2-5 15.5-12.1 17.6l-62.3-18.7c-25.7-7.7-43.7-32.4-43.7-60.1 .1-34 26.4-61.5 59.1-62.4zM480 352h-32.5c-19.6 26-44.6 47.7-73 64h63.8c5.3 0 9.6 3.6 9.6 8v16c0 4.4-4.3 8-9.6 8H73.6c-5.3 0-9.6-3.6-9.6-8v-16c0-4.4 4.3-8 9.6-8h63.8c-28.4-16.3-53.3-38-73-64H32c-17.7 0-32 14.3-32 32v96c0 17.7 14.3 32 32 32h448c17.7 0 32-14.3 32-32v-96c0-17.7-14.3-32-32-32z"
-                />
-              </svg>
-            </span>
-            Donate
-          </a>
-        </div>
-      </footer>
-      {}
-    </div> // End of container div
+      </main>
+    </div>
   );
 }
 
