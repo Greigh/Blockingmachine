@@ -77,61 +77,187 @@ function isValidFormat(format: unknown): format is FilterFormat {
   );
 }
 
-// Define a minimal custom menu (no Help, no View)
+// Set official application name for native macOS application menu
+app.name = 'Blockingmachine';
+
+const isMac = process.platform === 'darwin';
+
+// Define standard native application menu (Matching Apple HIG)
 const template: Electron.MenuItemConstructorOptions[] = [
+  ...(isMac
+    ? [
+        {
+          label: app.name,
+          submenu: [
+            { role: 'about' as const },
+            { type: 'separator' as const },
+            {
+              label: 'Preferences...',
+              accelerator: 'Cmd+,',
+              click: () => {
+                if (mainWindow) {
+                  mainWindow.show();
+                  mainWindow.focus();
+                  mainWindow.webContents.send('open-settings');
+                }
+              },
+            },
+            { type: 'separator' as const },
+            { role: 'services' as const },
+            { type: 'separator' as const },
+            { role: 'hide' as const },
+            { role: 'hideOthers' as const },
+            { role: 'unhide' as const },
+            { type: 'separator' as const },
+            { role: 'quit' as const },
+          ],
+        },
+      ]
+    : []),
   {
     label: 'File',
     submenu: [
-      { role: 'about' },
-      { type: 'separator' },
       {
-        label: 'Settings',
-        accelerator: process.platform === 'darwin' ? 'Cmd+,' : 'Ctrl+,',
+        label: 'Compile Rules Now',
+        accelerator: 'Cmd+R',
         click: () => {
-          // Send an IPC message to open settings, or show a settings window/modal
           if (mainWindow) {
-            mainWindow.webContents.send('open-settings');
+            mainWindow.show();
+            mainWindow.focus();
+            mainWindow.webContents.send('trigger-compile');
           }
         },
       },
-      { role: 'quit' },
+      {
+        label: 'Reveal Output in Finder',
+        accelerator: 'Cmd+Shift+O',
+        click: async () => {
+          const savePath = store.get('savePath');
+          if (savePath && typeof savePath === 'string') {
+            try {
+              shell.showItemInFolder(savePath);
+            } catch {
+              shell.openPath(dirname(savePath));
+            }
+          }
+        },
+      },
+      { type: 'separator' as const },
+      isMac ? { role: 'close' as const } : { role: 'quit' as const },
     ],
   },
   {
     label: 'Edit',
     submenu: [
-      { role: 'undo' },
-      { role: 'redo' },
-      { type: 'separator' },
-      { role: 'cut' },
-      { role: 'copy' },
-      { role: 'paste' },
-      { role: 'selectAll' },
+      { role: 'undo' as const },
+      { role: 'redo' as const },
+      { type: 'separator' as const },
+      { role: 'cut' as const },
+      { role: 'copy' as const },
+      { role: 'paste' as const },
+      { role: 'selectAll' as const },
+    ],
+  },
+  {
+    label: 'View',
+    submenu: [
+      {
+        label: 'Filter Processor',
+        accelerator: 'Cmd+1',
+        click: () => {
+          mainWindow?.webContents.send('navigate-view', 'process');
+        },
+      },
+      {
+        label: 'Filter Sources',
+        accelerator: 'Cmd+2',
+        click: () => {
+          mainWindow?.webContents.send('navigate-view', 'sources');
+        },
+      },
+      {
+        label: 'Bulk Import',
+        accelerator: 'Cmd+3',
+        click: () => {
+          mainWindow?.webContents.send('navigate-view', 'bulkImport');
+        },
+      },
+      {
+        label: 'Custom Rules',
+        accelerator: 'Cmd+4',
+        click: () => {
+          mainWindow?.webContents.send('navigate-view', 'custom');
+        },
+      },
+      {
+        label: 'Rule Inspector',
+        accelerator: 'Cmd+5',
+        click: () => {
+          mainWindow?.webContents.send('navigate-view', 'inspector');
+        },
+      },
+      {
+        label: 'Rule Browser',
+        accelerator: 'Cmd+6',
+        click: () => {
+          mainWindow?.webContents.send('navigate-view', 'browser');
+        },
+      },
+      { type: 'separator' as const },
+      { role: 'reload' as const },
+      { role: 'forceReload' as const },
+      { role: 'toggleDevTools' as const },
+      { type: 'separator' as const },
+      { role: 'resetZoom' as const },
+      { role: 'zoomIn' as const },
+      { role: 'zoomOut' as const },
+      { type: 'separator' as const },
+      { role: 'togglefullscreen' as const },
     ],
   },
   {
     label: 'Window',
     submenu: [
-      { role: 'minimize' },
-      { role: 'close' },
-      { type: 'separator' },
-      { role: 'front' },
-      { role: 'window' },
-      { type: 'separator' },
-      ...(isDev
+      { role: 'minimize' as const },
+      { role: 'zoom' as const },
+      ...(isMac
         ? [
-            {
-              label: 'Toggle Developer Tools',
-              accelerator:
-                process.platform === 'darwin' ? 'Cmd+Alt+I' : 'Ctrl+Shift+I',
-              click: () => {
-                if (mainWindow) {
-                  mainWindow.webContents.toggleDevTools();
-                }
-              },
-            },
+            { type: 'separator' as const },
+            { role: 'front' as const },
+            { type: 'separator' as const },
+            { role: 'window' as const },
           ]
-        : []),
+        : [{ role: 'close' as const }]),
+    ],
+  },
+  {
+    role: 'help' as const,
+    submenu: [
+      {
+        label: 'Quick Tour / Onboarding...',
+        click: () => {
+          mainWindow?.webContents.send('launch-onboarding');
+        },
+      },
+      { type: 'separator' as const },
+      {
+        label: 'GitHub Repository',
+        click: async () => {
+          await shell.openExternal('https://github.com/Greigh/Blockingmachine');
+        },
+      },
+      {
+        label: 'Report an Issue',
+        click: async () => {
+          await shell.openExternal('https://github.com/Greigh/Blockingmachine/issues');
+        },
+      },
+      {
+        label: 'Documentation & Guides',
+        click: async () => {
+          await shell.openExternal('https://github.com/Greigh/Blockingmachine#readme');
+        },
+      },
     ],
   },
 ];
@@ -295,21 +421,49 @@ function getAppIcon(): Electron.NativeImage | undefined {
   return undefined;
 }
 
-function createTray() {
-  try {
-    let icon = nativeImage.createEmpty();
-    const appIcon = getAppIcon();
-    if (appIcon) {
+function getTrayIcon(): Electron.NativeImage {
+  const isMac = process.platform === 'darwin';
+  if (isMac) {
+    const templateCandidate = getAssetPath('trayTemplate.png') || getAssetPath('trayTemplate@2x.png');
+    if (templateCandidate) {
       try {
-        icon = appIcon.resize({ width: 16, height: 16 });
+        const loaded = nativeImage.createFromPath(templateCandidate);
+        if (!loaded.isEmpty()) {
+          loaded.setTemplateImage(true);
+          return loaded;
+        }
       } catch {
         // fallback
       }
     }
+  }
 
+  const iconPath = getAssetPath('Blockingmachine.png');
+  if (iconPath) {
+    try {
+      const loaded = nativeImage.createFromPath(iconPath);
+      if (!loaded.isEmpty()) {
+        const resized = loaded.resize({ width: 18, height: 18 });
+        if (isMac) {
+          resized.setTemplateImage(true);
+        }
+        return resized;
+      }
+    } catch {
+      // fallback
+    }
+  }
+  return nativeImage.createEmpty();
+}
+
+function createTray() {
+  try {
+    const icon = getTrayIcon();
     appTray = new Tray(icon);
+    appTray.setToolTip('Blockingmachine');
+
     const contextMenu = Menu.buildFromTemplate([
-      { label: '🛡️ Blockingmachine', enabled: false },
+      { label: 'Blockingmachine', enabled: false },
       { type: 'separator' },
       {
         label: 'Open Blockingmachine',
@@ -322,23 +476,41 @@ function createTray() {
       },
       {
         label: 'Compile Rules Now',
+        accelerator: 'Cmd+R',
         click: () => {
           if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
             mainWindow.webContents.send('trigger-compile');
           }
         },
       },
       { type: 'separator' },
       {
+        label: 'Preferences...',
+        accelerator: 'Cmd+,',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+            mainWindow.webContents.send('open-settings');
+          }
+        },
+      },
+      { type: 'separator' },
+      {
         label: 'Quit Blockingmachine',
+        accelerator: 'Cmd+Q',
         click: () => app.quit(),
       },
     ]);
-    appTray.setToolTip('Blockingmachine - Ad & Tracker Filter Compiler');
     appTray.setContextMenu(contextMenu);
-    if (process.platform === 'darwin') {
-      appTray.setTitle('🛡️ BM');
-    }
+    appTray.on('click', () => {
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
   } catch (err) {
     console.warn('Tray initialization skipped:', err);
   }
