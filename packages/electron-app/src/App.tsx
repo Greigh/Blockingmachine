@@ -1286,17 +1286,19 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (
-        e.key === 'F12' ||
-        (e.metaKey && e.altKey && e.key.toLowerCase() === 'i') ||
-        (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'i')
-      ) {
-        e.preventDefault();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    if (process.env.NODE_ENV === 'production') {
+      const handler = (e: KeyboardEvent) => {
+        if (
+          e.key === 'F12' ||
+          (e.metaKey && e.altKey && e.key.toLowerCase() === 'i') ||
+          (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'i')
+        ) {
+          e.preventDefault();
+        }
+      };
+      window.addEventListener('keydown', handler);
+      return () => window.removeEventListener('keydown', handler);
+    }
   }, []);
 
   useEffect(() => {

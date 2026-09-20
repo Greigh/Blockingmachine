@@ -4,6 +4,7 @@ const HtmlWebpackPlugin = require('html-webpack-plugin');
 /** @type {import('webpack').Configuration} */
 module.exports = {
   mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
+  devtool: process.env.NODE_ENV === 'production' ? false : 'cheap-module-source-map',
   target: 'web',
   entry: './src/renderer.tsx',
   output: {
