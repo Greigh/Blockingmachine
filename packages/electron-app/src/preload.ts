@@ -12,6 +12,8 @@ const ALLOWED_CHANNELS = new Set([
   'update-progress',
   'update-downloaded',
   'trigger-compile',
+  'navigate-view',
+  'launch-onboarding',
 ]);
 
 // Expose the API to the renderer process
@@ -102,6 +104,20 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('trigger-compile', handler);
     return () => {
       ipcRenderer.removeListener('trigger-compile', handler);
+    };
+  },
+  onNavigateView: (callback: (view: string) => void) => {
+    const handler = (_event: IpcRendererEvent, view: string) => callback(view);
+    ipcRenderer.on('navigate-view', handler);
+    return () => {
+      ipcRenderer.removeListener('navigate-view', handler);
+    };
+  },
+  onLaunchOnboarding: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('launch-onboarding', handler);
+    return () => {
+      ipcRenderer.removeListener('launch-onboarding', handler);
     };
   },
   getLastProcessTime: () => ipcRenderer.invoke('get-last-process-time'),

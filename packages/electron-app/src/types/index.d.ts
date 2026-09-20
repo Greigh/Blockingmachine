@@ -203,6 +203,8 @@ export interface ElectronAPI {
   onUpdateError?: (callback: (error: Error) => void) => () => void;
   onOpenSettings?: (callback: () => void) => () => void;
   onTriggerCompile?: (callback: () => void) => () => void;
+  onNavigateView?: (callback: (view: string) => void) => () => void;
+  onLaunchOnboarding?: (callback: () => void) => () => void;
   receive?: (channel: string, func: (...args: any[]) => void) => void;
   removeAllListeners?: (channel: string) => void;
 }

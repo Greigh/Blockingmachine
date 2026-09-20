@@ -267,11 +267,13 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Listen for native IPC open-settings and update notifications
+  // Listen for native IPC open-settings, view navigation, and update notifications
   useEffect(() => {
     let cleanupSettings: (() => void) | undefined;
     let cleanupUpdate: (() => void) | undefined;
     let cleanupCompile: (() => void) | undefined;
+    let cleanupNav: (() => void) | undefined;
+    let cleanupOnboarding: (() => void) | undefined;
 
     if (window.electron?.onOpenSettings) {
       cleanupSettings = window.electron.onOpenSettings(() => {
@@ -285,6 +287,18 @@ function App() {
       });
     }
 
+    if (window.electron?.onNavigateView) {
+      cleanupNav = window.electron.onNavigateView((view: string) => {
+        setCurrentView(view);
+      });
+    }
+
+    if (window.electron?.onLaunchOnboarding) {
+      cleanupOnboarding = window.electron.onLaunchOnboarding(() => {
+        setIsOnboardingOpen(true);
+      });
+    }
+
     if (window.electron?.onUpdateAvailable) {
       cleanupUpdate = window.electron.onUpdateAvailable(() => {
         setUpdateAvailable(true);
@@ -295,6 +309,8 @@ function App() {
       cleanupSettings?.();
       cleanupUpdate?.();
       cleanupCompile?.();
+      cleanupNav?.();
+      cleanupOnboarding?.();
     };
   }, []);
 
