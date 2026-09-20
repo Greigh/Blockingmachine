@@ -40,7 +40,7 @@ export const Header: React.FC<HeaderProps> = ({
         };
       case 'deploy':
         return {
-          title: 'Deploy & Sinkhole Sync',
+          title: 'Deploy & Sync',
           desc: 'Connect your compiled blocklists to AdGuard Home, Pi-hole, desktop apps, and LAN devices',
         };
       case 'settings':
