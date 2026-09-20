@@ -52,15 +52,14 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="main-header">
       <div className="header-left">
-        <h1 className="view-title">
-          {title}
-          <span className="view-description">{desc}</span>
-        </h1>
+        <h1 className="view-title">{title}</h1>
+        <span className="view-subtitle">{desc}</span>
       </div>
-      <div className="header-actions">
+      <div className="header-right">
         {savePath && (
           <button
-            className="secondary-action-btn"
+            type="button"
+            className="header-action-btn"
             onClick={handleRevealOutputFolder}
             title={`Reveal output in Finder: ${savePath}`}
           >
