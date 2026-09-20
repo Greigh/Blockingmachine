@@ -128,8 +128,17 @@ async function fetchWithRetry(
       );
     }
 
-    // Retry logic (only if not an invalid URL)
-    if (error?.code !== "ERR_INVALID_URL" && attempt < MAX_RETRIES) {
+    const isPayloadOverflow =
+      typeof error?.message === "string" &&
+      error.message.includes("exceed") &&
+      error.message.includes("100MB");
+    const isNonRetryable =
+      error?.code === "ERR_INVALID_URL" ||
+      isPayloadOverflow ||
+      error?.status === 413;
+
+    // Retry logic (only if not a permanent non-retryable error)
+    if (!isNonRetryable && attempt < MAX_RETRIES) {
       const delay = INITIAL_DELAY * Math.pow(2, attempt - 1);
       console.log(`⏳ Retrying in ${delay / 1000}s...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -141,7 +150,11 @@ async function fetchWithRetry(
           `❌ Max retries reached or non-retryable error for ${url}. Last error: ${error?.message || error}`,
         );
       }
-      return { content: null, notModified: false, status: 0 };
+      return {
+        content: null,
+        notModified: false,
+        status: isPayloadOverflow ? 413 : error?.code === "ERR_INVALID_URL" ? 400 : 0,
+      };
     }
   } finally {
     clearTimeout(timeoutId);

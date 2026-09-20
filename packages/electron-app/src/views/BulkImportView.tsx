@@ -74,10 +74,14 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
     }
   };
 
-  const resolveSourceName = (url: string, current: FilterSource[], pending: FilterSource[]): string => {
+  const resolveSourceName = (url: string, takenNames: Set<string>): string => {
     // 1. Check if URL matches known catalog
     if (KNOWN_SOURCE_NAMES[url]) {
-      return KNOWN_SOURCE_NAMES[url];
+      const knownName = KNOWN_SOURCE_NAMES[url];
+      if (!takenNames.has(knownName)) {
+        takenNames.add(knownName);
+        return knownName;
+      }
     }
 
     // 2. Derive friendly name from path or hostname
@@ -96,9 +100,10 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
 
       let name = baseName;
       let counter = 1;
-      while (current.concat(pending).some((s) => s.name === name)) {
+      while (takenNames.has(name)) {
         name = `${baseName} (${++counter})`;
       }
+      takenNames.add(name);
       return name;
     } catch {
       return 'Custom Feed';
@@ -125,18 +130,20 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
     const importErrors: string[] = [];
     let skippedCount = 0;
 
+    const seenUrls = new Set(currentSources.map((s) => s.url.trim().toLowerCase()));
+    const takenNames = new Set(currentSources.map((s) => s.name));
+
     urls.forEach((url, index) => {
       try {
         new URL(url); // validate
-        if (
-          currentSources.some((s) => s.url.trim().toLowerCase() === url.toLowerCase()) ||
-          newSources.some((s) => s.url.trim().toLowerCase() === url.toLowerCase())
-        ) {
+        const lower = url.trim().toLowerCase();
+        if (seenUrls.has(lower)) {
           skippedCount++;
           return;
         }
+        seenUrls.add(lower);
 
-        const resolvedName = resolveSourceName(url, currentSources, newSources);
+        const resolvedName = resolveSourceName(url, takenNames);
         newSources.push({ name: resolvedName, url, enabled: true });
       } catch {
         importErrors.push(`Line ${index + 1}: Invalid URL "${url}"`);

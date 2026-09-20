@@ -80,20 +80,92 @@ export class DoctorCommand extends BaseCommand<DoctorOptions> {
 
     for (const source of sources) {
       const startTime = Date.now();
+
+      // Check local files directly without network fetch
+      if (!source.url.startsWith("http://") && !source.url.startsWith("https://")) {
+        try {
+          const fs = await import("fs/promises");
+          const { fileURLToPath } = await import("url");
+          const filePath = source.url.startsWith("file://")
+            ? fileURLToPath(source.url)
+            : source.url;
+          const stat = await fs.stat(filePath);
+          const latencyMs = Date.now() - startTime;
+          totalLatency += latencyMs;
+
+          if (stat.isFile()) {
+            healthyCount++;
+            sourceResults.push({
+              name: source.name,
+              url: source.url,
+              category: source.category,
+              status: "ok",
+              statusCode: 200,
+              latencyMs,
+            });
+            this.logger.info(
+              `  ${chalk.green("✓")} ${chalk.bold(source.name)} [${source.category}] - ${chalk.cyan("Local File")} - ${chalk.green(`${latencyMs}ms`)}`,
+            );
+          } else {
+            sourceResults.push({
+              name: source.name,
+              url: source.url,
+              category: source.category,
+              status: "error",
+              statusCode: 404,
+              latencyMs,
+            });
+            this.logger.info(
+              `  ${chalk.red("✗")} ${chalk.bold(source.name)} - Local path is not a regular file`,
+            );
+            recommendations.push(`Local source '${source.name}' is not a regular file.`);
+          }
+        } catch (localErr: any) {
+          const latencyMs = Date.now() - startTime;
+          const errMsg = localErr?.message || String(localErr);
+          sourceResults.push({
+            name: source.name,
+            url: source.url,
+            category: source.category,
+            status: "unreachable",
+            latencyMs,
+            error: errMsg,
+          });
+          this.logger.info(
+            `  ${chalk.red("✗")} ${chalk.bold(source.name)} - ${chalk.red(errMsg)}`,
+          );
+          recommendations.push(`Local source '${source.name}' cannot be accessed: ${errMsg}`);
+        }
+        continue;
+      }
+
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeout);
 
-        const response = await fetch(source.url, {
-          method: "HEAD",
-          signal: controller.signal,
-        });
-        clearTimeout(timer);
+        let response: globalThis.Response;
+        try {
+          response = await fetch(source.url, {
+            method: "HEAD",
+            signal: controller.signal,
+          });
+
+          // Fallback to lightweight ranged GET if HEAD is forbidden or not allowed by CDN
+          if ((response.status === 405 || response.status === 403) && !controller.signal.aborted) {
+            response = await fetch(source.url, {
+              method: "GET",
+              headers: { Range: "bytes=0-50" },
+              signal: controller.signal,
+            });
+          }
+        } finally {
+          clearTimeout(timer);
+        }
 
         const latencyMs = Date.now() - startTime;
         totalLatency += latencyMs;
 
-        if (response.ok) {
+        if (response.ok || response.status === 206) {
           healthyCount++;
           const status = latencyMs > 2000 ? "slow" : "ok";
           sourceResults.push({
@@ -105,7 +177,8 @@ export class DoctorCommand extends BaseCommand<DoctorOptions> {
             latencyMs,
           });
 
-          const latencyLabel = latencyMs > 2000 ? chalk.yellow(`${latencyMs}ms (slow)`) : chalk.green(`${latencyMs}ms`);
+          const latencyLabel =
+            latencyMs > 2000 ? chalk.yellow(`${latencyMs}ms (slow)`) : chalk.green(`${latencyMs}ms`);
           this.logger.info(
             `  ${chalk.green("✓")} ${chalk.bold(source.name)} [${source.category}] - ${chalk.cyan(response.status)} - ${latencyLabel}`,
           );
