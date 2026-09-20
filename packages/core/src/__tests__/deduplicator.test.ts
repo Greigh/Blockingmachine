@@ -219,4 +219,22 @@ doubleclick.net
     expect(remaining).not.toContain("||a.b.c.master-domain.org^");
     expect(remaining).not.toContain("0.0.0.0 x.y.z.master-domain.org");
   });
+
+  test("collapseIpRules removes duplicate IP rules and formats properly", () => {
+    const rules: any = [
+      { type: "blocking", originalRule: "0.0.0.0 192.168.1.100" },
+      { type: "blocking", originalRule: "127.0.0.1 192.168.1.100" },
+      { type: "blocking", originalRule: "10.0.0.1/24" },
+      { type: "blocking", originalRule: "0.0.0.0 10.0.0.1/24" },
+      { type: "blocking", originalRule: "||normal-domain.com^" },
+    ];
+
+    const collapsed = deduplicator.collapseIpRules(rules);
+    expect(collapsed).toHaveLength(3);
+    const rulesText = collapsed.map((r) => r.originalRule);
+    expect(rulesText).toContain("0.0.0.0 192.168.1.100");
+    expect(rulesText).toContain("10.0.0.1/24");
+    expect(rulesText).toContain("||normal-domain.com^");
+  });
 });
+

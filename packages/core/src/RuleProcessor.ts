@@ -1,6 +1,7 @@
 import { fetchContent } from "./fetch.js";
 import { sourceNames } from "./sources.js";
 import { performance } from "perf_hooks";
+import readline from "readline";
 import {
   RuleStore,
   RuleClassificationType,
@@ -166,6 +167,51 @@ export function parseFilterList(
     }
   }
   return rules;
+}
+
+export async function* parseFilterListStream(
+  stream: NodeJS.ReadableStream,
+  sourceUrl?: string,
+): AsyncGenerator<StoredRule, void, unknown> {
+  const rl = readline.createInterface({
+    input: stream,
+    crlfDelay: Infinity,
+  });
+
+  const source = sourceUrl || "unknown";
+  const tempProcessor = new RuleProcessor();
+
+  for await (const line of rl) {
+    const trimmedLine = line.replace(/^\uFEFF/, "").trim();
+    if (!trimmedLine) continue;
+
+    const ruleType = tempProcessor.classifyRule(trimmedLine);
+    if (
+      ruleType &&
+      ruleType !== "comment" &&
+      ruleType !== "preprocessor" &&
+      ruleType !== "hint"
+    ) {
+      const metadata = createRuleMetadata(
+        source,
+        ruleType as RuleType,
+        trimmedLine,
+      );
+
+      yield {
+        raw: trimmedLine,
+        originalRule: trimmedLine,
+        hash: "",
+        type: ruleType as RuleType,
+        isException:
+          trimmedLine.startsWith("@@") ||
+          trimmedLine.includes("#@#") ||
+          ruleType === "unblocking",
+        domain: metadata.domain || undefined,
+        metadata,
+      };
+    }
+  }
 }
 
 export async function downloadAndParseSource(

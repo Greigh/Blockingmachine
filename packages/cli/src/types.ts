@@ -195,9 +195,9 @@ export interface MetaConfig {
 // MongoDB configuration
 export interface MongoConfig {
   uri: string;
-  options: {
-    maxPoolSize: number;
-    // Add other MongoDB options as needed
+  options?: {
+    maxPoolSize?: number;
+    [key: string]: any;
   };
 }
 

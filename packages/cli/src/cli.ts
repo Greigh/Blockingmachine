@@ -16,6 +16,10 @@ import { ExportCommand } from "./commands/ExportCommand.js";
 import { ValidateCommand } from "./commands/ValidateCommand.js";
 import { TestCommand } from "./commands/TestCommand.js";
 import { DiffCommand } from "./commands/DiffCommand.js";
+import { DoctorCommand } from "./commands/DoctorCommand.js";
+import { ShellCommand } from "./commands/ShellCommand.js";
+import { ServeCommand } from "./commands/ServeCommand.js";
+import { listRuleSnapshots, rollbackSnapshot } from "./lib/db.js";
 import type { MetaConfig } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -181,4 +185,108 @@ program
     }
   });
 
+program
+  .command("doctor")
+  .description("Perform system, database, and source feed connectivity health checks")
+  .option("-t, --timeout <ms>", "Per-source request timeout in milliseconds", "5000")
+  .action(async (cmdOptions: { timeout: string }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new DoctorCommand({ config, logger });
+      const result = await cmd.execute({
+        timeout: parseInt(cmdOptions.timeout, 10) || 5000,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Doctor check failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+program
+  .command("shell")
+  .description("Launch interactive REPL for testing and inspecting rules in real-time")
+  .action(async () => {
+    try {
+      const config = await loadConfig();
+      const cmd = new ShellCommand({ config, logger });
+      await cmd.execute();
+    } catch (error) {
+      logger.error(
+        `Shell failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+program
+  .command("serve")
+  .description("Start local HTTP server with real-time domain inspection API endpoints")
+  .option("-p, --port <number>", "HTTP port to bind", "8053")
+  .option("-h, --host <host>", "Host interface to bind", "127.0.0.1")
+  .action(async (cmdOptions: { port: string; host: string }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new ServeCommand({ config, logger });
+      await cmd.execute({
+        port: parseInt(cmdOptions.port, 10) || 8053,
+        host: cmdOptions.host || "127.0.0.1",
+      });
+    } catch (error) {
+      logger.error(
+        `Server failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+const snapshotProgram = program
+  .command("snapshot")
+  .description("Manage database snapshots and rollbacks");
+
+snapshotProgram
+  .command("list")
+  .description("List all available rule snapshots")
+  .action(async () => {
+    try {
+      const config = await loadConfig();
+      const snapshots = await listRuleSnapshots(config.baseDir);
+      if (snapshots.length === 0) {
+        logger.info("No snapshots found.");
+      } else {
+        logger.info(`Available Snapshots (${snapshots.length}):`);
+        for (const s of snapshots) {
+          logger.info(`  • ${s.snapshotId} [${s.ruleCount} rules] - ${s.description} (${s.timestamp})`);
+        }
+      }
+    } catch (error) {
+      logger.error(`Failed to list snapshots: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+snapshotProgram
+  .command("rollback <snapshotId>")
+  .description("Rollback rule database to a previous snapshot")
+  .action(async (snapshotId: string) => {
+    try {
+      const config = await loadConfig();
+      const res = await rollbackSnapshot(snapshotId, config.baseDir);
+      if (res.success) {
+        logger.info(`✓ ${res.message}`);
+      } else {
+        logger.error(`✗ ${res.message}`);
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(`Rollback failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
 program.parse();
+

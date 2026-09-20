@@ -207,4 +207,40 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       expect(res.verdict).toBe('not_blocked');
     });
   });
+
+  describe('Curated Defense Packs & Presets Catalog', () => {
+    test('PRESET_BUNDLES contains curated bundles with valid feeds and metadata', async () => {
+      const { PRESET_BUNDLES } = await import('../views/PresetsModal.js');
+      expect(PRESET_BUNDLES.length).toBeGreaterThanOrEqual(3);
+
+      for (const bundle of PRESET_BUNDLES) {
+        expect(bundle.id).toBeTruthy();
+        expect(bundle.name).toBeTruthy();
+        expect(bundle.description).toBeTruthy();
+        expect(bundle.badge).toBeTruthy();
+        expect(bundle.items.length).toBeGreaterThan(0);
+
+        for (const item of bundle.items) {
+          expect(item.name).toBeTruthy();
+          expect(item.url).toMatch(/^https?:\/\//);
+          expect(item.category).toBeTruthy();
+        }
+      }
+    });
+  });
+
+  describe('Accent Color Palette & Dynamic Theme Customization', () => {
+    test('ACCENT_PALETTE defines coordinated color schemes with proper hex tokens', async () => {
+      const { ACCENT_PALETTE } = await import('../theme.js');
+      expect(ACCENT_PALETTE.length).toBeGreaterThanOrEqual(5);
+
+      for (const accent of ACCENT_PALETTE) {
+        expect(accent.id).toBeTruthy();
+        expect(accent.primary).toMatch(/^#[0-9a-fA-F]{6}$/);
+        expect(accent.hover).toMatch(/^#[0-9a-fA-F]{6}$/);
+        expect(accent.glow).toContain('rgba');
+      }
+    });
+  });
 });
+

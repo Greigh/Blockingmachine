@@ -1,5 +1,6 @@
-import { parseFilterList, RuleProcessor } from "../RuleProcessor.js";
+import { parseFilterList, parseFilterListStream, RuleProcessor } from "../RuleProcessor.js";
 import { cleanDomainPattern } from "../createMetadata.js";
+import { Readable } from "stream";
 
 describe("RuleProcessor & parseFilterList", () => {
   test("parseFilterList parses standard ABP network rules and extracts domains", () => {
@@ -101,4 +102,27 @@ describe("RuleProcessor & parseFilterList", () => {
     processor.clearErrors();
     expect(processor.getErrors().processingErrors).toHaveLength(0);
   });
+
+  test("parseFilterListStream asynchronously yields rules from stream", async () => {
+    const raw = `
+! Title: Stream List
+||stream-ad.com^
+0.0.0.0 stream-telemetry.io
+@@||stream-allowed.com^
+    `.trim();
+
+    const stream = Readable.from([raw]);
+    const rules = [];
+    for await (const rule of parseFilterListStream(stream, "stream-source")) {
+      rules.push(rule);
+    }
+
+    expect(rules).toHaveLength(3);
+    expect(rules[0].domain).toBe("stream-ad.com");
+    expect(rules[0].isException).toBe(false);
+    expect(rules[1].domain).toBe("stream-telemetry.io");
+    expect(rules[2].domain).toBe("stream-allowed.com");
+    expect(rules[2].isException).toBe(true);
+  });
 });
+

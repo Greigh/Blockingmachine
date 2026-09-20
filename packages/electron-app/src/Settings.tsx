@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './index.css';
 import type { ThemeType, FilterFormat } from './types/';
+import {
+  ACCENT_PALETTE,
+  applyAccentColor,
+  type AccentColorOption,
+} from './theme';
+
+export { ACCENT_PALETTE, applyAccentColor, type AccentColorOption };
 
 interface SettingsProps {
   currentTheme: ThemeType;
@@ -8,6 +15,19 @@ interface SettingsProps {
 }
 
 const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
+  const [accentColor, setAccentColor] = useState<string>(() => {
+    try {
+      return localStorage.getItem('bm-accent-color') || 'blue';
+    } catch {
+      return 'blue';
+    }
+  });
+
+  const handleAccentChange = (id: string) => {
+    setAccentColor(id);
+    applyAccentColor(id);
+  };
+
   // Existing state variables
   const [exportFormat, setExportFormat] = useState('');
   const [isLoadingFormat, setIsLoadingFormat] = useState(true);
@@ -306,6 +326,31 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
               onClick={() => onThemeChange('system')}
             >
               <div className="theme-preview-label">System</div>
+            </div>
+          </div>
+
+          {/* Accent Color Palette Customizer */}
+          <div className="accent-palette-section">
+            <h4 className="accent-palette-title">Accent Color Palette</h4>
+            <p className="accent-palette-subtitle">
+              Choose an accent tint to customize highlights, active controls, and focus glows.
+            </p>
+            <div className="accent-palette-grid">
+              {ACCENT_PALETTE.map((accent) => (
+                <button
+                  key={accent.id}
+                  className={`accent-color-swatch ${accentColor === accent.id ? 'selected' : ''}`}
+                  onClick={() => handleAccentChange(accent.id)}
+                  title={accent.name}
+                  type="button"
+                >
+                  <span
+                    className="accent-swatch-circle"
+                    style={{ backgroundColor: accent.primary }}
+                  />
+                  <span className="accent-swatch-name">{accent.name}</span>
+                </button>
+              ))}
             </div>
           </div>
         </div>
