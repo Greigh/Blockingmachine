@@ -10,7 +10,7 @@ export class ValidateCommand extends BaseCommand<ValidateOptions> {
     super(options);
   }
 
-  async execute(options: ValidateOptions = {}): Promise<CommandResult> {
+  async execute(_options: ValidateOptions = {}): Promise<CommandResult> {
     try {
       // Config is already validated by loadConfig()
       const sourceCount = this.config.sources.length;

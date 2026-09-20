@@ -18,7 +18,7 @@ export class ShellCommand extends BaseCommand<ShellOptions> {
     super(options);
   }
 
-  async execute(options?: ShellOptions): Promise<CommandResult> {
+  async execute(_options?: ShellOptions): Promise<CommandResult> {
     const processor = new RuleProcessor();
     const testCmd = new TestCommand(this.context);
 

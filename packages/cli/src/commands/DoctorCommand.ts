@@ -58,6 +58,7 @@ export class DoctorCommand extends BaseCommand<DoctorOptions> {
       if (connected) {
         mongoStatus = "connected";
         this.logger.info(chalk.green(`  MongoDB:  Connected (${mongoUri})`));
+        await disconnectDB();
       } else {
         mongoStatus = "offline";
         this.logger.info(chalk.yellow(`  MongoDB:  Offline / fallback file mode (${mongoUri})`));
