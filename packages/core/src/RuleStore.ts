@@ -452,7 +452,7 @@ export class RuleStore {
     originalRule: string,
     metadata: RuleMetadata,
   ): void {
-    const selector = this.extractSelectorFromRule(originalRule);
+    const selector = metadata.selector || this.extractSelectorFromRule(originalRule);
 
     if (!selector) {
       if (!originalRule.includes("#$#") && !originalRule.includes("#%#")) {
@@ -583,9 +583,14 @@ export class RuleStore {
     const cleanRule = rule.replace(/^@@/, ""); // Remove exception marker
 
     // Handle different rule formats
-    if (cleanRule.includes("##") || cleanRule.includes("#@#")) {
+    if (
+      cleanRule.includes("##") ||
+      cleanRule.includes("#@#") ||
+      cleanRule.includes("#?#") ||
+      cleanRule.includes("#$?#")
+    ) {
       // Cosmetic rule - extract domain part
-      const parts = cleanRule.split(/##|#@#/);
+      const parts = cleanRule.split(/##|#@#|#\?#|#\$\?#/);
       return parts[0] || null;
     }
 
@@ -600,7 +605,7 @@ export class RuleStore {
   }
 
   private extractSelectorFromRule(rule: string): string | null {
-    // Extract CSS selector from cosmetic rules
+    // Extract CSS/extended selector from cosmetic rules
     if (rule.includes("##")) {
       const parts = rule.split("##");
       return parts[1] || null;
@@ -609,6 +614,22 @@ export class RuleStore {
     if (rule.includes("#@#")) {
       const parts = rule.split("#@#");
       return parts[1] || null;
+    }
+
+    if (rule.includes("#?#")) {
+      const parts = rule.split("#?#");
+      return parts[1] || null;
+    }
+
+    if (rule.includes("#$?#")) {
+      const parts = rule.split("#$?#");
+      return parts[1] || null;
+    }
+
+    // Match short cosmetic rule syntax: example.com#.class or example.com#,selector
+    const shortMatch = rule.match(/(?:#\.|\#,)(.+)/);
+    if (shortMatch) {
+      return shortMatch[1] || null;
     }
 
     return null;

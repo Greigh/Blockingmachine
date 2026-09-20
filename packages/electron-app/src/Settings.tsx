@@ -43,15 +43,17 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
   };
 
   useEffect(() => {
+    let isMounted = true;
+
     // Load export format
     const loadExportFormat = async () => {
       try {
         const format = await window.electron.getExportFormat();
-        setExportFormat(format);
+        if (isMounted) setExportFormat(format);
       } catch (error) {
         console.error('Error loading format:', error);
       } finally {
-        setIsLoadingFormat(false);
+        if (isMounted) setIsLoadingFormat(false);
       }
     };
 
@@ -59,16 +61,20 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
     const loadSavePath = async () => {
       try {
         const path = await window.electron.getSavePath();
-        setSavePath(path);
+        if (isMounted) setSavePath(path);
       } catch (error) {
         console.error('Error loading path:', error);
       } finally {
-        setIsLoadingPath(false);
+        if (isMounted) setIsLoadingPath(false);
       }
     };
 
     loadExportFormat();
     loadSavePath();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const handleExternalLink = async (

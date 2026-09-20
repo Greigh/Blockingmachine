@@ -23,7 +23,7 @@ describe("CLI Commands", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  test("ExportCommand formats hosts and dnsmasq correctly with exception and comment handling", async () => {
+  test("ExportCommand formats hosts and dnsmasq correctly with exception, modifier and cosmetic handling", async () => {
     const outputDir = path.join(tmpDir, "filters", "output");
     await fs.mkdir(outputDir, { recursive: true });
 
@@ -32,6 +32,8 @@ describe("CLI Commands", () => {
       "||ads.example.com^",
       "@@||allowed.example.com^",
       "tracker.net",
+      "##.generic-banner",
+      "||browser-only.com^$script",
     ].join("\n");
 
     await fs.writeFile(path.join(outputDir, "imported-rules.txt"), rawRules, "utf-8");
@@ -55,18 +57,24 @@ describe("CLI Commands", () => {
     expect(hostsContent).toContain("0.0.0.0 tracker.net");
     expect(hostsContent).toContain("# EXCEPTION: @@||allowed.example.com^");
     expect(hostsContent).not.toContain("0.0.0.0 !");
+    expect(hostsContent).not.toContain("generic-banner");
+    expect(hostsContent).not.toContain("browser-only.com");
 
     const dnsmasqContent = await fs.readFile(path.join(outputDir, "filter-list.dnsmasq"), "utf-8");
     expect(dnsmasqContent).toContain("address=/ads.example.com/0.0.0.0");
     expect(dnsmasqContent).toContain("address=/tracker.net/0.0.0.0");
     expect(dnsmasqContent).toContain("# EXCEPTION: @@||allowed.example.com^");
+    expect(dnsmasqContent).not.toContain("generic-banner");
+    expect(dnsmasqContent).not.toContain("browser-only.com");
 
     const adguardContent = await fs.readFile(path.join(outputDir, "filter-list.txt"), "utf-8");
     expect(adguardContent).toContain("||ads.example.com^");
     expect(adguardContent).toContain("@@||allowed.example.com^");
+    expect(adguardContent).toContain("##.generic-banner");
+    expect(adguardContent).toContain("||browser-only.com^$script");
   });
 
-  test("ImportCommand imports and deduplicates rules from local file source", async () => {
+  test("ImportCommand imports, preserves cosmetic rules and deduplicates rules from local file source", async () => {
     const sourceFile = path.join(tmpDir, "sample-source.txt");
     const sourceContent = [
       "[Adblock Plus 2.0]",
@@ -74,6 +82,8 @@ describe("CLI Commands", () => {
       "||banner.com^",
       "||banner.com^",
       "||analytics.com^",
+      "##.cosmetic-ad",
+      "#?#.extended-promo",
     ].join("\n");
 
     await fs.writeFile(sourceFile, sourceContent, "utf-8");
@@ -97,12 +107,15 @@ describe("CLI Commands", () => {
     const result = await importCmd.execute({});
 
     expect(result.success).toBe(true);
-    expect(result.data.totalRules).toBe(2); // banner.com and analytics.com (deduplicated)
+    expect(result.data.totalRules).toBe(4); // banner.com, analytics.com, ##.cosmetic-ad, #?#.extended-promo
 
     const importedFile = path.join(tmpDir, "filters", "output", "imported-rules.txt");
     const saved = await fs.readFile(importedFile, "utf-8");
     expect(saved).toContain("||banner.com^");
     expect(saved).toContain("||analytics.com^");
+    expect(saved).toContain("##.cosmetic-ad");
+    expect(saved).toContain("#?#.extended-promo");
     expect(saved).not.toContain("[Adblock Plus 2.0]");
+    expect(saved).not.toContain("! Header comment");
   });
 });

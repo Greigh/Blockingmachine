@@ -256,9 +256,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle('run-import-process', async (_event: IpcMainInvokeEvent) => {
       const startTime = Date.now();
       const sender = _event.sender;
+      const sendProgress = (data: { status: string; percent: number }) => {
+        if (sender && !sender.isDestroyed()) {
+          sender.send('process-progress', data);
+        }
+      };
 
       try {
-        sender.send('process-progress', {
+        sendProgress({
           status: 'Loading sources...',
           percent: 5,
         });
@@ -278,7 +283,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           };
         }
 
-        sender.send('process-progress', {
+        sendProgress({
           status: 'Fetching filter lists...',
           percent: 10,
         });
@@ -305,13 +310,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           }
           processedCount++;
           const percent = Math.floor(10 + (processedCount / totalSources) * 30);
-          sender.send('process-progress', {
+          sendProgress({
             status: `Fetching source ${processedCount}/${totalSources}: ${source.name}`,
             percent,
           });
         }
 
-        sender.send('process-progress', {
+        sendProgress({
           status: 'Processing rules...',
           percent: 50,
         });
@@ -320,7 +325,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           `[IPC Main] Total rules before deduplication: ${totalProcessedCount}`
         );
 
-        sender.send('process-progress', {
+        sendProgress({
           status: 'Deduplicating rules...',
           percent: 70,
         });
@@ -360,7 +365,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           throw new Error('No valid rules found after deduplication');
         }
 
-        sender.send('process-progress', {
+        sendProgress({
           status: 'Adding custom rules...',
           percent: 80,
         });
@@ -386,7 +391,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           (rule) => rule.isException || (rule.raw && rule.raw.startsWith('@@'))
         ).length;
 
-        sender.send('process-progress', {
+        sendProgress({
           status: 'Generating filter list...',
           percent: 90,
         });
@@ -413,7 +418,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
         const generatedList = generateFilterList(uniqueRules, metadata, format);
 
-        sender.send('process-progress', {
+        sendProgress({
           status: 'Saving to file...',
           percent: 95,
         });
@@ -431,7 +436,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
         store.set('lastProcessTime', new Date().toLocaleString());
 
-        sender.send('process-progress', { status: 'Complete!', percent: 100 });
+        sendProgress({ status: 'Complete!', percent: 100 });
 
         const endTime = Date.now();
         console.log(`[IPC Main] Import process took ${endTime - startTime}ms.`);

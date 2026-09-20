@@ -60,6 +60,23 @@ async function fetchWithRetry(
       );
     }
 
+    if (response.body && typeof (response.body as any)[Symbol.asyncIterator] === "function") {
+      let totalBytes = 0;
+      const chunks: Buffer[] = [];
+      for await (const chunk of response.body as any) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buf.length;
+        if (totalBytes > MAX_PAYLOAD_SIZE) {
+          controller.abort();
+          throw new Error(
+            `Response payload exceeded limit of 100MB: >${totalBytes} bytes`,
+          );
+        }
+        chunks.push(buf);
+      }
+      return Buffer.concat(chunks).toString("utf-8");
+    }
+
     const text = await response.text();
     return text;
   } catch (error: any) {

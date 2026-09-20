@@ -4,7 +4,7 @@ import {
   type CommandResult,
 } from "./BaseCommand.js";
 import type { ImportOptions } from "./types.js";
-import { createPaths, fetchContent } from "@blockingmachine/core";
+import { createPaths, fetchContent, parseFilterList } from "@blockingmachine/core";
 import fs from "fs/promises";
 import path from "path";
 
@@ -49,17 +49,10 @@ export class ImportCommand extends BaseCommand<ImportOptions> {
             continue;
           }
 
-          // Extract non-comment lines
-          const rules = content
-            .split("\n")
-            .map((line: string) => line.trim())
-            .filter(
-              (line: string) =>
-                line &&
-                !line.startsWith("!") &&
-                !line.startsWith("#") &&
-                !line.startsWith("["),
-            );
+          // Parse filter list using robust core parser to preserve generic cosmetic rules,
+          // scriptlets, network rules, and hosts while stripping comments and preprocessors
+          const parsedRules = parseFilterList(content, source.url);
+          const rules = parsedRules.map((r) => r.raw);
 
           if (rules && rules.length > 0) {
             let newlyAdded = 0;

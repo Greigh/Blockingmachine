@@ -1,5 +1,6 @@
 import { unlink, readdir, access } from "fs/promises";
 import path from "path";
+import mongoose from "mongoose";
 import { connectDB, disconnectDB } from "../lib/db.js";
 import { createLogger } from "../lib/logger.js";
 import type { AppConfig } from "../types.js";
@@ -18,7 +19,9 @@ export async function cleanup(options: CleanupOptions): Promise<void> {
     if (process.env.NODE_ENV === "development" && options.dropCollections) {
       await connectDB(options.config.mongodb);
       dbConnected = true;
-      await disconnectDB();
+      if (mongoose.connection.db) {
+        await mongoose.connection.db.dropDatabase();
+      }
       logger.info("🧹 Database dropped (Development Mode)");
     }
 
