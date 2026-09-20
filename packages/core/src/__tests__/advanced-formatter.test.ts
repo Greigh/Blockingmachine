@@ -144,5 +144,9 @@ example.com#$#abort-current-inline-script
     expect(adguardOutput).toContain("||tracker.com^");
     expect(adguardOutput).toContain("||telemetry.io^");
     expect(adguardOutput).toContain("@@||safe.tracker.com^");
+
+    // Header count parity: header matches emitted rule count rather than raw input
+    expect(hostsOutput).toContain("# Total domains: 3");
+    expect(adguardOutput).toContain("! Unique rules: 6");
   });
 });

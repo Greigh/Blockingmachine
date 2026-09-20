@@ -83,21 +83,29 @@ export class RuleDeduplicator {
         stripped = stripped.slice(2); // Remove the @@ prefix
       }
 
+      const isCosmeticOrScriptlet =
+        stripped.includes("##") ||
+        stripped.includes("#@#") ||
+        stripped.includes("#?#") ||
+        stripped.includes("#$#") ||
+        stripped.includes("#$?#") ||
+        stripped.includes("#%#") ||
+        stripped.includes("$$");
+
       // 1. Extract and Normalize Key Modifiers/Selectors
       const parts = {
         domain: (stripped.match(/\$domain=([^,$/]+)/)?.[1] || "")
           .toLowerCase()
           .trim(),
-        // Ensure modifiers are handled correctly even if no '$' is present
-        modifiers: (
-          stripped.match(/\$([^#]*?)(?:##|#\?#|#@#|#\$#|#\$\?#|#%#|$)/)?.[1] ||
-          ""
-        )
-          .split(",")
-          .map((m) => m.split("=")[0].toLowerCase().trim())
-          .filter((m) => m && m !== "domain") // Ensure 'domain' modifier itself isn't included here
-          .sort()
-          .join(","),
+        // Modifiers only exist on network rules, never on cosmetic rules
+        modifiers: isCosmeticOrScriptlet
+          ? ""
+          : (stripped.match(/\$([^#]*?)$/)?.[1] || "")
+              .split(",")
+              .map((m) => m.split("=")[0].toLowerCase().trim())
+              .filter((m) => m && m !== "domain") // Ensure 'domain' modifier itself isn't included here
+              .sort()
+              .join(","),
         selector: (stripped.match(/(?:##|#@#)(.+)/)?.[1] || "")
           .toLowerCase()
           .replace(/\s+/g, " ")
@@ -117,11 +125,16 @@ export class RuleDeduplicator {
       };
 
       // 2. Remove all modifiers, selectors, options from the core rule string
-      stripped = stripped
-        .replace(/\$\$.*$/, "") // Remove HTML filtering section
-        .replace(/\$.*$/, "") // Remove modifiers section
-        .replace(/(?:##|#@#|#\?#|#\$#|#\$\?#|#%#).*$/, "") // Remove cosmetic/extended/scriptlet selectors
-        .replace(/[!#]\s*.*$/, ""); // Remove comments
+      if (isCosmeticOrScriptlet) {
+        stripped = stripped
+          .replace(/\$\$.*$/, "") // Remove HTML filtering section
+          .replace(/(?:##|#@#|#\?#|#\$#|#\$\?#|#%#).*$/, "") // Remove cosmetic/extended/scriptlet selectors
+          .replace(/\s+#.*$/, ""); // Remove trailing comments
+      } else {
+        stripped = stripped
+          .replace(/\$.*$/, "") // Remove modifiers section
+          .replace(/\s+#.*$/, ""); // Remove trailing comments
+      }
 
       // 3. Refined Normalization of the Core Target String
       // Strip hosts file IP prefix if present (e.g. 0.0.0.0, 127.0.0.1, ::1)

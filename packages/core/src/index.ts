@@ -47,7 +47,7 @@ export {
   type FilterFormat,
   type FilterMetadata,
 } from "./export/advanced-formatter.js";
-export { formatRuleForType } from "./export/formatters.js";
+export { formatRuleForType, formatAdguardRule } from "./export/formatters.js";
 export { generateHeader } from "./export/headers.js";
 export { exportFormat, exportWithOptions } from "./export/index.js";
 export { filterDNSRules, filterBrowserRules } from "./export/ruleFilters.js";

@@ -198,6 +198,17 @@ async function generateAdditionalFormats(adguardFilePath) {
       // Skip rules containing modifiers/options (they cannot be safely converted to hosts)
       if (line.includes('$')) return;
 
+      // Hosts format in source list: 0.0.0.0 domain or 127.0.0.1 domain
+      const hostsMatch = line.match(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([^\s#]+)/);
+      if (hostsMatch) {
+        const domain = hostsMatch[1].trim();
+        if (domain && !domain.includes('*') && !domain.includes('$')) {
+          hostsRules.push(`0.0.0.0 ${domain}`);
+          hostsCount++;
+        }
+        return;
+      }
+
       // Normal blocking domain rules (AdGuard/uBO format)
       if (line.match(/^\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^\|\|/, '').replace(/\^$/, '');
@@ -236,6 +247,17 @@ async function generateAdditionalFormats(adguardFilePath) {
 
       // Skip rules with modifiers/options
       if (line.includes('$')) return;
+
+      // Hosts format in source list
+      const hostsMatch = line.match(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([^\s#]+)/);
+      if (hostsMatch) {
+        const domain = hostsMatch[1].trim();
+        if (domain && !domain.includes('*') && !domain.includes('$')) {
+          dnsmasqRules.push(`address=/${domain}/0.0.0.0`);
+          dnsmasqCount++;
+        }
+        return;
+      }
 
       if (line.match(/^\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^\|\|/, '').replace(/\^$/, '');
@@ -448,6 +470,11 @@ async function generateDNSAdGuardList() {
         
         // Keep whitelisting rules  
         if (line.match(/^@@\|\|[^$]*\^$/)) {
+          return true;
+        }
+
+        // Keep hosts file rules
+        if (line.match(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+[^\s#]+/)) {
           return true;
         }
         

@@ -13,15 +13,32 @@ export function cleanDomainPattern(originalRule: string): string | null {
   if (
     trimmedRule.startsWith("!") ||
     trimmedRule.startsWith("[") ||
+    trimmedRule.startsWith("#") ||
     trimmedRule.startsWith("$") ||
     trimmedRule.includes("script:")
   ) {
     return null;
   }
 
+  // Cosmetic and scriptlet injection rules are element-hiding, not DNS/domain blocking
+  if (
+    trimmedRule.includes("##") ||
+    trimmedRule.includes("#@#") ||
+    trimmedRule.includes("#?#") ||
+    trimmedRule.includes("#$#") ||
+    trimmedRule.includes("#$?#") ||
+    trimmedRule.includes("#%#") ||
+    trimmedRule.includes("#@%#") ||
+    trimmedRule.includes("$$") ||
+    trimmedRule.includes("#.") ||
+    trimmedRule.includes("#,")
+  ) {
+    return null;
+  }
+
   try {
     // Strip trailing comments (e.g. in hosts files "127.0.0.1 example.com # comment")
-    trimmedRule = trimmedRule.replace(/#.*$/, "").trim();
+    trimmedRule = trimmedRule.replace(/\s+#.*$/, "").trim();
 
     // Strip hosts file IP prefix if present (e.g. 0.0.0.0, 127.0.0.1, ::1)
     trimmedRule = trimmedRule
@@ -62,12 +79,12 @@ export function cleanDomainPattern(originalRule: string): string | null {
 function extractSelector(originalRule: string): string | null {
   if (!originalRule || typeof originalRule !== "string") return null;
   try {
-    // Matches common cosmetic rule patterns (##, #@#, #?#, #$#)
+    // Matches common cosmetic rule patterns (##, #@#, #?#, #$#, #$?#, #%#, #@%#, #., #,)
     const match = originalRule.match(
-      /(?:##|#@#|#\?#|#\$#|#\$\?#|#\.|\#\,)(.+)/,
+      /(?:##|#@#|#\?#|#\$#|#\$\?#|#%#|#@%#|#\.|\#\,)(.+)/,
     );
-    // Further split by $ if options exist, take only the selector part
-    const selectorPart = match ? match[1].split("$", 1)[0].trim() : null;
+    // Never split by $ because CSS attribute selectors use $= (e.g. [id$="-ad"]) or CSS variables
+    const selectorPart = match ? match[1].trim() : null;
     return selectorPart || null; // Return selector or null if empty/not found
   } catch {
     return null; // Return null on error

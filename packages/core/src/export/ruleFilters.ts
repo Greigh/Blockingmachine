@@ -51,10 +51,30 @@ export function filterDNSRules(rules: StoredRule[]): StoredRule[] {
     if (!DNS_RULE_TYPES.has(rule.type)) return false;
     if (!rule.raw) return false;
 
-    // Exclude rules with specific patterns
-    if (/[#]/.test(rule.raw) && !rule.raw.includes("$denyallow")) return false;
-    if (rule.raw.includes("$$")) return false;
-    if (rule.raw.includes("/") && !rule.raw.match(/^(@@)?\|\|/)) return false;
+    // Exclude cosmetic rules, scriptlets, and standalone comments
+    if (
+      rule.raw.startsWith("#") ||
+      rule.raw.startsWith("!") ||
+      rule.raw.includes("##") ||
+      rule.raw.includes("#@#") ||
+      rule.raw.includes("#?#") ||
+      rule.raw.includes("#$#") ||
+      rule.raw.includes("#$?#") ||
+      rule.raw.includes("#%#") ||
+      rule.raw.includes("$$") ||
+      rule.raw.includes("#.") ||
+      rule.raw.includes("#,")
+    ) {
+      return false;
+    }
+
+    // ABP rules with URL paths cannot be blocked at DNS level
+    if (rule.raw.startsWith("||") || rule.raw.startsWith("@@||")) {
+      const rawNoPrefix = rule.raw.replace(/^(@@)?\|\|/, "").split("$")[0];
+      if (rawNoPrefix.includes("/")) return false;
+    } else if (rule.raw.includes("/")) {
+      return false;
+    }
 
     // Check modifiers (parse all comma-separated modifiers after $)
     const dollarIdx = rule.raw.indexOf("$");

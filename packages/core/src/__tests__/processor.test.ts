@@ -57,9 +57,12 @@ describe("RuleProcessor & parseFilterList", () => {
     );
     expect(cleanDomainPattern("@@||allowed.com^")).toBe("allowed.com");
 
-    // Path rules should not be extracted as pure domain names
+    // Path rules and cosmetic rules should not be extracted as pure domain names
     expect(cleanDomainPattern("||example.com/ad-banner.js")).toBeNull();
     expect(cleanDomainPattern("##.ad-class")).toBeNull();
+    expect(cleanDomainPattern("example.com##.ad-class")).toBeNull();
+    expect(cleanDomainPattern("example.com#@#.ad-class")).toBeNull();
+    expect(cleanDomainPattern("example.com#$#body { display: none; }")).toBeNull();
     expect(cleanDomainPattern("! comment")).toBeNull();
   });
 
@@ -122,6 +125,43 @@ describe("RuleProcessor & parseFilterList", () => {
     expect(rules[0].isException).toBe(false);
     expect(rules[1].domain).toBe("stream-telemetry.io");
     expect(rules[2].domain).toBe("stream-allowed.com");
+    expect(rules[2].isException).toBe(true);
+  });
+
+  test("parseFilterList parses multi-domain hosts lines without dropping or cutting off hostnames", () => {
+    const raw = `
+0.0.0.0 alpha.com beta.org gamma.net # multi-domain hosts line
+127.0.0.1 delta.io epsilon.app
+    `.trim();
+
+    const rules = parseFilterList(raw, "multi-hosts-source");
+    expect(rules).toHaveLength(5);
+    expect(rules.map((r) => r.domain)).toEqual([
+      "alpha.com",
+      "beta.org",
+      "gamma.net",
+      "delta.io",
+      "epsilon.app",
+    ]);
+    expect(rules[0].raw).toBe("0.0.0.0 alpha.com");
+    expect(rules[1].raw).toBe("0.0.0.0 beta.org");
+    expect(rules[2].raw).toBe("0.0.0.0 gamma.net");
+    expect(rules[3].raw).toBe("127.0.0.1 delta.io");
+    expect(rules[4].raw).toBe("127.0.0.1 epsilon.app");
+  });
+
+  test("parseFilterList preserves CSS attribute selectors with $ without truncating", () => {
+    const raw = `
+##div[id$="-ad"]
+example.com##a[href$=".apk"]
+test.com#@#div[class$="_sponsor"]
+    `.trim();
+
+    const rules = parseFilterList(raw, "cosmetic-source");
+    expect(rules).toHaveLength(3);
+    expect(rules[0].metadata?.selector).toBe('div[id$="-ad"]');
+    expect(rules[1].metadata?.selector).toBe('a[href$=".apk"]');
+    expect(rules[2].metadata?.selector).toBe('div[class$="_sponsor"]');
     expect(rules[2].isException).toBe(true);
   });
 });
