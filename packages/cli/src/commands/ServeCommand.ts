@@ -54,106 +54,141 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
       .filter((l) => l && !l.startsWith("!") && !l.startsWith("#"));
 
     const server = http.createServer(async (req, res) => {
-      const parsedUrl = new URL(req.url || "/", `http://${host}:${port}`);
-      const pathname = parsedUrl.pathname;
+      try {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization");
 
-      res.setHeader("Content-Type", "application/json");
-      res.setHeader("Access-Control-Allow-Origin", "*");
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
 
-      if (pathname === "/health") {
-        res.statusCode = 200;
-        res.end(
-          JSON.stringify({
-            status: "ok",
-            uptime: process.uptime(),
-            timestamp: new Date().toISOString(),
-            rulesLoaded: lines.length,
-            ruleSource: rulesSource || "memory-only",
-          }),
-        );
-        return;
-      }
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Method Not Allowed. Only GET and HEAD are supported." }));
+          return;
+        }
 
-      if (pathname === "/v1/check") {
-        const domain = parsedUrl.searchParams.get("domain")?.trim().toLowerCase();
-        if (!domain) {
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(req.url || "/", `http://${host}:${port}`);
+        } catch {
           res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Malformed URL request." }));
+          return;
+        }
+
+        const pathname = parsedUrl.pathname;
+        res.setHeader("Content-Type", "application/json");
+
+        if (pathname === "/health") {
+          res.statusCode = 200;
           res.end(
             JSON.stringify({
-              error: "Missing 'domain' query parameter. Example: /v1/check?domain=tracker.example.com",
+              status: "ok",
+              uptime: process.uptime(),
+              timestamp: new Date().toISOString(),
+              rulesLoaded: lines.length,
+              ruleSource: rulesSource || "memory-only",
             }),
           );
           return;
         }
 
-        const target = domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split(/[/:]/)[0];
+        if (pathname === "/v1/check") {
+          const domain = parsedUrl.searchParams.get("domain")?.trim().toLowerCase();
+          if (!domain) {
+            res.statusCode = 400;
+            res.end(
+              JSON.stringify({
+                error: "Missing 'domain' query parameter. Example: /v1/check?domain=tracker.example.com",
+              }),
+            );
+            return;
+          }
 
-        // Match against loaded rules
-        const matchedRules: string[] = [];
-        let exceptionRule: string | null = null;
+          const target = domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split(/[/:]/)[0];
 
-        for (const line of lines) {
-          if (line.startsWith("@@")) {
-            const pattern = cleanDomainPattern(line);
-            if (pattern && (target === pattern || target.endsWith(`.${pattern}`))) {
-              exceptionRule = line;
-              break;
-            }
-          } else {
-            const pattern = cleanDomainPattern(line);
-            if (pattern && (target === pattern || target.endsWith(`.${pattern}`))) {
-              matchedRules.push(line);
+          // Match against loaded rules
+          const matchedRules: string[] = [];
+          let exceptionRule: string | null = null;
+
+          for (const line of lines) {
+            if (line.startsWith("@@")) {
+              const pattern = cleanDomainPattern(line);
+              if (pattern && (target === pattern || target.endsWith(`.${pattern}`))) {
+                exceptionRule = line;
+                break;
+              }
+            } else {
+              const pattern = cleanDomainPattern(line);
+              if (pattern && (target === pattern || target.endsWith(`.${pattern}`))) {
+                matchedRules.push(line);
+              }
             }
           }
-        }
 
-        const isBlocked = exceptionRule ? false : matchedRules.length > 0;
-        const verdict = exceptionRule
-          ? "ALLOWED (Exception rule overrides block)"
-          : isBlocked
-            ? "BLOCKED"
-            : "UNBLOCKED";
+          const isBlocked = exceptionRule ? false : matchedRules.length > 0;
+          const verdict = exceptionRule
+            ? "ALLOWED (Exception rule overrides block)"
+            : isBlocked
+              ? "BLOCKED"
+              : "UNBLOCKED";
 
-        res.statusCode = 200;
-        res.end(
-          JSON.stringify({
-            domain: target,
-            blocked: isBlocked,
-            verdict,
-            exceptionRule,
-            matchedRules,
-            totalMatches: matchedRules.length,
-          }),
-        );
-        return;
-      }
-
-      if (pathname === "/v1/rules") {
-        if (req.headers.accept?.includes("text/plain")) {
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
           res.statusCode = 200;
-          res.end(rulesContent);
+          res.end(
+            JSON.stringify({
+              domain: target,
+              blocked: isBlocked,
+              verdict,
+              exceptionRule,
+              matchedRules,
+              totalMatches: matchedRules.length,
+            }),
+          );
           return;
         }
 
-        res.statusCode = 200;
+        if (pathname === "/v1/rules") {
+          if (req.headers.accept?.includes("text/plain")) {
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.statusCode = 200;
+            res.end(rulesContent);
+            return;
+          }
+
+          res.statusCode = 200;
+          res.end(
+            JSON.stringify({
+              totalRules: lines.length,
+              rules: lines.slice(0, 500),
+              sampleTruncated: lines.length > 500,
+            }),
+          );
+          return;
+        }
+
+        res.statusCode = 404;
         res.end(
           JSON.stringify({
-            totalRules: lines.length,
-            rules: lines.slice(0, 500),
-            sampleTruncated: lines.length > 500,
+            error: "Not Found",
+            availableEndpoints: ["/health", "/v1/check?domain=<name>", "/v1/rules"],
           }),
         );
-        return;
+      } catch (handlerErr: any) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(
+          JSON.stringify({
+            error: "Internal Server Error",
+            message: handlerErr?.message || "An unexpected error occurred",
+          }),
+        );
       }
-
-      res.statusCode = 404;
-      res.end(
-        JSON.stringify({
-          error: "Not Found",
-          availableEndpoints: ["/health", "/v1/check?domain=<name>", "/v1/rules"],
-        }),
-      );
     });
 
     if (options?.serverInstanceHolder) {

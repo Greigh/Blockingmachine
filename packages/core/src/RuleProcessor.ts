@@ -406,7 +406,9 @@ export class RuleProcessor {
     }
 
     // If still unrecognized, return null
-    console.warn(`[classifyRule] Rule fell through all checks: ${trimmedRule}`);
+    if (process.env.DEBUG) {
+      console.warn(`[classifyRule] Rule fell through all checks: ${trimmedRule}`);
+    }
     return null;
   }
 

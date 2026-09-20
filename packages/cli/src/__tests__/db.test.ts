@@ -132,8 +132,34 @@ describe("Database Layer & Offline Audit Logging", () => {
     expect(rollbackResult.success).toBe(true);
     expect(rollbackResult.ruleCount).toBe(1);
 
+    // Verify offline mode restores rule files to output directory
+    const outputDir = path.join(tmpDir, "filters", "output");
+    const importedFile = await fs.readFile(path.join(outputDir, "imported-rules.txt"), "utf8");
+    expect(importedFile).toContain("||telemetry.io^");
+
     const nonExistent = await rollbackSnapshot("non-existent-snap-id", tmpDir);
     expect(nonExistent.success).toBe(false);
+  });
+
+  test("rejects path traversal and invalid snapshot IDs securely", async () => {
+    const traversalAttempts = [
+      "../evil",
+      "../../etc/passwd",
+      "snap/shot",
+      "snap\\shot",
+      "snap;rm -rf",
+      "",
+      "   ",
+    ];
+
+    for (const badId of traversalAttempts) {
+      const loaded = await loadRuleSnapshot(badId, tmpDir);
+      expect(loaded).toBeNull();
+
+      const rollback = await rollbackSnapshot(badId, tmpDir);
+      expect(rollback.success).toBe(false);
+      expect(rollback.message).toContain("Invalid snapshot ID");
+    }
   });
 });
 

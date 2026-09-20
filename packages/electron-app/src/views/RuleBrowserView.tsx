@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { CompiledRuleItem } from '../types';
 
 interface RuleBrowserProps {
@@ -14,6 +14,15 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
   const [pageSize] = useState(100);
   const [loading, setLoading] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const fetchRules = useCallback(async () => {
     setLoading(true);
@@ -45,7 +54,10 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
   const handleCopy = (raw: string, idx: number) => {
     navigator.clipboard.writeText(raw);
     setCopiedIndex(idx);
-    setTimeout(() => setCopiedIndex(null), 1800);
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+    }
+    copyTimeoutRef.current = setTimeout(() => setCopiedIndex(null), 1800);
   };
 
   const totalPages = Math.ceil(totalCount / pageSize);

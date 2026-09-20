@@ -254,10 +254,23 @@ export async function listRuleSnapshots(
   }
 }
 
+export function isValidSnapshotId(snapshotId: string): boolean {
+  return (
+    typeof snapshotId === "string" &&
+    snapshotId.trim().length > 0 &&
+    /^[a-zA-Z0-9_-]+$/.test(snapshotId)
+  );
+}
+
 export async function loadRuleSnapshot(
   snapshotId: string,
   baseDir?: string,
 ): Promise<RuleSnapshotEntry | null> {
+  if (!isValidSnapshotId(snapshotId)) {
+    console.warn(`[Snapshot] Invalid snapshot ID rejected: ${snapshotId}`);
+    return null;
+  }
+
   if (dbConnected) {
     try {
       const doc = await RuleSnapshotModel.findOne({ snapshotId }).lean();
@@ -278,7 +291,8 @@ export async function loadRuleSnapshot(
   const fs = await import("fs/promises");
   const path = await import("path");
   const dir = baseDir || process.cwd();
-  const snapFile = path.join(dir, "snapshots", `${snapshotId}.json`);
+  const safeId = path.basename(snapshotId);
+  const snapFile = path.join(dir, "snapshots", `${safeId}.json`);
 
   try {
     const content = await fs.readFile(snapFile, "utf8");
@@ -292,6 +306,14 @@ export async function rollbackSnapshot(
   snapshotId: string,
   baseDir?: string,
 ): Promise<{ success: boolean; ruleCount: number; message: string }> {
+  if (!isValidSnapshotId(snapshotId)) {
+    return {
+      success: false,
+      ruleCount: 0,
+      message: `Invalid snapshot ID: '${snapshotId}'. Must contain only letters, numbers, hyphens, and underscores.`,
+    };
+  }
+
   const snapshot = await loadRuleSnapshot(snapshotId, baseDir);
   if (!snapshot) {
     return {
@@ -313,6 +335,26 @@ export async function rollbackSnapshot(
         ruleCount: 0,
         message: `Database rollback error: ${err?.message || err}`,
       };
+    }
+  } else {
+    // Offline mode: restore snapshot rules back to output text files
+    try {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const dir = baseDir || process.cwd();
+      const outDir = path.join(dir, "filters", "output");
+      await fs.mkdir(outDir, { recursive: true });
+
+      const ruleLines = snapshot.rules
+        .map((r) => r.raw || (r as any).originalRule)
+        .filter(Boolean)
+        .join("\n");
+      const content = ruleLines ? ruleLines + "\n" : "";
+
+      await fs.writeFile(path.join(outDir, "imported-rules.txt"), content, "utf8");
+      await fs.writeFile(path.join(outDir, "filter-list.txt"), content, "utf8");
+    } catch (fsErr: any) {
+      console.warn(`[Snapshot] Failed to write offline restored files: ${fsErr?.message || fsErr}`);
     }
   }
 

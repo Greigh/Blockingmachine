@@ -265,16 +265,19 @@ function createTray() {
       join(app.getAppPath(), 'assets/Blockingmachine.png'),
       join(process.cwd(), 'packages/electron-app/assets/Blockingmachine.png'),
     ];
+    const isMac = process.platform === 'darwin';
     let icon = nativeImage.createEmpty();
-    for (const candidate of assetCandidates) {
-      try {
-        const loaded = nativeImage.createFromPath(candidate);
-        if (!loaded.isEmpty()) {
-          icon = loaded.resize({ width: 16, height: 16 });
-          break;
+    if (!isMac) {
+      for (const candidate of assetCandidates) {
+        try {
+          const loaded = nativeImage.createFromPath(candidate);
+          if (!loaded.isEmpty()) {
+            icon = loaded.resize({ width: 16, height: 16 });
+            break;
+          }
+        } catch {
+          // try next
         }
-      } catch {
-        // try next
       }
     }
 
@@ -747,9 +750,12 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // Trigger optional post-compilation webhook
         const webhookUrl = store.get('webhookUrl');
         if (typeof webhookUrl === 'string' && webhookUrl.trim().startsWith('http')) {
+          const webhookController = new AbortController();
+          const webhookTimeout = setTimeout(() => webhookController.abort(), 10000);
           fetch(webhookUrl.trim(), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: webhookController.signal,
             body: JSON.stringify({
               event: 'compilation_complete',
               timestamp: new Date().toISOString(),
@@ -758,7 +764,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               format,
               savePath,
             }),
-          }).catch((err) => console.error('[IPC Main] Webhook ping failed:', err));
+          })
+            .catch((err) => console.error('[IPC Main] Webhook ping failed:', err))
+            .finally(() => clearTimeout(webhookTimeout));
         }
 
         // Trigger Sinkhole Sync if configured
@@ -961,8 +969,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
 
       const total = filtered.length;
-      const offset = options?.offset || 0;
-      const limit = options?.limit || 200;
+      const offset = Math.max(0, options?.offset || 0);
+      const limit = Math.min(1000, Math.max(1, options?.limit || 200));
       const sliced = filtered.slice(offset, offset + limit).map((r) => ({
         raw: r.raw,
         type: r.type,
@@ -1259,6 +1267,21 @@ async function initialize() {
     registerIPCHandlers(store);
     await createWindow();
     createTray();
+
+    app.on('before-quit', () => {
+      if (autoScheduleTimer) {
+        clearInterval(autoScheduleTimer);
+        autoScheduleTimer = null;
+      }
+      if (appTray) {
+        try {
+          appTray.destroy();
+        } catch {
+          // ignore
+        }
+        appTray = null;
+      }
+    });
 
     app.on('window-all-closed', () => {
       if (process.platform !== 'darwin') {
