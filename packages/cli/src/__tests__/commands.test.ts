@@ -3,6 +3,7 @@ import { ExportCommand } from "../commands/ExportCommand.js";
 import { ImportCommand } from "../commands/ImportCommand.js";
 import { TestCommand } from "../commands/TestCommand.js";
 import { DiffCommand } from "../commands/DiffCommand.js";
+import { ValidateCommand } from "../commands/ValidateCommand.js";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -260,5 +261,52 @@ describe("CLI Commands", () => {
     const secondRun = await importCmd.execute({});
     expect(secondRun.success).toBe(true);
     expect(secondRun.data.totalRules).toBe(1);
+  });
+
+  test("ValidateCommand validates and reports source counts and output paths", async () => {
+    const config: any = {
+      baseDir: tmpDir,
+      mongodb: { uri: "mongodb://localhost:27017/blockingmachine" },
+      output: { directory: path.join(tmpDir, "filters", "output") },
+      sources: [
+        { name: "Source 1", url: "https://example.com/1", enabled: true },
+        { name: "Source 2", url: "https://example.com/2", enabled: false },
+      ],
+    };
+
+    const validateCmd = new ValidateCommand({ config, logger: mockLogger });
+    const result = await validateCmd.execute({});
+
+    expect(result.success).toBe(true);
+    expect(result.data.sourceCount).toBe(2);
+    expect(result.data.enabledCount).toBe(1);
+    expect(result.data.mongodb).toBe("mongodb://localhost:27017/blockingmachine");
+  });
+
+  test("ExportCommand handles unreachable sinkhole URL gracefully without crashing", async () => {
+    const outputDir = path.join(tmpDir, "filters", "output");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(
+      path.join(outputDir, "imported-rules.txt"),
+      "||ads.test^\n",
+      "utf-8",
+    );
+
+    const config: any = {
+      baseDir: tmpDir,
+      output: { directory: outputDir },
+      sources: [],
+    };
+
+    const exportCmd = new ExportCommand({ config, logger: mockLogger });
+    const result = await exportCmd.execute({
+      outputPath: outputDir,
+      formats: ["hosts"],
+      syncPihole: "http://127.0.0.1:59999/admin/api.php",
+      webhook: "http://127.0.0.1:59999/webhook",
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockLogger.warn).toHaveBeenCalled();
   });
 });

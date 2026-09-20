@@ -100,4 +100,123 @@ doubleclick.net
 
     expect(deduplicator.getStats().subdomainsPruned).toBe(2);
   });
+
+  test("getRuleScore accurately calculates bonus weights for important, trusted, domain modifiers and attribution", () => {
+    const baseRule: any = {
+      originalRule: "||tracker.com^",
+      metadata: {
+        sources: ["source1"],
+        dateAdded: new Date(),
+      },
+    };
+
+    const importantRule: any = {
+      originalRule: "||tracker.com^$important",
+      metadata: {
+        sources: ["source1"],
+        dateAdded: new Date(),
+      },
+    };
+
+    const trustedRule: any = {
+      originalRule: "||tracker.com^",
+      metadata: {
+        sources: ["source1"],
+        dateAdded: new Date(),
+        sourceInfo: { trusted: true },
+      },
+    };
+
+    const attributedRule: any = {
+      originalRule: "||tracker.com^",
+      metadata: {
+        sources: ["source1"],
+        dateAdded: new Date(),
+        attribution: "Curated by Daniel Hipskind",
+      },
+    };
+
+    const baseScore = deduplicator.getRuleScore(baseRule);
+    const importantScore = deduplicator.getRuleScore(importantRule);
+    const trustedScore = deduplicator.getRuleScore(trustedRule);
+    const attributedScore = deduplicator.getRuleScore(attributedRule);
+
+    expect(importantScore).toBeGreaterThan(baseScore);
+    expect(trustedScore).toBeGreaterThan(baseScore);
+    expect(attributedScore).toBeGreaterThan(baseScore);
+    expect(deduplicator.getRuleScore(null)).toBe(0);
+  });
+
+  test("selectBestRule chooses highest scored rule and breaks ties by length", () => {
+    const ruleA: any = {
+      originalRule: "||adserver.com^",
+      metadata: { sources: ["src1"], dateAdded: new Date() },
+    };
+    const ruleB: any = {
+      originalRule: "||adserver.com^$important",
+      metadata: { sources: ["src1"], dateAdded: new Date() },
+    };
+
+    expect(deduplicator.selectBestRule([ruleA, ruleB])).toBe(ruleB);
+
+    // Tie-breaker prefers shorter rule
+    const tieShort: any = {
+      originalRule: "adserver.com",
+      metadata: { sources: ["src1"], dateAdded: new Date() },
+    };
+    const tieLong: any = {
+      originalRule: "0.0.0.0 adserver.com",
+      metadata: { sources: ["src1"], dateAdded: new Date() },
+    };
+    const selected = deduplicator.selectBestRule([tieLong, tieShort]);
+    expect(selected.originalRule.length).toBeLessThanOrEqual(tieLong.originalRule.length);
+  });
+
+  test("mergeMetadata combines sources, modifiers, dates, and alternatives", () => {
+    const earlyDate = new Date("2023-01-01");
+    const lateDate = new Date("2024-01-01");
+
+    const rule1: any = {
+      originalRule: "||analytics.net^",
+      metadata: {
+        sources: ["feed-alpha"],
+        dateAdded: lateDate,
+        modifiers: ["third-party"],
+      },
+    };
+
+    const rule2: any = {
+      originalRule: "0.0.0.0 analytics.net",
+      metadata: {
+        sources: ["feed-beta"],
+        dateAdded: earlyDate,
+        modifiers: ["script"],
+      },
+    };
+
+    const merged = deduplicator.mergeMetadata([rule1, rule2], rule1);
+    expect(merged.sources).toContain("feed-alpha");
+    expect(merged.sources).toContain("feed-beta");
+    expect(merged.dateAdded).toEqual(earlyDate);
+    expect(merged.modifiers).toContain("third-party");
+    expect(merged.modifiers).toContain("script");
+    expect(merged.alternatives).toContain("0.0.0.0 analytics.net");
+  });
+
+  test("pruneRedundantSubdomains handles multi-level deep subdomains", () => {
+    const rules: any = [
+      { type: "blocking", originalRule: "||master-domain.org^" },
+      { type: "blocking", originalRule: "||a.b.c.master-domain.org^" },
+      { type: "blocking", originalRule: "0.0.0.0 x.y.z.master-domain.org" },
+      { type: "blocking", originalRule: "||independent-domain.org^" },
+    ];
+
+    const pruned = deduplicator.pruneRedundantSubdomains(rules);
+    expect(pruned).toHaveLength(2);
+    const remaining = pruned.map((r) => r.originalRule);
+    expect(remaining).toContain("||master-domain.org^");
+    expect(remaining).toContain("||independent-domain.org^");
+    expect(remaining).not.toContain("||a.b.c.master-domain.org^");
+    expect(remaining).not.toContain("0.0.0.0 x.y.z.master-domain.org");
+  });
 });

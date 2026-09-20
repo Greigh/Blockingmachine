@@ -47,4 +47,36 @@ describe("fetchWithConditionalCache", () => {
     const content = await fetchContent(tempFilePath);
     expect(content).toContain("0.0.0.0 tracking.com");
   });
+
+  test("fetches local file with file:// protocol scheme", async () => {
+    const fileUrl = `file://${tempFilePath}`;
+    const res = await fetchWithConditionalCache(fileUrl);
+    expect(res.status).toBe(200);
+    expect(res.content).toContain("||adserver.example.com^");
+  });
+
+  test("returns 404 when target local path is a directory", async () => {
+    const res = await fetchWithConditionalCache(os.tmpdir());
+    expect(res.status).toBe(404);
+    expect(res.content).toBeNull();
+  });
+
+  test("returns 500 when local file does not exist", async () => {
+    const nonExistentPath = path.join(os.tmpdir(), "non-existent-filter-file.txt");
+    const res = await fetchWithConditionalCache(nonExistentPath);
+    expect(res.status).toBe(500);
+    expect(res.content).toBeNull();
+  });
+
+  test("fetchContent returns null for non-existent file", async () => {
+    const nonExistentPath = path.join(os.tmpdir(), "non-existent-filter-file-2.txt");
+    const content = await fetchContent(nonExistentPath);
+    expect(content).toBeNull();
+  });
+
+  test("returns 400 when URL is malformed and invalid", async () => {
+    const res = await fetchWithConditionalCache("http://[invalid-ipv6-bracket");
+    expect(res.status).toBe(400);
+    expect(res.content).toBeNull();
+  });
 });
