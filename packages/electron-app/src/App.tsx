@@ -8,6 +8,8 @@ import { BulkImportView } from './views/BulkImportView';
 import { CustomRulesView } from './views/CustomRulesView';
 import { RuleInspectorView } from './views/RuleInspectorView';
 import { RuleBrowserView } from './views/RuleBrowserView';
+import { OnboardingModal, type OnboardingConfig } from './views/OnboardingModal';
+import { PRESET_BUNDLES } from './views/PresetsModal';
 import type { FilterSource, ThemeType } from './types/';
 import { applyTheme, applyAccentColor } from './theme';
 import './index.css';
@@ -35,6 +37,14 @@ function App() {
   const [globalSuccessMessage, setGlobalSuccessMessage] = useState<string | null>(null);
   const [savePath, setSavePath] = useState<string>('');
   const [updateAvailable, setUpdateAvailable] = useState<boolean>(false);
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bm-onboarding-completed') !== 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [autoTriggerCompile, setAutoTriggerCompile] = useState<boolean>(false);
 
   useEffect(() => {
     window.electron.getSavePath().then(setSavePath);
@@ -141,6 +151,62 @@ function App() {
     },
     []
   );
+
+  const handleOnboardingComplete = async (config: OnboardingConfig) => {
+    try {
+      localStorage.setItem('bm-onboarding-completed', 'true');
+    } catch {}
+
+    setIsOnboardingOpen(false);
+
+    // 1. If a starter bundle was selected, subscribe its feeds
+    if (config.selectedBundleId) {
+      const bundle = PRESET_BUNDLES.find((b) => b.id === config.selectedBundleId);
+      if (bundle) {
+        const existingUrls = new Set(sources.map((s) => s.url.trim().toLowerCase()));
+        const toAdd = bundle.items
+          .filter((item) => !existingUrls.has(item.url.trim().toLowerCase()))
+          .map((item) => ({
+            name: item.name,
+            url: item.url,
+            enabled: true,
+          }));
+
+        if (toAdd.length > 0) {
+          const merged = [...sources, ...toAdd];
+          try {
+            await saveSources(
+              merged,
+              `Subscribed to ${bundle.name} (${toAdd.length} feeds).`,
+            );
+          } catch (err) {
+            console.error('Failed to subscribe starter pack:', err);
+          }
+        }
+      }
+    }
+
+    // 2. Set export format if configured
+    if (config.exportFormat) {
+      try {
+        await window.electron.setExportFormat(config.exportFormat);
+      } catch (err) {
+        console.error('Failed to set export format:', err);
+      }
+    }
+
+    // 3. Set accent color
+    if (config.accentColor) {
+      applyAccentColor(config.accentColor);
+    }
+
+    // 4. Trigger initial compilation if requested
+    if (config.shouldCompileImmediately) {
+      setCurrentView('process');
+      setAutoTriggerCompile(true);
+      setTimeout(() => setAutoTriggerCompile(false), 1500);
+    }
+  };
 
   // ResizeObserver for window dimensions
   useEffect(() => {
@@ -256,6 +322,7 @@ function App() {
         totalSourcesCount={sources.length}
         updateAvailable={updateAvailable}
         handleExternalLink={handleExternalLink}
+        onLaunchOnboarding={() => setIsOnboardingOpen(true)}
       />
 
       {/* Main Workspace Pane */}
@@ -285,7 +352,12 @@ function App() {
             </div>
           )}
 
-          {currentView === 'process' && <DashboardView savePath={savePath} />}
+          {currentView === 'process' && (
+            <DashboardView
+              savePath={savePath}
+              autoTriggerCompile={autoTriggerCompile}
+            />
+          )}
           {currentView === 'sources' && (
             <SourcesView
               sources={sources}
@@ -318,10 +390,19 @@ function App() {
             <Settings
               currentTheme={selectedTheme}
               onThemeChange={handleThemeChange}
+              onLaunchOnboarding={() => setIsOnboardingOpen(true)}
             />
           )}
         </div>
       </main>
+
+      {/* Interactive First-Launch & Replay Onboarding Modal */}
+      <OnboardingModal
+        isOpen={isOnboardingOpen}
+        onClose={() => setIsOnboardingOpen(false)}
+        currentSources={sources}
+        onComplete={handleOnboardingComplete}
+      />
     </div>
   );
 }

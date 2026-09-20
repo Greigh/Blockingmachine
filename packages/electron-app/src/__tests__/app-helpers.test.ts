@@ -242,5 +242,30 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       }
     });
   });
+
+  describe('Onboarding Flow Configuration & Starter Profiles', () => {
+    test('Onboarding profiles provide essential, privacy, and distraction-free options', async () => {
+      const { PRESET_BUNDLES } = await import('../views/PresetsModal.js');
+      const bundleIds = PRESET_BUNDLES.map((b) => b.id);
+      expect(bundleIds).toContain('essential');
+      expect(bundleIds).toContain('privacy-fortress');
+      expect(bundleIds).toContain('distraction-free');
+    });
+
+    test('Onboarding completion key matches expected convention', () => {
+      const ONBOARDING_STORAGE_KEY = 'bm-onboarding-completed';
+      const mockStorage: Record<string, string> = {};
+
+      // Simulate initial state (first launch)
+      const isFirstLaunch = mockStorage[ONBOARDING_STORAGE_KEY] !== 'true';
+      expect(isFirstLaunch).toBe(true);
+
+      // Simulate completing onboarding
+      mockStorage[ONBOARDING_STORAGE_KEY] = 'true';
+      const isSubsequentLaunch = mockStorage[ONBOARDING_STORAGE_KEY] !== 'true';
+      expect(isSubsequentLaunch).toBe(false);
+    });
+  });
 });
+
 
