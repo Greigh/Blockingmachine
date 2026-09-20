@@ -10,6 +10,7 @@ import chalk from "chalk";
 
 export interface TestOptions {
   domain: string;
+  file?: string;
 }
 
 export class TestCommand extends BaseCommand<TestOptions> {
@@ -47,6 +48,10 @@ export class TestCommand extends BaseCommand<TestOptions> {
         "hosts.txt",
       ),
     ];
+
+    if (options?.file) {
+      candidateFiles.unshift(options.file);
+    }
 
     let rules: string[] = [];
     let foundFile = "";

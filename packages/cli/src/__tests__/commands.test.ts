@@ -204,4 +204,61 @@ describe("CLI Commands", () => {
     expect(result.data.removedCount).toBe(1);
     expect(result.data.unchangedCount).toBe(1);
   });
+
+  test("TestCommand supports custom rule file via file option", async () => {
+    const customRuleFile = path.join(tmpDir, "custom-rules.txt");
+    await fs.writeFile(
+      customRuleFile,
+      "||custom-blocked.com^\n@@||custom-blocked.com/allowed^\n",
+      "utf-8",
+    );
+
+    const config: any = { baseDir: tmpDir, sources: [] };
+    const testCmd = new TestCommand({ config, logger: mockLogger });
+
+    const result = await testCmd.execute({
+      domain: "sub.custom-blocked.com",
+      file: customRuleFile,
+    });
+    expect(result.success).toBe(true);
+    expect(result.data.verdict).toBe("BLOCKED");
+  });
+
+  test("ImportCommand creates and leverages cache on subsequent runs", async () => {
+    const sourceFile = path.join(tmpDir, "cached-source.txt");
+    await fs.writeFile(sourceFile, "||cached-domain.com^\n", "utf-8");
+
+    const outputDir = path.join(tmpDir, "filters", "output");
+    await fs.mkdir(outputDir, { recursive: true });
+
+    const config: any = {
+      baseDir: tmpDir,
+      output: { directory: outputDir },
+      sources: [
+        {
+          name: "Cached Source",
+          url: `file://${sourceFile}`,
+          enabled: true,
+          category: "ads",
+          priority: 1,
+        },
+      ],
+    };
+
+    const importCmd = new ImportCommand({ config, logger: mockLogger });
+    const firstRun = await importCmd.execute({});
+    expect(firstRun.success).toBe(true);
+
+    const cacheFile = path.join(outputDir, ".cache.json");
+    const cacheExists = await fs
+      .stat(cacheFile)
+      .then(() => true)
+      .catch(() => false);
+    expect(cacheExists).toBe(true);
+
+    // Second run without force should hit cache / 304
+    const secondRun = await importCmd.execute({});
+    expect(secondRun.success).toBe(true);
+    expect(secondRun.data.totalRules).toBe(1);
+  });
 });

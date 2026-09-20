@@ -1,40 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 import type { FilterSource, ThemeType, FilterFormat } from './types/index';
-import type { UpdateInfo, ProcessProgress, UpdateProgress, ProcessingResult } from './types/index';
+import type { UpdateInfo, ProcessProgress, UpdateProgress } from './types/index';
 
-// Define the API type
-interface ElectronAPI {
-  getFilterSources: () => Promise<FilterSource[]>;
-  setFilterSources: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
-  getSources: () => Promise<FilterSource[]>;
-  setSources: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
-  saveSources: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
-  getCustomRules: () => Promise<string>;
-  setCustomRules: (rules: string) => Promise<{ success: boolean; error?: string }>;
-  getSavePath: () => Promise<string>;
-  setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;
-  selectSavePath: () => Promise<string>;
-  getExportFormat: () => Promise<FilterFormat>;
-  setExportFormat: (format: FilterFormat) => Promise<{ success: boolean; error?: string }>;
-  getTheme: () => Promise<ThemeType>;
-  setTheme: (theme: ThemeType) => Promise<{ success: boolean; error?: string }>;
-  onUpdateAvailable: (callback: (info: UpdateInfo) => void) => () => void;
-  onUpdateDownloaded: (callback: () => void) => () => void;
-  onUpdateError: (callback: (error: Error) => void) => () => void;
-  onUpdateStatus: (callback: (status: string) => void) => () => void;
-  onProcessProgress: (callback: (progress: ProcessProgress) => void) => () => void;
-  removeProcessProgressListener: () => void;
-  onUpdateProgress: (callback: (progress: number) => void) => () => void;
-  onOpenSettings: (callback: () => void) => () => void;
-  getLastProcessTime: () => Promise<string>;
-  notifyResize: (width: number, height: number) => void;
-  runImportProcess: () => Promise<ProcessingResult>;
-  showItemInFolder: (path: string) => void;
-  openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
-  receive: (channel: string, callback: (...args: unknown[]) => void) => void;
-  removeAllListeners: (channel: string) => void;
-}
+import type { ElectronAPI } from './types/index';
 
 const ALLOWED_CHANNELS = new Set([
   'open-settings',

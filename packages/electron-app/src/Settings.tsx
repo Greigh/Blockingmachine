@@ -39,6 +39,8 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
   const [isSyncingSinkhole, setIsSyncingSinkhole] = useState(false);
   const [sinkholeMessage, setSinkholeMessage] = useState('');
   const [syncResults, setSyncResults] = useState<Array<{ service: string; status: 'success' | 'error' | 'skipped'; message: string }>>([]);
+  const [showPiholeKey, setShowPiholeKey] = useState(false);
+  const [showAdguardPass, setShowAdguardPass] = useState(false);
 
   // Path state variables
   const [savePath, setSavePath] = useState('');
@@ -258,6 +260,7 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
   const handleTriggerSync = async () => {
     setIsSyncingSinkhole(true);
     try {
+      await window.electron.setSinkholeConfig(sinkholeConfig);
       const res = await window.electron.syncSinkholes();
       setSyncResults(res.results || []);
     } catch (err: any) {
@@ -537,9 +540,18 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
                 />
               </div>
               <div>
-                <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Auth API Token</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Auth API Token</label>
+                  <button
+                    type="button"
+                    style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                    onClick={() => setShowPiholeKey(!showPiholeKey)}
+                  >
+                    {showPiholeKey ? 'Hide' : 'Show'}
+                  </button>
+                </div>
                 <input
-                  type="password"
+                  type={showPiholeKey ? 'text' : 'password'}
                   className="path-input"
                   style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
                   placeholder="Pi-hole web password hash"
@@ -578,9 +590,18 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
                   />
                 </div>
                 <div>
-                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Password</label>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Password</label>
+                    <button
+                      type="button"
+                      style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                      onClick={() => setShowAdguardPass(!showAdguardPass)}
+                    >
+                      {showAdguardPass ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
                   <input
-                    type="password"
+                    type={showAdguardPass ? 'text' : 'password'}
                     className="path-input"
                     style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
                     placeholder="••••••••"
