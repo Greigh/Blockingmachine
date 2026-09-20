@@ -7,6 +7,9 @@
   "workspaces": [
     "packages/*"
   ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "build": "npm run build --workspace=@blockingmachine/core && npm run build --workspaces --if-present",
     "clean": "npm run clean --workspaces --if-present",
