@@ -661,15 +661,32 @@ const createWindow = async () => {
     }
   });
 
+  mainWindow.webContents.on('console-message', (event: any) => {
+    const level = event.level ?? 0;
+    const message = event.message ?? '';
+    const line = event.lineNumber ?? 0;
+    const sourceId = event.sourceId ?? '';
+    if (isDev || level >= 2) {
+      console.log(`[Renderer Console - ${level}] ${message} (${sourceId}:${line})`);
+    }
+  });
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`Failed to load ${validatedURL}: ${errorCode} ${errorDescription}`);
+  });
+
   if (typeof MAIN_WINDOW_WEBPACK_ENTRY !== 'undefined') {
     await mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
   } else if (isDev) {
     await mainWindow.loadURL('http://localhost:3000');
-    mainWindow.webContents.openDevTools();
   } else {
     await mainWindow.loadURL(
       `file://${join(__dirname, '../renderer/index.html')}`
     );
+  }
+
+  if (isDev) {
+    mainWindow.webContents.openDevTools();
   }
 
   mainWindow.show();
@@ -678,12 +695,14 @@ const createWindow = async () => {
 async function initialize() {
   try {
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      const csp = isDev
+        ? "default-src 'self' 'unsafe-inline' data:; script-src 'self' 'unsafe-eval' 'unsafe-inline' data:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: http:;"
+        : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self';";
+
       callback({
         responseHeaders: {
           ...details.responseHeaders,
-          'Content-Security-Policy': [
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self';",
-          ],
+          'Content-Security-Policy': [csp],
         },
       });
     });
