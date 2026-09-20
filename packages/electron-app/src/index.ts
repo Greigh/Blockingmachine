@@ -587,55 +587,38 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         );
 
         sendProgress({
-          status: 'Aggregating rules for deduplication...',
-          percent: 60,
-        });
-
-        // Fast collection without array churn
-        const allRules: StoredRule[] = [];
-        for (const res of sourceResults) {
-          if (res.rules.length > 0) {
-            allRules.push(...res.rules);
-          }
-        }
-
-        const totalProcessedCount = allRules.length;
-        console.log(
-          `[IPC Main] Total rules before deduplication: ${totalProcessedCount}`
-        );
-
-        sendProgress({
-          status: 'Deduplicating rules...',
-          percent: 70,
+          status: 'Deduplicating rules across feeds...',
+          percent: 65,
         });
 
         const deduplicator = new RuleDeduplicator();
         const uniqueRulesSet = new Set<string>();
+        const uniqueRules: StoredRule[] = [];
+        let totalProcessedCount = 0;
 
-        console.log(
-          '[IPC Main] Starting deduplication of',
-          allRules.length,
-          'rules'
-        );
-
-        const uniqueRules = allRules.filter((rule) => {
-          if (!rule || !rule.raw) {
-            return false;
+        // Iterate safely without spreading large arrays onto call stack or doubling heap allocations
+        for (const res of sourceResults) {
+          if (!res.rules || res.rules.length === 0) continue;
+          totalProcessedCount += res.rules.length;
+          const rules = res.rules;
+          const rulesLen = rules.length;
+          for (let i = 0; i < rulesLen; i++) {
+            const rule = rules[i];
+            if (!rule || !rule.raw) continue;
+            const strippedRule = deduplicator.stripRule(rule.raw);
+            if (!uniqueRulesSet.has(strippedRule)) {
+              uniqueRulesSet.add(strippedRule);
+              uniqueRules.push(rule);
+            }
           }
-          const strippedRule = deduplicator.stripRule(rule.raw);
-          const isDuplicate = uniqueRulesSet.has(strippedRule);
-          if (!isDuplicate) {
-            uniqueRulesSet.add(strippedRule);
-            return true;
-          }
-          return false;
-        });
+        }
 
         const uniqueRuleCount = uniqueRules.length;
+        const duplicatesRemovedCount = totalProcessedCount - uniqueRuleCount;
         console.log(`[IPC Main] Deduplication complete:
-  - Initial rules: ${allRules.length}
+  - Initial rules: ${totalProcessedCount}
   - Unique rules: ${uniqueRuleCount}
-  - Duplicates removed: ${allRules.length - uniqueRuleCount}
+  - Duplicates removed: ${duplicatesRemovedCount}
 `);
 
         if (!Array.isArray(uniqueRules) || uniqueRules.length === 0) {
@@ -691,7 +674,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             uniqueRules: uniqueRules.length,
             blockingRules: uniqueRules.length - exceptionRuleCount,
             exceptionRules: exceptionRuleCount,
-            duplicatesRemoved: allRules.length - uniqueRuleCount,
+            duplicatesRemoved: duplicatesRemovedCount,
           },
           generatorVersion: app.getVersion(),
         };
@@ -742,7 +725,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           processedRuleCount: totalProcessedCount,
           uniqueRuleCount,
           exceptionRuleCount,
-          duplicatesRemoved: allRules.length - uniqueRuleCount,
+          duplicatesRemoved: duplicatesRemovedCount,
           exportFormats: [format, ...validAdditional],
         };
         store.set('compilationHistory', [newSnapshot, ...prevHistory].slice(0, 10));

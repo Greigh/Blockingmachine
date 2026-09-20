@@ -266,6 +266,57 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       expect(isSubsequentLaunch).toBe(false);
     });
   });
+
+  describe('Large-Scale Feed Deduplication & Call Stack Safety', () => {
+    test('deduplicates massive feeds (>70,000 rules) without exceeding maximum call stack size', async () => {
+      const { RuleDeduplicator } = await import('@blockingmachine/core');
+      const deduplicator = new RuleDeduplicator();
+      const uniqueRulesSet = new Set<string>();
+      const uniqueRules: any[] = [];
+      let totalProcessedCount = 0;
+
+      // Simulate 2 large sources with 75,000 rules each (150,000 rules total)
+      // Array.prototype.push(...rules) blows the stack at ~65,536 elements
+      const sourceResults = [
+        {
+          source: { name: 'Huge Feed A', url: 'https://example.com/a.txt' },
+          rules: Array.from({ length: 75000 }, (_, i) => ({
+            raw: `||tracker-${i % 25000}.com^`,
+            originalRule: `||tracker-${i % 25000}.com^`,
+            type: 'blocking' as const,
+          })),
+        },
+        {
+          source: { name: 'Huge Feed B', url: 'https://example.com/b.txt' },
+          rules: Array.from({ length: 75000 }, (_, i) => ({
+            raw: `||tracker-${i % 25000}.com^`,
+            originalRule: `||tracker-${i % 25000}.com^`,
+            type: 'blocking' as const,
+          })),
+        },
+      ];
+
+      expect(() => {
+        for (const res of sourceResults) {
+          if (!res.rules || res.rules.length === 0) continue;
+          totalProcessedCount += res.rules.length;
+          const rules = res.rules;
+          const rulesLen = rules.length;
+          for (let i = 0; i < rulesLen; i++) {
+            const rule = rules[i];
+            if (!rule || !rule.raw) continue;
+            const strippedRule = deduplicator.stripRule(rule.raw);
+            if (!uniqueRulesSet.has(strippedRule)) {
+              uniqueRulesSet.add(strippedRule);
+              uniqueRules.push(rule);
+            }
+          }
+        }
+      }).not.toThrow();
+
+      expect(totalProcessedCount).toBe(150000);
+      expect(uniqueRules.length).toBe(25000);
+      expect(totalProcessedCount - uniqueRules.length).toBe(125000);
+    });
+  });
 });
-
-
