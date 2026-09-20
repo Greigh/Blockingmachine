@@ -26,6 +26,27 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   const [testingService, setTestingService] = useState<'pihole' | 'adguard' | null>(null);
   const [testResult, setTestResult] = useState<SinkholeTestResult | null>(null);
 
+  // Sinkhole live sync configuration & monitoring
+  const [sinkholeConfig, setSinkholeConfig] = useState({
+    piholeUrl: '',
+    piholeApiKey: '',
+    adguardHomeUrl: '',
+    adguardHomeUser: '',
+    adguardHomePassword: '',
+    syncOnCompile: false,
+  });
+  const [isSavingSinkhole, setIsSavingSinkhole] = useState(false);
+  const [isSyncingSinkhole, setIsSyncingSinkhole] = useState(false);
+  const [sinkholeMessage, setSinkholeMessage] = useState<string | null>(null);
+  const [lastSyncResult, setLastSyncResult] = useState<{
+    service: string;
+    status: 'success' | 'error' | 'skipped';
+    message: string;
+    timestamp?: string;
+  } | null>(null);
+  const [showAdguardPass, setShowAdguardPass] = useState(false);
+  const [showPiholeKey, setShowPiholeKey] = useState(false);
+
   // Load configuration & server status on mount
   useEffect(() => {
     let isMounted = true;
@@ -51,6 +72,12 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     if (window.electron?.getCompiledRules) {
       window.electron.getCompiledRules({ limit: 1 }).then((res) => {
         if (isMounted && res?.total) setUniqueRulesCount(res.total);
+      });
+    }
+
+    if (window.electron?.getSinkholeConfig) {
+      window.electron.getSinkholeConfig().then((cfg) => {
+        if (isMounted && cfg) setSinkholeConfig(cfg);
       });
     }
 
@@ -100,6 +127,77 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
       });
     } finally {
       setTestingService(null);
+    }
+  };
+
+  const handleToggleSyncOnCompile = async (enabled: boolean) => {
+    const updated = { ...sinkholeConfig, syncOnCompile: enabled };
+    setSinkholeConfig(updated);
+    if (window.electron?.setSinkholeConfig) {
+      try {
+        await window.electron.setSinkholeConfig(updated);
+        setSinkholeMessage(enabled ? '✓ Auto-push on compile enabled' : 'Auto-push disabled');
+        setTimeout(() => setSinkholeMessage(null), 3000);
+      } catch (err: any) {
+        console.error('Failed to update sync on compile:', err);
+      }
+    }
+  };
+
+  const handleSaveSinkholeConfig = async (service: 'adguard' | 'pihole') => {
+    if (!window.electron?.setSinkholeConfig) return;
+    setIsSavingSinkhole(true);
+    setSinkholeMessage(null);
+    try {
+      await window.electron.setSinkholeConfig(sinkholeConfig);
+      setSinkholeMessage('✓ Connection settings saved successfully!');
+      setTimeout(() => setSinkholeMessage(null), 3500);
+
+      // Trigger instant connection test to confirm credentials work
+      handleTestConnection(service);
+    } catch (err: any) {
+      setSinkholeMessage(`Failed to save: ${err?.message || err}`);
+      setTimeout(() => setSinkholeMessage(null), 4000);
+    } finally {
+      setIsSavingSinkhole(false);
+    }
+  };
+
+  const handleTriggerLiveSync = async (service: 'adguard' | 'pihole') => {
+    if (!window.electron?.syncSinkholes) return;
+    setIsSyncingSinkhole(true);
+    setSinkholeMessage(null);
+    try {
+      await window.electron.setSinkholeConfig(sinkholeConfig);
+      const res = await window.electron.syncSinkholes();
+      const match = res.results?.find((r: any) =>
+        service === 'adguard'
+          ? r.service.toLowerCase().includes('adguard')
+          : r.service.toLowerCase().includes('pi-hole')
+      );
+      if (match) {
+        setLastSyncResult({
+          ...match,
+          timestamp: new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
+        });
+      }
+    } catch (err: any) {
+      setLastSyncResult({
+        service: service === 'adguard' ? 'AdGuard Home' : 'Pi-hole',
+        status: 'error',
+        message: err?.message || 'Sync failed',
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+      });
+    } finally {
+      setIsSyncingSinkhole(false);
     }
   };
 
@@ -404,17 +502,153 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                 </div>
               </div>
 
-              <div className="guide-step-card">
+              <div className="guide-step-card live-sync-step-card">
                 <div className="step-num-pill">5</div>
                 <div className="step-content">
-                  <h4>Save & Automate with Live Push</h4>
-                  <p>Click <strong>Save</strong>. AdGuard Home will ingest the compiled rules immediately.</p>
-                  <div className="tip-alert-box">
-                    <strong>💡 Pro Tip: Zero-Touch Live API Reload</strong>
-                    <p>
-                      In Blockingmachine <strong>Settings</strong>, enter your AdGuard Home URL, username, and password.
-                      Every time you click &ldquo;Compile Rules&rdquo;, Blockingmachine will automatically send an API signal to AdGuard Home to reload the rules in under 1 second without touching the web browser!
-                    </p>
+                  <div className="step-header-row">
+                    <div>
+                      <h4>Automated Live API Reload & Monitoring</h4>
+                      <p>
+                        Enable zero-touch automatic reloads: whenever you compile rules in Blockingmachine,
+                        it will immediately signal AdGuard Home via API to reload in under 1 second without touching the web browser.
+                      </p>
+                    </div>
+
+                    <div className="live-sync-header-actions">
+                      <label className="sync-toggle-label" title="Trigger automated sync after each rule compile">
+                        <input
+                          type="checkbox"
+                          checked={sinkholeConfig.syncOnCompile}
+                          onChange={(e) => handleToggleSyncOnCompile(e.target.checked)}
+                        />
+                        <span>Auto-Push on Compile</span>
+                      </label>
+
+                      <button
+                        className="live-push-btn"
+                        onClick={() => handleTriggerLiveSync('adguard')}
+                        disabled={isSyncingSinkhole || !sinkholeConfig.adguardHomeUrl}
+                        title="Send immediate API reload signal to AdGuard Home"
+                      >
+                        {isSyncingSinkhole ? (
+                          <>
+                            <span className="loading-spinner mini" />
+                            <span>Pushing…</span>
+                          </>
+                        ) : (
+                          <>
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                            </svg>
+                            <span>Push Live Reload Now</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Live Status & Watch Monitor */}
+                  <div className="live-sync-monitor-box">
+                    <div className="monitor-status-line">
+                      <div className="monitor-indicator-group">
+                        <span className={`monitor-dot ${sinkholeConfig.adguardHomeUrl ? 'active' : 'idle'}`} />
+                        <span className="monitor-target-name">
+                          {sinkholeConfig.adguardHomeUrl
+                            ? `Target: ${sinkholeConfig.adguardHomeUrl}`
+                            : 'Target: Not Configured'}
+                        </span>
+                      </div>
+
+                      <div className="monitor-badges">
+                        {testResult?.service === 'adguard' && (
+                          <span className={`test-status-pill ${testResult.success ? 'success' : 'error'}`}>
+                            {testResult.message}
+                          </span>
+                        )}
+                        {lastSyncResult?.service?.toLowerCase().includes('adguard') && (
+                          <span className={`test-status-pill ${lastSyncResult.status === 'success' ? 'success' : 'error'}`}>
+                            Last Push: {lastSyncResult.message} ({lastSyncResult.timestamp})
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Quick In-Place Credentials & Endpoint Editor */}
+                    <div className="inline-config-editor">
+                      <div className="inline-fields-row">
+                        <div className="inline-field-group url-field">
+                          <label>AdGuard Home URL</label>
+                          <input
+                            type="text"
+                            placeholder="http://192.168.1.100:3000 or http://adguard.home"
+                            value={sinkholeConfig.adguardHomeUrl || ''}
+                            onChange={(e) =>
+                              setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })
+                            }
+                          />
+                        </div>
+
+                        <div className="inline-field-group user-field">
+                          <label>Username</label>
+                          <input
+                            type="text"
+                            placeholder="admin"
+                            value={sinkholeConfig.adguardHomeUser || ''}
+                            onChange={(e) =>
+                              setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })
+                            }
+                          />
+                        </div>
+
+                        <div className="inline-field-group pass-field">
+                          <label>Password</label>
+                          <div className="inline-input-with-eye">
+                            <input
+                              type={showAdguardPass ? 'text' : 'password'}
+                              placeholder="••••••••"
+                              value={sinkholeConfig.adguardHomePassword || ''}
+                              onChange={(e) =>
+                                setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="eye-toggle-btn"
+                              onClick={() => setShowAdguardPass(!showAdguardPass)}
+                              title={showAdguardPass ? 'Hide password' : 'Show password'}
+                            >
+                              {showAdguardPass ? '👁️' : '👁️‍🗨️'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="inline-actions-row">
+                        <div className="inline-actions-left">
+                          <button
+                            type="button"
+                            className="primary-button save-config-btn"
+                            onClick={() => handleSaveSinkholeConfig('adguard')}
+                            disabled={isSavingSinkhole}
+                          >
+                            {isSavingSinkhole ? 'Saving…' : 'Save Connection Details'}
+                          </button>
+
+                          <button
+                            type="button"
+                            className="secondary-button test-inline-btn"
+                            onClick={() => handleTestConnection('adguard')}
+                            disabled={testingService === 'adguard' || !sinkholeConfig.adguardHomeUrl}
+                          >
+                            {testingService === 'adguard' ? 'Testing…' : '⚡ Test Connection'}
+                          </button>
+                        </div>
+
+                        {sinkholeMessage && (
+                          <span className="sinkhole-feedback-msg">{sinkholeMessage}</span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -508,16 +742,141 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                 </div>
               </div>
 
-              <div className="guide-step-card">
+              <div className="guide-step-card live-sync-step-card">
                 <div className="step-num-pill">5</div>
                 <div className="step-content">
-                  <h4>Automated Gravity Sync via API</h4>
-                  <div className="tip-alert-box">
-                    <strong>💡 Pro Tip: Live Pi-hole API Key Sync</strong>
-                    <p>
-                      Enter your Pi-hole URL and API Auth Token under <strong>Settings</strong> in Blockingmachine.
-                      Whenever a compilation completes, Blockingmachine will trigger Pi-hole to reload gravity automatically!
-                    </p>
+                  <div className="step-header-row">
+                    <div>
+                      <h4>Automated Gravity Sync & Monitoring (Pi-hole API)</h4>
+                      <p>
+                        Enable zero-touch automatic Gravity updates: whenever rules are compiled in Blockingmachine,
+                        it will signal Pi-hole&rsquo;s API to reload Gravity (`pihole -g`) automatically.
+                      </p>
+                    </div>
+
+                    <div className="live-sync-header-actions">
+                      <label className="sync-toggle-label" title="Trigger automated sync after each rule compile">
+                        <input
+                          type="checkbox"
+                          checked={sinkholeConfig.syncOnCompile}
+                          onChange={(e) => handleToggleSyncOnCompile(e.target.checked)}
+                        />
+                        <span>Auto-Push on Compile</span>
+                      </label>
+
+                      <button
+                        className="live-push-btn"
+                        onClick={() => handleTriggerLiveSync('pihole')}
+                        disabled={isSyncingSinkhole || !sinkholeConfig.piholeUrl}
+                        title="Trigger immediate Gravity update on Pi-hole"
+                      >
+                        {isSyncingSinkhole ? (
+                          <>
+                            <span className="loading-spinner mini" />
+                            <span>Reloading…</span>
+                          </>
+                        ) : (
+                          <>
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                            </svg>
+                            <span>Trigger Gravity Reload Now</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Live Status & Watch Monitor */}
+                  <div className="live-sync-monitor-box">
+                    <div className="monitor-status-line">
+                      <div className="monitor-indicator-group">
+                        <span className={`monitor-dot ${sinkholeConfig.piholeUrl ? 'active' : 'idle'}`} />
+                        <span className="monitor-target-name">
+                          {sinkholeConfig.piholeUrl
+                            ? `Target: ${sinkholeConfig.piholeUrl}`
+                            : 'Target: Not Configured'}
+                        </span>
+                      </div>
+
+                      <div className="monitor-badges">
+                        {testResult?.service === 'pihole' && (
+                          <span className={`test-status-pill ${testResult.success ? 'success' : 'error'}`}>
+                            {testResult.message}
+                          </span>
+                        )}
+                        {lastSyncResult?.service?.toLowerCase().includes('pi-hole') && (
+                          <span className={`test-status-pill ${lastSyncResult.status === 'success' ? 'success' : 'error'}`}>
+                            Last Gravity Reload: {lastSyncResult.message} ({lastSyncResult.timestamp})
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Quick In-Place Credentials & Endpoint Editor */}
+                    <div className="inline-config-editor">
+                      <div className="inline-fields-row">
+                        <div className="inline-field-group url-field" style={{ flex: 1.5 }}>
+                          <label>Pi-hole Web/API URL</label>
+                          <input
+                            type="text"
+                            placeholder="http://pi.hole/admin/api.php or http://192.168.1.50/admin"
+                            value={sinkholeConfig.piholeUrl || ''}
+                            onChange={(e) =>
+                              setSinkholeConfig({ ...sinkholeConfig, piholeUrl: e.target.value })
+                            }
+                          />
+                        </div>
+
+                        <div className="inline-field-group pass-field" style={{ flex: 1.2 }}>
+                          <label>API Key / Web Password Token</label>
+                          <div className="inline-input-with-eye">
+                            <input
+                              type={showPiholeKey ? 'text' : 'password'}
+                              placeholder="WEBPASSWORD hash or API token"
+                              value={sinkholeConfig.piholeApiKey || ''}
+                              onChange={(e) =>
+                                setSinkholeConfig({ ...sinkholeConfig, piholeApiKey: e.target.value })
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="eye-toggle-btn"
+                              onClick={() => setShowPiholeKey(!showPiholeKey)}
+                              title={showPiholeKey ? 'Hide key' : 'Show key'}
+                            >
+                              {showPiholeKey ? '👁️' : '👁️‍🗨️'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="inline-actions-row">
+                        <div className="inline-actions-left">
+                          <button
+                            type="button"
+                            className="primary-button save-config-btn"
+                            onClick={() => handleSaveSinkholeConfig('pihole')}
+                            disabled={isSavingSinkhole}
+                          >
+                            {isSavingSinkhole ? 'Saving…' : 'Save Connection Details'}
+                          </button>
+
+                          <button
+                            type="button"
+                            className="secondary-button test-inline-btn"
+                            onClick={() => handleTestConnection('pihole')}
+                            disabled={testingService === 'pihole' || !sinkholeConfig.piholeUrl}
+                          >
+                            {testingService === 'pihole' ? 'Testing…' : '⚡ Test Connection'}
+                          </button>
+                        </div>
+
+                        {sinkholeMessage && (
+                          <span className="sinkhole-feedback-msg">{sinkholeMessage}</span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
