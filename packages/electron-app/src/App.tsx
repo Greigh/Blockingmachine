@@ -8,6 +8,7 @@ import { BulkImportView } from './views/BulkImportView';
 import { CustomRulesView } from './views/CustomRulesView';
 import { RuleInspectorView } from './views/RuleInspectorView';
 import { RuleBrowserView } from './views/RuleBrowserView';
+import { DeployHubView } from './views/DeployHubView';
 import { OnboardingModal, type OnboardingConfig } from './views/OnboardingModal';
 import { PRESET_BUNDLES } from './views/PresetsModal';
 import type { FilterSource, ThemeType } from './types/';
@@ -257,6 +258,9 @@ function App() {
         } else if (e.key === '6') {
           e.preventDefault();
           setCurrentView('browser');
+        } else if (e.key === '7') {
+          e.preventDefault();
+          setCurrentView('deploy');
         } else if (e.key === ',') {
           e.preventDefault();
           setCurrentView('settings');
@@ -406,6 +410,13 @@ function App() {
             {currentView === 'inspector' && <RuleInspectorView />}
             {currentView === 'browser' && (
               <RuleBrowserView
+                onTriggerCompile={() => setCurrentView('process')}
+              />
+            )}
+            {currentView === 'deploy' && (
+              <DeployHubView
+                savePath={savePath}
+                onNavigateSettings={() => setCurrentView('settings')}
                 onTriggerCompile={() => setCurrentView('process')}
               />
             )}

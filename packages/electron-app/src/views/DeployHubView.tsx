@@ -1,0 +1,749 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import type { FilterFormat, FeedServerStatus, SinkholeTestResult } from '../types/';
+
+interface DeployHubViewProps {
+  savePath: string;
+  onNavigateSettings?: () => void;
+  onTriggerCompile?: () => void;
+}
+
+type PlatformTab = 'adguard-home' | 'pihole' | 'adguard-desktop' | 'hosts' | 'dnsmasq';
+
+export const DeployHubView: React.FC<DeployHubViewProps> = ({
+  savePath,
+  onNavigateSettings,
+  onTriggerCompile,
+}) => {
+  const [activeTab, setActiveTab] = useState<PlatformTab>('adguard-home');
+  const [exportFormat, setExportFormat] = useState<FilterFormat>('adguard');
+  const [serverStatus, setServerStatus] = useState<FeedServerStatus | null>(null);
+  const [isServerLoading, setIsServerLoading] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [lastProcessTime, setLastProcessTime] = useState<string | null>(null);
+  const [uniqueRulesCount, setUniqueRulesCount] = useState<number | null>(null);
+
+  // Connection tester states
+  const [testingService, setTestingService] = useState<'pihole' | 'adguard' | null>(null);
+  const [testResult, setTestResult] = useState<SinkholeTestResult | null>(null);
+
+  // Load configuration & server status on mount
+  useEffect(() => {
+    let isMounted = true;
+
+    if (window.electron?.getExportFormat) {
+      window.electron.getExportFormat().then((fmt) => {
+        if (isMounted && fmt) setExportFormat(fmt);
+      });
+    }
+
+    if (window.electron?.getFeedServerStatus) {
+      window.electron.getFeedServerStatus().then((status) => {
+        if (isMounted) setServerStatus(status);
+      });
+    }
+
+    if (window.electron?.getLastProcessTime) {
+      window.electron.getLastProcessTime().then((time) => {
+        if (isMounted) setLastProcessTime(time);
+      });
+    }
+
+    if (window.electron?.getCompiledRules) {
+      window.electron.getCompiledRules({ limit: 1 }).then((res) => {
+        if (isMounted && res?.total) setUniqueRulesCount(res.total);
+      });
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handleCopy = useCallback((text: string, key: string) => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2400);
+    }
+  }, []);
+
+  const handleToggleFeedServer = async () => {
+    if (!window.electron) return;
+    setIsServerLoading(true);
+    try {
+      if (serverStatus?.isRunning) {
+        const updated = await window.electron.stopFeedServer();
+        setServerStatus(updated);
+      } else {
+        const updated = await window.electron.startFeedServer(9191);
+        setServerStatus(updated);
+      }
+    } catch (err) {
+      console.error('Failed to toggle feed server:', err);
+    } finally {
+      setIsServerLoading(false);
+    }
+  };
+
+  const handleTestConnection = async (service: 'pihole' | 'adguard') => {
+    if (!window.electron?.testSinkholeConnection) return;
+    setTestingService(service);
+    setTestResult(null);
+    try {
+      const res = await window.electron.testSinkholeConnection(service);
+      setTestResult(res);
+    } catch (err: any) {
+      setTestResult({
+        service,
+        success: false,
+        message: err?.message || 'Connection test failed',
+      });
+    } finally {
+      setTestingService(null);
+    }
+  };
+
+  const fileUrl = savePath ? `file://${savePath}` : '';
+  const fileName = savePath ? savePath.split(/[/\\]/).pop() || 'rules.txt' : 'rules.txt';
+  const lanFeedUrl = serverStatus?.lanUrl ? `${serverStatus.lanUrl}/${fileName}` : `http://<your-mac-ip>:9191/${fileName}`;
+  const localHttpUrl = serverStatus?.localUrl ? `${serverStatus.localUrl}/${fileName}` : `http://localhost:9191/${fileName}`;
+
+  return (
+    <div className="deploy-hub-container">
+      {/* Top Banner Header */}
+      <div className="deploy-hub-header">
+        <div className="deploy-header-left">
+          <div className="deploy-header-badge">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+            </svg>
+            <span>Production Deployment Hub</span>
+          </div>
+          <h2 className="deploy-hub-title">Deploy & Integrate Filter Lists</h2>
+          <p className="deploy-hub-subtitle">
+            Attach your compiled blocklists to local network DNS sinkholes, desktop adblockers,
+            custom routers, and operating systems with automated synchronization.
+          </p>
+        </div>
+
+        <div className="deploy-header-actions">
+          {onTriggerCompile && (
+            <button className="secondary-button" onClick={onTriggerCompile} title="Recompile filter lists">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
+              <span>Compile Rules</span>
+            </button>
+          )}
+          {onNavigateSettings && (
+            <button className="secondary-button" onClick={onNavigateSettings} title="Open Sinkhole API Settings">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <span>Sync Settings</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Top Overview Split Grid */}
+      <div className="deploy-status-grid">
+        {/* Active Export File Card */}
+        <div className="deploy-card export-file-card">
+          <div className="deploy-card-header">
+            <div className="deploy-card-title-group">
+              <span className="deploy-card-icon">📁</span>
+              <div>
+                <h4 className="deploy-card-title">Compiled Target List</h4>
+                <span className="deploy-card-subtitle">
+                  {uniqueRulesCount ? `${uniqueRulesCount.toLocaleString()} active rules` : 'Ready to deploy'}
+                  {lastProcessTime ? ` • Updated ${new Date(lastProcessTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                </span>
+              </div>
+            </div>
+            <span className="format-badge-pill">{exportFormat.toUpperCase()}</span>
+          </div>
+
+          <div className="file-path-display-box">
+            <span className="file-path-text" title={savePath}>{savePath || 'No save path configured'}</span>
+          </div>
+
+          <div className="deploy-card-buttons">
+            <button
+              className={`mini-action-btn ${copiedKey === 'local-path' ? 'copied' : ''}`}
+              onClick={() => handleCopy(savePath, 'local-path')}
+              title="Copy absolute filesystem path"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+              </svg>
+              <span>{copiedKey === 'local-path' ? 'Copied Path!' : 'Copy Path'}</span>
+            </button>
+
+            <button
+              className={`mini-action-btn ${copiedKey === 'file-url' ? 'copied' : ''}`}
+              onClick={() => handleCopy(fileUrl, 'file-url')}
+              title="Copy file:// URL format for browser/adblock subscriptions"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
+                <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
+              </svg>
+              <span>{copiedKey === 'file-url' ? 'Copied file:// URL!' : 'Copy file:// URL'}</span>
+            </button>
+
+            {window.electron?.showItemInFolder && (
+              <button
+                className="mini-action-btn"
+                onClick={() => window.electron.showItemInFolder(savePath)}
+                title="Show in Finder / File Explorer"
+              >
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                </svg>
+                <span>Reveal in Finder</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Embedded Local HTTP Feed Server Card */}
+        <div className="deploy-card server-feed-card">
+          <div className="deploy-card-header">
+            <div className="deploy-card-title-group">
+              <span className="deploy-card-icon">📡</span>
+              <div>
+                <h4 className="deploy-card-title">Local Network Feed Server</h4>
+                <span className="deploy-card-subtitle">
+                  Serve lists directly over HTTP to devices on your LAN or Docker containers
+                </span>
+              </div>
+            </div>
+
+            <div className="server-toggle-wrap">
+              <span className={`server-status-pill ${serverStatus?.isRunning ? 'online' : 'offline'}`}>
+                {serverStatus?.isRunning ? '● LIVE ON LAN' : 'OFFLINE'}
+              </span>
+              <button
+                className={`server-toggle-btn ${serverStatus?.isRunning ? 'active' : ''}`}
+                onClick={handleToggleFeedServer}
+                disabled={isServerLoading}
+              >
+                {isServerLoading ? '…' : serverStatus?.isRunning ? 'Stop Server' : 'Start Server'}
+              </button>
+            </div>
+          </div>
+
+          <div className="server-url-display-box">
+            <div className="server-url-row">
+              <span className="server-url-label">LAN Feed URL:</span>
+              <code className="server-url-code">{lanFeedUrl}</code>
+              <button
+                className={`copy-icon-btn ${copiedKey === 'lan-url' ? 'copied' : ''}`}
+                onClick={() => handleCopy(lanFeedUrl, 'lan-url')}
+                title="Copy LAN subscription URL"
+              >
+                {copiedKey === 'lan-url' ? '✓' : 'Copy'}
+              </button>
+            </div>
+            {serverStatus?.isRunning && (
+              <div className="server-url-row secondary">
+                <span className="server-url-label">Localhost URL:</span>
+                <code className="server-url-code">{localHttpUrl}</code>
+                <button
+                  className={`copy-icon-btn ${copiedKey === 'local-http' ? 'copied' : ''}`}
+                  onClick={() => handleCopy(localHttpUrl, 'local-http')}
+                  title="Copy localhost URL"
+                >
+                  {copiedKey === 'local-http' ? '✓' : 'Copy'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <p className="server-help-hint">
+            {serverStatus?.isRunning
+              ? '✅ Server is active on port 9191. Any device on your local Wi-Fi/Ethernet network can subscribe to this URL.'
+              : '💡 Turn on this server if Pi-hole or AdGuard Home is running on a Raspberry Pi or Docker container that cannot access local files directly.'}
+          </p>
+        </div>
+      </div>
+
+      {/* Platform Tabs Navigation */}
+      <div className="deploy-platform-tabs">
+        <button
+          className={`platform-tab-btn ${activeTab === 'adguard-home' ? 'active' : ''}`}
+          onClick={() => setActiveTab('adguard-home')}
+        >
+          <span className="platform-tab-icon">🛡️</span>
+          <span className="platform-tab-label">AdGuard Home</span>
+        </button>
+
+        <button
+          className={`platform-tab-btn ${activeTab === 'pihole' ? 'active' : ''}`}
+          onClick={() => setActiveTab('pihole')}
+        >
+          <span className="platform-tab-icon">🥧</span>
+          <span className="platform-tab-label">Pi-hole (v5 & v6)</span>
+        </button>
+
+        <button
+          className={`platform-tab-btn ${activeTab === 'adguard-desktop' ? 'active' : ''}`}
+          onClick={() => setActiveTab('adguard-desktop')}
+        >
+          <span className="platform-tab-icon">💻</span>
+          <span className="platform-tab-label">AdGuard for Mac / Win</span>
+        </button>
+
+        <button
+          className={`platform-tab-btn ${activeTab === 'hosts' ? 'active' : ''}`}
+          onClick={() => setActiveTab('hosts')}
+        >
+          <span className="platform-tab-icon">🖥️</span>
+          <span className="platform-tab-label">OS Hosts File</span>
+        </button>
+
+        <button
+          className={`platform-tab-btn ${activeTab === 'dnsmasq' ? 'active' : ''}`}
+          onClick={() => setActiveTab('dnsmasq')}
+        >
+          <span className="platform-tab-icon">🌐</span>
+          <span className="platform-tab-label">Dnsmasq & Routers</span>
+        </button>
+      </div>
+
+      {/* Platform Instructions Body */}
+      <div className="deploy-guide-panel">
+        {/* TAB 1: AdGuard Home */}
+        {activeTab === 'adguard-home' && (
+          <div className="guide-section">
+            <div className="guide-hero-banner">
+              <div className="guide-hero-text">
+                <h3>Connecting to AdGuard Home</h3>
+                <p>
+                  Deploy your compiled lists as an active DNS blocklist in AdGuard Home with optional
+                  zero-touch automated API reload whenever you compile.
+                </p>
+              </div>
+              <div className="guide-quick-test">
+                <button
+                  className="tester-btn"
+                  onClick={() => handleTestConnection('adguard')}
+                  disabled={testingService === 'adguard'}
+                >
+                  {testingService === 'adguard' ? 'Testing Connection…' : '⚡ Test AdGuard Home Connection'}
+                </button>
+                {testResult?.service === 'adguard' && (
+                  <span className={`test-status-pill ${testResult.success ? 'success' : 'error'}`}>
+                    {testResult.message}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="guide-steps-flow">
+              <div className="guide-step-card">
+                <div className="step-num-pill">1</div>
+                <div className="step-content">
+                  <h4>Open AdGuard Home Web Interface</h4>
+                  <p>Open your browser and navigate to your AdGuard Home dashboard (default: <code>http://&lt;ip&gt;:3000</code>).</p>
+                </div>
+              </div>
+
+              <div className="guide-step-card">
+                <div className="step-num-pill">2</div>
+                <div className="step-content">
+                  <h4>Navigate to DNS Blocklists</h4>
+                  <p>In the top navigation menu, click on <strong>Filters</strong>, then select <strong>DNS blocklists</strong>.</p>
+                </div>
+              </div>
+
+              <div className="guide-step-card">
+                <div className="step-num-pill">3</div>
+                <div className="step-content">
+                  <h4>Add Custom Blocklist</h4>
+                  <p>Click the <strong>Add blocklist</strong> button at the bottom and choose <strong>Add a custom list</strong>.</p>
+                </div>
+              </div>
+
+              <div className="guide-step-card highlight">
+                <div className="step-num-pill">4</div>
+                <div className="step-content">
+                  <h4>Enter Name & Subscription URL</h4>
+                  <p>Set the name to <code>Blockingmachine Compiled</code>. For the URL or path:</p>
+                  
+                  <div className="snippet-choice-group">
+                    <div className="snippet-box">
+                      <div className="snippet-header">
+                        <span>Option A: Over Local Network (Recommended for Remote / Docker)</span>
+                        <button
+                          className="copy-snippet-btn"
+                          onClick={() => handleCopy(lanFeedUrl, 'agh-lan')}
+                        >
+                          {copiedKey === 'agh-lan' ? 'Copied!' : 'Copy LAN URL'}
+                        </button>
+                      </div>
+                      <code>{lanFeedUrl}</code>
+                    </div>
+
+                    <div className="snippet-box">
+                      <div className="snippet-header">
+                        <span>Option B: Local File Path (If AdGuard Home runs on this Mac)</span>
+                        <button
+                          className="copy-snippet-btn"
+                          onClick={() => handleCopy(fileUrl, 'agh-file')}
+                        >
+                          {copiedKey === 'agh-file' ? 'Copied!' : 'Copy File URL'}
+                        </button>
+                      </div>
+                      <code>{fileUrl}</code>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="guide-step-card">
+                <div className="step-num-pill">5</div>
+                <div className="step-content">
+                  <h4>Save & Automate with Live Push</h4>
+                  <p>Click <strong>Save</strong>. AdGuard Home will ingest the compiled rules immediately.</p>
+                  <div className="tip-alert-box">
+                    <strong>💡 Pro Tip: Zero-Touch Live API Reload</strong>
+                    <p>
+                      In Blockingmachine <strong>Settings</strong>, enter your AdGuard Home URL, username, and password.
+                      Every time you click &ldquo;Compile Rules&rdquo;, Blockingmachine will automatically send an API signal to AdGuard Home to reload the rules in under 1 second without touching the web browser!
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: Pi-hole */}
+        {activeTab === 'pihole' && (
+          <div className="guide-section">
+            <div className="guide-hero-banner">
+              <div className="guide-hero-text">
+                <h3>Connecting to Pi-hole (v5 & v6)</h3>
+                <p>
+                  Ingest your deduplicated rules into Pi-hole&rsquo;s adlist database and trigger Gravity
+                  updates automatically over API.
+                </p>
+              </div>
+              <div className="guide-quick-test">
+                <button
+                  className="tester-btn"
+                  onClick={() => handleTestConnection('pihole')}
+                  disabled={testingService === 'pihole'}
+                >
+                  {testingService === 'pihole' ? 'Testing Connection…' : '⚡ Test Pi-hole Connection'}
+                </button>
+                {testResult?.service === 'pihole' && (
+                  <span className={`test-status-pill ${testResult.success ? 'success' : 'error'}`}>
+                    {testResult.message}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="guide-steps-flow">
+              <div className="guide-step-card">
+                <div className="step-num-pill">1</div>
+                <div className="step-content">
+                  <h4>Open Pi-hole Admin Console</h4>
+                  <p>Open your browser and navigate to <code>http://pi.hole/admin</code> (or your Pi-hole&rsquo;s IP address).</p>
+                </div>
+              </div>
+
+              <div className="guide-step-card">
+                <div className="step-num-pill">2</div>
+                <div className="step-content">
+                  <h4>Go to Adlists</h4>
+                  <p>In the left sidebar menu, click on <strong>Adlists</strong>.</p>
+                </div>
+              </div>
+
+              <div className="guide-step-card highlight">
+                <div className="step-num-pill">3</div>
+                <div className="step-content">
+                  <h4>Add Subscription Address</h4>
+                  <p>Paste the HTTP feed URL into the <strong>Address</strong> field and click <strong>Add</strong>:</p>
+
+                  <div className="snippet-box">
+                    <div className="snippet-header">
+                      <span>Pi-hole Adlist Subscription URL (LAN HTTP)</span>
+                      <button
+                        className="copy-snippet-btn"
+                        onClick={() => handleCopy(lanFeedUrl, 'pi-lan')}
+                      >
+                        {copiedKey === 'pi-lan' ? 'Copied!' : 'Copy URL'}
+                      </button>
+                    </div>
+                    <code>{lanFeedUrl}</code>
+                  </div>
+                  <span className="step-subtext">Note: Pi-hole requires rules to be delivered via HTTP/HTTPS. Ensure the Local Feed Server is running above!</span>
+                </div>
+              </div>
+
+              <div className="guide-step-card">
+                <div className="step-num-pill">4</div>
+                <div className="step-content">
+                  <h4>Update Gravity Database</h4>
+                  <p>
+                    Navigate to <strong>Tools</strong> → <strong>Update Gravity</strong> in the web console and click <strong>Update</strong>,
+                    or run the following in your Pi-hole terminal:
+                  </p>
+                  <div className="code-command-snippet">
+                    <code>pihole -g</code>
+                    <button
+                      className="copy-snippet-btn"
+                      onClick={() => handleCopy('pihole -g', 'pi-cmd')}
+                    >
+                      {copiedKey === 'pi-cmd' ? 'Copied!' : 'Copy Command'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="guide-step-card">
+                <div className="step-num-pill">5</div>
+                <div className="step-content">
+                  <h4>Automated Gravity Sync via API</h4>
+                  <div className="tip-alert-box">
+                    <strong>💡 Pro Tip: Live Pi-hole API Key Sync</strong>
+                    <p>
+                      Enter your Pi-hole URL and API Auth Token under <strong>Settings</strong> in Blockingmachine.
+                      Whenever a compilation completes, Blockingmachine will trigger Pi-hole to reload gravity automatically!
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: AdGuard Desktop (Mac / Windows) */}
+        {activeTab === 'adguard-desktop' && (
+          <div className="guide-section">
+            <div className="guide-hero-banner">
+              <div className="guide-hero-text">
+                <h3>Connecting to AdGuard for Mac & Windows</h3>
+                <p>
+                  Import or subscribe to your compiled rule bundle directly within the standalone AdGuard desktop application.
+                </p>
+              </div>
+            </div>
+
+            <div className="guide-steps-flow">
+              <div className="guide-step-card">
+                <div className="step-num-pill">1</div>
+                <div className="step-content">
+                  <h4>Open AdGuard Preferences</h4>
+                  <p>Launch AdGuard for Mac or Windows, open <strong>Preferences / Settings</strong>, and select the <strong>Filters</strong> tab.</p>
+                </div>
+              </div>
+
+              <div className="guide-step-card">
+                <div className="step-num-pill">2</div>
+                <div className="step-content">
+                  <h4>Add Custom Filter</h4>
+                  <p>Select <strong>Custom</strong> in the left filter categories, then click <strong>Add custom filter</strong> (the &ldquo;+&rdquo; button at the bottom).</p>
+                </div>
+              </div>
+
+              <div className="guide-step-card highlight">
+                <div className="step-num-pill">3</div>
+                <div className="step-content">
+                  <h4>Subscribe by URL or Local File</h4>
+                  <p>You can either import the raw file or enter the local file URL for seamless updates:</p>
+
+                  <div className="snippet-choice-group">
+                    <div className="snippet-box">
+                      <div className="snippet-header">
+                        <span>Subscribe by URL (Automatic Updates)</span>
+                        <button
+                          className="copy-snippet-btn"
+                          onClick={() => handleCopy(fileUrl, 'ag-desk-url')}
+                        >
+                          {copiedKey === 'ag-desk-url' ? 'Copied!' : 'Copy URL'}
+                        </button>
+                      </div>
+                      <code>{fileUrl}</code>
+                    </div>
+
+                    <div className="snippet-box">
+                      <div className="snippet-header">
+                        <span>Direct Local File Path</span>
+                        <button
+                          className="copy-snippet-btn"
+                          onClick={() => handleCopy(savePath, 'ag-desk-path')}
+                        >
+                          {copiedKey === 'ag-desk-path' ? 'Copied!' : 'Copy Path'}
+                        </button>
+                      </div>
+                      <code>{savePath}</code>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="guide-step-card">
+                <div className="step-num-pill">4</div>
+                <div className="step-content">
+                  <h4>Enable Filter</h4>
+                  <p>Ensure the checkmark next to your newly added filter is checked. All desktop browser and application network traffic will now be filtered through this bundle.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 4: OS System Hosts File */}
+        {activeTab === 'hosts' && (
+          <div className="guide-section">
+            <div className="guide-hero-banner">
+              <div className="guide-hero-text">
+                <h3>Direct System Hosts File (/etc/hosts)</h3>
+                <p>
+                  Zero-software system-level blocking on macOS, Linux, and Windows. Requires export format to be set to Hosts.
+                </p>
+              </div>
+            </div>
+
+            <div className="guide-steps-flow">
+              <div className="guide-step-card">
+                <div className="step-num-pill">1</div>
+                <div className="step-content">
+                  <h4>Ensure Export Format is Hosts</h4>
+                  <p>In Blockingmachine, go to <strong>Settings</strong> and ensure your export format is set to <strong>Pi-hole / Standard Hosts (hosts.txt)</strong>.</p>
+                </div>
+              </div>
+
+              <div className="guide-step-card highlight">
+                <div className="step-num-pill">2</div>
+                <div className="step-content">
+                  <h4>Apply to System Hosts & Flush DNS Cache</h4>
+                  <p>Run the corresponding command in your terminal as Administrator/root:</p>
+
+                  <div className="snippet-choice-group">
+                    <div className="snippet-box">
+                      <div className="snippet-header">
+                        <span>🍎 macOS Terminal Command</span>
+                        <button
+                          className="copy-snippet-btn"
+                          onClick={() => handleCopy(`sudo cp "${savePath}" /etc/hosts && sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`, 'hosts-mac')}
+                        >
+                          {copiedKey === 'hosts-mac' ? 'Copied!' : 'Copy macOS Command'}
+                        </button>
+                      </div>
+                      <code>{`sudo cp "${savePath}" /etc/hosts && sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`}</code>
+                    </div>
+
+                    <div className="snippet-box">
+                      <div className="snippet-header">
+                        <span>🐧 Linux Terminal Command</span>
+                        <button
+                          className="copy-snippet-btn"
+                          onClick={() => handleCopy(`sudo cp "${savePath}" /etc/hosts && sudo systemd-resolve --flush-caches`, 'hosts-linux')}
+                        >
+                          {copiedKey === 'hosts-linux' ? 'Copied!' : 'Copy Linux Command'}
+                        </button>
+                      </div>
+                      <code>{`sudo cp "${savePath}" /etc/hosts && sudo systemd-resolve --flush-caches`}</code>
+                    </div>
+
+                    <div className="snippet-box">
+                      <div className="snippet-header">
+                        <span>🪟 Windows PowerShell (Run as Administrator)</span>
+                        <button
+                          className="copy-snippet-btn"
+                          onClick={() => handleCopy(`Copy-Item "${savePath}" -Destination "$env:SystemRoot\\System32\\drivers\\etc\\hosts" -Force; ipconfig /flushdns`, 'hosts-win')}
+                        >
+                          {copiedKey === 'hosts-win' ? 'Copied!' : 'Copy PowerShell Command'}
+                        </button>
+                      </div>
+                      <code>{`Copy-Item "${savePath}" -Destination "$env:SystemRoot\\System32\\drivers\\etc\\hosts" -Force; ipconfig /flushdns`}</code>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 5: Dnsmasq, Routers & Firewalls */}
+        {activeTab === 'dnsmasq' && (
+          <div className="guide-section">
+            <div className="guide-hero-banner">
+              <div className="guide-hero-text">
+                <h3>Routers, Firewalls & Dnsmasq</h3>
+                <p>
+                  Deploy compiled rules into OpenWrt, pfSense (pfBlockerNG), OPNsense (Unbound), and DD-WRT.
+                </p>
+              </div>
+            </div>
+
+            <div className="guide-steps-flow">
+              <div className="guide-step-card">
+                <div className="step-num-pill">1</div>
+                <div className="step-content">
+                  <h4>Dnsmasq Server (OpenWrt / Linux)</h4>
+                  <p>In your <code>/etc/dnsmasq.conf</code> or <code>/etc/config/dhcp</code>, add the following line pointing to the hosts file or conf file:</p>
+                  <div className="code-command-snippet">
+                    <code>{`addn-hosts=${savePath}`}</code>
+                    <button
+                      className="copy-snippet-btn"
+                      onClick={() => handleCopy(`addn-hosts=${savePath}`, 'dnsmasq-conf')}
+                    >
+                      {copiedKey === 'dnsmasq-conf' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="step-subtext">Restart dnsmasq to apply: <code>sudo /etc/init.d/dnsmasq restart</code></p>
+                </div>
+              </div>
+
+              <div className="guide-step-card">
+                <div className="step-num-pill">2</div>
+                <div className="step-content">
+                  <h4>pfSense & pfBlockerNG</h4>
+                  <p>
+                    In pfSense, navigate to <strong>Firewall</strong> → <strong>pfBlockerNG</strong> → <strong>DNSBL Feeds</strong>.
+                    Add a new feed item and set the URL to your LAN feed URL:
+                  </p>
+                  <div className="snippet-box">
+                    <div className="snippet-header">
+                      <span>pfBlockerNG Custom Feed URL</span>
+                      <button
+                        className="copy-snippet-btn"
+                        onClick={() => handleCopy(lanFeedUrl, 'pf-lan')}
+                      >
+                        {copiedKey === 'pf-lan' ? 'Copied!' : 'Copy'}
+                      </button>
+                    </div>
+                    <code>{lanFeedUrl}</code>
+                  </div>
+                </div>
+              </div>
+
+              <div className="guide-step-card">
+                <div className="step-num-pill">3</div>
+                <div className="step-content">
+                  <h4>OPNsense & Unbound DNS</h4>
+                  <p>
+                    In OPNsense, go to <strong>Services</strong> → <strong>Unbound DNS</strong> → <strong>Blocklist</strong>.
+                    Add a Custom URL with your LAN Feed URL and save changes.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default DeployHubView;

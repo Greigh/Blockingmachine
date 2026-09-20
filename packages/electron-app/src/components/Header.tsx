@@ -38,6 +38,11 @@ export const Header: React.FC<HeaderProps> = ({
           title: 'Rule Browser',
           desc: 'Search, filter, and inspect the active set of compiled rules',
         };
+      case 'deploy':
+        return {
+          title: 'Deploy & Sinkhole Sync',
+          desc: 'Connect your compiled blocklists to AdGuard Home, Pi-hole, desktop apps, and LAN devices',
+        };
       case 'settings':
         return {
           title: 'Preferences',

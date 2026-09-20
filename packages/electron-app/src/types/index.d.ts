@@ -136,6 +136,23 @@ export interface SinkholeSyncResult {
   message: string;
 }
 
+export interface FeedServerStatus {
+  isRunning: boolean;
+  port: number;
+  localUrl: string;
+  lanUrl?: string;
+  lanIp?: string;
+  error?: string;
+}
+
+export interface SinkholeTestResult {
+  service: 'pihole' | 'adguard';
+  success: boolean;
+  statusCode?: number;
+  latencyMs?: number;
+  message: string;
+}
+
 export interface StoreSchema {
   filterSources: FilterSource[];
   customRules: string;
@@ -191,6 +208,10 @@ export interface ElectronAPI {
   getCompilationHistory: () => Promise<CompilationSnapshot[]>;
   inspectDomain: (domain: string) => Promise<DomainInspectionResult>;
   testFeedUrl: (url: string) => Promise<FeedDiagnostic>;
+  startFeedServer: (port?: number) => Promise<FeedServerStatus>;
+  stopFeedServer: () => Promise<FeedServerStatus>;
+  getFeedServerStatus: () => Promise<FeedServerStatus>;
+  testSinkholeConnection: (service: 'pihole' | 'adguard') => Promise<SinkholeTestResult>;
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   showItemInFolder: (path: string) => void;

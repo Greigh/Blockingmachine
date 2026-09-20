@@ -1,4 +1,6 @@
-import { join, dirname, isAbsolute } from 'path';
+import { join, dirname, isAbsolute, basename } from 'path';
+import { createServer, Server as HttpServer } from 'http';
+import { networkInterfaces } from 'os';
 import {
   app,
   BrowserWindow,
@@ -201,6 +203,13 @@ const template: Electron.MenuItemConstructorOptions[] = [
         accelerator: 'Cmd+6',
         click: () => {
           mainWindow?.webContents.send('navigate-view', 'browser');
+        },
+      },
+      {
+        label: 'Deploy & Sync',
+        accelerator: 'Cmd+7',
+        click: () => {
+          mainWindow?.webContents.send('navigate-view', 'deploy');
         },
       },
       { type: 'separator' as const },
@@ -486,6 +495,16 @@ function createTray() {
           }
         },
       },
+      {
+        label: 'Deploy & Sync...',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+            mainWindow.webContents.send('navigate-view', 'deploy');
+          }
+        },
+      },
       { type: 'separator' },
       {
         label: 'Preferences...',
@@ -636,6 +655,129 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
   }
 
   return results;
+}
+
+let feedHttpServer: HttpServer | null = null;
+let feedServerPort = 9191;
+
+function getLocalLanIp(): string {
+  try {
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name] || []) {
+        if (net.family === 'IPv4' && !net.internal) {
+          return net.address;
+        }
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return '127.0.0.1';
+}
+
+function getFeedServerStatus() {
+  const isRunning = feedHttpServer !== null && feedHttpServer.listening;
+  const lanIp = getLocalLanIp();
+  return {
+    isRunning,
+    port: feedServerPort,
+    localUrl: `http://localhost:${feedServerPort}`,
+    lanUrl: `http://${lanIp}:${feedServerPort}`,
+    lanIp,
+  };
+}
+
+async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>) {
+  if (feedHttpServer && feedHttpServer.listening) {
+    return getFeedServerStatus();
+  }
+
+  feedServerPort = port;
+
+  return new Promise<{ isRunning: boolean; port: number; localUrl: string; lanUrl: string; lanIp: string; error?: string }>((resolve) => {
+    try {
+      feedHttpServer = createServer(async (req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+
+        const savePath = storeRef.get('savePath');
+        const outputDir = dirname(savePath);
+        const reqUrl = new URL(req.url || '/', 'http://localhost');
+        const pathname = decodeURIComponent(reqUrl.pathname);
+
+        // Determine target file to serve
+        let targetFilePath = savePath;
+        if (pathname !== '/' && pathname.length > 1) {
+          const cleanName = basename(pathname);
+          targetFilePath = join(outputDir, cleanName);
+        }
+
+        try {
+          if (existsSync(targetFilePath)) {
+            const stat = await fs.stat(targetFilePath);
+            if (stat.isFile()) {
+              const content = await fs.readFile(targetFilePath);
+              res.writeHead(200, {
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Content-Length': content.length,
+              });
+              res.end(content);
+              return;
+            }
+          }
+
+          // Not found response with helpful feed directory listing
+          const available = existsSync(outputDir) ? (await fs.readdir(outputDir)).filter((f) => !f.startsWith('.')) : [];
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end(
+            `File not found: ${pathname}\n\nAvailable compiled lists in Blockingmachine output directory:\n${available.map((f) => ` - http://${getLocalLanIp()}:${feedServerPort}/${f}`).join('\n') || ' (no files yet - compile rules first)'}`
+          );
+        } catch (err: any) {
+          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end(`Internal server error: ${err?.message || err}`);
+        }
+      });
+
+      feedHttpServer.on('error', (err: any) => {
+        console.error('[Feed Server Error]:', err);
+        feedHttpServer = null;
+        resolve({
+          ...getFeedServerStatus(),
+          error: err?.message || String(err),
+        });
+      });
+
+      feedHttpServer.listen(feedServerPort, '0.0.0.0', () => {
+        console.log(`[Feed Server] Started on http://0.0.0.0:${feedServerPort}`);
+        resolve(getFeedServerStatus());
+      });
+    } catch (err: any) {
+      resolve({
+        ...getFeedServerStatus(),
+        error: err?.message || String(err),
+      });
+    }
+  });
+}
+
+function stopFeedServer() {
+  if (feedHttpServer) {
+    try {
+      feedHttpServer.close();
+    } catch {
+      // ignore
+    }
+    feedHttpServer = null;
+  }
+  return getFeedServerStatus();
 }
 
 // Remove the typed wrapper and use store directly
@@ -1192,6 +1334,79 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       return { results };
     });
 
+    ipcMain.handle('start-feed-server', async (_event, port?: number) => {
+      return await startFeedServer(port || 9191, store);
+    });
+
+    ipcMain.handle('stop-feed-server', async () => {
+      return stopFeedServer();
+    });
+
+    ipcMain.handle('get-feed-server-status', async () => {
+      return getFeedServerStatus();
+    });
+
+    ipcMain.handle('test-sinkhole-connection', async (_event, service: 'pihole' | 'adguard') => {
+      const startTime = Date.now();
+      try {
+        if (service === 'pihole') {
+          const rawUrl = store.get('piholeUrl') as string | undefined;
+          const apiKey = store.get('piholeApiKey') as string | undefined;
+          if (!rawUrl || !rawUrl.trim()) {
+            return { service: 'pihole', success: false, message: 'Pi-hole URL is not configured in Settings.' };
+          }
+          let urlStr = rawUrl.trim();
+          if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+            urlStr = `http://${urlStr}`;
+          }
+          const u = new URL(urlStr);
+          if (apiKey) u.searchParams.set('auth', apiKey.trim());
+          u.searchParams.set('type', 'version');
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 6000);
+          const res = await fetch(u.toString(), { signal: controller.signal });
+          clearTimeout(timeout);
+          const latencyMs = Date.now() - startTime;
+          if (res.ok) {
+            return { service: 'pihole', success: true, statusCode: res.status, latencyMs, message: `Connected to Pi-hole (${latencyMs}ms, HTTP ${res.status})` };
+          } else {
+            return { service: 'pihole', success: false, statusCode: res.status, latencyMs, message: `Pi-hole returned HTTP ${res.status}: ${res.statusText}` };
+          }
+        } else {
+          const rawUrl = store.get('adguardHomeUrl') as string | undefined;
+          const user = store.get('adguardHomeUser') as string | undefined;
+          const pass = store.get('adguardHomePassword') as string | undefined;
+          if (!rawUrl || !rawUrl.trim()) {
+            return { service: 'adguard', success: false, message: 'AdGuard Home URL is not configured in Settings.' };
+          }
+          let urlStr = rawUrl.trim();
+          if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+            urlStr = `http://${urlStr}`;
+          }
+          const base = urlStr.replace(/\/$/, '');
+          const u = `${base}/control/status`;
+          const headers: Record<string, string> = {};
+          if (user && pass) {
+            const credentials = Buffer.from(`${user}:${pass}`).toString('base64');
+            headers['Authorization'] = `Basic ${credentials}`;
+          }
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 6000);
+          const res = await fetch(u, { headers, signal: controller.signal });
+          clearTimeout(timeout);
+          const latencyMs = Date.now() - startTime;
+          if (res.ok) {
+            return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: `Connected to AdGuard Home (${latencyMs}ms, HTTP ${res.status})` };
+          } else {
+            return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `AdGuard Home returned HTTP ${res.status}: ${res.statusText}` };
+          }
+        }
+      } catch (err: any) {
+        const latencyMs = Date.now() - startTime;
+        return { service, success: false, latencyMs, message: err?.message || String(err) };
+      }
+    });
+
     ipcMain.handle('get-compilation-history', async () => {
       return store.get('compilationHistory') || [];
     });
@@ -1463,6 +1678,7 @@ async function initialize() {
     createTray();
 
     app.on('before-quit', () => {
+      stopFeedServer();
       if (autoScheduleTimer) {
         clearInterval(autoScheduleTimer);
         autoScheduleTimer = null;
