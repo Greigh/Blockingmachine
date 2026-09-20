@@ -145,11 +145,12 @@ program
   .description(
     "Test and inspect how a domain or URL is handled by compiled rules",
   )
-  .action(async (domain: string) => {
+  .option("-f, --file <path>", "Specific rule file to test against")
+  .action(async (domain: string, cmdOptions: { file?: string }) => {
     try {
       const config = await loadConfig();
       const cmd = new TestCommand({ config, logger });
-      const result = await cmd.execute({ domain });
+      const result = await cmd.execute({ domain, file: cmdOptions.file });
       if (!result.success) {
         process.exit(1);
       }

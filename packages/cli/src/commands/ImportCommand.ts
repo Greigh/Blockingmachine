@@ -6,11 +6,17 @@ import {
 import type { ImportOptions } from "./types.js";
 import {
   createPaths,
-  fetchContent,
+  fetchWithConditionalCache,
   parseFilterList,
 } from "@blockingmachine/core";
 import fs from "fs/promises";
 import path from "path";
+
+interface CacheRecord {
+  etag?: string | null;
+  lastModified?: string | null;
+  rules: string[];
+}
 
 export class ImportCommand extends BaseCommand<ImportOptions> {
   constructor(options: CommandOptions) {
@@ -28,6 +34,17 @@ export class ImportCommand extends BaseCommand<ImportOptions> {
       // Create output directory if it doesn't exist
       await fs.mkdir(paths.output.dir, { recursive: true });
 
+      const cacheFile = path.join(paths.output.dir, ".cache.json");
+      let cache: Record<string, CacheRecord> = {};
+      if (!options.force) {
+        try {
+          const rawCache = await fs.readFile(cacheFile, "utf-8");
+          cache = JSON.parse(rawCache);
+        } catch {
+          cache = {};
+        }
+      }
+
       // Process each enabled source
       let totalProcessed = 0;
       let totalSources = 0;
@@ -44,19 +61,32 @@ export class ImportCommand extends BaseCommand<ImportOptions> {
         this.logger.info(`Processing source: ${source.name}`);
 
         try {
-          // Download the filter list using robust core fetchContent
+          // Download the filter list using robust core fetchWithConditionalCache
           this.logger.info(`Downloading from: ${source.url}`);
-          const content = await fetchContent(source.url);
+          const cached = !options.force ? cache[source.url] : undefined;
+          const fetchRes = await fetchWithConditionalCache(source.url, {
+            etag: cached?.etag || undefined,
+            lastModified: cached?.lastModified || undefined,
+          });
 
-          if (!content) {
+          let rules: string[] = [];
+          if (fetchRes.notModified && cached?.rules) {
+            this.logger.info(
+              `✓ 304 Not Modified: ${source.name} (cached ${cached.rules.length} rules)`,
+            );
+            rules = cached.rules;
+          } else if (fetchRes.content) {
+            const parsedRules = parseFilterList(fetchRes.content, source.url);
+            rules = parsedRules.map((r) => r.raw);
+            cache[source.url] = {
+              etag: fetchRes.etag,
+              lastModified: fetchRes.lastModified,
+              rules,
+            };
+          } else {
             this.logger.warn(`⚠ No content returned for: ${source.name}`);
             continue;
           }
-
-          // Parse filter list using robust core parser to preserve generic cosmetic rules,
-          // scriptlets, network rules, and hosts while stripping comments and preprocessors
-          const parsedRules = parseFilterList(content, source.url);
-          const rules = parsedRules.map((r) => r.raw);
 
           if (rules && rules.length > 0) {
             let newlyAdded = 0;
@@ -77,6 +107,13 @@ export class ImportCommand extends BaseCommand<ImportOptions> {
         } catch (error) {
           this.logger.error(`✗ Error processing ${source.name}:`, error);
         }
+      }
+
+      // Persist cache metadata
+      try {
+        await fs.writeFile(cacheFile, JSON.stringify(cache, null, 2), "utf-8");
+      } catch {
+        // ignore cache write errors
       }
 
       // Save all rules to a combined file

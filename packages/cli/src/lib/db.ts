@@ -67,6 +67,32 @@ const auditLogSchema = new mongoose.Schema({
 
 export const AuditLogModel = mongoose.model("AuditLog", auditLogSchema);
 
+export async function logRuleAudit(
+  entry: RuleAuditEntry,
+  baseDir?: string,
+): Promise<void> {
+  if (dbConnected) {
+    try {
+      await AuditLogModel.create(entry);
+      return;
+    } catch {
+      // fallback to offline file
+    }
+  }
+
+  try {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const dir = baseDir || process.cwd();
+    const logDir = path.join(dir, "logs");
+    await fs.mkdir(logDir, { recursive: true });
+    const logFile = path.join(logDir, "audit-log.jsonl");
+    await fs.appendFile(logFile, JSON.stringify(entry) + "\n", "utf8");
+  } catch {
+    // ignore
+  }
+}
+
 const ruleSchema = new mongoose.Schema({
   raw: { type: String, required: true },
   type: { type: String, required: true },

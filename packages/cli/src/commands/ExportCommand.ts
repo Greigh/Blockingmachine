@@ -153,8 +153,15 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
       // Handle external sync hooks
       if (options.syncPihole) {
         try {
-          this.logger.info(`Syncing with Pi-hole at: ${options.syncPihole}`);
-          const res = await fetch(options.syncPihole, { method: "GET" });
+          let piholeUrl = options.syncPihole.trim();
+          if (!piholeUrl.startsWith("http://") && !piholeUrl.startsWith("https://")) {
+            piholeUrl = `http://${piholeUrl}`;
+          }
+          this.logger.info(`Syncing with Pi-hole at: ${piholeUrl}`);
+          const res = await fetch(piholeUrl, {
+            method: "GET",
+            signal: AbortSignal.timeout(6000),
+          });
           if (res.ok) {
             this.logger.info(
               `✓ Pi-hole sync triggered successfully (${res.status})`,
@@ -171,10 +178,12 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
 
       if (options.webhook) {
         try {
-          this.logger.info(
-            `Sending webhook notification to: ${options.webhook}`,
-          );
-          const res = await fetch(options.webhook, {
+          let webhookUrl = options.webhook.trim();
+          if (!webhookUrl.startsWith("http://") && !webhookUrl.startsWith("https://")) {
+            webhookUrl = `http://${webhookUrl}`;
+          }
+          this.logger.info(`Sending webhook notification to: ${webhookUrl}`);
+          const res = await fetch(webhookUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -183,6 +192,7 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
               totalRules: rules.length,
               formats: results,
             }),
+            signal: AbortSignal.timeout(6000),
           });
           if (res.ok) {
             this.logger.info(`✓ Webhook notified successfully (${res.status})`);

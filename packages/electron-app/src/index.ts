@@ -24,6 +24,7 @@ import type { ElectronStore, StoreSchema } from './types';
 import {
   downloadAndParseSource,
   parseFilterList,
+  cleanDomainPattern,
   RuleDeduplicator,
   generateFilterList,
   filterLists,
@@ -259,7 +260,24 @@ let appTray: Tray | null = null;
 
 function createTray() {
   try {
-    const icon = nativeImage.createEmpty();
+    const assetCandidates = [
+      join(__dirname, '../assets/Blockingmachine.png'),
+      join(app.getAppPath(), 'assets/Blockingmachine.png'),
+      join(process.cwd(), 'packages/electron-app/assets/Blockingmachine.png'),
+    ];
+    let icon = nativeImage.createEmpty();
+    for (const candidate of assetCandidates) {
+      try {
+        const loaded = nativeImage.createFromPath(candidate);
+        if (!loaded.isEmpty()) {
+          icon = loaded.resize({ width: 16, height: 16 });
+          break;
+        }
+      } catch {
+        // try next
+      }
+    }
+
     appTray = new Tray(icon);
     const contextMenu = Menu.buildFromTemplate([
       { label: '🛡️ Blockingmachine', enabled: false },
@@ -297,27 +315,79 @@ function createTray() {
   }
 }
 
+async function getOrLoadCompiledRules(storeRef: ElectronStore<StoreSchema>): Promise<StoredRule[]> {
+  if (latestCompiledRules.length > 0) {
+    return latestCompiledRules;
+  }
+
+  const savePath = storeRef.get('savePath');
+  const candidates: string[] = [];
+
+  if (savePath && typeof savePath === 'string' && isAbsolute(savePath)) {
+    candidates.push(savePath);
+    candidates.push(join(savePath, 'processed_rules.txt'));
+    candidates.push(join(savePath, 'filter-list.txt'));
+    candidates.push(join(savePath, 'adguard.txt'));
+    candidates.push(join(savePath, 'hosts.txt'));
+  }
+
+  const defaultDocDir = join(app.getPath('documents'), 'Blockingmachine');
+  candidates.push(join(defaultDocDir, 'processed_rules.txt'));
+  candidates.push(join(defaultDocDir, 'filter-list.txt'));
+  candidates.push(join(process.cwd(), 'filters', 'output', 'filter-list.txt'));
+  candidates.push(join(process.cwd(), 'filters', 'output', 'hosts.txt'));
+  candidates.push(join(process.cwd(), 'packages', 'electron-app', 'filters', 'output', 'hosts.txt'));
+
+  for (const candidate of candidates) {
+    try {
+      const stat = await fs.stat(candidate);
+      if (stat.isFile() && stat.size > 0) {
+        const content = await fs.readFile(candidate, 'utf8');
+        latestCompiledRules = parseFilterList(content);
+        if (latestCompiledRules.length > 0) {
+          console.log(`[IPC Main] Loaded ${latestCompiledRules.length} compiled rules from ${candidate}`);
+          break;
+        }
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+
+  return latestCompiledRules;
+}
+
 async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
-  const piholeUrl = storeRef.get('piholeUrl') as string | undefined;
+  const rawPihole = storeRef.get('piholeUrl') as string | undefined;
   const piholeApiKey = storeRef.get('piholeApiKey') as string | undefined;
-  const adguardHomeUrl = storeRef.get('adguardHomeUrl') as string | undefined;
+  const rawAdguard = storeRef.get('adguardHomeUrl') as string | undefined;
   const adguardHomeUser = storeRef.get('adguardHomeUser') as string | undefined;
   const adguardHomePassword = storeRef.get('adguardHomePassword') as string | undefined;
 
   const results: { service: string; status: 'success' | 'error' | 'skipped'; message: string }[] = [];
 
-  if (piholeUrl && piholeUrl.trim()) {
+  if (rawPihole && rawPihole.trim()) {
     try {
-      const url = new URL(piholeUrl.trim());
+      let piholeUrl = rawPihole.trim();
+      if (!piholeUrl.startsWith('http://') && !piholeUrl.startsWith('https://')) {
+        piholeUrl = `http://${piholeUrl}`;
+      }
+      const url = new URL(piholeUrl);
       if (piholeApiKey) {
         url.searchParams.set('auth', piholeApiKey.trim());
       }
       url.searchParams.set('action', 'updategravity');
-      const res = await fetch(url.toString());
-      if (res.ok) {
-        results.push({ service: 'Pi-hole', status: 'success', message: 'Gravity update triggered' });
-      } else {
-        results.push({ service: 'Pi-hole', status: 'error', message: `HTTP ${res.status}` });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      try {
+        const res = await fetch(url.toString(), { signal: controller.signal });
+        if (res.ok) {
+          results.push({ service: 'Pi-hole', status: 'success', message: 'Gravity update triggered successfully' });
+        } else {
+          results.push({ service: 'Pi-hole', status: 'error', message: `HTTP status ${res.status}` });
+        }
+      } finally {
+        clearTimeout(timeoutId);
       }
     } catch (err: any) {
       results.push({ service: 'Pi-hole', status: 'error', message: err.message || String(err) });
@@ -326,20 +396,35 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
     results.push({ service: 'Pi-hole', status: 'skipped', message: 'Not configured' });
   }
 
-  if (adguardHomeUrl && adguardHomeUrl.trim()) {
+  if (rawAdguard && rawAdguard.trim()) {
     try {
-      const base = adguardHomeUrl.trim().replace(/\/$/, '');
+      let adguardUrl = rawAdguard.trim();
+      if (!adguardUrl.startsWith('http://') && !adguardUrl.startsWith('https://')) {
+        adguardUrl = `http://${adguardUrl}`;
+      }
+      const base = adguardUrl.replace(/\/$/, '');
       const refreshUrl = `${base}/control/filtering/refresh`;
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (adguardHomeUser && adguardHomePassword) {
         const credentials = Buffer.from(`${adguardHomeUser}:${adguardHomePassword}`).toString('base64');
         headers['Authorization'] = `Basic ${credentials}`;
       }
-      const res = await fetch(refreshUrl, { method: 'POST', headers, body: JSON.stringify({ whitelist: false }) });
-      if (res.ok) {
-        results.push({ service: 'AdGuard Home', status: 'success', message: 'Filters refreshed successfully' });
-      } else {
-        results.push({ service: 'AdGuard Home', status: 'error', message: `HTTP ${res.status}` });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      try {
+        const res = await fetch(refreshUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ whitelist: false }),
+          signal: controller.signal,
+        });
+        if (res.ok) {
+          results.push({ service: 'AdGuard Home', status: 'success', message: 'Filters refreshed successfully' });
+        } else {
+          results.push({ service: 'AdGuard Home', status: 'error', message: `HTTP status ${res.status}` });
+        }
+      } finally {
+        clearTimeout(timeoutId);
       }
     } catch (err: any) {
       results.push({ service: 'AdGuard Home', status: 'error', message: err.message || String(err) });
@@ -744,14 +829,18 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         };
       }
 
+      const rulesToSearch = await getOrLoadCompiledRules(store);
+
       // Check exception rules first
-      const exceptionRule = latestCompiledRules.find(
-        (r) =>
-          (r.isException || (r.raw && r.raw.startsWith('@@'))) &&
-          (r.domain === cleanDomain ||
-            r.raw.includes(cleanDomain) ||
-            cleanDomain.endsWith(`.${r.domain}`))
-      );
+      const exceptionRule = rulesToSearch.find((r) => {
+        const isEx = r.isException || (r.raw && r.raw.startsWith('@@'));
+        if (!isEx) return false;
+        const dom = r.domain || cleanDomainPattern(r.raw || '');
+        if (dom && (cleanDomain === dom || cleanDomain.endsWith(`.${dom}`))) {
+          return true;
+        }
+        return Boolean(r.raw && r.raw.includes(cleanDomain));
+      });
 
       if (exceptionRule) {
         return {
@@ -765,8 +854,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
 
       // Check blocking rules
-      const blockRule = latestCompiledRules.find((r) => {
-        if (r.domain && (r.domain === cleanDomain || cleanDomain.endsWith(`.${r.domain}`))) {
+      const blockRule = rulesToSearch.find((r) => {
+        const dom = r.domain || cleanDomainPattern(r.raw || '');
+        if (dom && (cleanDomain === dom || cleanDomain.endsWith(`.${dom}`))) {
           return true;
         }
         if (r.raw) {
@@ -849,20 +939,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('get-compiled-rules', async (_event, options?: { search?: string; limit?: number; offset?: number; typeFilter?: string }) => {
-      if (latestCompiledRules.length === 0) {
-        let savePath = store.get('savePath');
-        if (!savePath || typeof savePath !== 'string' || !isAbsolute(savePath)) {
-          savePath = join(app.getPath('documents'), 'Blockingmachine', 'processed_rules.txt');
-        }
-        try {
-          const content = await fs.readFile(savePath, 'utf8');
-          latestCompiledRules = parseFilterList(content);
-        } catch {
-          // not compiled yet
-        }
-      }
+      const allCompiled = await getOrLoadCompiledRules(store);
 
-      let filtered = latestCompiledRules;
+      let filtered = allCompiled;
       const search = options?.search?.trim().toLowerCase();
       if (search) {
         filtered = filtered.filter((r) =>

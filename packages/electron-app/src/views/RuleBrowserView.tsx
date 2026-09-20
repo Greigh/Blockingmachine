@@ -87,12 +87,18 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
             <input
               type="text"
               className="text-input"
-              style={{ width: '100%', paddingLeft: '36px', height: '40px', borderRadius: '8px' }}
+              style={{ width: '100%', paddingLeft: '36px', paddingRight: searchQuery ? '32px' : '12px', height: '40px', borderRadius: '8px' }}
               placeholder="Search rule syntax or domain..."
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
                 setPage(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setSearchQuery('');
+                  setPage(0);
+                }
               }}
             />
             <svg
@@ -106,6 +112,31 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
             </svg>
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setPage(0);
+                }}
+                style={{
+                  position: 'absolute',
+                  right: '10px',
+                  top: '10px',
+                  background: 'none',
+                  border: 'none',
+                  color: 'inherit',
+                  opacity: 0.6,
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                }}
+                title="Clear search (Esc)"
+              >
+                ✕
+              </button>
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: '6px', background: 'var(--bg-tertiary, rgba(255,255,255,0.05))', padding: '4px', borderRadius: '8px' }}>
@@ -150,9 +181,26 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
       </div>
 
       {/* Stats bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', fontSize: '0.85rem', opacity: 0.8 }}>
-        <div>
-          Showing {rules.length > 0 ? (page * pageSize + 1).toLocaleString() : 0} – {Math.min((page + 1) * pageSize, totalCount).toLocaleString()} of {totalCount.toLocaleString()} rules
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', fontSize: '0.85rem', opacity: 0.8, flexWrap: 'wrap', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span>
+            Showing {rules.length > 0 ? (page * pageSize + 1).toLocaleString() : 0} – {Math.min((page + 1) * pageSize, totalCount).toLocaleString()} of {totalCount.toLocaleString()} rules
+          </span>
+          {rules.length > 0 && (
+            <button
+              className="secondary-button"
+              style={{ padding: '2px 8px', fontSize: '0.75rem', borderRadius: '4px', cursor: 'pointer' }}
+              onClick={() => {
+                const text = rules.map((r) => r.raw).join('\n');
+                navigator.clipboard.writeText(text);
+                setCopiedIndex(-1);
+                setTimeout(() => setCopiedIndex(null), 1800);
+              }}
+              title="Copy all rules currently visible on this page"
+            >
+              {copiedIndex === -1 ? '✓ Copied Page' : 'Copy Page Rules'}
+            </button>
+          )}
         </div>
         {totalPages > 1 && (
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -193,6 +241,18 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
             <p style={{ margin: 0, fontSize: '0.875rem' }}>
               {searchQuery ? 'Try adjusting your search terms or filter mode.' : 'Compile your filter lists to browse all generated rules.'}
             </p>
+            {!searchQuery && onTriggerCompile && (
+              <button
+                className="primary-button"
+                style={{ marginTop: '16px', padding: '8px 18px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+                onClick={onTriggerCompile}
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Compile Rules Now
+              </button>
+            )}
           </div>
         ) : (
           <div style={{ maxHeight: 'calc(100vh - 340px)', overflowY: 'auto' }}>
