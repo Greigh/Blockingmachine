@@ -11,6 +11,11 @@ export type { CommandOptions } from "./commands/BaseCommand.js";
 export { ExportCommand } from "./commands/ExportCommand.js";
 export { ImportCommand } from "./commands/ImportCommand.js";
 export { ValidateCommand } from "./commands/ValidateCommand.js";
+export { TestCommand } from "./commands/TestCommand.js";
+export { DiffCommand } from "./commands/DiffCommand.js";
+export { DoctorCommand } from "./commands/DoctorCommand.js";
+export { ShellCommand } from "./commands/ShellCommand.js";
+export { ServeCommand } from "./commands/ServeCommand.js";
 
 // Export library functions
 export * from "./lib/logger.js";

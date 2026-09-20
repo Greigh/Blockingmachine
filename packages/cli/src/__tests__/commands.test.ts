@@ -4,6 +4,9 @@ import { ImportCommand } from "../commands/ImportCommand.js";
 import { TestCommand } from "../commands/TestCommand.js";
 import { DiffCommand } from "../commands/DiffCommand.js";
 import { ValidateCommand } from "../commands/ValidateCommand.js";
+import { DoctorCommand } from "../commands/DoctorCommand.js";
+import { ServeCommand } from "../commands/ServeCommand.js";
+import http from "http";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -309,4 +312,89 @@ describe("CLI Commands", () => {
     expect(result.success).toBe(true);
     expect(mockLogger.warn).toHaveBeenCalled();
   });
+
+  test("DoctorCommand performs connectivity checks and produces scorecard report", async () => {
+    const config: any = {
+      baseDir: tmpDir,
+      mongodb: { uri: "mongodb://127.0.0.1:59999/unreachable" },
+      sources: [
+        {
+          name: "Test Source Offline",
+          url: "http://127.0.0.1:59999/test-feed.txt",
+          category: "ads",
+        },
+      ],
+    };
+
+    const doctorCmd = new DoctorCommand({ config, logger: mockLogger });
+    const result = await doctorCmd.execute({ timeout: 200 });
+
+    expect(result.success).toBe(true);
+    expect(result.data.sourcesChecked).toBe(1);
+    expect(result.data.sourcesHealthy).toBe(0);
+    expect(result.data.mongoStatus).toBe("offline");
+    expect(result.data.recommendations.length).toBeGreaterThan(0);
+  });
+
+  test("ServeCommand starts HTTP server and handles /health, /v1/check and /v1/rules", async () => {
+    const outputDir = path.join(tmpDir, "filters", "output");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(
+      path.join(outputDir, "imported-rules.txt"),
+      "||tracker.io^\n@@||safe.tracker.io^\n",
+      "utf-8",
+    );
+
+    const config: any = {
+      baseDir: tmpDir,
+      output: { directory: outputDir },
+      sources: [],
+    };
+
+    const holder: { server?: http.Server } = {};
+    const serveCmd = new ServeCommand({ config, logger: mockLogger });
+    const port = 18053;
+
+    const result = await serveCmd.execute({
+      port,
+      host: "127.0.0.1",
+      serverInstanceHolder: holder,
+    });
+
+    expect(result.success).toBe(true);
+
+    try {
+      // 1. Check /health
+      const healthRes = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(healthRes.status).toBe(200);
+      const healthData = (await healthRes.json()) as any;
+      expect(healthData.status).toBe("ok");
+      expect(healthData.rulesLoaded).toBe(2);
+
+      // 2. Check /v1/check blocked
+      const checkRes = await fetch(`http://127.0.0.1:${port}/v1/check?domain=sub.tracker.io`);
+      expect(checkRes.status).toBe(200);
+      const checkData = (await checkRes.json()) as any;
+      expect(checkData.blocked).toBe(true);
+      expect(checkData.matchedRules).toContain("||tracker.io^");
+
+      // 3. Check /v1/check exception
+      const exceptionRes = await fetch(`http://127.0.0.1:${port}/v1/check?domain=safe.tracker.io`);
+      expect(exceptionRes.status).toBe(200);
+      const exceptionData = (await exceptionRes.json()) as any;
+      expect(exceptionData.blocked).toBe(false);
+      expect(exceptionData.exceptionRule).toBe("@@||safe.tracker.io^");
+
+      // 4. Check /v1/rules
+      const rulesRes = await fetch(`http://127.0.0.1:${port}/v1/rules`);
+      expect(rulesRes.status).toBe(200);
+      const rulesData = (await rulesRes.json()) as any;
+      expect(rulesData.totalRules).toBe(2);
+    } finally {
+      if (holder.server) {
+        await new Promise((r) => holder.server!.close(r));
+      }
+    }
+  });
 });
+

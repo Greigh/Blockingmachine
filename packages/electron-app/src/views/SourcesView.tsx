@@ -402,6 +402,20 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
         onAddPreset={(preset) => {
           saveSources([...sources, preset], `Subscribed to "${preset.name}".`);
         }}
+        onAddMultiplePresets={(newPresets) => {
+          const existingUrls = new Set(
+            sources.map((s) => s.url.trim().toLowerCase()),
+          );
+          const toAdd = newPresets.filter(
+            (p) => !existingUrls.has(p.url.trim().toLowerCase()),
+          );
+          if (toAdd.length > 0) {
+            saveSources(
+              [...sources, ...toAdd],
+              `Subscribed to ${toAdd.length} curated feed${toAdd.length > 1 ? 's' : ''}.`,
+            );
+          }
+        }}
       />
     </div>
   );

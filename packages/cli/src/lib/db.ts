@@ -121,4 +121,214 @@ const ruleSchema = new mongoose.Schema({
   ],
 });
 
-export const StoredRuleModel = mongoose.model<StoredRule>("Rule", ruleSchema);
+export const StoredRuleModel =
+  mongoose.models.Rule || mongoose.model<StoredRule>("Rule", ruleSchema);
+
+export interface RuleSnapshotEntry {
+  snapshotId: string;
+  timestamp: string;
+  description: string;
+  ruleCount: number;
+  rules: StoredRule[];
+}
+
+const snapshotSchema = new mongoose.Schema({
+  snapshotId: { type: String, required: true, unique: true },
+  timestamp: { type: Date, default: Date.now },
+  description: { type: String, required: true },
+  ruleCount: { type: Number, required: true },
+  rules: { type: Array, required: true },
+});
+
+export const RuleSnapshotModel =
+  mongoose.models.RuleSnapshot ||
+  mongoose.model("RuleSnapshot", snapshotSchema);
+
+export async function saveRuleSnapshot(
+  description: string,
+  rules: StoredRule[],
+  baseDir?: string,
+): Promise<RuleSnapshotEntry> {
+  const snapshotId = `snap_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const timestamp = new Date().toISOString();
+  const entry: RuleSnapshotEntry = {
+    snapshotId,
+    timestamp,
+    description,
+    ruleCount: rules.length,
+    rules,
+  };
+
+  if (dbConnected) {
+    try {
+      await RuleSnapshotModel.create({
+        snapshotId,
+        timestamp: new Date(timestamp),
+        description,
+        ruleCount: rules.length,
+        rules,
+      });
+      await logRuleAudit(
+        {
+          timestamp,
+          action: "import",
+          count: rules.length,
+          details: `Snapshot created: ${description} (${snapshotId})`,
+        },
+        baseDir,
+      );
+      return entry;
+    } catch {
+      // fallback to offline file
+    }
+  }
+
+  const fs = await import("fs/promises");
+  const path = await import("path");
+  const dir = baseDir || process.cwd();
+  const snapDir = path.join(dir, "snapshots");
+  await fs.mkdir(snapDir, { recursive: true });
+  const snapFile = path.join(snapDir, `${snapshotId}.json`);
+  await fs.writeFile(snapFile, JSON.stringify(entry, null, 2), "utf8");
+
+  await logRuleAudit(
+    {
+      timestamp,
+      action: "import",
+      count: rules.length,
+      details: `Snapshot created offline: ${description} (${snapshotId})`,
+    },
+    baseDir,
+  );
+
+  return entry;
+}
+
+export async function listRuleSnapshots(
+  baseDir?: string,
+): Promise<Array<Omit<RuleSnapshotEntry, "rules">>> {
+  if (dbConnected) {
+    try {
+      const docs = await RuleSnapshotModel.find(
+        {},
+        { snapshotId: 1, timestamp: 1, description: 1, ruleCount: 1 },
+      )
+        .sort({ timestamp: -1 })
+        .lean();
+      return docs.map((d: any) => ({
+        snapshotId: d.snapshotId,
+        timestamp: new Date(d.timestamp).toISOString(),
+        description: d.description,
+        ruleCount: d.ruleCount,
+      }));
+    } catch {
+      // fallback to offline file
+    }
+  }
+
+  const fs = await import("fs/promises");
+  const path = await import("path");
+  const dir = baseDir || process.cwd();
+  const snapDir = path.join(dir, "snapshots");
+
+  try {
+    const files = await fs.readdir(snapDir);
+    const results: Array<Omit<RuleSnapshotEntry, "rules">> = [];
+    for (const file of files.filter((f) => f.endsWith(".json"))) {
+      try {
+        const content = await fs.readFile(path.join(snapDir, file), "utf8");
+        const parsed = JSON.parse(content);
+        results.push({
+          snapshotId: parsed.snapshotId || file.replace(".json", ""),
+          timestamp: parsed.timestamp,
+          description: parsed.description,
+          ruleCount: parsed.ruleCount,
+        });
+      } catch {
+        // ignore malformed snapshot
+      }
+    }
+    return results.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  } catch {
+    return [];
+  }
+}
+
+export async function loadRuleSnapshot(
+  snapshotId: string,
+  baseDir?: string,
+): Promise<RuleSnapshotEntry | null> {
+  if (dbConnected) {
+    try {
+      const doc = await RuleSnapshotModel.findOne({ snapshotId }).lean();
+      if (doc) {
+        return {
+          snapshotId: (doc as any).snapshotId,
+          timestamp: new Date((doc as any).timestamp).toISOString(),
+          description: (doc as any).description,
+          ruleCount: (doc as any).ruleCount,
+          rules: (doc as any).rules,
+        };
+      }
+    } catch {
+      // fallback to offline file
+    }
+  }
+
+  const fs = await import("fs/promises");
+  const path = await import("path");
+  const dir = baseDir || process.cwd();
+  const snapFile = path.join(dir, "snapshots", `${snapshotId}.json`);
+
+  try {
+    const content = await fs.readFile(snapFile, "utf8");
+    return JSON.parse(content) as RuleSnapshotEntry;
+  } catch {
+    return null;
+  }
+}
+
+export async function rollbackSnapshot(
+  snapshotId: string,
+  baseDir?: string,
+): Promise<{ success: boolean; ruleCount: number; message: string }> {
+  const snapshot = await loadRuleSnapshot(snapshotId, baseDir);
+  if (!snapshot) {
+    return {
+      success: false,
+      ruleCount: 0,
+      message: `Snapshot '${snapshotId}' not found`,
+    };
+  }
+
+  if (dbConnected) {
+    try {
+      await StoredRuleModel.deleteMany({});
+      if (snapshot.rules.length > 0) {
+        await StoredRuleModel.insertMany(snapshot.rules);
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        ruleCount: 0,
+        message: `Database rollback error: ${err?.message || err}`,
+      };
+    }
+  }
+
+  await logRuleAudit(
+    {
+      timestamp: new Date().toISOString(),
+      action: "delete",
+      count: snapshot.ruleCount,
+      details: `Rolled back to snapshot ${snapshotId}: ${snapshot.description}`,
+    },
+    baseDir,
+  );
+
+  return {
+    success: true,
+    ruleCount: snapshot.ruleCount,
+    message: `Successfully rolled back to snapshot '${snapshotId}' (${snapshot.ruleCount} rules restored)`,
+  };
+}

@@ -4053,3 +4053,203 @@ input:checked + .mac-slider:before {
   padding: 1px 3px;
   border-radius: 3px;
 }
+
+/* ==========================================================================
+   Presets Modal: Curated Defense Packs & Sub-Tabs
+   ========================================================================== */
+.presets-modal-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 8px;
+}
+
+.presets-modal-tab {
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--secondary-color);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.presets-modal-tab:hover {
+  color: var(--text-color);
+  background: var(--sidebar-hover-bg);
+}
+
+.presets-modal-tab.active {
+  color: var(--primary-color);
+  background: rgba(0, 122, 255, 0.1);
+  font-weight: 600;
+}
+
+.preset-bundles-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.preset-bundle-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 16px;
+  transition: all 0.2s ease;
+}
+
+.preset-bundle-card:hover {
+  border-color: var(--primary-color);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.preset-bundle-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.preset-bundle-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preset-bundle-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--heading-color);
+}
+
+.preset-bundle-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(0, 122, 255, 0.12);
+  color: var(--primary-color);
+}
+
+.preset-bundle-cat {
+  font-size: 11px;
+  color: var(--secondary-color);
+  display: block;
+  margin-top: 2px;
+}
+
+.preset-bundle-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--secondary-color);
+  margin: 0 0 12px 0;
+}
+
+.preset-bundle-items-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.preset-bundle-feed-tag {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--sidebar-hover-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+}
+
+.preset-bundle-feed-tag.added {
+  background: rgba(52, 199, 89, 0.1);
+  color: #34c759;
+  border-color: rgba(52, 199, 89, 0.25);
+  font-weight: 500;
+}
+
+.preset-bundle-btn {
+  font-size: 12px;
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Settings: Accent Color Palette Swatches
+   ========================================================================== */
+.accent-palette-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.accent-palette-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--heading-color);
+  margin: 0 0 4px 0;
+}
+
+.accent-palette-subtitle {
+  font-size: 12px;
+  color: var(--secondary-color);
+  margin: 0 0 12px 0;
+}
+
+.accent-palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.accent-color-swatch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--control-bg-color);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  color: var(--text-color);
+  text-align: left;
+}
+
+.accent-color-swatch:hover {
+  border-color: var(--control-border-color);
+  background: var(--sidebar-hover-bg);
+  transform: translateY(-1px);
+}
+
+.accent-color-swatch.selected {
+  border-color: var(--primary-color);
+  background: rgba(0, 122, 255, 0.08);
+  box-shadow: 0 0 0 1.5px var(--primary-color);
+}
+
+.accent-swatch-circle {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.accent-swatch-name {
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

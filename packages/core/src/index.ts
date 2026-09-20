@@ -16,10 +16,14 @@ export {
 export {
   RuleProcessor,
   parseFilterList,
+  parseFilterListStream,
   downloadAndParseSource,
   type ProcessorErrors,
 } from "./RuleProcessor.js";
-export { RuleDeduplicator } from "./RuleDeduplicator.js";
+export {
+  RuleDeduplicator,
+  type MergedRuleMetadata,
+} from "./RuleDeduplicator.js";
 export { createRuleMetadata, cleanDomainPattern } from "./createMetadata.js";
 export {
   filterLists,

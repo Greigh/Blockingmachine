@@ -34,7 +34,7 @@ interface DeduplicatorStats {
 }
 
 // Use our extended RuleMetadata
-interface MergedRuleMetadata extends ExtendedRuleMetadata {
+export interface MergedRuleMetadata extends ExtendedRuleMetadata {
   alternatives?: string[];
 }
 
@@ -389,6 +389,35 @@ export class RuleDeduplicator {
   }
 
   /**
+   * Deduplicates and aggregates IP-based blocking rules (e.g. 0.0.0.0 ip, 127.0.0.1 ip, or CIDR).
+   */
+  public collapseIpRules(rules: StoredRule[]): StoredRule[] {
+    const seenIps = new Set<string>();
+    const result: StoredRule[] = [];
+
+    for (const rule of rules) {
+      const trimmed = (rule.originalRule || rule.raw || "").trim();
+      const match = trimmed.match(
+        /^(?:(?:0\.0\.0\.0|127\.0\.0\.1)\s+)?((?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:\/[0-9]{1,2})?)$/
+      );
+
+      if (match) {
+        const ip = match[1];
+        if (seenIps.has(ip)) {
+          this.stats.duplicates++;
+          continue;
+        }
+        seenIps.add(ip);
+        result.push(rule);
+      } else {
+        result.push(rule);
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Selects the "best" rule from a group of duplicates based on a scoring system.
    * @param rules An array of StoredRule objects that are duplicates.
    * @returns The selected best StoredRule.
@@ -430,7 +459,7 @@ export class RuleDeduplicator {
   mergeMetadata(
     group: StoredRule[],
     bestRule: StoredRule,
-  ): ExtendedRuleMetadata {
+  ): MergedRuleMetadata {
     // Add parameter types and return type
     try {
       // Start with a copy of the best rule's metadata or an empty object

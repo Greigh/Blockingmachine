@@ -9,29 +9,8 @@ import { CustomRulesView } from './views/CustomRulesView';
 import { RuleInspectorView } from './views/RuleInspectorView';
 import { RuleBrowserView } from './views/RuleBrowserView';
 import type { FilterSource, ThemeType } from './types/';
+import { applyTheme, applyAccentColor } from './theme';
 import './index.css';
-
-// --- Theme Helper Function ---
-const applyTheme = (theme: ThemeType) => {
-  const body = document.body;
-  body.classList.remove('light-theme', 'dark-theme');
-
-  if (theme === 'light') {
-    body.classList.add('light-theme');
-  } else if (theme === 'dark') {
-    body.classList.add('dark-theme');
-  } else {
-    // System theme
-    if (
-      window.matchMedia &&
-      window.matchMedia('(prefers-color-scheme: dark)').matches
-    ) {
-      body.classList.add('dark-theme');
-    } else {
-      body.classList.add('light-theme');
-    }
-  }
-};
 
 // --- External Link Helper Function ---
 const handleExternalLink = async (
@@ -80,6 +59,12 @@ function App() {
       }
     };
     loadAndApplyTheme();
+
+    try {
+      const savedAccent = localStorage.getItem('bm-accent-color') || 'blue';
+      applyAccentColor(savedAccent);
+    } catch {}
+
     return () => {
       isMounted = false;
     };

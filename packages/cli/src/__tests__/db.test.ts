@@ -4,6 +4,10 @@ import {
   connectDB,
   disconnectDB,
   logRuleAudit,
+  saveRuleSnapshot,
+  listRuleSnapshots,
+  loadRuleSnapshot,
+  rollbackSnapshot,
   type RuleAuditEntry,
 } from "../lib/db.js";
 import fs from "fs/promises";
@@ -94,4 +98,42 @@ describe("Database Layer & Offline Audit Logging", () => {
     expect(lines[1].action).toBe("prune");
     expect(lines[1].count).toBe(15);
   });
+
+  test("saveRuleSnapshot and listRuleSnapshots persist snapshots in offline mode", async () => {
+    const mockRules: any = [
+      { raw: "||tracker.com^", type: "blocking", domain: "tracker.com" },
+      { raw: "0.0.0.0 bad.org", type: "blocking", domain: "bad.org" },
+    ];
+
+    const saved = await saveRuleSnapshot("Test Snapshot Alpha", mockRules, tmpDir);
+    expect(saved.snapshotId).toBeDefined();
+    expect(saved.ruleCount).toBe(2);
+    expect(saved.description).toBe("Test Snapshot Alpha");
+
+    const snapshots = await listRuleSnapshots(tmpDir);
+    expect(snapshots.length).toBeGreaterThanOrEqual(1);
+    expect(snapshots[0].snapshotId).toBe(saved.snapshotId);
+    expect(snapshots[0].description).toBe("Test Snapshot Alpha");
+    expect(snapshots[0].ruleCount).toBe(2);
+  });
+
+  test("loadRuleSnapshot retrieves snapshot rules and rollbackSnapshot performs rollback", async () => {
+    const mockRules: any = [
+      { raw: "||telemetry.io^", type: "blocking", domain: "telemetry.io" },
+    ];
+
+    const saved = await saveRuleSnapshot("Rollback Target", mockRules, tmpDir);
+    const loaded = await loadRuleSnapshot(saved.snapshotId, tmpDir);
+    expect(loaded).not.toBeNull();
+    expect(loaded?.rules).toHaveLength(1);
+    expect(loaded?.rules[0].raw).toBe("||telemetry.io^");
+
+    const rollbackResult = await rollbackSnapshot(saved.snapshotId, tmpDir);
+    expect(rollbackResult.success).toBe(true);
+    expect(rollbackResult.ruleCount).toBe(1);
+
+    const nonExistent = await rollbackSnapshot("non-existent-snap-id", tmpDir);
+    expect(nonExistent.success).toBe(false);
+  });
 });
+
