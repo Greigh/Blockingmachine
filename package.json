@@ -13,6 +13,7 @@
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "start": "npm run --prefix packages/electron-app start",
+    "dev": "npm start",
     "package": "npm run --prefix packages/electron-app package",
     "make": "npm run --prefix packages/electron-app make"
   },
