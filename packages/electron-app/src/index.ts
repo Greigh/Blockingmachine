@@ -11,6 +11,11 @@ import {
 } from 'electron';
 import { promises as fs } from 'fs';
 import isDev from 'electron-is-dev';
+
+if (isDev) {
+  process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
+}
+
 import Store from 'electron-store';
 import type { ElectronStore, StoreSchema } from './types';
 import {
