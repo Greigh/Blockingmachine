@@ -8,7 +8,7 @@ const config = {
     asar: {
       unpack: "**/node_modules/electron-store/**/*"
     },
-    extraResource: [],
+    extraResource: ['./assets'],
     afterPrune: [
       (buildPath, electronVersion, platform, arch, callback) => {
         require('@electron/rebuild').rebuild({

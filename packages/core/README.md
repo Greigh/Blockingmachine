@@ -1,6 +1,11 @@
+<div align="center">
+  <img src="https://raw.githubusercontent.com/Greigh/Blockingmachine/main/assets/Blockingmachine.png" width="180" alt="Blockingmachine Logo" />
+
 # @blockingmachine/core
 
 Core functionality for Blockingmachine, providing robust filter list processing and rule management for AdGuard Home and similar applications.
+
+</div>
 
 [![LICENSE: BSD-3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 [![GitHub Actions](https://github.com/greigh/blockingmachine-cli/workflows/CI/badge.svg)](https://github.com/greigh/blockingmachine-cli/actions)

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="../../assets/blockingmachine.png" width="200" alt="Blockingmachine Logo" />
+  <img src="https://raw.githubusercontent.com/Greigh/Blockingmachine/main/assets/Blockingmachine.png" width="180" alt="Blockingmachine Logo" />
 
 # Blockingmachine
 

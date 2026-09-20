@@ -12,7 +12,7 @@ import {
   Tray,
   nativeImage,
 } from 'electron';
-import { promises as fs } from 'fs';
+import { promises as fs, existsSync } from 'fs';
 import isDev from 'electron-is-dev';
 
 if (isDev) {
@@ -258,26 +258,52 @@ function setupAutoScheduleTimer(schedule: 'disabled' | '12h' | '24h' | 'weekly',
 
 let appTray: Tray | null = null;
 
+function getAssetPath(filename: string): string {
+  const assetCandidates = [
+    join(process.resourcesPath, 'assets', filename),
+    join(process.resourcesPath, filename),
+    join(app.getAppPath(), 'assets', filename),
+    join(__dirname, '../assets', filename),
+    join(__dirname, '../../assets', filename),
+    join(process.cwd(), 'packages/electron-app/assets', filename),
+    join(process.cwd(), 'assets', filename),
+  ];
+  for (const candidate of assetCandidates) {
+    try {
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+  return '';
+}
+
+function getAppIcon(): Electron.NativeImage | undefined {
+  const iconPath = getAssetPath('Blockingmachine.png') || getAssetPath('Blockingmachine.icns');
+  if (iconPath) {
+    try {
+      const loaded = nativeImage.createFromPath(iconPath);
+      if (!loaded.isEmpty()) {
+        return loaded;
+      }
+    } catch {
+      // fallback
+    }
+  }
+  return undefined;
+}
+
 function createTray() {
   try {
-    const assetCandidates = [
-      join(__dirname, '../assets/Blockingmachine.png'),
-      join(app.getAppPath(), 'assets/Blockingmachine.png'),
-      join(process.cwd(), 'packages/electron-app/assets/Blockingmachine.png'),
-    ];
-    const isMac = process.platform === 'darwin';
     let icon = nativeImage.createEmpty();
-    if (!isMac) {
-      for (const candidate of assetCandidates) {
-        try {
-          const loaded = nativeImage.createFromPath(candidate);
-          if (!loaded.isEmpty()) {
-            icon = loaded.resize({ width: 16, height: 16 });
-            break;
-          }
-        } catch {
-          // try next
-        }
+    const appIcon = getAppIcon();
+    if (appIcon) {
+      try {
+        icon = appIcon.resize({ width: 16, height: 16 });
+      } catch {
+        // fallback
       }
     }
 
@@ -763,9 +789,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
         // Native Desktop Notification
         if (Notification.isSupported()) {
+          const notifIconPath = getAssetPath('Blockingmachine.png');
           new Notification({
             title: 'Blockingmachine',
             body: `Compilation complete: ${uniqueRuleCount.toLocaleString()} rules compiled.`,
+            icon: notifIconPath || undefined,
           }).show();
         }
 
@@ -1162,12 +1190,22 @@ const createWindow = async () => {
       : join(__dirname, 'preload.js');
 
   const isMac = process.platform === 'darwin';
+  const appIcon = getAppIcon();
+
+  if (isMac && app.dock && appIcon) {
+    try {
+      app.dock.setIcon(appIcon);
+    } catch (err) {
+      console.warn('[Dock] Failed to set dock icon:', err);
+    }
+  }
 
   mainWindow = new BrowserWindow({
     width: 1060,
     height: 750,
     minWidth: 920,
     minHeight: 600,
+    icon: appIcon,
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
     trafficLightPosition: isMac ? { x: 18, y: 18 } : undefined,
     webPreferences: {
