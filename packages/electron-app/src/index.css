@@ -452,6 +452,9 @@ body {
   display: flex;
   align-items: baseline;
   gap: 12px;
+  min-width: 0;
+  flex: 1;
+  margin-right: 16px;
 }
 
 .view-title {
@@ -460,12 +463,17 @@ body {
   color: var(--heading-color);
   margin: 0;
   letter-spacing: -0.01em;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .view-subtitle {
   font-size: 12px;
   color: var(--muted-text);
   font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header-right {
@@ -5414,21 +5422,26 @@ input:checked + .mac-slider:before {
   margin: 0;
 }
 
-/* Platform Navigation Tabs */
+/* Platform Navigation Tabs (macOS Segmented Control) */
 .deploy-platform-tabs {
   display: flex;
-  gap: 8px;
-  border-bottom: 1px solid var(--border-color);
-  padding-bottom: 10px;
-  flex-wrap: wrap;
+  background: var(--control-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 4px;
+  gap: 4px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .platform-tab-btn {
+  flex: 1;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
-  padding: 7px 13px;
-  border-radius: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
   background: transparent;
   border: 1px solid transparent;
   color: var(--secondary-color);
@@ -5436,24 +5449,34 @@ input:checked + .mac-slider:before {
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.18s ease;
+  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
 }
 
 .platform-tab-btn:hover {
-  background: var(--sidebar-hover-bg);
+  background: rgba(127, 127, 127, 0.08);
   color: var(--heading-color);
 }
 
 .platform-tab-btn.active {
-  background: var(--control-bg-color);
+  background: var(--bg-color);
   color: var(--primary-color);
-  border-color: var(--border-color);
+  border-color: rgba(0, 0, 0, 0.08);
   font-weight: 600;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12), 0 0 1px rgba(0, 0, 0, 0.15);
 }
 
 .platform-tab-icon {
-  font-size: 15px;
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+.platform-tab-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Platform Instructions Guide */
