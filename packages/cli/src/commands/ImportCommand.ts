@@ -4,7 +4,11 @@ import {
   type CommandResult,
 } from "./BaseCommand.js";
 import type { ImportOptions } from "./types.js";
-import { createPaths, fetchContent, parseFilterList } from "@blockingmachine/core";
+import {
+  createPaths,
+  fetchContent,
+  parseFilterList,
+} from "@blockingmachine/core";
 import fs from "fs/promises";
 import path from "path";
 
@@ -79,7 +83,9 @@ export class ImportCommand extends BaseCommand<ImportOptions> {
       if (allRules.length > 0) {
         const outputFile = path.join(paths.output.dir, "imported-rules.txt");
         await fs.writeFile(outputFile, allRules.join("\n"));
-        this.logger.info(`Saved ${allRules.length} unique rules to: ${outputFile}`);
+        this.logger.info(
+          `Saved ${allRules.length} unique rules to: ${outputFile}`,
+        );
       }
 
       this.logger.info(

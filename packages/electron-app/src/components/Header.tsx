@@ -33,6 +33,11 @@ export const Header: React.FC<HeaderProps> = ({
           title: 'Rule Inspector',
           desc: 'Verify if any domain is blocked and trace its origin rule',
         };
+      case 'browser':
+        return {
+          title: 'Rule Browser',
+          desc: 'Search, filter, and inspect the active set of compiled rules',
+        };
       case 'settings':
         return {
           title: 'Preferences',

@@ -285,7 +285,8 @@ export class RuleProcessor {
     // 7. Specific Advanced Rules by Modifier (prioritize browser context if applicable)
     if (hasBrowserOnlyModifier) {
       if (modifierMap.has("csp")) return "csp";
-      if (modifierMap.has("redirect") || modifierMap.has("redirect-rule")) return "redirect";
+      if (modifierMap.has("redirect") || modifierMap.has("redirect-rule"))
+        return "redirect";
       if (modifierMap.has("replace")) return "replace";
       if (modifierMap.has("removeparam")) return "parameter"; // Map to 'parameter' as per RuleStore logic
       if (modifierMap.has("removeheader")) return "removeheader";

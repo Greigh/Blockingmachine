@@ -14,6 +14,8 @@ import { defaultMetaConfig } from "./lib/constants.js";
 import { ImportCommand } from "./commands/ImportCommand.js";
 import { ExportCommand } from "./commands/ExportCommand.js";
 import { ValidateCommand } from "./commands/ValidateCommand.js";
+import { TestCommand } from "./commands/TestCommand.js";
+import { DiffCommand } from "./commands/DiffCommand.js";
 import type { MetaConfig } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -68,12 +70,16 @@ program
   .command("export")
   .description("Export filter lists")
   .option("-o, --output-path <path>", "Output path")
+  .option("--sync-pihole <url>", "Pi-hole reload/update endpoint URL")
+  .option("--webhook <url>", "Webhook URL to notify upon completion")
   .action(async (cmdOptions) => {
     try {
       const config = await loadConfig();
       const cmd = new ExportCommand({ config, logger });
       const result = await cmd.execute({
         outputPath: cmdOptions.outputPath,
+        syncPihole: cmdOptions.syncPihole,
+        webhook: cmdOptions.webhook,
       });
       if (!result.success) {
         process.exit(1);
@@ -129,6 +135,46 @@ program
     } catch (error) {
       logger.error(
         `Validation failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+program
+  .command("test <domain>")
+  .description(
+    "Test and inspect how a domain or URL is handled by compiled rules",
+  )
+  .action(async (domain: string) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new TestCommand({ config, logger });
+      const result = await cmd.execute({ domain });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Test failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+program
+  .command("diff <fileA> <fileB>")
+  .description("Compare two filter list files and inspect added/removed rules")
+  .action(async (fileA: string, fileB: string) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new DiffCommand({ config, logger });
+      const result = await cmd.execute({ fileA, fileB });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Diff failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       process.exit(1);
     }

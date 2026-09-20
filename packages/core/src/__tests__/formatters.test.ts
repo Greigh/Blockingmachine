@@ -34,7 +34,12 @@ describe("formatters & headers", () => {
       dateAdded: new Date(),
       lastUpdated: new Date(),
       enabled: true,
-      sourceInfo: { category: "whitelist", trusted: true, url: "", priority: 1 },
+      sourceInfo: {
+        category: "whitelist",
+        trusted: true,
+        url: "",
+        priority: 1,
+      },
       tags: [],
       domain: "safe-tracker.com",
     },
@@ -55,26 +60,58 @@ describe("formatters & headers", () => {
   };
 
   test("formatRuleForType formats blocking rules correctly for all supported formats", () => {
-    expect(formatRuleForType(sampleBlockingRule, "hosts")).toBe("0.0.0.0 adtracker.net");
-    expect(formatRuleForType(sampleBlockingRule, "dnsmasq")).toBe("address=/adtracker.net/0.0.0.0");
-    expect(formatRuleForType(sampleBlockingRule, "unbound")).toBe('local-zone: "adtracker.net" static');
-    expect(formatRuleForType(sampleBlockingRule, "bind")).toBe('zone "adtracker.net" { type master; file "null.zone.file"; };');
-    expect(formatRuleForType(sampleBlockingRule, "privoxy")).toBe("{ +block { adtracker.net } }");
-    expect(formatRuleForType(sampleBlockingRule, "shadowrocket")).toBe("DOMAIN,adtracker.net,REJECT");
-    expect(formatRuleForType(sampleBlockingRule, "adguard")).toBe("||adtracker.net^");
-    expect(formatRuleForType(sampleBlockingRule, "abp")).toBe("||adtracker.net^");
+    expect(formatRuleForType(sampleBlockingRule, "hosts")).toBe(
+      "0.0.0.0 adtracker.net",
+    );
+    expect(formatRuleForType(sampleBlockingRule, "dnsmasq")).toBe(
+      "address=/adtracker.net/0.0.0.0",
+    );
+    expect(formatRuleForType(sampleBlockingRule, "unbound")).toBe(
+      'local-zone: "adtracker.net" static',
+    );
+    expect(formatRuleForType(sampleBlockingRule, "bind")).toBe(
+      'zone "adtracker.net" { type master; file "null.zone.file"; };',
+    );
+    expect(formatRuleForType(sampleBlockingRule, "privoxy")).toBe(
+      "{ +block { adtracker.net } }",
+    );
+    expect(formatRuleForType(sampleBlockingRule, "shadowrocket")).toBe(
+      "DOMAIN,adtracker.net,REJECT",
+    );
+    expect(formatRuleForType(sampleBlockingRule, "adguard")).toBe(
+      "||adtracker.net^",
+    );
+    expect(formatRuleForType(sampleBlockingRule, "abp")).toBe(
+      "||adtracker.net^",
+    );
   });
 
   test("formatRuleForType does NOT invert exception rules to block entries", () => {
-    expect(formatRuleForType(sampleExceptionRule, "hosts")).toBe("# EXCEPTION: @@||safe-tracker.com^");
-    expect(formatRuleForType(sampleExceptionRule, "dnsmasq")).toBe("# EXCEPTION: @@||safe-tracker.com^");
-    expect(formatRuleForType(sampleExceptionRule, "unbound")).toBe("# EXCEPTION: @@||safe-tracker.com^");
-    expect(formatRuleForType(sampleExceptionRule, "bind")).toBe("# EXCEPTION: @@||safe-tracker.com^");
-    expect(formatRuleForType(sampleExceptionRule, "privoxy")).toBe("# EXCEPTION: @@||safe-tracker.com^");
-    expect(formatRuleForType(sampleExceptionRule, "shadowrocket")).toBe("# EXCEPTION: @@||safe-tracker.com^");
+    expect(formatRuleForType(sampleExceptionRule, "hosts")).toBe(
+      "# EXCEPTION: @@||safe-tracker.com^",
+    );
+    expect(formatRuleForType(sampleExceptionRule, "dnsmasq")).toBe(
+      "# EXCEPTION: @@||safe-tracker.com^",
+    );
+    expect(formatRuleForType(sampleExceptionRule, "unbound")).toBe(
+      "# EXCEPTION: @@||safe-tracker.com^",
+    );
+    expect(formatRuleForType(sampleExceptionRule, "bind")).toBe(
+      "# EXCEPTION: @@||safe-tracker.com^",
+    );
+    expect(formatRuleForType(sampleExceptionRule, "privoxy")).toBe(
+      "# EXCEPTION: @@||safe-tracker.com^",
+    );
+    expect(formatRuleForType(sampleExceptionRule, "shadowrocket")).toBe(
+      "# EXCEPTION: @@||safe-tracker.com^",
+    );
     // AdGuard and ABP preserve exception syntax natively
-    expect(formatRuleForType(sampleExceptionRule, "adguard")).toBe("@@||safe-tracker.com^");
-    expect(formatRuleForType(sampleExceptionRule, "abp")).toBe("@@||safe-tracker.com^");
+    expect(formatRuleForType(sampleExceptionRule, "adguard")).toBe(
+      "@@||safe-tracker.com^",
+    );
+    expect(formatRuleForType(sampleExceptionRule, "abp")).toBe(
+      "@@||safe-tracker.com^",
+    );
   });
 
   test("generateHeader uses # comment prefix for DNS/hosts/bind/privoxy/shadowrocket formats", () => {

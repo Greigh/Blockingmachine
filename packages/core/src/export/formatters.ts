@@ -12,7 +12,12 @@ function isException(rule: StoredRule): boolean {
 }
 
 function getDomain(rule: StoredRule): string | undefined {
-  return rule.domain || rule.metadata?.domain || cleanDomainPattern(rule.raw) || undefined;
+  return (
+    rule.domain ||
+    rule.metadata?.domain ||
+    cleanDomainPattern(rule.raw) ||
+    undefined
+  );
 }
 
 export function formatRuleForType(

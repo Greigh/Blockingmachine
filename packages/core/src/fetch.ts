@@ -23,11 +23,24 @@ const INITIAL_DELAY = 2000;
 const FETCH_TIMEOUT = 30000; // Define timeout duration
 const MAX_PAYLOAD_SIZE = 100 * 1024 * 1024; // 100MB max payload limit
 
+export interface FetchOptions {
+  etag?: string;
+  lastModified?: string;
+}
+
+export interface FetchResult {
+  content: string | null;
+  notModified: boolean;
+  etag?: string | null;
+  lastModified?: string | null;
+  status: number;
+}
+
 async function fetchWithRetry(
   url: RequestInfo,
   options: RequestInit,
   attempt = 1,
-): Promise<string | null> {
+): Promise<FetchResult> {
   // --- Timeout Controller ---
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
@@ -42,13 +55,23 @@ async function fetchWithRetry(
     // Use the options with the AbortSignal
     const response: Response = await fetch(url, fetchOptions);
 
+    if (response.status === 304) {
+      return {
+        content: null,
+        notModified: true,
+        etag: response.headers.get("etag") || undefined,
+        lastModified: response.headers.get("last-modified") || undefined,
+        status: 304,
+      };
+    }
+
     if (!response.ok) {
       // Specific handling for common non-fatal errors
       if ([403, 404, 503].includes(response.status)) {
         console.warn(
           `⚠️ Received status ${response.status} for ${url}. Skipping retries for this status.`,
         );
-        return null; // Treat as fetch failure but don't retry endlessly
+        return { content: null, notModified: false, status: response.status };
       }
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -60,7 +83,11 @@ async function fetchWithRetry(
       );
     }
 
-    if (response.body && typeof (response.body as any)[Symbol.asyncIterator] === "function") {
+    let textContent: string;
+    if (
+      response.body &&
+      typeof (response.body as any)[Symbol.asyncIterator] === "function"
+    ) {
       let totalBytes = 0;
       const chunks: Buffer[] = [];
       for await (const chunk of response.body as any) {
@@ -74,11 +101,18 @@ async function fetchWithRetry(
         }
         chunks.push(buf);
       }
-      return Buffer.concat(chunks).toString("utf-8");
+      textContent = Buffer.concat(chunks).toString("utf-8");
+    } else {
+      textContent = await response.text();
     }
 
-    const text = await response.text();
-    return text;
+    return {
+      content: textContent,
+      notModified: false,
+      etag: response.headers.get("etag") || undefined,
+      lastModified: response.headers.get("last-modified") || undefined,
+      status: response.status,
+    };
   } catch (error: any) {
     // Check if the error was due to the abort signal (timeout)
     if (error.name === "AbortError") {
@@ -87,7 +121,7 @@ async function fetchWithRetry(
       );
     } else if (error?.code === "ERR_INVALID_URL") {
       console.error(`❌ Invalid URL encountered: ${url}`);
-      return null; // Don't retry invalid URLs
+      return { content: null, notModified: false, status: 400 };
     } else {
       console.warn(
         `⚠️ Attempt ${attempt}/${MAX_RETRIES} failed for ${url}: ${error?.message || error}`,
@@ -103,26 +137,34 @@ async function fetchWithRetry(
       return fetchWithRetry(url, options, attempt + 1);
     } else {
       if (error?.code !== "ERR_INVALID_URL") {
-        // Avoid double logging for invalid URL
         console.error(
           `❌ Max retries reached or non-retryable error for ${url}. Last error: ${error?.message || error}`,
         );
       }
-      return null; // Return null after max retries
+      return { content: null, notModified: false, status: 0 };
     }
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-export async function fetchContent(url: string): Promise<string | null> {
-  // Remove timeout from the base options object
-  const options: RequestInit = {
-    headers: {
-      "User-Agent":
-        "Blockingmachine/3.0 (+https://github.com/greigh/blockingmachine)",
-    },
+export async function fetchWithConditionalCache(
+  url: string,
+  cacheOptions?: FetchOptions,
+): Promise<FetchResult> {
+  const headers: Record<string, string> = {
+    "User-Agent":
+      "Blockingmachine/3.0 (+https://github.com/greigh/blockingmachine)",
   };
+
+  if (cacheOptions?.etag) {
+    headers["If-None-Match"] = cacheOptions.etag;
+  }
+  if (cacheOptions?.lastModified) {
+    headers["If-Modified-Since"] = cacheOptions.lastModified;
+  }
+
+  const options: RequestInit = { headers };
 
   // --- Check if it's a local file path ---
   if (!url.startsWith("http:") && !url.startsWith("https:")) {
@@ -144,26 +186,47 @@ export async function fetchContent(url: string): Promise<string | null> {
       const stat = await fs.stat(filePath);
       if (!stat.isFile()) {
         console.error(`❌ Local path is not a file: ${filePath}`);
-        return null;
+        return { content: null, notModified: false, status: 404 };
       }
       if (stat.size > MAX_PAYLOAD_SIZE) {
         console.error(
           `❌ Local file exceeds 100MB limit: ${filePath} (${stat.size} bytes)`,
         );
-        return null;
+        return { content: null, notModified: false, status: 413 };
       }
 
-      console.log(`Reading local file: ${filePath}`);
+      const fileLastModified = stat.mtime.toUTCString();
+      if (
+        cacheOptions?.lastModified &&
+        new Date(fileLastModified) <= new Date(cacheOptions.lastModified)
+      ) {
+        return {
+          content: null,
+          notModified: true,
+          lastModified: fileLastModified,
+          status: 304,
+        };
+      }
+
       const content = await fs.readFile(filePath, "utf8");
-      return content;
+      return {
+        content,
+        notModified: false,
+        lastModified: fileLastModified,
+        status: 200,
+      };
     } catch (error: any) {
       console.error(
         `❌ Error reading local file ${url}: ${error?.message || error}`,
       );
-      return null;
+      return { content: null, notModified: false, status: 500 };
     }
   } else {
-    // Pass url and options; fetchWithRetry will handle the timeout internally
     return await fetchWithRetry(url, options);
   }
+}
+
+export async function fetchContent(url: string): Promise<string | null> {
+  const result = await fetchWithConditionalCache(url);
+  return result.content;
 }

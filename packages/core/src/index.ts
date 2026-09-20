@@ -28,7 +28,12 @@ export {
   type SourceInfo,
   type FilterListInfo,
 } from "./sources.js";
-export { fetchContent } from "./fetch.js";
+export {
+  fetchContent,
+  fetchWithConditionalCache,
+  type FetchOptions,
+  type FetchResult,
+} from "./fetch.js";
 
 // Export / Formatters
 export {

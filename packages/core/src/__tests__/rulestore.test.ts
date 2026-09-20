@@ -111,7 +111,10 @@ describe("RuleStore", () => {
 
   test("handles extended cosmetic rules (#?#) and scriptlet exceptions (#$?#) without invalidating them", () => {
     store.addRule("example.com#?#.ad-banner:has(> .sponsored)", "ubo-source");
-    store.addRule("example.com#$?#abort-current-inline-script", "scriptlet-source");
+    store.addRule(
+      "example.com#$?#abort-current-inline-script",
+      "scriptlet-source",
+    );
     store.addRule("##.generic-ad", "generic-source");
 
     const rules = store.getUniqueRules();

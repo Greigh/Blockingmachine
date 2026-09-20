@@ -65,9 +65,13 @@ describe("advanced-formatter", () => {
   test("generates unbound format correctly", () => {
     const output = generateFilterList(rules, metadata, "unbound");
 
-    expect(output).toContain('local-zone: "analytics.google.com" always_nxdomain');
+    expect(output).toContain(
+      'local-zone: "analytics.google.com" always_nxdomain',
+    );
     expect(output).toContain('local-zone: "ads.facebook.com" always_nxdomain');
-    expect(output).toContain('local-zone: "telemetry.microsoft.com" always_nxdomain');
+    expect(output).toContain(
+      'local-zone: "telemetry.microsoft.com" always_nxdomain',
+    );
     expect(output).toContain("# EXCEPTION: @@||allowed-cdn.com^");
   });
 
@@ -91,13 +95,22 @@ describe("advanced-formatter", () => {
         dateAdded: new Date(),
         lastUpdated: new Date(),
         enabled: true,
-        sourceInfo: { category: "ads", trusted: true, url: "test", priority: 1 },
+        sourceInfo: {
+          category: "ads",
+          trusted: true,
+          url: "test",
+          priority: 1,
+        },
         tags: [],
       },
     };
 
-    expect(formatRule(ruleWithoutDomain, "hosts")).toBe("0.0.0.0 doubleclick.net");
-    expect(formatRule(ruleWithoutDomain, "dnsmasq")).toBe("address=/doubleclick.net/0.0.0.0");
+    expect(formatRule(ruleWithoutDomain, "hosts")).toBe(
+      "0.0.0.0 doubleclick.net",
+    );
+    expect(formatRule(ruleWithoutDomain, "dnsmasq")).toBe(
+      "address=/doubleclick.net/0.0.0.0",
+    );
     expect(formatRule(ruleWithoutDomain, "domains")).toBe("doubleclick.net");
   });
 });

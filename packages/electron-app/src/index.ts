@@ -9,6 +9,8 @@ import {
   shell,
   session,
   Notification,
+  Tray,
+  nativeImage,
 } from 'electron';
 import { promises as fs } from 'fs';
 import isDev from 'electron-is-dev';
@@ -251,6 +253,102 @@ function setupAutoScheduleTimer(schedule: 'disabled' | '12h' | '24h' | 'weekly',
       // Internal trigger can use existing sources
     }, intervalMs);
   }
+}
+
+let appTray: Tray | null = null;
+
+function createTray() {
+  try {
+    const icon = nativeImage.createEmpty();
+    appTray = new Tray(icon);
+    const contextMenu = Menu.buildFromTemplate([
+      { label: '🛡️ Blockingmachine', enabled: false },
+      { type: 'separator' },
+      {
+        label: 'Open Blockingmachine',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+          }
+        },
+      },
+      {
+        label: 'Compile Rules Now',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.webContents.send('trigger-compile');
+          }
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit Blockingmachine',
+        click: () => app.quit(),
+      },
+    ]);
+    appTray.setToolTip('Blockingmachine - Ad & Tracker Filter Compiler');
+    appTray.setContextMenu(contextMenu);
+    if (process.platform === 'darwin') {
+      appTray.setTitle('🛡️ BM');
+    }
+  } catch (err) {
+    console.warn('Tray initialization skipped:', err);
+  }
+}
+
+async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
+  const piholeUrl = storeRef.get('piholeUrl') as string | undefined;
+  const piholeApiKey = storeRef.get('piholeApiKey') as string | undefined;
+  const adguardHomeUrl = storeRef.get('adguardHomeUrl') as string | undefined;
+  const adguardHomeUser = storeRef.get('adguardHomeUser') as string | undefined;
+  const adguardHomePassword = storeRef.get('adguardHomePassword') as string | undefined;
+
+  const results: { service: string; status: 'success' | 'error' | 'skipped'; message: string }[] = [];
+
+  if (piholeUrl && piholeUrl.trim()) {
+    try {
+      const url = new URL(piholeUrl.trim());
+      if (piholeApiKey) {
+        url.searchParams.set('auth', piholeApiKey.trim());
+      }
+      url.searchParams.set('action', 'updategravity');
+      const res = await fetch(url.toString());
+      if (res.ok) {
+        results.push({ service: 'Pi-hole', status: 'success', message: 'Gravity update triggered' });
+      } else {
+        results.push({ service: 'Pi-hole', status: 'error', message: `HTTP ${res.status}` });
+      }
+    } catch (err: any) {
+      results.push({ service: 'Pi-hole', status: 'error', message: err.message || String(err) });
+    }
+  } else {
+    results.push({ service: 'Pi-hole', status: 'skipped', message: 'Not configured' });
+  }
+
+  if (adguardHomeUrl && adguardHomeUrl.trim()) {
+    try {
+      const base = adguardHomeUrl.trim().replace(/\/$/, '');
+      const refreshUrl = `${base}/control/filtering/refresh`;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adguardHomeUser && adguardHomePassword) {
+        const credentials = Buffer.from(`${adguardHomeUser}:${adguardHomePassword}`).toString('base64');
+        headers['Authorization'] = `Basic ${credentials}`;
+      }
+      const res = await fetch(refreshUrl, { method: 'POST', headers, body: JSON.stringify({ whitelist: false }) });
+      if (res.ok) {
+        results.push({ service: 'AdGuard Home', status: 'success', message: 'Filters refreshed successfully' });
+      } else {
+        results.push({ service: 'AdGuard Home', status: 'error', message: `HTTP ${res.status}` });
+      }
+    } catch (err: any) {
+      results.push({ service: 'AdGuard Home', status: 'error', message: err.message || String(err) });
+    }
+  } else {
+    results.push({ service: 'AdGuard Home', status: 'skipped', message: 'Not configured' });
+  }
+
+  return results;
 }
 
 // Remove the typed wrapper and use store directly
@@ -578,6 +676,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           }).catch((err) => console.error('[IPC Main] Webhook ping failed:', err));
         }
 
+        // Trigger Sinkhole Sync if configured
+        if (store.get('syncOnCompile')) {
+          executeSinkholeSync(store).catch((err) =>
+            console.error('[IPC Main] Sinkhole auto-sync failed:', err)
+          );
+        }
+
         // Native Desktop Notification
         if (Notification.isSupported()) {
           new Notification({
@@ -741,6 +846,79 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle('set-webhook-url', async (_event, url: string) => {
       store.set('webhookUrl', url);
       return { success: true };
+    });
+
+    ipcMain.handle('get-compiled-rules', async (_event, options?: { search?: string; limit?: number; offset?: number; typeFilter?: string }) => {
+      if (latestCompiledRules.length === 0) {
+        let savePath = store.get('savePath');
+        if (!savePath || typeof savePath !== 'string' || !isAbsolute(savePath)) {
+          savePath = join(app.getPath('documents'), 'Blockingmachine', 'processed_rules.txt');
+        }
+        try {
+          const content = await fs.readFile(savePath, 'utf8');
+          latestCompiledRules = parseFilterList(content);
+        } catch {
+          // not compiled yet
+        }
+      }
+
+      let filtered = latestCompiledRules;
+      const search = options?.search?.trim().toLowerCase();
+      if (search) {
+        filtered = filtered.filter((r) =>
+          (r.raw && r.raw.toLowerCase().includes(search)) ||
+          (r.domain && r.domain.toLowerCase().includes(search))
+        );
+      }
+
+      if (options?.typeFilter && options.typeFilter !== 'all') {
+        if (options.typeFilter === 'exceptions') {
+          filtered = filtered.filter((r) => r.isException || r.raw?.startsWith('@@'));
+        } else if (options.typeFilter === 'cosmetic') {
+          filtered = filtered.filter((r) => r.raw?.includes('##') || r.raw?.includes('#@#'));
+        } else if (options.typeFilter === 'blocking') {
+          filtered = filtered.filter((r) => !r.isException && !r.raw?.startsWith('@@'));
+        }
+      }
+
+      const total = filtered.length;
+      const offset = options?.offset || 0;
+      const limit = options?.limit || 200;
+      const sliced = filtered.slice(offset, offset + limit).map((r) => ({
+        raw: r.raw,
+        type: r.type,
+        domain: r.domain,
+        isException: Boolean(r.isException || r.raw?.startsWith('@@')),
+        source: r.metadata?.sourceInfo?.url || 'Filter Feed',
+      }));
+
+      return { total, rules: sliced };
+    });
+
+    ipcMain.handle('get-sinkhole-config', async () => {
+      return {
+        piholeUrl: store.get('piholeUrl') || '',
+        piholeApiKey: store.get('piholeApiKey') || '',
+        adguardHomeUrl: store.get('adguardHomeUrl') || '',
+        adguardHomeUser: store.get('adguardHomeUser') || '',
+        adguardHomePassword: store.get('adguardHomePassword') || '',
+        syncOnCompile: Boolean(store.get('syncOnCompile')),
+      };
+    });
+
+    ipcMain.handle('set-sinkhole-config', async (_event, config: any) => {
+      if (config.piholeUrl !== undefined) store.set('piholeUrl', config.piholeUrl);
+      if (config.piholeApiKey !== undefined) store.set('piholeApiKey', config.piholeApiKey);
+      if (config.adguardHomeUrl !== undefined) store.set('adguardHomeUrl', config.adguardHomeUrl);
+      if (config.adguardHomeUser !== undefined) store.set('adguardHomeUser', config.adguardHomeUser);
+      if (config.adguardHomePassword !== undefined) store.set('adguardHomePassword', config.adguardHomePassword);
+      if (config.syncOnCompile !== undefined) store.set('syncOnCompile', Boolean(config.syncOnCompile));
+      return { success: true };
+    });
+
+    ipcMain.handle('sync-sinkholes', async () => {
+      const results = await executeSinkholeSync(store);
+      return { results };
     });
 
     ipcMain.handle('get-compilation-history', async () => {
@@ -1001,6 +1179,7 @@ async function initialize() {
     setupDefaultFilterSources();
     registerIPCHandlers(store);
     await createWindow();
+    createTray();
 
     app.on('window-all-closed', () => {
       if (process.platform !== 'darwin') {

@@ -30,6 +30,7 @@ interface DeduplicatorStats {
   uniqueRules?: number; // Added for final stats
   duplicateGroups?: number; // Added for final stats
   duplicatePercent?: string; // Added for final stats
+  subdomainsPruned?: number; // Pruned redundant subdomains under parent wildcards
 }
 
 // Use our extended RuleMetadata
@@ -88,7 +89,10 @@ export class RuleDeduplicator {
           .toLowerCase()
           .trim(),
         // Ensure modifiers are handled correctly even if no '$' is present
-        modifiers: (stripped.match(/\$([^#]*?)(?:##|#\?#|#@#|#\$#|#\$\?#|#%#|$)/)?.[1] || "")
+        modifiers: (
+          stripped.match(/\$([^#]*?)(?:##|#\?#|#@#|#\$#|#\$\?#|#%#|$)/)?.[1] ||
+          ""
+        )
           .split(",")
           .map((m) => m.split("=")[0].toLowerCase().trim())
           .filter((m) => m && m !== "domain") // Ensure 'domain' modifier itself isn't included here
@@ -121,7 +125,9 @@ export class RuleDeduplicator {
 
       // 3. Refined Normalization of the Core Target String
       // Strip hosts file IP prefix if present (e.g. 0.0.0.0, 127.0.0.1, ::1)
-      stripped = stripped.replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+/, "").trim();
+      stripped = stripped
+        .replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+/, "")
+        .trim();
 
       // Strip ABP network rule prefixes (|| or |)
       stripped = stripped.replace(/^(?:\|\||\|)/, "");
@@ -137,7 +143,11 @@ export class RuleDeduplicator {
       // Handle cases where stripping leaves nothing
       if (
         !stripped &&
-        (parts.modifiers || parts.selector || parts.extendedSelector || parts.scriptlet || parts.htmlFiltering)
+        (parts.modifiers ||
+          parts.selector ||
+          parts.extendedSelector ||
+          parts.scriptlet ||
+          parts.htmlFiltering)
       ) {
         stripped = "modifier_or_selector_rule"; // Use a placeholder key
       } else if (!stripped) {
@@ -258,22 +268,124 @@ export class RuleDeduplicator {
       }
     }
 
+    // Pass 2.5: Subdomain Redundancy Pruning under parent wildcard blocks
+    const unprunedList = Array.from(this.filteredRules.values());
+    const optimizedList = this.pruneRedundantSubdomains(unprunedList);
+
     // Calculate final stats
     const finalStats: DeduplicatorStats = {
       ...this.stats,
-      uniqueRules: this.filteredRules.size,
+      uniqueRules: optimizedList.length,
       duplicateGroups: ruleGroups.size - this.filteredRules.size, // Groups that had > 1 rule
       duplicatePercent:
         this.stats.total > 0
           ? ((this.stats.duplicates / this.stats.total) * 100).toFixed(2) + "%"
           : "0.00%",
+      subdomainsPruned: unprunedList.length - optimizedList.length,
     };
     this.stats = finalStats; // Update internal stats
 
     console.log("\nDeduplication complete!");
     console.table(finalStats); // Use console.table for better output
 
-    return Array.from(this.filteredRules.values());
+    return optimizedList;
+  }
+
+  /**
+   * Prunes child subdomains that are already completely covered by an existing
+   * parent wildcard domain block (e.g. ||example.com^ blocks all *.example.com).
+   * Allowlist exceptions (@@) and cosmetic rules (##) are never pruned.
+   */
+  public pruneRedundantSubdomains(rules: StoredRule[]): StoredRule[] {
+    const parentWildcards = new Set<string>();
+
+    // 1. Collect all root/parent wildcard domains without restricting modifiers
+    for (const rule of rules) {
+      if (rule.type === "blocking" && !rule.originalRule.startsWith("@@")) {
+        const match = rule.originalRule.match(/^\|\|([a-z0-9.-]+)\^$/i);
+        if (match) {
+          parentWildcards.add(match[1].toLowerCase());
+        }
+      }
+    }
+
+    if (parentWildcards.size === 0) {
+      return rules;
+    }
+
+    // 2. Identify redundant subdomains
+    const result: StoredRule[] = [];
+    let prunedCount = 0;
+
+    for (const rule of rules) {
+      // Never prune exceptions or cosmetic rules
+      if (
+        rule.type !== "blocking" ||
+        rule.originalRule.startsWith("@@") ||
+        rule.originalRule.includes("##")
+      ) {
+        result.push(rule);
+        continue;
+      }
+
+      let targetDomain: string | null = null;
+      if (rule.originalRule.startsWith("||")) {
+        const match = rule.originalRule.match(/^\|\|([a-z0-9.-]+)\^$/i);
+        if (match) {
+          targetDomain = match[1].toLowerCase();
+        }
+      } else if (
+        rule.originalRule.startsWith("0.0.0.0 ") ||
+        rule.originalRule.startsWith("127.0.0.1 ")
+      ) {
+        const parts = rule.originalRule.trim().split(/\s+/);
+        if (parts.length >= 2) {
+          targetDomain = parts[1].toLowerCase();
+        }
+      } else if (
+        !rule.originalRule.includes("/") &&
+        !rule.originalRule.includes("$")
+      ) {
+        // Plain domain
+        targetDomain = rule.originalRule.trim().toLowerCase();
+      }
+
+      if (!targetDomain) {
+        result.push(rule);
+        continue;
+      }
+
+      // Check if targetDomain has an active parent in parentWildcards
+      let isRedundant = false;
+      const dotIndex = targetDomain.indexOf(".");
+      if (dotIndex > 0) {
+        let parentCandidate = targetDomain.slice(dotIndex + 1);
+        while (parentCandidate.includes(".")) {
+          if (parentWildcards.has(parentCandidate)) {
+            isRedundant = true;
+            break;
+          }
+          const nextDot = parentCandidate.indexOf(".");
+          if (nextDot === -1) break;
+          parentCandidate = parentCandidate.slice(nextDot + 1);
+        }
+      }
+
+      if (isRedundant) {
+        prunedCount++;
+        this.stats.duplicates++;
+      } else {
+        result.push(rule);
+      }
+    }
+
+    if (prunedCount > 0) {
+      console.log(
+        `[RuleDeduplicator] Pruned ${prunedCount} redundant subdomain rules under parent wildcards.`,
+      );
+    }
+
+    return result;
   }
 
   /**

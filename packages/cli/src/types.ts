@@ -133,11 +133,7 @@ export interface FilterSource extends Source {
 
 // Rule-related types
 export type RuleType =
-  | "domain"
-  | "regex"
-  | "exception"
-  | "cosmetic"
-  | "unknown";
+  "domain" | "regex" | "exception" | "cosmetic" | "unknown";
 
 // Simplified modifier type - just strings now
 export type RuleModifier = string;
@@ -242,6 +238,8 @@ export interface ExportOptions {
   excludeCategories?: CategoryName[];
   minPriority?: number;
   tags?: string[];
+  syncPihole?: string;
+  webhook?: string;
 }
 
 // Make sure SupportedFormat is also defined

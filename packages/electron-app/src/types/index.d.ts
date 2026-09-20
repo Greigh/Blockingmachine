@@ -91,6 +91,34 @@ export interface CompilationSnapshot {
   exportFormats: FilterFormat[];
 }
 
+export interface CompiledRuleItem {
+  raw: string;
+  type: string;
+  domain?: string;
+  isException: boolean;
+  source?: string;
+}
+
+export interface CompiledRulesResponse {
+  total: number;
+  rules: CompiledRuleItem[];
+}
+
+export interface SinkholeConfig {
+  piholeUrl: string;
+  piholeApiKey: string;
+  adguardHomeUrl: string;
+  adguardHomeUser: string;
+  adguardHomePassword: string;
+  syncOnCompile: boolean;
+}
+
+export interface SinkholeSyncResult {
+  service: string;
+  status: 'success' | 'error' | 'skipped';
+  message: string;
+}
+
 export interface StoreSchema {
   filterSources: FilterSource[];
   customRules: string;
@@ -102,6 +130,12 @@ export interface StoreSchema {
   webhookUrl?: string;
   lastProcessTime: string;
   compilationHistory?: CompilationSnapshot[];
+  piholeUrl?: string;
+  piholeApiKey?: string;
+  adguardHomeUrl?: string;
+  adguardHomeUser?: string;
+  adguardHomePassword?: string;
+  syncOnCompile?: boolean;
 }
 
 // Electron API interface
@@ -123,6 +157,15 @@ export interface ElectronAPI {
   setAutoSchedule: (schedule: 'disabled' | '12h' | '24h' | 'weekly') => Promise<{ success: boolean; error?: string }>;
   getWebhookUrl: () => Promise<string>;
   setWebhookUrl: (url: string) => Promise<{ success: boolean; error?: string }>;
+  getCompiledRules: (options?: {
+    search?: string;
+    limit?: number;
+    offset?: number;
+    typeFilter?: string;
+  }) => Promise<CompiledRulesResponse>;
+  getSinkholeConfig: () => Promise<SinkholeConfig>;
+  setSinkholeConfig: (config: Partial<SinkholeConfig>) => Promise<{ success: boolean; error?: string }>;
+  syncSinkholes: () => Promise<{ results: SinkholeSyncResult[] }>;
   getSavePath: () => Promise<string>;
   setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;
   selectSavePath: () => Promise<string>;
@@ -142,6 +185,7 @@ export interface ElectronAPI {
   onUpdateAvailable?: (callback: (info: UpdateInfo) => void) => () => void;
   onUpdateError?: (callback: (error: Error) => void) => () => void;
   onOpenSettings?: (callback: () => void) => () => void;
+  onTriggerCompile?: (callback: () => void) => () => void;
   receive?: (channel: string, func: (...args: any[]) => void) => void;
   removeAllListeners?: (channel: string) => void;
 }

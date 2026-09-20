@@ -68,6 +68,6 @@ export function createLogger(debug = false) {
     ],
   });
   return cachedLogger;
-};
+}
 
 export type Logger = ReturnType<typeof createLogger>;

@@ -10,7 +10,9 @@ describe("RuleDeduplicator", () => {
 
   test("stripRule normalizes hosts file rules and ABP rules to the same canonical key", () => {
     const hostsKey1 = deduplicator.stripRule("0.0.0.0 telemetry.example.com");
-    const hostsKey2 = deduplicator.stripRule("127.0.0.1 telemetry.example.com # comment");
+    const hostsKey2 = deduplicator.stripRule(
+      "127.0.0.1 telemetry.example.com # comment",
+    );
     const abpKey = deduplicator.stripRule("||telemetry.example.com^");
     const plainKey = deduplicator.stripRule("telemetry.example.com");
 
@@ -21,7 +23,9 @@ describe("RuleDeduplicator", () => {
   });
 
   test("stripRule preserves modifiers in normalized key", () => {
-    const keyWithMod = deduplicator.stripRule("||tracker.org^$third-party,script");
+    const keyWithMod = deduplicator.stripRule(
+      "||tracker.org^$third-party,script",
+    );
     expect(keyWithMod).toBe("tracker.org|mods=script,third-party");
   });
 
@@ -29,7 +33,9 @@ describe("RuleDeduplicator", () => {
     const networkException = deduplicator.stripRule("@@||safe-site.com^");
     expect(networkException).toBe("@@safe-site.com");
 
-    const cosmeticException = deduplicator.stripRule("example.com#@#.ad-banner");
+    const cosmeticException = deduplicator.stripRule(
+      "example.com#@#.ad-banner",
+    );
     const cosmeticHide = deduplicator.stripRule("example.com##.ad-banner");
     expect(cosmeticException).toBe("@@example.com|sel=.ad-banner");
     expect(cosmeticHide).toBe("example.com|sel=.ad-banner");
@@ -37,7 +43,9 @@ describe("RuleDeduplicator", () => {
   });
 
   test("stripRule preserves distinct scriptlets on the same domain", () => {
-    const s1 = deduplicator.stripRule("example.com#$#abort-current-inline-script");
+    const s1 = deduplicator.stripRule(
+      "example.com#$#abort-current-inline-script",
+    );
     const s2 = deduplicator.stripRule("example.com#$#set-constant ad true");
     expect(s1).toBe("example.com|scriptlet=abort-current-inline-script");
     expect(s2).toBe("example.com|scriptlet=set-constant ad true");
@@ -65,5 +73,31 @@ doubleclick.net
 
     deduplicator.clear();
     expect(deduplicator.getStats().total).toBe(0);
+  });
+
+  test("pruneRedundantSubdomains eliminates subdomains when parent wildcard block is active", async () => {
+    const rawSources = `
+||example.com^
+||sub.example.com^
+0.0.0.0 deep.sub.example.com
+@@||safe.example.com^
+||unrelated.org^
+    `.trim();
+
+    const rules = parseFilterList(rawSources, "test");
+    const deduped = await deduplicator.processRules(rules);
+
+    const ruleStrings = deduped.map((r) => r.originalRule);
+    // ||example.com^ is parent wildcard
+    expect(ruleStrings).toContain("||example.com^");
+    // @@||safe.example.com^ is exception and must NEVER be pruned
+    expect(ruleStrings).toContain("@@||safe.example.com^");
+    // ||unrelated.org^ is preserved
+    expect(ruleStrings).toContain("||unrelated.org^");
+    // ||sub.example.com^ and 0.0.0.0 deep.sub.example.com should be pruned
+    expect(ruleStrings).not.toContain("||sub.example.com^");
+    expect(ruleStrings).not.toContain("0.0.0.0 deep.sub.example.com");
+
+    expect(deduplicator.getStats().subdomainsPruned).toBe(2);
   });
 });
