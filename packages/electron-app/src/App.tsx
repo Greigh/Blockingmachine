@@ -845,21 +845,54 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
     return () => window.removeEventListener('keydown', handleKeydown);
   }, [isLoading]);
 
+  // Derived metrics
+  const totalProcessed = lastResult?.processedRuleCount ?? 0;
+  const uniqueCount = lastResult?.uniqueRuleCount ?? 0;
+  const exceptionCount = lastResult?.exceptionRuleCount ?? 0;
+  const blockingCount = Math.max(0, uniqueCount - exceptionCount);
+  const duplicatesRemoved = Math.max(0, totalProcessed - uniqueCount);
+  const dedupRate =
+    totalProcessed > 0
+      ? ((duplicatesRemoved / totalProcessed) * 100).toFixed(1)
+      : '0';
+  const blockingPercent =
+    uniqueCount > 0 ? ((blockingCount / uniqueCount) * 100).toFixed(1) : '0';
+  const exceptionPercent =
+    uniqueCount > 0 ? ((exceptionCount / uniqueCount) * 100).toFixed(1) : '0';
+
   return (
     <div className="section">
       {/* Modern Desktop Action Banner */}
       <div className="process-banner-card">
         <div className="process-banner-content">
+          <div className="banner-badge-row">
+            <span className="banner-status-pill">
+              <span className="status-dot" />
+              Engine Ready
+            </span>
+            {dashboardStats.lastProcessedTime && (
+              <span className="banner-time-sub">
+                Last run: {dashboardStats.lastProcessedTime}
+              </span>
+            )}
+          </div>
           <h3>Compile & Export Filter Lists</h3>
           <p>
             Fetches enabled filter feeds, parses rules, runs deduplication, and writes clean blocklists to disk.
           </p>
           {savePath && (
-            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>Destination:</span>
-              <code style={{ fontFamily: 'ui-monospace, monospace', background: 'rgba(0,0,0,0.18)', padding: '2px 6px', borderRadius: 4 }}>
-                {savePath}
-              </code>
+            <div className="banner-dest-row">
+              <span className="dest-label">Output Directory:</span>
+              <button
+                className="dest-path-pill"
+                onClick={() => window.electron.showItemInFolder(savePath)}
+                title="Click to reveal folder in Finder"
+              >
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+                </svg>
+                <code>{savePath}</code>
+              </button>
             </div>
           )}
         </div>
@@ -901,221 +934,335 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
         </div>
       )}
 
-      {/* Metric Cards Grid */}
-      <div className="dashboard-grid">
-        <div className="dashboard-card">
-          <div className="dashboard-icon">🛡️</div>
-          <div className="dashboard-stat-content">
-            <span className="dashboard-stat-value">
-              {dashboardStats.enabledSources}/{dashboardStats.totalSources}
-            </span>
-            <span className="dashboard-stat-label">Active Sources</span>
+      {/* When Compilation Results Exist */}
+      {lastResult && lastResult.success && (
+        <div className="results-panel">
+          {/* Results Bar Header */}
+          <div className="results-panel-header">
+            <div className="results-panel-title-area">
+              <span className="results-success-pill">
+                <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+                </svg>
+                Compilation Complete
+              </span>
+              <span className="results-timestamp">{lastResult.timestamp}</span>
+            </div>
+            {savePath && (
+              <button
+                className="header-action-btn"
+                onClick={() => window.electron.showItemInFolder(savePath)}
+                title="Reveal exported blocklists in Finder"
+              >
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+                </svg>
+                Reveal in Finder
+              </button>
+            )}
           </div>
-        </div>
 
-        <div className="dashboard-card">
-          <div className="dashboard-icon">✍️</div>
-          <div className="dashboard-stat-content">
-            <span className="dashboard-stat-value">
-              {dashboardStats.customRulesCount}
-            </span>
-            <span className="dashboard-stat-label">Custom Rules</span>
-          </div>
-        </div>
-
-        <div className="dashboard-card">
-          <div className="dashboard-icon">🕒</div>
-          <div className="dashboard-stat-content">
-            <span className="dashboard-stat-value" style={{ fontSize: '1.05rem', marginTop: 3 }}>
-              {dashboardStats.lastProcessedTime ? dashboardStats.lastProcessedTime.split(',')[0] || 'Recently' : 'Never'}
-            </span>
-            <span className="dashboard-stat-label">
-              {dashboardStats.lastProcessedTime ? 'Last Compilation' : 'Not yet compiled'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Results Card */}
-      {lastResult && (
-        <div
-          className={`process-card results-card ${lastResult.success ? 'success' : 'error'}`}
-        >
-          <div className="card-header">
-            <h3>
-              {lastResult.success ? (
-                <span className="success-icon">✅ Processing Results</span>
-              ) : (
-                <span className="error-icon">❌ Processing Failed</span>
-              )}
-            </h3>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {lastResult.success && savePath && (
-                <button
-                  className="header-action-btn"
-                  onClick={() => window.electron.showItemInFolder(savePath)}
-                  title="Reveal exported blocklists in folder"
-                  style={{ fontSize: 12, padding: '4px 10px' }}
-                >
-                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+          {/* 4-Column KPI Grid */}
+          <div className="results-kpi-grid">
+            <div className="kpi-card">
+              <div className="kpi-card-top">
+                <span className="kpi-icon-wrap" style={{ color: '#5856d6', background: 'rgba(88, 86, 214, 0.12)' }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" />
                   </svg>
-                  Reveal in Finder
-                </button>
-              )}
-              <span className="timestamp">{lastResult.timestamp || 'N/A'}</span>
+                </span>
+                <span className="kpi-label">Total Ingested</span>
+              </div>
+              <div className="kpi-value">{totalProcessed.toLocaleString()}</div>
+              <div className="kpi-subtext">From {dashboardStats.enabledSources} active feeds</div>
+            </div>
+
+            <div className="kpi-card">
+              <div className="kpi-card-top">
+                <span className="kpi-icon-wrap" style={{ color: '#0a84ff', background: 'rgba(10, 132, 255, 0.12)' }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                  </svg>
+                </span>
+                <span className="kpi-label">Unique Rules</span>
+              </div>
+              <div className="kpi-value">{uniqueCount.toLocaleString()}</div>
+              <div className="kpi-badge">+{dedupRate}% deduplicated</div>
+            </div>
+
+            <div className="kpi-card">
+              <div className="kpi-card-top">
+                <span className="kpi-icon-wrap" style={{ color: '#30d158', background: 'rgba(48, 209, 88, 0.12)' }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                  </svg>
+                </span>
+                <span className="kpi-label">Blocking Rules</span>
+              </div>
+              <div className="kpi-value">{blockingCount.toLocaleString()}</div>
+              <div className="kpi-subtext">{blockingPercent}% domain & cosmetic</div>
+            </div>
+
+            <div className="kpi-card">
+              <div className="kpi-card-top">
+                <span className="kpi-icon-wrap" style={{ color: '#ff9f0a', background: 'rgba(255, 159, 10, 0.12)' }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                  </svg>
+                </span>
+                <span className="kpi-label">Exception Rules</span>
+              </div>
+              <div className="kpi-value">{exceptionCount.toLocaleString()}</div>
+              <div className="kpi-subtext">{exceptionPercent}% whitelist rules</div>
             </div>
           </div>
-          <div className="card-content">
-            {lastResult.success ? (
-              <>
-                {/* Summary Cards with Key Metrics */}
-                <div className="summary-cards">
-                  <div className="summary-card">
-                    <div className="summary-card-header">
-                      <h4 className="summary-card-title">Total Rules</h4>
-                    </div>
-                    <div className="summary-card-value">
-                      {lastResult.processedRuleCount?.toLocaleString() ?? 'N/A'}
-                    </div>
-                    <div className="summary-card-footer">
-                      Rules processed from all sources
-                    </div>
-                  </div>
 
-                  <div className="summary-card">
-                    <div className="summary-card-header">
-                      <h4 className="summary-card-title">Unique Rules</h4>
-                    </div>
-                    <div className="summary-card-value">
-                      {lastResult.uniqueRuleCount?.toLocaleString() ?? 'N/A'}
-                    </div>
-                    <div className="summary-card-footer">
-                      {lastResult.processedRuleCount > 0
-                        ? `${((1 - lastResult.uniqueRuleCount / lastResult.processedRuleCount) * 100).toFixed(1)}% deduplication rate`
-                        : 'N/A'}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="stats-grid">
-                  <div className="stat-item">
-                    <span className="stat-label">Blocking Rules</span>
-                    <span className="stat-value">
-                      {(
-                        lastResult.uniqueRuleCount -
-                        (lastResult.exceptionRuleCount || 0)
-                      ).toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Exception Rules</span>
-                    <span className="stat-value">
-                      {lastResult.exceptionRuleCount?.toLocaleString() ?? 'N/A'}
-                    </span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Deduplication Rate</span>
-                    <span className="stat-value">
-                      {lastResult.processedRuleCount > 0
-                        ? (
-                            (1 -
-                              lastResult.uniqueRuleCount /
-                                lastResult.processedRuleCount) *
-                            100
-                          ).toFixed(2) + '%'
-                        : 'N/A'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Chart using Recharts */}
-                <div className="comparison-chart">
-                  <h3>Rule Distribution</h3>
-                  <div className="chart-container">
-                    <ResponsiveContainer width="100%" height={300}>
-                      <PieChart>
-                        <Pie
-                          data={[
-                            {
-                              name: 'Blocking Rules',
-                              value:
-                                lastResult.uniqueRuleCount -
-                                (lastResult.exceptionRuleCount || 0),
-                            },
-                            {
-                              name: 'Exception Rules',
-                              value: lastResult.exceptionRuleCount || 0,
-                            },
-                          ]}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
-                          label={({ name, percent }) =>
-                            `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
-                          }
-                        >
-                          <Cell fill="#4CAF50" />
-                          <Cell fill="#FFA726" />
-                        </Pie>
-                        <Legend />
-                        <Tooltip content={<CustomTooltip />} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-
-                {/* Bar Chart for filter stats */}
-                <div className="comparison-chart">
-                  <h3>Filter Stats Comparison</h3>
-                  <div className="chart-container">
-                    <ResponsiveContainer width="100%" height={300}>
-                      <BarChart
-                        data={[
-                          {
-                            name: 'Rules',
-                            Processed: lastResult.processedRuleCount,
-                            Unique: lastResult.uniqueRuleCount,
-                            Exceptions: lastResult.exceptionRuleCount || 0,
-                            Blocking:
-                              lastResult.uniqueRuleCount -
-                              (lastResult.exceptionRuleCount || 0),
-                          },
-                        ]}
-                        margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="name" />
-                        <YAxis />
-                        <Tooltip content={<CustomTooltip />} />
-                        <Legend />
-                        <Bar dataKey="Processed" fill="#8884d8" />
-                        <Bar dataKey="Unique" fill="#82ca9d" />
-                        <Bar dataKey="Blocking" fill="#4CAF50" />
-                        <Bar dataKey="Exceptions" fill="#FFA726" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="error-message">
-                {lastResult.error || 'Unknown error'}
+          {/* Deduplication Efficiency Card */}
+          <div className="dedup-efficiency-card">
+            <div className="dedup-card-header">
+              <div className="dedup-title-area">
+                <h4>Deduplication & Engine Efficiency</h4>
+                <p>Eliminated redundant rules across subscribed lists to maximize blocking performance</p>
               </div>
-            )}
+              <span className="dedup-rate-badge">{dedupRate}% Efficiency</span>
+            </div>
+            <div className="dedup-bar-container">
+              <div
+                className="dedup-bar-active"
+                style={{ width: `${Math.max(10, 100 - Number(dedupRate))}%` }}
+                title={`Active Rules: ${uniqueCount.toLocaleString()}`}
+              />
+              <div
+                className="dedup-bar-removed"
+                style={{ width: `${Math.min(90, Number(dedupRate))}%` }}
+                title={`Duplicate Rules Removed: ${duplicatesRemoved.toLocaleString()}`}
+              />
+            </div>
+            <div className="dedup-stats-pills">
+              <div className="dedup-stat-pill">
+                <span className="pill-dot active" />
+                <span>Unique Output: <strong>{uniqueCount.toLocaleString()}</strong></span>
+              </div>
+              <div className="dedup-stat-pill">
+                <span className="pill-dot duplicate" />
+                <span>Duplicates Purged: <strong>{duplicatesRemoved.toLocaleString()}</strong></span>
+              </div>
+              <div className="dedup-stat-pill">
+                <span className="pill-icon">⚡</span>
+                <span>Deduplication Ratio: <strong>{dedupRate}%</strong></span>
+              </div>
+            </div>
+          </div>
+
+          {/* 2-Column Split Analytics Grid */}
+          <div className="analytics-split-grid">
+            {/* Donut Chart Card */}
+            <div className="analytics-card">
+              <div className="analytics-card-header">
+                <h4>Rule Composition</h4>
+                <p>Distribution of blocking vs exception rules</p>
+              </div>
+              <div className="donut-chart-wrapper">
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie
+                      data={[
+                        { name: 'Blocking Rules', value: blockingCount },
+                        { name: 'Exception Rules', value: exceptionCount },
+                      ]}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={65}
+                      outerRadius={88}
+                      paddingAngle={4}
+                      dataKey="value"
+                      stroke="none"
+                    >
+                      <Cell fill="#0a84ff" />
+                      <Cell fill="#ff9f0a" />
+                    </Pie>
+                    <Tooltip content={<CustomTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="donut-center-overlay">
+                  <span className="donut-center-num">
+                    {uniqueCount >= 1000 ? `${(uniqueCount / 1000).toFixed(1)}k` : uniqueCount}
+                  </span>
+                  <span className="donut-center-lbl">Active Rules</span>
+                </div>
+              </div>
+              <div className="donut-legend-row">
+                <div className="legend-item">
+                  <span className="legend-color-dot" style={{ backgroundColor: '#0a84ff' }} />
+                  <span className="legend-name">Blocking:</span>
+                  <span className="legend-val">{blockingCount.toLocaleString()}</span>
+                  <span className="legend-pct">({blockingPercent}%)</span>
+                </div>
+                <div className="legend-item">
+                  <span className="legend-color-dot" style={{ backgroundColor: '#ff9f0a' }} />
+                  <span className="legend-name">Exceptions:</span>
+                  <span className="legend-val">{exceptionCount.toLocaleString()}</span>
+                  <span className="legend-pct">({exceptionPercent}%)</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Generated Blocklists Card */}
+            <div className="analytics-card">
+              <div className="analytics-card-header">
+                <h4>Exported Formats</h4>
+                <p>Compiled files ready for DNS and browser integration</p>
+              </div>
+              <div className="export-files-list">
+                <div className="export-file-row">
+                  <div className="export-file-icon">📄</div>
+                  <div className="export-file-info">
+                    <span className="export-file-name">hosts.txt</span>
+                    <span className="export-file-desc">Standard Hosts format • {blockingCount.toLocaleString()} rules</span>
+                  </div>
+                  {savePath && (
+                    <button
+                      className="header-action-btn"
+                      onClick={() => window.electron.showItemInFolder(savePath)}
+                      title="Reveal hosts.txt in Finder"
+                    >
+                      Reveal
+                    </button>
+                  )}
+                </div>
+
+                <div className="export-file-row">
+                  <div className="export-file-icon">🛡️</div>
+                  <div className="export-file-info">
+                    <span className="export-file-name">adguard.txt</span>
+                    <span className="export-file-desc">Adblock Plus syntax • {uniqueCount.toLocaleString()} rules</span>
+                  </div>
+                  {savePath && (
+                    <button
+                      className="header-action-btn"
+                      onClick={() => window.electron.showItemInFolder(savePath)}
+                      title="Reveal adguard.txt in Finder"
+                    >
+                      Reveal
+                    </button>
+                  )}
+                </div>
+
+                <div className="export-file-row">
+                  <div className="export-file-icon">🌐</div>
+                  <div className="export-file-info">
+                    <span className="export-file-name">dnsmasq.txt</span>
+                    <span className="export-file-desc">Router format • {blockingCount.toLocaleString()} rules</span>
+                  </div>
+                  {savePath && (
+                    <button
+                      className="header-action-btn"
+                      onClick={() => window.electron.showItemInFolder(savePath)}
+                      title="Reveal dnsmasq.txt in Finder"
+                    >
+                      Reveal
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Bar Chart Comparison Card */}
+          <div className="analytics-card comparison-chart-card">
+            <div className="analytics-card-header">
+              <h4>Filter Pipeline Comparison</h4>
+              <p>Total processed vs unique compiled rules</p>
+            </div>
+            <div className="chart-container" style={{ height: 240 }}>
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart
+                  data={[
+                    {
+                      name: 'Rules',
+                      Processed: totalProcessed,
+                      Unique: uniqueCount,
+                      Blocking: blockingCount,
+                      Exceptions: exceptionCount,
+                    },
+                  ]}
+                  margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+                  <XAxis dataKey="name" stroke="var(--secondary-color)" fontSize={12} />
+                  <YAxis stroke="var(--secondary-color)" fontSize={11} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend />
+                  <Bar dataKey="Processed" fill="#5856d6" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Unique" fill="#0a84ff" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Blocking" fill="#30d158" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Exceptions" fill="#ff9f0a" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Display specific error if lastResult is null but error exists (e.g., IPC call failed) */}
-      {!lastResult && error && (
-        <div className="process-card error-card">
+      {/* Initial state (before compilation) */}
+      {!lastResult && !isLoading && (
+        <>
+          <div className="dashboard-grid">
+            <div className="dashboard-card">
+              <div className="dashboard-icon">🛡️</div>
+              <div className="dashboard-stat-content">
+                <span className="dashboard-stat-value">
+                  {dashboardStats.enabledSources}/{dashboardStats.totalSources}
+                </span>
+                <span className="dashboard-stat-label">Active Sources</span>
+              </div>
+            </div>
+
+            <div className="dashboard-card">
+              <div className="dashboard-icon">✍️</div>
+              <div className="dashboard-stat-content">
+                <span className="dashboard-stat-value">
+                  {dashboardStats.customRulesCount}
+                </span>
+                <span className="dashboard-stat-label">Custom Rules</span>
+              </div>
+            </div>
+
+            <div className="dashboard-card">
+              <div className="dashboard-icon">🕒</div>
+              <div className="dashboard-stat-content">
+                <span className="dashboard-stat-value" style={{ fontSize: '1.05rem', marginTop: 3 }}>
+                  {dashboardStats.lastProcessedTime ? dashboardStats.lastProcessedTime.split(',')[0] || 'Recently' : 'Never'}
+                </span>
+                <span className="dashboard-stat-label">
+                  {dashboardStats.lastProcessedTime ? 'Last Compilation' : 'Not yet compiled'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="empty-state-desktop">
+            <div className="empty-state-icon-shield">
+              <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+              </svg>
+            </div>
+            <h4>Ready to Compile Blocklists</h4>
+            <p>
+              Click <strong>Run Processor</strong> above or press <kbd>⌘R</kbd> to fetch all {dashboardStats.enabledSources} active sources and build your unified filter lists.
+            </p>
+          </div>
+        </>
+      )}
+
+      {/* Error Card */}
+      {error && (
+        <div className="process-card error-card" style={{ marginTop: 16 }}>
           <div className="card-content">
-            <h3 className="error-icon">❌ Error</h3>
-            <p>{error}</p>
+            <h3 className="error-icon" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>⚠️</span> Compilation Error
+            </h3>
+            <p style={{ margin: 0, color: 'var(--danger-color)', fontSize: 13 }}>{error}</p>
           </div>
         </div>
       )}
