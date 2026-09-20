@@ -29,8 +29,14 @@ export {
   filterLists,
   sourceCategories,
   sourceNames,
+  CURATED_SOURCE_PROFILES,
+  getSourceProfile,
+  detectSourceClassification,
   type SourceInfo,
   type FilterListInfo,
+  type SourceScope,
+  type SourceCategory,
+  type SourceProfile,
 } from "./sources.js";
 export {
   fetchContent,

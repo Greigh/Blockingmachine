@@ -15,6 +15,11 @@
       "import": "./dist/index.js",
       "require": "./dist/index.js"
     },
+    "./sources": {
+      "types": "./dist/sources.d.ts",
+      "import": "./dist/sources.js",
+      "require": "./dist/sources.js"
+    },
     "./package.json": "./package.json"
   },
   "license": "BSD-3-Clause",

@@ -58,10 +58,27 @@ export interface UpdateProgress {
   total: number;
 }
 
+export type SourceScope = 'dns' | 'browser' | 'hybrid';
+
+export type SourceCategory =
+  | 'ads'
+  | 'privacy'
+  | 'security'
+  | 'annoyances'
+  | 'social'
+  | 'mobile'
+  | 'unbreak'
+  | 'anti-circumvention'
+  | 'custom';
+
 export interface FilterSource {
   name: string;
   url: string;
   enabled: boolean;
+  scope?: SourceScope;
+  category?: SourceCategory | string;
+  description?: string;
+  recommendedFor?: string;
 }
 
 export interface DomainInspectionResult {

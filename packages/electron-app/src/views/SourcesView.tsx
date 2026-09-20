@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
-import type { FilterSource, FeedDiagnostic } from '../types';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import type { FilterSource, FeedDiagnostic, SourceScope } from '../types';
+import { getSourceProfile, detectSourceClassification } from '@blockingmachine/core/sources';
 import { PresetsModal } from './PresetsModal';
 
 interface SourcesViewProps {
@@ -21,6 +22,7 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
   const [newSourceName, setNewSourceName] = useState('');
   const [newSourceUrl, setNewSourceUrl] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedScopeFilter, setSelectedScopeFilter] = useState<'all' | SourceScope>('all');
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editUrl, setEditUrl] = useState('');
@@ -36,6 +38,12 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
       isMountedRef.current = false;
     };
   }, []);
+
+  // Real-time source intelligence preview as the user types/pastes URL
+  const detectedProfile = useMemo(() => {
+    if (!newSourceUrl.trim() && !newSourceName.trim()) return null;
+    return detectSourceClassification(newSourceUrl.trim() || newSourceName.trim());
+  }, [newSourceUrl, newSourceName]);
 
   const handleAddSource = () => {
     if (!newSourceName.trim() || !newSourceUrl.trim()) {
@@ -61,10 +69,16 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
       return;
     }
 
+    const profile = detectSourceClassification(newSourceUrl.trim());
+
     const newSource: FilterSource = {
       name: newSourceName.trim(),
       url: newSourceUrl.trim(),
       enabled: true,
+      scope: profile.scope,
+      category: profile.category,
+      description: profile.description,
+      recommendedFor: profile.recommendedFor,
     };
 
     const updated = [...sources, newSource];
@@ -132,9 +146,19 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
       return;
     }
 
+    const reProfile = detectSourceClassification(editUrl.trim());
+
     const updated = sources.map((s, idx) => {
       if (idx === editingIndex) {
-        return { ...s, name: editName.trim(), url: editUrl.trim() };
+        return {
+          ...s,
+          name: editName.trim(),
+          url: editUrl.trim(),
+          scope: reProfile.scope,
+          category: reProfile.category,
+          description: reProfile.description,
+          recommendedFor: reProfile.recommendedFor,
+        };
       }
       return s;
     });
@@ -175,21 +199,90 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
     }
   };
 
-  const getSourceTag = (name: string, url: string) => {
-    const combined = (name + ' ' + url).toLowerCase();
-    if (combined.includes('dns') || combined.includes('hosts')) return { label: 'DNS', cls: 'tag-dns' };
-    if (combined.includes('adguard')) return { label: 'AdGuard', cls: 'tag-adguard' };
-    if (combined.includes('ublock')) return { label: 'uBlock', cls: 'tag-ublock' };
-    if (combined.includes('privacy') || combined.includes('track') || combined.includes('telemetry')) return { label: 'Privacy', cls: 'tag-privacy' };
-    if (combined.includes('security') || combined.includes('malware') || combined.includes('badware')) return { label: 'Security', cls: 'tag-security' };
-    return { label: 'Filter', cls: 'tag-default' };
+  const renderScopeBadge = (scope: SourceScope) => {
+    switch (scope) {
+      case 'dns':
+        return (
+          <span
+            className="source-scope-badge scope-dns"
+            title="DNS Sinkhole Safe: pure domain & IP rules; compatible with Pi-hole, AdGuard Home, router firewalls"
+          >
+            🌐 DNS Safe
+          </span>
+        );
+      case 'browser':
+        return (
+          <span
+            className="source-scope-badge scope-browser"
+            title="Browser Only: contains DOM cosmetic element-hiding (##, #@#) and scriptlets; requires browser extension"
+          >
+            🖥️ Browser Only
+          </span>
+        );
+      case 'hybrid':
+      default:
+        return (
+          <span
+            className="source-scope-badge scope-hybrid"
+            title="Hybrid: contains both network request blocks and browser cosmetic element-hiding"
+          >
+            ⚡ Hybrid
+          </span>
+        );
+    }
   };
 
-  const filteredSources = sources.filter(
-    (s) =>
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.url.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const renderCategoryBadge = (category: string) => {
+    const cat = (category || 'custom').toLowerCase();
+    switch (cat) {
+      case 'ads':
+        return <span className="source-category-badge cat-ads">🛡️ Ads</span>;
+      case 'privacy':
+        return <span className="source-category-badge cat-privacy">🕵️ Privacy</span>;
+      case 'security':
+        return <span className="source-category-badge cat-security">🚨 Security</span>;
+      case 'annoyances':
+        return <span className="source-category-badge cat-annoyances">🍪 Annoyances</span>;
+      case 'social':
+        return <span className="source-category-badge cat-social">💬 Social</span>;
+      case 'mobile':
+        return <span className="source-category-badge cat-mobile">📱 Mobile</span>;
+      case 'unbreak':
+        return <span className="source-category-badge cat-unbreak">🩹 Unbreak</span>;
+      case 'anti-circumvention':
+        return <span className="source-category-badge cat-circumvention">🔓 Anti-Circumvention</span>;
+      case 'custom':
+      default:
+        return <span className="source-category-badge cat-custom">⚙️ Custom</span>;
+    }
+  };
+
+  // Scope counts for quick filter buttons
+  const scopeCounts = useMemo(() => {
+    let dns = 0;
+    let browser = 0;
+    let hybrid = 0;
+    for (const s of sources) {
+      const p = getSourceProfile(s.url || s.name);
+      if (p.scope === 'dns') dns++;
+      else if (p.scope === 'browser') browser++;
+      else hybrid++;
+    }
+    return { dns, browser, hybrid, all: sources.length };
+  }, [sources]);
+
+  const filteredSources = sources.filter((s) => {
+    const profile = getSourceProfile(s.url || s.name);
+    const matchesScope =
+      selectedScopeFilter === 'all' || profile.scope === selectedScopeFilter;
+    const query = searchQuery.toLowerCase();
+    const matchesSearch =
+      s.name.toLowerCase().includes(query) ||
+      s.url.toLowerCase().includes(query) ||
+      profile.category.toLowerCase().includes(query) ||
+      profile.description.toLowerCase().includes(query);
+    return matchesScope && matchesSearch;
+  });
 
   const enabledCount = sources.filter((s) => s.enabled).length;
 
@@ -198,13 +291,25 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
       {/* Top Toolbar */}
       <div className="sources-toolbar-row">
         <div className="sources-search-wrap">
-          <svg className="sources-search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+          <svg
+            className="sources-search-icon"
+            viewBox="0 0 24 24"
+            width="15"
+            height="15"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+            />
           </svg>
           <input
             type="text"
             className="search-input"
-            placeholder="Search subscribed feeds by name or URL..."
+            placeholder="Search subscribed feeds by name, URL, or category..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -232,7 +337,14 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
             className="primary-button presets-btn"
             onClick={() => setIsPresetsOpen(true)}
           >
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2">
+            <svg
+              viewBox="0 0 24 24"
+              width="14"
+              height="14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+            >
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
             </svg>
             <span>Curated Feeds</span>
@@ -240,12 +352,49 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
         </div>
       </div>
 
+      {/* Scope Filter Bar */}
+      <div className="sources-scope-filter-bar">
+        <span className="scope-filter-label">Filter by Layer:</span>
+        <button
+          className={`scope-filter-pill ${selectedScopeFilter === 'all' ? 'active' : ''}`}
+          onClick={() => setSelectedScopeFilter('all')}
+        >
+          All ({scopeCounts.all})
+        </button>
+        <button
+          className={`scope-filter-pill scope-dns-btn ${selectedScopeFilter === 'dns' ? 'active' : ''}`}
+          onClick={() => setSelectedScopeFilter('dns')}
+          title="Filter pure DNS-level sinkhole sources"
+        >
+          🌐 DNS Safe ({scopeCounts.dns})
+        </button>
+        <button
+          className={`scope-filter-pill scope-browser-btn ${selectedScopeFilter === 'browser' ? 'active' : ''}`}
+          onClick={() => setSelectedScopeFilter('browser')}
+          title="Filter browser cosmetic & element-hiding sources"
+        >
+          🖥️ Browser Only ({scopeCounts.browser})
+        </button>
+        <button
+          className={`scope-filter-pill scope-hybrid-btn ${selectedScopeFilter === 'hybrid' ? 'active' : ''}`}
+          onClick={() => setSelectedScopeFilter('hybrid')}
+          title="Filter hybrid network + cosmetic sources"
+        >
+          ⚡ Hybrid ({scopeCounts.hybrid})
+        </button>
+      </div>
+
       {/* Add New Source Card */}
       <div className="desktop-card add-source-card">
         <div className="add-source-header-row">
-          <h4 className="add-source-title">Add Custom Source Feed</h4>
-          <span className="add-source-subtitle">Subscribe to any remote HTTP(S) blocklist or hosts file</span>
+          <div>
+            <h4 className="add-source-title">Add Custom Source Feed</h4>
+            <span className="add-source-subtitle">
+              Subscribe to any remote HTTP(S) blocklist, ABP feed, or hosts file
+            </span>
+          </div>
         </div>
+
         <div className="add-source-form-grid">
           <input
             type="text"
@@ -267,18 +416,50 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
             onClick={handleAddSource}
             disabled={!newSourceName.trim() || !newSourceUrl.trim()}
           >
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4">
+            <svg
+              viewBox="0 0 24 24"
+              width="13"
+              height="13"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+            >
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
             </svg>
             <span>Add Source</span>
           </button>
         </div>
+
+        {/* Live Source Intelligence Preview */}
+        {detectedProfile && (
+          <div className="source-intelligence-preview-box">
+            <div className="source-intelligence-header">
+              <span className="source-intelligence-badge-title">Source Intelligence:</span>
+              <div className="source-intelligence-tags">
+                {renderScopeBadge(detectedProfile.scope)}
+                {renderCategoryBadge(detectedProfile.category)}
+              </div>
+            </div>
+            <p className="source-intelligence-desc">{detectedProfile.description}</p>
+            <div className="source-intelligence-meta">
+              <span className="source-intelligence-target">
+                🎯 <strong>Recommended for:</strong> {detectedProfile.recommendedFor}
+              </span>
+              {detectedProfile.warning && (
+                <span className="source-intelligence-warning">
+                  ⚠️ {detectedProfile.warning}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Sources List Header */}
       <div className="sources-list-meta-bar">
         <span>
-          Showing <strong>{filteredSources.length}</strong> of <strong>{sources.length}</strong> sources ({enabledCount} active)
+          Showing <strong>{filteredSources.length}</strong> of <strong>{sources.length}</strong> sources (
+          {enabledCount} active)
         </span>
       </div>
 
@@ -289,6 +470,7 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
           const isEditing = editingIndex === originalIndex;
           const health = feedHealth[source.url];
           const isTesting = testingUrls[source.url];
+          const profile = getSourceProfile(source.url || source.name);
 
           if (isEditing) {
             return (
@@ -321,12 +503,16 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
             );
           }
 
-          const tag = getSourceTag(source.name, source.url);
-
           return (
-            <div key={source.url} className={`source-item-card ${source.enabled ? 'is-enabled' : 'is-disabled'}`}>
+            <div
+              key={source.url}
+              className={`source-item-card ${source.enabled ? 'is-enabled' : 'is-disabled'}`}
+            >
               <div className="source-toggle-col">
-                <label className="mac-switch" title={source.enabled ? 'Disable source' : 'Enable source'}>
+                <label
+                  className="mac-switch"
+                  title={source.enabled ? 'Disable source' : 'Enable source'}
+                >
                   <input
                     type="checkbox"
                     checked={source.enabled}
@@ -339,20 +525,37 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
               <div className="source-info-col">
                 <div className="source-title-row">
                   <span className="source-name">{source.name}</span>
-                  <span className={`source-type-pill ${tag.cls}`}>{tag.label}</span>
+                  <div className="source-badges-group">
+                    {renderScopeBadge(profile.scope)}
+                    {renderCategoryBadge(profile.category)}
+                  </div>
                   {health && (
                     <span className={`health-pill status-${health.status}`}>
                       {health.status === 'ok' ? (
-                        <>● {health.latencyMs}ms • {health.ruleCount?.toLocaleString()} rules</>
+                        <>
+                          ● {health.latencyMs}ms • {health.ruleCount?.toLocaleString()} rules
+                        </>
                       ) : (
                         <>● {health.error || 'Failed'}</>
                       )}
                     </span>
                   )}
                 </div>
-                <span className="source-url" title={source.url}>
-                  {source.url}
-                </span>
+
+                <p className="source-description-text">{profile.description}</p>
+
+                <div className="source-meta-row">
+                  <span className="source-url" title={source.url}>
+                    {source.url}
+                  </span>
+                  <span className="source-target-hint">🎯 {profile.recommendedFor}</span>
+                </div>
+
+                {profile.warning && (
+                  <div className="source-warning-notice">
+                    <span>⚠️ {profile.warning}</span>
+                  </div>
+                )}
               </div>
 
               <div className="source-actions-col">
@@ -365,8 +568,19 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
                   {isTesting ? (
                     <span className="loading-spinner-micro" />
                   ) : (
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="14"
+                      height="14"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"
+                      />
                     </svg>
                   )}
                 </button>
@@ -375,8 +589,19 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
                   onClick={() => handleStartEdit(originalIndex)}
                   title="Edit source name and URL"
                 >
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"
+                    />
                   </svg>
                 </button>
                 <button
@@ -384,8 +609,19 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
                   onClick={() => handleRemoveSource(originalIndex)}
                   title="Remove this source"
                 >
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
+                    />
                   </svg>
                 </button>
               </div>
@@ -404,15 +640,15 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
         }}
         onAddMultiplePresets={(newPresets) => {
           const existingUrls = new Set(
-            sources.map((s) => s.url.trim().toLowerCase()),
+            sources.map((s) => s.url.trim().toLowerCase())
           );
           const toAdd = newPresets.filter(
-            (p) => !existingUrls.has(p.url.trim().toLowerCase()),
+            (p) => !existingUrls.has(p.url.trim().toLowerCase())
           );
           if (toAdd.length > 0) {
             saveSources(
               [...sources, ...toAdd],
-              `Subscribed to ${toAdd.length} curated feed${toAdd.length > 1 ? 's' : ''}.`,
+              `Subscribed to ${toAdd.length} curated feed${toAdd.length > 1 ? 's' : ''}.`
             );
           }
         }}
@@ -420,3 +656,4 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
     </div>
   );
 };
+

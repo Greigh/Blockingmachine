@@ -1,79 +1,119 @@
 import React, { useState } from 'react';
-import type { FilterSource } from '../types';
+import type { FilterSource, SourceScope } from '../types';
 
-interface PresetItem {
+export interface PresetItem {
   name: string;
   url: string;
+  scope: SourceScope;
   category: string;
   description: string;
+  features: string[];
+  recommendedFor: string;
+  warning?: string;
 }
 
-const PRESET_CATALOG: PresetItem[] = [
+export const PRESET_CATALOG: PresetItem[] = [
   {
     name: 'AdGuard DNS Filter',
     url: 'https://filters.adtidy.org/extension/chromium/filters/15.txt',
+    scope: 'dns',
     category: 'Advertising',
-    description: 'Comprehensive DNS-level blocklist for advertising domains and popups.',
+    description: 'Comprehensive network-level blocklist for advertising domains and popups, stripped of cosmetic rules.',
+    features: ['DNS sinkhole safe', 'No DOM overhead', 'Ad blocking'],
+    recommendedFor: 'Pi-hole, AdGuard Home, router firewalls, and network DNS resolvers',
   },
   {
     name: 'uBlock Origin Filters',
     url: 'https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.txt',
+    scope: 'hybrid',
     category: 'Advertising',
-    description: 'Official uBlock Origin core network and cosmetic filter rules.',
+    description: 'Official uBlock Origin core network request blocks, advanced cosmetic element-hiding, and procedural scriptlets.',
+    features: ['Cosmetic element hiding', 'Scriptlet injection', 'Network blocking'],
+    recommendedFor: 'uBlock Origin, AdGuard Browser Extension, Brave Shields',
+    warning: 'Contains cosmetic rules (##, #@#) that are ignored by network DNS resolvers',
   },
   {
     name: 'EasyList',
     url: 'https://easylist.to/easylist/easylist.txt',
+    scope: 'hybrid',
     category: 'Advertising',
-    description: 'The standard ad-blocking list that removes adverts from web pages.',
+    description: 'The foundational open-source ad-blocking rule set that removes adverts from international web pages.',
+    features: ['Standard ABP syntax', 'Global ad rules', 'Element hiding'],
+    recommendedFor: 'Browser extensions and unified ad-blocking pipelines',
   },
   {
     name: 'AdGuard Base Filter',
     url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt',
+    scope: 'hybrid',
     category: 'Advertising',
-    description: 'Standard AdGuard base list for blocking banners, video ads, and popups.',
+    description: 'Standard AdGuard base list for blocking banners, video ads, and popups across web pages.',
+    features: ['Banner blocking', 'Video ad filtering', 'Cosmetic rules'],
+    recommendedFor: 'Browser extensions and unified blocking engines',
   },
   {
     name: "HaGeZi's Windows/Office Tracker",
     url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_63.txt',
+    scope: 'dns',
     category: 'Privacy',
-    description: 'Blocks telemetry, diagnostic beacons, and background trackers on Windows and Office.',
+    description: 'Aggressively blocks telemetry, diagnostic beacons, and background trackers on Windows and Office.',
+    features: ['Windows telemetry', 'Office diagnostics', 'Pure DNS domains'],
+    recommendedFor: 'Pi-hole, AdGuard Home, Windows desktop users seeking maximum OS privacy',
   },
   {
     name: 'uBlock Unbreak Filter',
     url: 'https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/unbreak.txt',
+    scope: 'hybrid',
     category: 'Privacy',
-    description: 'Crucial exception rules that fix web pages broken by aggressive blocking.',
+    description: 'Crucial exception rules that fix web pages, logins, and checkouts broken by aggressive blocking.',
+    features: ['Exception rules (@@)', 'Site unbreaking', 'Anti-breakage allowlists'],
+    recommendedFor: 'All setups to prevent broken web pages, logins, and checkouts',
   },
   {
     name: "Peter Lowe's List",
     url: 'https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblock&showintro=0&mimetype=plaintext',
+    scope: 'dns',
     category: 'Security',
-    description: 'Hand-curated, low-false-positive list of tracking and malicious ad servers.',
+    description: 'Hand-curated, low-false-positive list of tracking servers and malicious ad delivery networks.',
+    features: ['Conservative blocking', 'DNS hosts format', 'Low false-positives'],
+    recommendedFor: 'Network-wide DNS sinkholes and ad blockers',
   },
   {
     name: 'OISD Blocklist Small',
     url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_5.txt',
+    scope: 'dns',
     category: 'Security',
-    description: 'Popular aggregated blocklist focused on high-confidence malware and phishing domains.',
+    description: 'Renowned curated blocklist focused on high-confidence malware, phishing, and aggressive tracking.',
+    features: ['Zero false-positives', 'Pure DNS domains', 'Safe for home networks'],
+    recommendedFor: 'Every network DNS sinkhole (Pi-hole, AdGuard Home, router firewalls)',
   },
   {
     name: 'AdGuard Annoyances Filter',
     url: 'https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_14_Annoyances/filter.txt',
+    scope: 'browser',
     category: 'Annoyances',
-    description: 'Blocks cookie notices, floating GDPR popups, push notifications, and app banners.',
+    description: 'Blocks cookie notices, floating GDPR popups, push notifications, and mobile app banners.',
+    features: ['Cookie banner hiding', 'GDPR modal suppression', 'Floating nag removal'],
+    recommendedFor: 'Browser extensions (requires DOM/CSS inspection; ineffective on DNS sinkholes)',
+    warning: 'Purely cosmetic: cannot be enforced by network DNS sinkholes like Pi-hole',
   },
   {
     name: "Fanboy's Annoyance List",
     url: 'https://secure.fanboy.co.nz/fanboy-annoyance.txt',
+    scope: 'browser',
     category: 'Annoyances',
     description: 'Removes social widgets, in-page popups, newsletter overlays, and nag screens.',
+    features: ['Cookie notices', 'Social buttons', 'In-page popups'],
+    recommendedFor: 'Browser extensions (requires DOM/CSS inspection; ineffective on DNS sinkholes)',
+    warning: 'Purely cosmetic: cannot be enforced by network DNS sinkholes like Pi-hole',
   },
   {
     name: 'AdGuard Social Media Filter',
     url: 'https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_4_Social/filter.txt',
+    scope: 'browser',
     category: 'Social',
     description: 'Blocks Like buttons, share widgets, and cross-site social tracking beacons.',
+    features: ['Social widget hiding', 'Facebook Pixel neutralization', 'Like button removal'],
+    recommendedFor: 'Browser extensions (removes embedded social widgets from web layouts)',
   },
 ];
 
@@ -94,9 +134,9 @@ export const PRESET_BUNDLES: PresetBundle[] = [
     badge: 'Recommended',
     category: 'Advertising & Security',
     items: [
-      PRESET_CATALOG[0], // AdGuard DNS
-      PRESET_CATALOG[1], // uBlock Origin
-      PRESET_CATALOG[6], // Peter Lowe
+      PRESET_CATALOG[0], // AdGuard DNS (dns)
+      PRESET_CATALOG[1], // uBlock Origin (hybrid)
+      PRESET_CATALOG[6], // Peter Lowe (dns)
     ],
   },
   {
@@ -106,9 +146,9 @@ export const PRESET_BUNDLES: PresetBundle[] = [
     badge: 'Max Privacy',
     category: 'Privacy',
     items: [
-      PRESET_CATALOG[4], // HaGeZi Windows/Office
-      PRESET_CATALOG[5], // uBlock Unbreak
-      PRESET_CATALOG[7], // OISD Blocklist Small
+      PRESET_CATALOG[4], // HaGeZi Windows/Office (dns)
+      PRESET_CATALOG[5], // uBlock Unbreak (hybrid)
+      PRESET_CATALOG[7], // OISD Blocklist Small (dns)
     ],
   },
   {
@@ -118,9 +158,9 @@ export const PRESET_BUNDLES: PresetBundle[] = [
     badge: 'Clean Browsing',
     category: 'Annoyances & Social',
     items: [
-      PRESET_CATALOG[8], // AdGuard Annoyances
-      PRESET_CATALOG[9], // Fanboy's Annoyance
-      PRESET_CATALOG[10], // AdGuard Social
+      PRESET_CATALOG[8], // AdGuard Annoyances (browser)
+      PRESET_CATALOG[9], // Fanboy's Annoyance (browser)
+      PRESET_CATALOG[10], // AdGuard Social (browser)
     ],
   },
 ];
@@ -142,6 +182,7 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'feeds' | 'packs'>('packs');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [selectedScope, setSelectedScope] = useState<'all' | SourceScope>('all');
   const [search, setSearch] = useState<string>('');
 
   if (!isOpen) return null;
@@ -151,17 +192,24 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
   const filteredPresets = PRESET_CATALOG.filter((item) => {
     const matchesCategory =
       selectedCategory === 'All' || item.category === selectedCategory;
+    const matchesScope =
+      selectedScope === 'all' || item.scope === selectedScope;
     const matchesSearch =
       item.name.toLowerCase().includes(search.toLowerCase()) ||
-      item.description.toLowerCase().includes(search.toLowerCase());
-    return matchesCategory && matchesSearch;
+      item.description.toLowerCase().includes(search.toLowerCase()) ||
+      item.recommendedFor.toLowerCase().includes(search.toLowerCase());
+    return matchesCategory && matchesScope && matchesSearch;
   });
 
   const handleSubscribeBundle = (bundle: PresetBundle) => {
-    const toAdd = bundle.items.map((item) => ({
+    const toAdd: FilterSource[] = bundle.items.map((item) => ({
       name: item.name,
       url: item.url,
       enabled: true,
+      scope: item.scope,
+      category: item.category,
+      description: item.description,
+      recommendedFor: item.recommendedFor,
     }));
 
     if (onAddMultiplePresets) {
@@ -178,14 +226,26 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
     }
   };
 
+  const renderScopePill = (scope: SourceScope) => {
+    switch (scope) {
+      case 'dns':
+        return <span className="source-scope-badge scope-dns">🌐 DNS Safe</span>;
+      case 'browser':
+        return <span className="source-scope-badge scope-browser">🖥️ Browser Only</span>;
+      case 'hybrid':
+      default:
+        return <span className="source-scope-badge scope-hybrid">⚡ Hybrid</span>;
+    }
+  };
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-dialog presets-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-title-wrap">
-            <h2 className="modal-title">Recommended Filter Feeds</h2>
+            <h2 className="modal-title">Recommended Filter Feeds & Packs</h2>
             <p className="modal-subtitle">
-              Quickly subscribe to curated, high-reputation adblock and privacy blocklists.
+              Quickly subscribe to curated, high-reputation adblock and privacy blocklists with full layer & scope intelligence.
             </p>
           </div>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close modal">
@@ -256,7 +316,7 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
                           className={`preset-bundle-feed-tag ${isItemAdded ? 'added' : ''}`}
                         >
                           {isItemAdded ? '✓ ' : '+ '}
-                          {item.name}
+                          {item.name} ({item.scope.toUpperCase()})
                         </span>
                       );
                     })}
@@ -268,25 +328,58 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
         ) : (
           <>
             {/* Filter and Search Bar */}
-            <div className="presets-controls-row">
-              <div className="category-pills">
-                {categories.map((cat) => (
-                  <button
-                    key={cat}
-                    className={`category-pill ${selectedCategory === cat ? 'active' : ''}`}
-                    onClick={() => setSelectedCategory(cat)}
-                  >
-                    {cat}
-                  </button>
-                ))}
+            <div className="presets-controls-stack">
+              <div className="presets-scope-bar">
+                <span className="scope-filter-label">Layer Scope:</span>
+                <button
+                  className={`scope-filter-pill ${selectedScope === 'all' ? 'active' : ''}`}
+                  onClick={() => setSelectedScope('all')}
+                >
+                  All Scopes
+                </button>
+                <button
+                  className={`scope-filter-pill scope-dns-btn ${selectedScope === 'dns' ? 'active' : ''}`}
+                  onClick={() => setSelectedScope('dns')}
+                  title="Filter pure DNS-level sinkhole feeds"
+                >
+                  🌐 DNS Safe
+                </button>
+                <button
+                  className={`scope-filter-pill scope-browser-btn ${selectedScope === 'browser' ? 'active' : ''}`}
+                  onClick={() => setSelectedScope('browser')}
+                  title="Filter browser cosmetic & element-hiding feeds"
+                >
+                  🖥️ Browser Only
+                </button>
+                <button
+                  className={`scope-filter-pill scope-hybrid-btn ${selectedScope === 'hybrid' ? 'active' : ''}`}
+                  onClick={() => setSelectedScope('hybrid')}
+                  title="Filter hybrid network + cosmetic feeds"
+                >
+                  ⚡ Hybrid
+                </button>
               </div>
-              <input
-                type="text"
-                className="search-input presets-search"
-                placeholder="Search curated feeds..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+
+              <div className="presets-controls-row">
+                <div className="category-pills">
+                  {categories.map((cat) => (
+                    <button
+                      key={cat}
+                      className={`category-pill ${selectedCategory === cat ? 'active' : ''}`}
+                      onClick={() => setSelectedCategory(cat)}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  className="search-input presets-search"
+                  placeholder="Search curated feeds..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
             </div>
 
             {/* Presets List */}
@@ -301,15 +394,38 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
                     <div className="preset-card-main">
                       <div className="preset-title-row">
                         <span className="preset-name">{preset.name}</span>
-                        <span className={`preset-category-badge cat-${preset.category.toLowerCase()}`}>
-                          {preset.category}
-                        </span>
+                        <div className="preset-badges-group">
+                          {renderScopePill(preset.scope)}
+                          <span className={`preset-category-badge cat-${preset.category.toLowerCase()}`}>
+                            {preset.category}
+                          </span>
+                        </div>
                       </div>
+
                       <p className="preset-desc">{preset.description}</p>
-                      <span className="preset-url" title={preset.url}>
-                        {preset.url}
-                      </span>
+
+                      <div className="preset-features-row">
+                        {preset.features.map((feat) => (
+                          <span key={feat} className="preset-feature-pill">
+                            • {feat}
+                          </span>
+                        ))}
+                      </div>
+
+                      <div className="preset-meta-footer">
+                        <span className="preset-url" title={preset.url}>
+                          {preset.url}
+                        </span>
+                        <span className="preset-target-hint">🎯 {preset.recommendedFor}</span>
+                      </div>
+
+                      {preset.warning && (
+                        <div className="preset-warning-notice">
+                          <span>⚠️ {preset.warning}</span>
+                        </div>
+                      )}
                     </div>
+
                     <div className="preset-card-action">
                       {isAlreadyAdded ? (
                         <span className="preset-subscribed-badge">✓ Subscribed</span>
@@ -321,6 +437,10 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
                               name: preset.name,
                               url: preset.url,
                               enabled: true,
+                              scope: preset.scope,
+                              category: preset.category,
+                              description: preset.description,
+                              recommendedFor: preset.recommendedFor,
                             })
                           }
                         >
@@ -344,3 +464,4 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
     </div>
   );
 };
+
