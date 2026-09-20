@@ -199,13 +199,22 @@ export function generateFilterList(
   metadata: FilterMetadata,
   format: FilterFormat,
 ): string {
-  const header = generateHeader(metadata, format);
-
   // Process rules based on format
-  const formattedRules = rules
+  const formattedRulesList = rules
     .map((rule) => formatRule(rule, format))
-    .filter(Boolean) // Remove empty strings
-    .join("\n");
+    .filter(Boolean); // Remove empty strings
+
+  const effectiveMeta: FilterMetadata = {
+    ...metadata,
+    stats: {
+      ...metadata.stats,
+      totalRules: metadata.stats?.totalRules ?? formattedRulesList.length,
+      uniqueRules: formattedRulesList.length,
+    },
+  };
+
+  const header = generateHeader(effectiveMeta, format);
+  const formattedRules = formattedRulesList.join("\n");
 
   return formattedRules ? `${header}${formattedRules}\n` : header;
 }

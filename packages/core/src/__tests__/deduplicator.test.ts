@@ -236,5 +236,15 @@ doubleclick.net
     expect(rulesText).toContain("10.0.0.1/24");
     expect(rulesText).toContain("||normal-domain.com^");
   });
+
+  test("stripRule handles cosmetic selectors with $ attribute matching without cutoffs", () => {
+    const key1 = deduplicator.stripRule('example.com##div[id$="-ad"]');
+    expect(key1).toContain('sel=div[id$="-ad"]');
+    expect(key1).not.toContain("mods=");
+
+    const key2 = deduplicator.stripRule('##a[href$=".apk"]');
+    expect(key2).toContain('sel=a[href$=".apk"]');
+    expect(key2).not.toContain("mods=");
+  });
 });
 

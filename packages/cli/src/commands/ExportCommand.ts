@@ -9,6 +9,7 @@ import {
   cleanDomainPattern,
   parseFilterList,
   filterDNSRules,
+  formatAdguardRule,
 } from "@blockingmachine/core";
 import type { FilterListMetadata } from "../types.js";
 import fs from "fs/promises";
@@ -83,9 +84,23 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
 
           // Format rules based on output format
           switch (format) {
-            case "adguard":
-              output = header + rules.join("\n");
+            case "adguard": {
+              const formattedRules =
+                parsedRules.length > 0
+                  ? parsedRules.map((r) => formatAdguardRule(r)).filter(Boolean)
+                  : rules;
+              const adgHeader = [
+                `! Title: ${meta.title}`,
+                `! Description: ${meta.description}`,
+                `! Homepage: ${meta.homepage}`,
+                `! Version: ${meta.version}`,
+                `! Last updated: ${meta.lastUpdated}`,
+                `! Rules count: ${formattedRules.length}`,
+                "",
+              ].join("\n");
+              output = adgHeader + formattedRules.join("\n");
               break;
+            }
             case "hosts": {
               const formattedRules: string[] = [];
               for (const rule of dnsSafeRules) {

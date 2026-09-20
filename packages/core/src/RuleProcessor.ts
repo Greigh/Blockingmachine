@@ -138,6 +138,43 @@ export function parseFilterList(
     const trimmedLine = line.trim();
     if (!trimmedLine) continue;
 
+    // Expand multi-domain hosts file lines (e.g. "0.0.0.0 ad1.com ad2.com # comment")
+    const hostsMatch = trimmedLine.match(
+      /^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+([^#]+)/,
+    );
+    if (hostsMatch) {
+      const ip = trimmedLine.split(/\s+/)[0];
+      const domainTokens = hostsMatch[1].trim().split(/\s+/).filter(Boolean);
+      if (domainTokens.length > 1) {
+        for (const dom of domainTokens) {
+          const subRule = `${ip} ${dom}`;
+          const ruleType = tempProcessor.classifyRule(subRule);
+          if (
+            ruleType &&
+            ruleType !== "comment" &&
+            ruleType !== "preprocessor" &&
+            ruleType !== "hint"
+          ) {
+            const metadata = createRuleMetadata(
+              source,
+              ruleType as RuleType,
+              subRule,
+            );
+            rules.push({
+              raw: subRule,
+              originalRule: subRule,
+              hash: "",
+              type: ruleType as RuleType,
+              isException: false,
+              domain: metadata.domain || dom.toLowerCase(),
+              metadata,
+            });
+          }
+        }
+        continue;
+      }
+    }
+
     const ruleType = tempProcessor.classifyRule(trimmedLine);
 
     if (
@@ -184,6 +221,43 @@ export async function* parseFilterListStream(
   for await (const line of rl) {
     const trimmedLine = line.replace(/^\uFEFF/, "").trim();
     if (!trimmedLine) continue;
+
+    // Expand multi-domain hosts file lines (e.g. "0.0.0.0 ad1.com ad2.com # comment")
+    const hostsMatch = trimmedLine.match(
+      /^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+([^#]+)/,
+    );
+    if (hostsMatch) {
+      const ip = trimmedLine.split(/\s+/)[0];
+      const domainTokens = hostsMatch[1].trim().split(/\s+/).filter(Boolean);
+      if (domainTokens.length > 1) {
+        for (const dom of domainTokens) {
+          const subRule = `${ip} ${dom}`;
+          const ruleType = tempProcessor.classifyRule(subRule);
+          if (
+            ruleType &&
+            ruleType !== "comment" &&
+            ruleType !== "preprocessor" &&
+            ruleType !== "hint"
+          ) {
+            const metadata = createRuleMetadata(
+              source,
+              ruleType as RuleType,
+              subRule,
+            );
+            yield {
+              raw: subRule,
+              originalRule: subRule,
+              hash: "",
+              type: ruleType as RuleType,
+              isException: false,
+              domain: metadata.domain || dom.toLowerCase(),
+              metadata,
+            };
+          }
+        }
+        continue;
+      }
+    }
 
     const ruleType = tempProcessor.classifyRule(trimmedLine);
     if (

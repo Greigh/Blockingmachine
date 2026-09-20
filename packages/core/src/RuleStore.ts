@@ -583,49 +583,67 @@ export class RuleStore {
       cleanRule.includes("##") ||
       cleanRule.includes("#@#") ||
       cleanRule.includes("#?#") ||
-      cleanRule.includes("#$?#")
+      cleanRule.includes("#$?#") ||
+      cleanRule.includes("#$#") ||
+      cleanRule.includes("#%#") ||
+      cleanRule.includes("$$")
     ) {
       // Cosmetic rule - extract domain part
-      const parts = cleanRule.split(/##|#@#|#\?#|#\$\?#/);
-      return parts[0] || null;
+      const parts = cleanRule.split(/##|#@#|#\?#|#\$\?#|#\$#|#%#|\$\$/);
+      return parts[0]?.trim() || null;
     }
 
     if (cleanRule.includes("$")) {
       // Rule with modifiers - extract part before $
       const parts = cleanRule.split("$");
-      return parts[0] || null;
+      return parts[0]?.trim() || null;
     }
 
     // Simple domain or pattern
-    return cleanRule || null;
+    return cleanRule.trim() || null;
   }
 
   private extractSelectorFromRule(rule: string): string | null {
     // Extract CSS/extended selector from cosmetic rules
     if (rule.includes("##")) {
       const parts = rule.split("##");
-      return parts[1] || null;
+      return parts.slice(1).join("##").trim() || null;
     }
 
     if (rule.includes("#@#")) {
       const parts = rule.split("#@#");
-      return parts[1] || null;
+      return parts.slice(1).join("#@#").trim() || null;
     }
 
     if (rule.includes("#?#")) {
       const parts = rule.split("#?#");
-      return parts[1] || null;
+      return parts.slice(1).join("#?#").trim() || null;
     }
 
     if (rule.includes("#$?#")) {
       const parts = rule.split("#$?#");
-      return parts[1] || null;
+      return parts.slice(1).join("#$?#").trim() || null;
+    }
+
+    if (rule.includes("#$#")) {
+      const parts = rule.split("#$#");
+      return parts.slice(1).join("#$#").trim() || null;
+    }
+
+    if (rule.includes("#%#")) {
+      const parts = rule.split("#%#");
+      return parts.slice(1).join("#%#").trim() || null;
+    }
+
+    if (rule.includes("$$")) {
+      const parts = rule.split("$$");
+      return parts.slice(1).join("$$").trim() || null;
     }
 
     // Match short cosmetic rule syntax: example.com#.class or example.com#,selector
     const shortMatch = rule.match(/(?:#\.|\#,)(.+)/);
     if (shortMatch) {
-      return shortMatch[1] || null;
+      return shortMatch[1].trim() || null;
     }
 
     return null;

@@ -605,7 +605,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           for (let i = 0; i < rulesLen; i++) {
             const rule = rules[i];
             if (!rule || !rule.raw) continue;
-            const strippedRule = deduplicator.stripRule(rule.raw);
+            const strippedRule =
+              deduplicator.stripRule(rule.raw) || rule.raw.toLowerCase().trim();
             if (!uniqueRulesSet.has(strippedRule)) {
               uniqueRulesSet.add(strippedRule);
               uniqueRules.push(rule);
@@ -635,7 +636,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           let addedCustom = 0;
           for (const rule of customRules) {
             if (!rule || !rule.raw) continue;
-            const stripped = deduplicator.stripRule(rule.raw);
+            const stripped =
+              deduplicator.stripRule(rule.raw) || rule.raw.toLowerCase().trim();
             if (!uniqueRulesSet.has(stripped)) {
               uniqueRulesSet.add(stripped);
               uniqueRules.push(rule);
