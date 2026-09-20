@@ -113,4 +113,36 @@ describe("advanced-formatter", () => {
     );
     expect(formatRule(ruleWithoutDomain, "domains")).toBe("doubleclick.net");
   });
+
+  test("generateFilterList preserves cosmetic/scriptlet rules in AdGuard and excludes them from hosts", () => {
+    const mixedListText = `
+||tracker.com^
+0.0.0.0 telemetry.io
+nytimes.com##.sponsor-banner
+||cdn.com/tracking/pixel.js$script
+example.com#$#abort-current-inline-script
+@@||safe.tracker.com^
+    `.trim();
+
+    const mixedRules = parseFilterList(mixedListText, "mixed-source");
+    const hostsOutput = generateFilterList(mixedRules, metadata, "hosts");
+    const adguardOutput = generateFilterList(mixedRules, metadata, "adguard");
+
+    // Hosts output: Must contain domain blocks and exception comment
+    expect(hostsOutput).toContain("0.0.0.0 tracker.com");
+    expect(hostsOutput).toContain("0.0.0.0 telemetry.io");
+    expect(hostsOutput).toContain("# EXCEPTION: @@||safe.tracker.com^");
+    // Hosts output: Must NEVER convert cosmetic or path rules to domain blocks
+    expect(hostsOutput).not.toContain("0.0.0.0 nytimes.com");
+    expect(hostsOutput).not.toContain("0.0.0.0 cdn.com");
+    expect(hostsOutput).not.toContain("0.0.0.0 example.com");
+
+    // AdGuard output: Must preserve cosmetic, scriptlet, and path rules
+    expect(adguardOutput).toContain("nytimes.com##.sponsor-banner");
+    expect(adguardOutput).toContain("||cdn.com/tracking/pixel.js$script");
+    expect(adguardOutput).toContain("example.com#$#abort-current-inline-script");
+    expect(adguardOutput).toContain("||tracker.com^");
+    expect(adguardOutput).toContain("||telemetry.io^");
+    expect(adguardOutput).toContain("@@||safe.tracker.com^");
+  });
 });

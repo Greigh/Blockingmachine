@@ -137,4 +137,117 @@ describe("formatters & headers", () => {
     const abpHeader = generateHeader(metadata, "abp");
     expect(abpHeader).toMatch(/^! Title: Test Blocklist/m);
   });
+
+  test("accurately formats rules according to their actual rule kind", () => {
+    // 1. Cosmetic rules must NEVER be emitted as DNS domain blocks
+    const cosmeticRule: StoredRule = {
+      raw: "youtube.com##.ytd-ad-slot-renderer",
+      originalRule: "youtube.com##.ytd-ad-slot-renderer",
+      hash: "cos1",
+      type: "cosmetic",
+      domain: "youtube.com",
+      isException: false,
+      metadata: {
+        sources: ["easylist"],
+        dateAdded: new Date(),
+        lastUpdated: new Date(),
+        enabled: true,
+        sourceInfo: { category: "cosmetic", trusted: true, url: "", priority: 1 },
+        tags: [],
+        domain: "youtube.com",
+      },
+    };
+
+    expect(formatRuleForType(cosmeticRule, "hosts")).toBe("");
+    expect(formatRuleForType(cosmeticRule, "dnsmasq")).toBe("");
+    expect(formatRuleForType(cosmeticRule, "unbound")).toBe("");
+    expect(formatRuleForType(cosmeticRule, "domains")).toBe("");
+    // But preserved in browser formats
+    expect(formatRuleForType(cosmeticRule, "adguard")).toBe(
+      "youtube.com##.ytd-ad-slot-renderer",
+    );
+    expect(formatRuleForType(cosmeticRule, "abp")).toBe(
+      "youtube.com##.ytd-ad-slot-renderer",
+    );
+
+    // 2. Browser path rules must NEVER be emitted as whole-domain DNS blocks
+    const pathRule: StoredRule = {
+      raw: "||example.com/ads/tracker.js$script",
+      originalRule: "||example.com/ads/tracker.js$script",
+      hash: "path1",
+      type: "blocking",
+      domain: "example.com",
+      isException: false,
+      metadata: {
+        sources: ["easylist"],
+        dateAdded: new Date(),
+        lastUpdated: new Date(),
+        enabled: true,
+        sourceInfo: { category: "ads", trusted: true, url: "", priority: 1 },
+        tags: [],
+        domain: "example.com",
+      },
+    };
+
+    expect(formatRuleForType(pathRule, "hosts")).toBe("");
+    expect(formatRuleForType(pathRule, "dnsmasq")).toBe("");
+    expect(formatRuleForType(pathRule, "unbound")).toBe("");
+    expect(formatRuleForType(pathRule, "adguard")).toBe(
+      "||example.com/ads/tracker.js$script",
+    );
+
+    // 3. Hosts file rules (0.0.0.0 domain) formatted into proper ABP/AdGuard syntax
+    const hostsLineRule: StoredRule = {
+      raw: "0.0.0.0 telemetry.tracker.com",
+      originalRule: "0.0.0.0 telemetry.tracker.com",
+      hash: "host1",
+      type: "blocking",
+      domain: "telemetry.tracker.com",
+      isException: false,
+      metadata: {
+        sources: ["stevenblack"],
+        dateAdded: new Date(),
+        lastUpdated: new Date(),
+        enabled: true,
+        sourceInfo: { category: "malware", trusted: true, url: "", priority: 1 },
+        tags: [],
+        domain: "telemetry.tracker.com",
+      },
+    };
+
+    expect(formatRuleForType(hostsLineRule, "hosts")).toBe(
+      "0.0.0.0 telemetry.tracker.com",
+    );
+    expect(formatRuleForType(hostsLineRule, "adguard")).toBe(
+      "||telemetry.tracker.com^",
+    );
+    expect(formatRuleForType(hostsLineRule, "abp")).toBe(
+      "||telemetry.tracker.com^",
+    );
+
+    // 4. Scriptlet rules preserved in AdGuard and omitted from DNS
+    const scriptletRule: StoredRule = {
+      raw: "example.com#$#abort-current-inline-script",
+      originalRule: "example.com#$#abort-current-inline-script",
+      hash: "sc1",
+      type: "scriptlet",
+      domain: "example.com",
+      isException: false,
+      metadata: {
+        sources: ["ubo"],
+        dateAdded: new Date(),
+        lastUpdated: new Date(),
+        enabled: true,
+        sourceInfo: { category: "scriptlet", trusted: true, url: "", priority: 1 },
+        tags: [],
+        domain: "example.com",
+      },
+    };
+
+    expect(formatRuleForType(scriptletRule, "hosts")).toBe("");
+    expect(formatRuleForType(scriptletRule, "dnsmasq")).toBe("");
+    expect(formatRuleForType(scriptletRule, "adguard")).toBe(
+      "example.com#$#abort-current-inline-script",
+    );
+  });
 });
