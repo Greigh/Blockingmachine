@@ -222,6 +222,7 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
           <div className="bulk-buttons-group">
             {bulkUrls && (
               <button
+                type="button"
                 className="secondary-button"
                 onClick={() => setBulkUrls('')}
                 disabled={isImporting}
@@ -230,13 +231,65 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
               </button>
             )}
             <button
-              className="primary-button"
+              type="button"
+              className="primary-button import-submit-btn"
               onClick={handleBulkImport}
               disabled={isImporting || lineCount === 0}
             >
-              {isImporting ? 'Importing Sources…' : `Import ${lineCount > 0 ? `(${lineCount})` : ''}`}
+              {isImporting ? (
+                <span>Importing Feeds…</span>
+              ) : (
+                <>
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                  </svg>
+                  <span>Import {lineCount > 0 ? `${lineCount} Feed${lineCount === 1 ? '' : 's'}` : 'Feeds'}</span>
+                </>
+              )}
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* Quick Insert Templates & Engine Processing Strip */}
+      <div className="desktop-card bulk-quick-templates-card">
+        <div className="bulk-templates-header">
+          <div>
+            <h4 className="bulk-templates-title">Quick-Insert Well-Known Feeds</h4>
+            <span className="bulk-templates-sub">Click to append popular filter lists directly into your import queue</span>
+          </div>
+          <div className="engine-feature-pills">
+            <span className="feature-pill">⚡ 5x Parallel Fetch</span>
+            <span className="feature-pill">🔍 Auto-Deduplication</span>
+          </div>
+        </div>
+
+        <div className="quick-feed-chips-grid">
+          {[
+            { name: 'EasyList Ads', url: 'https://easylist.to/easylist/easylist.txt' },
+            { name: 'EasyPrivacy Tracking', url: 'https://easylist.to/easylist/easyprivacy.txt' },
+            { name: 'AdGuard DNS Filter', url: 'https://filters.adtidy.org/extension/chromium/filters/15.txt' },
+            { name: 'uBlock Filters', url: 'https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.txt' },
+            { name: 'StevenBlack Unified Hosts', url: 'https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts' },
+            { name: 'Peter Lowe Adservers', url: 'https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblock&showintro=0&mimetype=plaintext' },
+          ].map((feed) => (
+            <button
+              key={feed.url}
+              type="button"
+              className="quick-feed-chip"
+              onClick={() => {
+                setBulkUrls((prev) => {
+                  const trimmed = prev.trim();
+                  if (trimmed.includes(feed.url)) return prev;
+                  return trimmed ? `${trimmed}\n${feed.url}` : feed.url;
+                });
+              }}
+              title={`Click to append ${feed.name}`}
+            >
+              <span className="chip-plus">+</span>
+              <span className="chip-name">{feed.name}</span>
+            </button>
+          ))}
         </div>
       </div>
     </div>

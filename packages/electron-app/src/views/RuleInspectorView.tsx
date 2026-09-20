@@ -164,6 +164,45 @@ export const RuleInspectorView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Empty State / How Inspection Works */}
+      {!result && !isSearching && (
+        <div className="inspector-guide-wrapper">
+          <div className="inspector-guide-header">
+            <span className="guide-title">How Domain Matching & Resolution Works</span>
+            <span className="guide-sub">Every domain query is verified through three engine stages in under 2ms</span>
+          </div>
+
+          <div className="inspector-stages-grid">
+            <div className="desktop-card stage-card">
+              <div className="stage-icon-wrap icon-match">🛑</div>
+              <div className="stage-number-badge">Stage 1</div>
+              <h4 className="stage-title">Network & Wildcard Match</h4>
+              <p className="stage-desc">
+                Tests domain against compiled <code>||domain.com^</code> rules, host IPs (<code>0.0.0.0</code>), and wildcards across all active feeds.
+              </p>
+            </div>
+
+            <div className="desktop-card stage-card">
+              <div className="stage-icon-wrap icon-exception">🟢</div>
+              <div className="stage-number-badge">Stage 2</div>
+              <h4 className="stage-title">Exception Override Layer</h4>
+              <p className="stage-desc">
+                Evaluates priority allowlist rules (<code>@@||domain^</code>) to unbreak websites and ensure trusted destinations are never blocked.
+              </p>
+            </div>
+
+            <div className="desktop-card stage-card">
+              <div className="stage-icon-wrap icon-trace">📍</div>
+              <div className="stage-number-badge">Stage 3</div>
+              <h4 className="stage-title">Origin Feed Attribution</h4>
+              <p className="stage-desc">
+                Identifies which specific subscribed filter list (e.g. AdGuard Base, EasyList) contributed the rule, enabling granular tuning.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
