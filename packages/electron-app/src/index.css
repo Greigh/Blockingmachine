@@ -3547,50 +3547,284 @@ input:checked + .mac-slider:before {
   letter-spacing: -0.01em;
 }
 
-/* Feed Type Category Badges */
-.source-type-pill {
+/* Source Badges & Taxonomy */
+.source-badges-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.source-scope-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  letter-spacing: 0.01em;
+}
+
+.source-scope-badge.scope-dns {
+  background: rgba(10, 132, 255, 0.15);
+  color: #0a84ff;
+  border: 1px solid rgba(10, 132, 255, 0.3);
+}
+
+.source-scope-badge.scope-browser {
+  background: rgba(191, 90, 242, 0.15);
+  color: #bf5af2;
+  border: 1px solid rgba(191, 90, 242, 0.3);
+}
+
+.source-scope-badge.scope-hybrid {
+  background: rgba(255, 159, 10, 0.15);
+  color: #ff9f0a;
+  border: 1px solid rgba(255, 159, 10, 0.3);
+}
+
+.source-category-badge {
   font-size: 10px;
   font-weight: 600;
-  padding: 1.5px 6px;
+  padding: 2px 6px;
   border-radius: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  text-transform: capitalize;
+  letter-spacing: 0.02em;
 }
 
-.source-type-pill.tag-dns {
-  background: rgba(0, 122, 255, 0.14);
-  color: #0a84ff;
-  border: 1px solid rgba(0, 122, 255, 0.25);
-}
-
-.source-type-pill.tag-adguard {
+.source-category-badge.cat-ads {
   background: rgba(52, 199, 89, 0.14);
   color: #30d158;
-  border: 1px solid rgba(52, 199, 89, 0.25);
+  border: 1px solid rgba(52, 199, 89, 0.28);
 }
 
-.source-type-pill.tag-ublock {
-  background: rgba(175, 82, 222, 0.14);
-  color: #bf5af2;
-  border: 1px solid rgba(175, 82, 222, 0.25);
-}
-
-.source-type-pill.tag-privacy {
+.source-category-badge.cat-privacy {
   background: rgba(255, 149, 0, 0.14);
   color: #ff9f0a;
-  border: 1px solid rgba(255, 149, 0, 0.25);
+  border: 1px solid rgba(255, 149, 0, 0.28);
 }
 
-.source-type-pill.tag-security {
+.source-category-badge.cat-security {
   background: rgba(255, 59, 48, 0.14);
   color: #ff453a;
-  border: 1px solid rgba(255, 59, 48, 0.25);
+  border: 1px solid rgba(255, 59, 48, 0.28);
 }
 
-.source-type-pill.tag-default {
+.source-category-badge.cat-annoyances {
+  background: rgba(100, 210, 255, 0.14);
+  color: #64d2ff;
+  border: 1px solid rgba(100, 210, 255, 0.28);
+}
+
+.source-category-badge.cat-social {
+  background: rgba(218, 143, 255, 0.14);
+  color: #da8fff;
+  border: 1px solid rgba(218, 143, 255, 0.28);
+}
+
+.source-category-badge.cat-mobile {
+  background: rgba(48, 209, 88, 0.14);
+  color: #30d158;
+  border: 1px solid rgba(48, 209, 88, 0.28);
+}
+
+.source-category-badge.cat-unbreak {
+  background: rgba(10, 132, 255, 0.14);
+  color: #0a84ff;
+  border: 1px solid rgba(10, 132, 255, 0.28);
+}
+
+.source-category-badge.cat-circumvention {
+  background: rgba(255, 214, 10, 0.14);
+  color: #ffd60a;
+  border: 1px solid rgba(255, 214, 10, 0.28);
+}
+
+.source-category-badge.cat-custom {
   background: rgba(255, 255, 255, 0.08);
   color: var(--secondary-color);
   border: 1px solid var(--border-color);
+}
+
+/* Scope Filters Toolbar */
+.sources-scope-filter-bar,
+.presets-scope-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.scope-filter-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--secondary-color);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 4px;
+}
+
+.scope-filter-pill {
+  background: var(--card-bg, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.scope-filter-pill:hover {
+  border-color: var(--primary-color);
+  background: rgba(0, 122, 255, 0.08);
+}
+
+.scope-filter-pill.active {
+  background: var(--primary-color);
+  color: #ffffff;
+  border-color: var(--primary-color);
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(0, 122, 255, 0.35);
+}
+
+/* Source Details & Context */
+.source-description-text {
+  font-size: 11.5px;
+  color: var(--text-color);
+  margin: 3px 0 4px;
+  line-height: 1.4;
+  opacity: 0.9;
+}
+
+.source-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.source-target-hint,
+.preset-target-hint {
+  font-size: 11px;
+  color: var(--secondary-color);
+  font-weight: 500;
+}
+
+.source-warning-notice,
+.preset-warning-notice {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #ff9f0a;
+  background: rgba(255, 159, 10, 0.12);
+  border: 1px solid rgba(255, 159, 10, 0.28);
+  padding: 3px 8px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Live Source Intelligence Preview Box */
+.source-intelligence-preview-box {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(0, 122, 255, 0.06);
+  border: 1px solid rgba(0, 122, 255, 0.22);
+  animation: fadeIn 0.18s ease;
+}
+
+.source-intelligence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.source-intelligence-badge-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #0a84ff;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.source-intelligence-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.source-intelligence-desc {
+  font-size: 12px;
+  color: var(--text-color);
+  margin: 0 0 6px;
+  line-height: 1.4;
+}
+
+.source-intelligence-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+}
+
+.source-intelligence-target {
+  color: var(--secondary-color);
+}
+
+.source-intelligence-warning {
+  color: #ff9f0a;
+  font-weight: 500;
+}
+
+/* Presets Modal Controls Stack & Feature Badges */
+.presets-controls-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.preset-badges-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.preset-features-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 4px 0;
+}
+
+.preset-feature-pill {
+  font-size: 10.5px;
+  color: var(--secondary-color);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1.5px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+}
+
+.preset-meta-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
 }
 
 .health-pill {

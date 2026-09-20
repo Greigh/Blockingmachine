@@ -16,7 +16,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@blockingmachine/core": ["../core/src/index.ts"]
+      "@blockingmachine/core": ["../core/src/index.ts"],
+      "@blockingmachine/core/sources": ["../core/src/sources.ts"]
     },
     "typeRoots": [
       "./node_modules/@types",

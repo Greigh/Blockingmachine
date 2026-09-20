@@ -35,6 +35,9 @@ module.exports = {
     })
   ],
   resolve: {
-    extensions: ['.js', '.ts', '.jsx', '.tsx', '.css']
+    extensions: ['.js', '.ts', '.jsx', '.tsx', '.css'],
+    alias: {
+      '@blockingmachine/core/sources': path.resolve(__dirname, '../core/src/sources.ts')
+    }
   }
 };

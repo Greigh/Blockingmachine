@@ -19,6 +19,10 @@ export type CategoryName =
   | "gaming"
   | "dns"
   | "annoyances"
+  | "ads"
+  | "unbreak"
+  | "social"
+  | "anti-circumvention"
   | "custom";
 
 export interface Category {
@@ -108,6 +112,30 @@ export const CATEGORIES: Record<CategoryName, Category> = {
     priority: 50,
     enabled: false,
   },
+  ads: {
+    name: "ads",
+    description: "Advertising domains",
+    priority: 10,
+    enabled: true,
+  },
+  unbreak: {
+    name: "unbreak",
+    description: "Compatibility and exception allowlists",
+    priority: 0,
+    enabled: true,
+  },
+  social: {
+    name: "social",
+    description: "Social tracking beacons and widgets",
+    priority: 30,
+    enabled: false,
+  },
+  "anti-circumvention": {
+    name: "anti-circumvention",
+    description: "Anti-adblock bypass and circumvention",
+    priority: 15,
+    enabled: true,
+  },
   custom: {
     name: "custom",
     description: "Custom domains",
@@ -122,6 +150,7 @@ export interface Source {
   url: string;
   category: CategoryName;
   enabled: boolean;
+  scope?: "dns" | "browser" | "hybrid";
   priority?: number;
   trusted?: boolean;
 }

@@ -209,9 +209,21 @@ describe('Electron App Core Utilities & IPC Logic', () => {
   });
 
   describe('Curated Defense Packs & Presets Catalog', () => {
-    test('PRESET_BUNDLES contains curated bundles with valid feeds and metadata', async () => {
-      const { PRESET_BUNDLES } = await import('../views/PresetsModal.js');
+    test('PRESET_BUNDLES and PRESET_CATALOG contain curated feeds with layer scope taxonomy', async () => {
+      const { PRESET_BUNDLES, PRESET_CATALOG } = await import('../views/PresetsModal.js');
       expect(PRESET_BUNDLES.length).toBeGreaterThanOrEqual(3);
+      expect(PRESET_CATALOG.length).toBeGreaterThanOrEqual(10);
+
+      for (const preset of PRESET_CATALOG) {
+        expect(preset.name).toBeTruthy();
+        expect(preset.url).toMatch(/^https?:\/\//);
+        expect(['dns', 'browser', 'hybrid']).toContain(preset.scope);
+        expect(preset.category).toBeTruthy();
+        expect(preset.description).toBeTruthy();
+        expect(Array.isArray(preset.features)).toBe(true);
+        expect(preset.features.length).toBeGreaterThan(0);
+        expect(preset.recommendedFor).toBeTruthy();
+      }
 
       for (const bundle of PRESET_BUNDLES) {
         expect(bundle.id).toBeTruthy();
@@ -223,6 +235,7 @@ describe('Electron App Core Utilities & IPC Logic', () => {
         for (const item of bundle.items) {
           expect(item.name).toBeTruthy();
           expect(item.url).toMatch(/^https?:\/\//);
+          expect(['dns', 'browser', 'hybrid']).toContain(item.scope);
           expect(item.category).toBeTruthy();
         }
       }
