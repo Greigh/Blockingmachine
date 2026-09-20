@@ -4,7 +4,12 @@ import {
   type CommandResult,
 } from "./BaseCommand.js";
 import type { ExportOptions } from "../types.js";
-import { createPaths, cleanDomainPattern } from "@blockingmachine/core";
+import {
+  createPaths,
+  cleanDomainPattern,
+  parseFilterList,
+  filterDNSRules,
+} from "@blockingmachine/core";
 import type { FilterListMetadata } from "../types.js";
 import fs from "fs/promises";
 import path from "path";
@@ -37,9 +42,10 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
       // Read the imported rules
       const inputFile = path.join(paths.output.dir, "imported-rules.txt");
       let rules: string[] = [];
+      let content = "";
 
       try {
-        const content = await fs.readFile(inputFile, "utf-8");
+        content = await fs.readFile(inputFile, "utf-8");
         rules = content.split("\n").filter((rule) => rule.trim());
         this.logger.info(`Loaded ${rules.length} rules from: ${inputFile}`);
       } catch (error) {
@@ -47,6 +53,9 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
           `Could not read rules from ${inputFile}, creating empty filter lists`,
         );
       }
+
+      const parsedRules = content ? parseFilterList(content) : [];
+      const dnsSafeRules = filterDNSRules(parsedRules);
 
       // Generate filter lists in different formats
       const outputPath = options.outputPath || paths.output.dir;
@@ -78,40 +87,50 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
               break;
             case "hosts": {
               const formattedRules: string[] = [];
-              for (const rule of rules) {
-                const trimmed = rule.trim();
-                if (!trimmed) continue;
-                if (trimmed.startsWith("!") || trimmed.startsWith("#")) {
-                  formattedRules.push(`# ${trimmed.replace(/^[!#]\s*/, "")}`);
-                } else if (trimmed.startsWith("@@")) {
-                  formattedRules.push(`# EXCEPTION: ${trimmed}`);
+              for (const rule of dnsSafeRules) {
+                if (rule.isException || rule.raw.startsWith("@@")) {
+                  formattedRules.push(`# EXCEPTION: ${rule.raw}`);
                 } else {
-                  const domain = cleanDomainPattern(trimmed);
+                  const domain = cleanDomainPattern(rule.raw) || rule.domain;
                   if (domain) {
                     formattedRules.push(`0.0.0.0 ${domain}`);
                   }
                 }
               }
-              output = header.replace(/!/g, "#") + formattedRules.join("\n");
+              const hostsHeader = [
+                `# Title: ${meta.title}`,
+                `# Description: ${meta.description}`,
+                `# Homepage: ${meta.homepage}`,
+                `# Version: ${meta.version}`,
+                `# Last updated: ${meta.lastUpdated}`,
+                `# Rules count: ${formattedRules.length}`,
+                "",
+              ].join("\n");
+              output = hostsHeader + formattedRules.join("\n");
               break;
             }
             case "dnsmasq": {
               const formattedRules: string[] = [];
-              for (const rule of rules) {
-                const trimmed = rule.trim();
-                if (!trimmed) continue;
-                if (trimmed.startsWith("!") || trimmed.startsWith("#")) {
-                  formattedRules.push(`# ${trimmed.replace(/^[!#]\s*/, "")}`);
-                } else if (trimmed.startsWith("@@")) {
-                  formattedRules.push(`# EXCEPTION: ${trimmed}`);
+              for (const rule of dnsSafeRules) {
+                if (rule.isException || rule.raw.startsWith("@@")) {
+                  formattedRules.push(`# EXCEPTION: ${rule.raw}`);
                 } else {
-                  const domain = cleanDomainPattern(trimmed);
+                  const domain = cleanDomainPattern(rule.raw) || rule.domain;
                   if (domain) {
                     formattedRules.push(`address=/${domain}/0.0.0.0`);
                   }
                 }
               }
-              output = header.replace(/!/g, "#") + formattedRules.join("\n");
+              const dnsmasqHeader = [
+                `# Title: ${meta.title}`,
+                `# Description: ${meta.description}`,
+                `# Homepage: ${meta.homepage}`,
+                `# Version: ${meta.version}`,
+                `# Last updated: ${meta.lastUpdated}`,
+                `# Rules count: ${formattedRules.length}`,
+                "",
+              ].join("\n");
+              output = dnsmasqHeader + formattedRules.join("\n");
               break;
             }
             default:

@@ -68,6 +68,14 @@ const BulkImportManager: React.FC<BulkImportManagerProps> = ({
 }) => {
   const [bulkUrls, setBulkUrls] = useState('');
   const [isImporting, setIsImporting] = useState(false);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const handleBulkImport = async () => {
     setError(null);
@@ -80,7 +88,7 @@ const BulkImportManager: React.FC<BulkImportManagerProps> = ({
       .filter((url) => url.length > 0 && !url.startsWith('#') && !url.startsWith('!'));
     if (urls.length === 0) {
       setError('No valid URLs entered in the bulk import field.');
-      setIsImporting(false);
+      if (isMountedRef.current) setIsImporting(false);
       return;
     }
 
@@ -123,7 +131,7 @@ const BulkImportManager: React.FC<BulkImportManagerProps> = ({
         finalSuccessMessage =
           `Imported ${newSources.length} new sources.` +
           (skippedCount > 0 ? ` Skipped ${skippedCount} duplicates.` : '');
-        setBulkUrls('');
+        if (isMountedRef.current) setBulkUrls('');
       } catch (saveError) {
         finalErrorMessage = `Failed to save imported sources. ${saveError instanceof Error ? saveError.message : ''}`;
       }
@@ -140,7 +148,7 @@ const BulkImportManager: React.FC<BulkImportManagerProps> = ({
     if (finalSuccessMessage) setSuccessMessage(finalSuccessMessage);
     if (finalErrorMessage) setError(finalErrorMessage);
 
-    setIsImporting(false);
+    if (isMountedRef.current) setIsImporting(false);
   };
 
   return (
@@ -189,6 +197,14 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editUrl, setEditUrl] = useState('');
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // --- Handlers ---
   const handleAddSource = () => {
@@ -225,8 +241,10 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
     saveSources(updatedSources, `Source "${newSource.name}" added.`)
       .then(() => {
         // Clear input fields only on successful save
-        setNewSourceName('');
-        setNewSourceUrl('');
+        if (isMountedRef.current) {
+          setNewSourceName('');
+          setNewSourceUrl('');
+        }
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : 'Failed to add source.');
@@ -305,9 +323,11 @@ const SourcesManager: React.FC<SourcesManagerProps> = ({
     saveSources(updatedSources, `Source "${editName.trim()}" updated.`)
       .then(() => {
         // Exit edit mode only on successful save
-        setEditingIndex(null);
-        setEditName('');
-        setEditUrl('');
+        if (isMountedRef.current) {
+          setEditingIndex(null);
+          setEditName('');
+          setEditUrl('');
+        }
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : 'Failed to update source.');
@@ -659,9 +679,18 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
     customRulesCount: 0,
     lastProcessedTime: null,
   });
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Load dashboard stats
   useEffect(() => {
+    let isMounted = true;
     const loadStats = async () => {
       try {
         // Get current sources
@@ -681,38 +710,31 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
         // Get last process time
         const lastProcessTime = await window.electron.getLastProcessTime();
 
-        setDashboardStats({
-          enabledSources,
-          totalSources: sources.length,
-          customRulesCount,
-          lastProcessedTime: lastProcessTime,
-        });
+        if (isMounted) {
+          setDashboardStats({
+            enabledSources,
+            totalSources: sources.length,
+            customRulesCount,
+            lastProcessedTime: lastProcessTime,
+          });
+        }
       } catch (err) {
         console.error('Failed to load dashboard stats:', err);
       }
     };
 
     loadStats();
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (
-        e.key === 'F12' ||
-        (e.metaKey && e.altKey && e.key.toLowerCase() === 'i') ||
-        (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'i')
-      ) {
-        e.preventDefault();
-      }
+    return () => {
+      isMounted = false;
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
   }, []);
 
   // Listen for progress updates
   useEffect(() => {
     const onProgressUpdate = (data: { status: string; percent: number }) => {
-      setProgress(data);
+      if (isMountedRef.current) {
+        setProgress(data);
+      }
     };
 
     const unsubscribe = window.electron.onProcessProgress(onProgressUpdate);
@@ -734,19 +756,23 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
 
     try {
       const result = await window.electron.runImportProcess();
-      setLastResult(result);
+      if (isMountedRef.current) {
+        setLastResult(result);
+      }
 
       // Refresh dashboard stats after processing
       const sources = await window.electron.getSources();
       const lastProcessTime = await window.electron.getLastProcessTime();
-      setDashboardStats((prev) => ({
-        ...prev,
-        enabledSources: sources.filter((s: FilterSource) => s.enabled).length,
-        totalSources: sources.length,
-        lastProcessedTime: lastProcessTime,
-      }));
+      if (isMountedRef.current) {
+        setDashboardStats((prev) => ({
+          ...prev,
+          enabledSources: sources.filter((s: FilterSource) => s.enabled).length,
+          totalSources: sources.length,
+          lastProcessedTime: lastProcessTime,
+        }));
+      }
 
-      if (!result.success) {
+      if (!result.success && isMountedRef.current) {
         setError(
           result.error || 'An unknown error occurred during processing.'
         );
@@ -755,10 +781,14 @@ const ProcessingControls: React.FC<ProcessingControlsProps> = ({
       console.error('Error running process:', err);
       const message =
         err instanceof Error ? err.message : 'An unexpected error occurred.';
-      setError(message);
+      if (isMountedRef.current) {
+        setError(message);
+      }
     } finally {
-      setIsLoading(false);
-      setProgress(null);
+      if (isMountedRef.current) {
+        setIsLoading(false);
+        setProgress(null);
+      }
     }
   };
 
@@ -1253,6 +1283,20 @@ function App() {
         window.electron.removeAllListeners?.('open-settings');
       };
     }
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (
+        e.key === 'F12' ||
+        (e.metaKey && e.altKey && e.key.toLowerCase() === 'i') ||
+        (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'i')
+      ) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
   }, []);
 
   useEffect(() => {

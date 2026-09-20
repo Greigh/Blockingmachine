@@ -108,4 +108,16 @@ describe("RuleStore", () => {
     expect(stats.unblocking).toBe(0);
     expect(stats.cosmetic).toBe(0);
   });
+
+  test("handles extended cosmetic rules (#?#) and scriptlet exceptions (#$?#) without invalidating them", () => {
+    store.addRule("example.com#?#.ad-banner:has(> .sponsored)", "ubo-source");
+    store.addRule("example.com#$?#abort-current-inline-script", "scriptlet-source");
+    store.addRule("##.generic-ad", "generic-source");
+
+    const rules = store.getUniqueRules();
+    expect(rules).toHaveLength(3);
+    const stats = store.getStats();
+    expect(stats.invalid).toBe(0);
+    expect(stats.cosmetic).toBe(3);
+  });
 });

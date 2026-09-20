@@ -64,4 +64,8 @@ async function addIndexesToRules(): Promise<void> {
   await StoredRuleModel.collection.createIndex({ domain: 1 });
   await StoredRuleModel.collection.createIndex({ type: 1 });
   await StoredRuleModel.collection.createIndex({ hash: 1 }, { unique: true });
+  await StoredRuleModel.collection.createIndex({
+    "metadata.sourceInfo.category": 1,
+  });
+  await StoredRuleModel.collection.createIndex({ "metadata.tags": 1 });
 }

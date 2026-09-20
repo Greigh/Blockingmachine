@@ -47,24 +47,39 @@ function generateHeader(
 }
 
 function formatRuleForType(rule: StoredRule, format: SupportedFormat): string {
-  if (!rule.domain) return rule.raw;
+  const isException =
+    rule.type === "exception" ||
+    rule.raw.startsWith("@@") ||
+    rule.raw.includes("#@#");
 
   switch (format) {
     case "hosts":
+      if (isException) return `# EXCEPTION: ${rule.raw}`;
+      if (!rule.domain) return "";
       return `0.0.0.0 ${rule.domain}`;
     case "dnsmasq":
+      if (isException) return `# EXCEPTION: ${rule.raw}`;
+      if (!rule.domain) return "";
       return `address=/${rule.domain}/0.0.0.0`;
     case "unbound":
+      if (isException) return `# EXCEPTION: ${rule.raw}`;
+      if (!rule.domain) return "";
       return `local-zone: "${rule.domain}" redirect\nlocal-data: "${rule.domain} A 0.0.0.0"`;
     case "bind":
+      if (isException) return `# EXCEPTION: ${rule.raw}`;
+      if (!rule.domain) return "";
       return `zone "${rule.domain}" { type master; file "null.zone.file"; };`;
     case "privoxy":
-      // Privoxy requires domain entries like ".example.com" inside action files
+      if (isException) return `# EXCEPTION: ${rule.raw}`;
+      if (!rule.domain) return "";
       return `.${rule.domain}`;
     case "shadowrocket":
+      if (isException) return `# EXCEPTION: ${rule.raw}`;
+      if (!rule.domain) return "";
       return `DOMAIN-SUFFIX,${rule.domain},REJECT`;
     case "adguard":
     case "abp":
+    case "all":
       return rule.raw;
     default:
       return rule.raw;
@@ -81,7 +96,9 @@ export async function exportFormat(
   try {
     await fs.mkdir(outputDir, { recursive: true });
 
-    const formattedRules = rules.map((rule) => formatRuleForType(rule, format));
+    const formattedRules = rules
+      .map((rule) => formatRuleForType(rule, format))
+      .filter((line) => Boolean(line && line.trim()));
     const header = generateHeader(meta, format);
     const content = [header, ...formattedRules].join("\n");
 
@@ -102,22 +119,21 @@ export async function exportWithOptions(
   const query: any = {};
 
   if (options.categories?.length) {
-    query.category = { $in: options.categories };
+    query["metadata.sourceInfo.category"] = { $in: options.categories };
   }
 
   if (options.excludeCategories?.length) {
-    query.category = { ...query.category, $nin: options.excludeCategories };
-  }
-
-  if (options.minPriority) {
-    query.priority = { $gte: options.minPriority };
+    query["metadata.sourceInfo.category"] = {
+      ...(query["metadata.sourceInfo.category"] || {}),
+      $nin: options.excludeCategories,
+    };
   }
 
   if (options.tags?.length) {
-    query.tags = { $in: options.tags };
+    query["metadata.tags"] = { $in: options.tags };
   }
 
-  const rules = await StoredRuleModel.find(query).sort({ priority: -1 }).lean();
+  const rules = (await StoredRuleModel.find(query).lean()) as unknown as StoredRule[];
 
   for (const format of options.formats || ["adguard"]) {
     // Ensure format is a SupportedFormat
