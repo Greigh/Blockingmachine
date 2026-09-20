@@ -6,7 +6,7 @@
   "license": "BSD-3-Clause",
   "type": "module",
   "engines": {
-    "node": ">=14.16"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "build": "tsc --skipLibCheck && chmod +x dist/cli.js",
