@@ -175,6 +175,16 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
     }
   };
 
+  const getSourceTag = (name: string, url: string) => {
+    const combined = (name + ' ' + url).toLowerCase();
+    if (combined.includes('dns') || combined.includes('hosts')) return { label: 'DNS', cls: 'tag-dns' };
+    if (combined.includes('adguard')) return { label: 'AdGuard', cls: 'tag-adguard' };
+    if (combined.includes('ublock')) return { label: 'uBlock', cls: 'tag-ublock' };
+    if (combined.includes('privacy') || combined.includes('track') || combined.includes('telemetry')) return { label: 'Privacy', cls: 'tag-privacy' };
+    if (combined.includes('security') || combined.includes('malware') || combined.includes('badware')) return { label: 'Security', cls: 'tag-security' };
+    return { label: 'Filter', cls: 'tag-default' };
+  };
+
   const filteredSources = sources.filter(
     (s) =>
       s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -202,6 +212,7 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
 
         <div className="sources-toolbar-actions">
           <button
+            type="button"
             className="secondary-button"
             onClick={() => handleToggleAll(true)}
             title="Enable all sources"
@@ -209,6 +220,7 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
             Enable All
           </button>
           <button
+            type="button"
             className="secondary-button"
             onClick={() => handleToggleAll(false)}
             title="Disable all sources"
@@ -216,6 +228,7 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
             Disable All
           </button>
           <button
+            type="button"
             className="primary-button presets-btn"
             onClick={() => setIsPresetsOpen(true)}
           >
@@ -227,13 +240,16 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
         </div>
       </div>
 
-      {/* Add New Source Accordion */}
+      {/* Add New Source Card */}
       <div className="desktop-card add-source-card">
-        <h4 className="add-source-title">Add Custom Source Feed</h4>
+        <div className="add-source-header-row">
+          <h4 className="add-source-title">Add Custom Source Feed</h4>
+          <span className="add-source-subtitle">Subscribe to any remote HTTP(S) blocklist or hosts file</span>
+        </div>
         <div className="add-source-form-grid">
           <input
             type="text"
-            placeholder="Source Name (e.g. My Company Tracker Block)"
+            placeholder="Source Name (e.g. My Custom Tracker Block)"
             value={newSourceName}
             onChange={(e) => setNewSourceName(e.target.value)}
             className="form-input"
@@ -246,11 +262,15 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
             className="form-input"
           />
           <button
-            className="primary-button"
+            type="button"
+            className="primary-button add-source-submit-btn"
             onClick={handleAddSource}
             disabled={!newSourceName.trim() || !newSourceUrl.trim()}
           >
-            Add Source
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            <span>Add Source</span>
           </button>
         </div>
       </div>
@@ -301,6 +321,8 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
             );
           }
 
+          const tag = getSourceTag(source.name, source.url);
+
           return (
             <div key={source.url} className={`source-item-card ${source.enabled ? 'is-enabled' : 'is-disabled'}`}>
               <div className="source-toggle-col">
@@ -317,12 +339,13 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
               <div className="source-info-col">
                 <div className="source-title-row">
                   <span className="source-name">{source.name}</span>
+                  <span className={`source-type-pill ${tag.cls}`}>{tag.label}</span>
                   {health && (
                     <span className={`health-pill status-${health.status}`}>
                       {health.status === 'ok' ? (
-                        <>● 200 OK • {health.latencyMs}ms • {health.ruleCount?.toLocaleString()} rules</>
+                        <>● {health.latencyMs}ms • {health.ruleCount?.toLocaleString()} rules</>
                       ) : (
-                        <>● Error: {health.error || 'Failed'}</>
+                        <>● {health.error || 'Failed'}</>
                       )}
                     </span>
                   )}
