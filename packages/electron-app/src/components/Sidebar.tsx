@@ -195,12 +195,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="sidebar-shortcut">⌘6</span>
         </button>
 
+        <button
+          className={`sidebar-nav-item ${currentView === 'deploy' ? 'active' : ''}`}
+          onClick={() => setCurrentView('deploy')}
+          title="Deploy & Sinkhole Sync (Cmd+7)"
+        >
+          <span className="sidebar-icon">
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <rect x="2" y="3" width="20" height="6" rx="2" />
+              <rect x="2" y="15" width="20" height="6" rx="2" />
+              <path strokeLinecap="round" d="M6 6h.01M6 18h.01M12 9v6M8 12h8" />
+            </svg>
+          </span>
+          <span className="sidebar-label">Deploy & Sync</span>
+          <span className="sidebar-shortcut">⌘7</span>
+        </button>
+
         <div className="sidebar-section-label">Preferences</div>
 
         <button
           className={`sidebar-nav-item ${currentView === 'settings' ? 'active' : ''}`}
           onClick={() => setCurrentView('settings')}
-          title="Settings (Cmd+6 or Cmd+,)"
+          title="Settings (Cmd+,)"
         >
           <span className="sidebar-icon">
             <svg

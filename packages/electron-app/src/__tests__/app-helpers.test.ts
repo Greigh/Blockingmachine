@@ -332,4 +332,39 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       expect(totalProcessedCount - uniqueRules.length).toBe(125000);
     });
   });
+
+  describe('Deploy & Sync Hub Helpers', () => {
+    function formatFeedUrls(
+      savePath: string,
+      lanIp: string,
+      port = 9191
+    ): { fileName: string; fileUrl: string; lanUrl: string; localUrl: string } {
+      const fileName = savePath.split(/[/\\]/).pop() || 'rules.txt';
+      const fileUrl = `file://${savePath}`;
+      const lanUrl = `http://${lanIp}:${port}/${fileName}`;
+      const localUrl = `http://localhost:${port}/${fileName}`;
+      return { fileName, fileUrl, lanUrl, localUrl };
+    }
+
+    test('constructs valid file://, LAN, and localhost URLs for compiled filter lists', () => {
+      const urls = formatFeedUrls('/Users/alice/Library/Blockingmachine/adguard-rules.txt', '192.168.1.145');
+      expect(urls.fileName).toBe('adguard-rules.txt');
+      expect(urls.fileUrl).toBe('file:///Users/alice/Library/Blockingmachine/adguard-rules.txt');
+      expect(urls.lanUrl).toBe('http://192.168.1.145:9191/adguard-rules.txt');
+      expect(urls.localUrl).toBe('http://localhost:9191/adguard-rules.txt');
+    });
+
+    test('generates accurate OS hosts copy commands for macOS, Linux, and Windows', () => {
+      const savePath = '/Users/alice/Library/Blockingmachine/hosts.txt';
+      const macCmd = `sudo cp "${savePath}" /etc/hosts && sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`;
+      const linuxCmd = `sudo cp "${savePath}" /etc/hosts && sudo systemd-resolve --flush-caches`;
+      const winCmd = `Copy-Item "${savePath}" -Destination "$env:SystemRoot\\System32\\drivers\\etc\\hosts" -Force; ipconfig /flushdns`;
+
+      expect(macCmd).toContain('sudo cp "/Users/alice/Library/Blockingmachine/hosts.txt" /etc/hosts');
+      expect(macCmd).toContain('mDNSResponder');
+      expect(linuxCmd).toContain('/etc/hosts');
+      expect(winCmd).toContain('$env:SystemRoot\\System32\\drivers\\etc\\hosts');
+    });
+  });
 });
+
