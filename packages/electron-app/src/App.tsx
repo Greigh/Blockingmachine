@@ -237,6 +237,7 @@ function App() {
   // Global Keyboard Shortcuts (Cmd+1..6, Cmd+,)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isOnboardingOpen) return;
       if (e.metaKey || e.ctrlKey) {
         if (e.key === '1') {
           e.preventDefault();
@@ -265,7 +266,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isOnboardingOpen]);
 
   // Listen for native IPC open-settings, view navigation, and update notifications
   useEffect(() => {
@@ -330,87 +331,94 @@ function App() {
 
   return (
     <div className="app-shell" ref={containerRef}>
-      {/* Native macOS Sidebar */}
-      <Sidebar
-        currentView={currentView}
-        setCurrentView={setCurrentView}
-        enabledSourcesCount={sources.filter((s) => s.enabled).length}
-        totalSourcesCount={sources.length}
-        updateAvailable={updateAvailable}
-        handleExternalLink={handleExternalLink}
-        onLaunchOnboarding={() => setIsOnboardingOpen(true)}
-      />
-
-      {/* Main Workspace Pane */}
-      <main className="app-main-pane">
-        <Header
+      {/* Background Application Layout (rendered inert when onboarding is open) */}
+      <div
+        className="app-body-layout"
+        aria-hidden={isOnboardingOpen}
+        inert={isOnboardingOpen ? true : undefined}
+      >
+        {/* Native macOS Sidebar */}
+        <Sidebar
           currentView={currentView}
-          savePath={savePath}
-          handleRevealOutputFolder={handleRevealOutputFolder}
+          setCurrentView={setCurrentView}
+          enabledSourcesCount={sources.filter((s) => s.enabled).length}
+          totalSourcesCount={sources.length}
+          updateAvailable={updateAvailable}
+          handleExternalLink={handleExternalLink}
+          onLaunchOnboarding={() => setIsOnboardingOpen(true)}
         />
 
-        <div className="main-content-scroll">
-          {globalError && (
-            <div className="dashboard-alert error-banner">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-              </svg>
-              <span>{globalError}</span>
-            </div>
-          )}
+        {/* Main Workspace Pane */}
+        <main className="app-main-pane">
+          <Header
+            currentView={currentView}
+            savePath={savePath}
+            handleRevealOutputFolder={handleRevealOutputFolder}
+          />
 
-          {globalSuccessMessage && (
-            <div className="dashboard-alert success-banner">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span>{globalSuccessMessage}</span>
-            </div>
-          )}
+          <div className="main-content-scroll">
+            {globalError && (
+              <div className="dashboard-alert error-banner">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+                </svg>
+                <span>{globalError}</span>
+              </div>
+            )}
 
-          {currentView === 'process' && (
-            <DashboardView
-              savePath={savePath}
-              autoTriggerCompile={autoTriggerCompile}
-            />
-          )}
-          {currentView === 'sources' && (
-            <SourcesView
-              sources={sources}
-              saveSources={saveSources}
-              setError={setGlobalError}
-              setSuccessMessage={setGlobalSuccessMessage}
-            />
-          )}
-          {currentView === 'bulkImport' && (
-            <BulkImportView
-              currentSources={sources}
-              saveSources={saveSources}
-              setError={setGlobalError}
-              setSuccessMessage={setGlobalSuccessMessage}
-            />
-          )}
-          {currentView === 'custom' && (
-            <CustomRulesView
-              setError={setGlobalError}
-              setSuccessMessage={setGlobalSuccessMessage}
-            />
-          )}
-          {currentView === 'inspector' && <RuleInspectorView />}
-          {currentView === 'browser' && (
-            <RuleBrowserView
-              onTriggerCompile={() => setCurrentView('process')}
-            />
-          )}
-          {currentView === 'settings' && (
-            <Settings
-              currentTheme={selectedTheme}
-              onThemeChange={handleThemeChange}
-              onLaunchOnboarding={() => setIsOnboardingOpen(true)}
-            />
-          )}
-        </div>
-      </main>
+            {globalSuccessMessage && (
+              <div className="dashboard-alert success-banner">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>{globalSuccessMessage}</span>
+              </div>
+            )}
+
+            {currentView === 'process' && (
+              <DashboardView
+                savePath={savePath}
+                autoTriggerCompile={autoTriggerCompile}
+              />
+            )}
+            {currentView === 'sources' && (
+              <SourcesView
+                sources={sources}
+                saveSources={saveSources}
+                setError={setGlobalError}
+                setSuccessMessage={setGlobalSuccessMessage}
+              />
+            )}
+            {currentView === 'bulkImport' && (
+              <BulkImportView
+                currentSources={sources}
+                saveSources={saveSources}
+                setError={setGlobalError}
+                setSuccessMessage={setGlobalSuccessMessage}
+              />
+            )}
+            {currentView === 'custom' && (
+              <CustomRulesView
+                setError={setGlobalError}
+                setSuccessMessage={setGlobalSuccessMessage}
+              />
+            )}
+            {currentView === 'inspector' && <RuleInspectorView />}
+            {currentView === 'browser' && (
+              <RuleBrowserView
+                onTriggerCompile={() => setCurrentView('process')}
+              />
+            )}
+            {currentView === 'settings' && (
+              <Settings
+                currentTheme={selectedTheme}
+                onThemeChange={handleThemeChange}
+                onLaunchOnboarding={() => setIsOnboardingOpen(true)}
+              />
+            )}
+          </div>
+        </main>
+      </div>
 
       {/* Interactive First-Launch & Replay Onboarding Modal */}
       <OnboardingModal

@@ -116,6 +116,14 @@ body {
   background-color: var(--background-color);
 }
 
+.app-body-layout {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  flex: 1;
+  overflow: hidden;
+}
+
 /* Left Sidebar */
 .app-sidebar {
   width: 230px;
@@ -510,26 +518,43 @@ body {
   scroll-behavior: smooth;
 }
 
-/* Custom overlay scrollbars */
-.main-content-scroll::-webkit-scrollbar,
-.sidebar-nav::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
+/* Custom overlay scrollbars across all scrollable containers & elements */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
+*::-webkit-scrollbar,
+.main-content-scroll::-webkit-scrollbar,
+.sidebar-nav::-webkit-scrollbar,
+.onboarding-body::-webkit-scrollbar,
+.modal-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track,
 .main-content-scroll::-webkit-scrollbar-track,
-.sidebar-nav::-webkit-scrollbar-track {
+.sidebar-nav::-webkit-scrollbar-track,
+.onboarding-body::-webkit-scrollbar-track,
+.modal-body::-webkit-scrollbar-track {
   background: transparent;
 }
 
+*::-webkit-scrollbar-thumb,
 .main-content-scroll::-webkit-scrollbar-thumb,
-.sidebar-nav::-webkit-scrollbar-thumb {
+.sidebar-nav::-webkit-scrollbar-thumb,
+.onboarding-body::-webkit-scrollbar-thumb,
+.modal-body::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
+*::-webkit-scrollbar-thumb:hover,
 .main-content-scroll::-webkit-scrollbar-thumb:hover,
-.sidebar-nav::-webkit-scrollbar-thumb:hover {
+.sidebar-nav::-webkit-scrollbar-thumb:hover,
+.onboarding-body::-webkit-scrollbar-thumb:hover,
+.modal-body::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
 
@@ -4700,8 +4725,30 @@ input:checked + .mac-slider:before {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
 }
 
-.highlight-icon {
-  font-size: 24px;
+.highlight-icon-box {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: rgba(0, 122, 255, 0.12);
+  border: 1px solid rgba(0, 122, 255, 0.22);
+  color: var(--primary-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.onboarding-highlight-card:hover .highlight-icon-box {
+  background: rgba(0, 122, 255, 0.2);
+  border-color: rgba(0, 122, 255, 0.45);
+  transform: scale(1.04);
+}
+
+.highlight-icon-box svg {
+  width: 19px;
+  height: 19px;
+  stroke: currentColor;
 }
 
 .onboarding-highlight-card h4 {
@@ -4805,9 +4852,37 @@ input:checked + .mac-slider:before {
 }
 
 .pack-radio-indicator {
-  font-size: 16px;
-  color: var(--primary-color);
-  font-weight: bold;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  background: var(--control-bg-color);
+  margin-top: 2px;
+}
+
+.pack-radio-indicator.active {
+  border-color: var(--primary-color);
+  background: var(--primary-color);
+}
+
+.pack-radio-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ffffff;
+  opacity: 0;
+  transform: scale(0.4);
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pack-radio-indicator.active .pack-radio-dot {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .pack-desc {

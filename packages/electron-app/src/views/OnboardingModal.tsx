@@ -77,18 +77,82 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     }
   }, []);
 
-  // Keyboard navigation (Esc to dismiss, Enter to advance)
+  const dialogRef = React.useRef<HTMLDivElement>(null);
+
+  // Focus trap inside the modal dialog & keyboard navigation
   useEffect(() => {
     if (!isOpen) return;
+
+    // Auto-focus primary action or first interactive element on open/step-change
+    const focusTimer = setTimeout(() => {
+      if (dialogRef.current) {
+        const nextBtn = dialogRef.current.querySelector<HTMLElement>(
+          '.onboarding-next-btn, .onboarding-finish-btn'
+        );
+        if (nextBtn) {
+          nextBtn.focus();
+        } else {
+          const firstFocusable = dialogRef.current.querySelector<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          );
+          if (firstFocusable) {
+            firstFocusable.focus();
+          }
+        }
+      }
+    }, 40);
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         handleSkip();
-      } else if (e.key === 'Enter' && currentStep < 4) {
+        return;
+      }
+
+      // Intercept Tab to trap focus strictly inside the dialog
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusables = Array.from(
+          dialogRef.current.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter((el) => el.offsetParent !== null); // Only visible elements
+
+        if (focusables.length === 0) {
+          e.preventDefault();
+          return;
+        }
+
+        const firstEl = focusables[0];
+        const lastEl = focusables[focusables.length - 1];
+
+        if (e.shiftKey) {
+          if (document.activeElement === firstEl || !dialogRef.current.contains(document.activeElement)) {
+            e.preventDefault();
+            lastEl.focus();
+          }
+        } else {
+          if (document.activeElement === lastEl || !dialogRef.current.contains(document.activeElement)) {
+            e.preventDefault();
+            firstEl.focus();
+          }
+        }
+        return;
+      }
+
+      if (e.key === 'Enter' && currentStep < 4) {
+        const target = e.target as HTMLElement | null;
+        // Do not intercept enter on buttons/inputs that have their own action
+        if (target && (target.tagName === 'BUTTON' || target.tagName === 'INPUT')) {
+          return;
+        }
         setCurrentStep((prev) => prev + 1);
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(focusTimer);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, [isOpen, currentStep]);
 
   if (!isOpen) return null;
@@ -122,6 +186,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   return (
     <div className="modal-overlay onboarding-overlay" onClick={handleSkip}>
       <div
+        ref={dialogRef}
         className="modal-dialog onboarding-dialog"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
@@ -179,7 +244,18 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
               <div className="onboarding-highlights-grid">
                 <div className="onboarding-highlight-card">
-                  <div className="highlight-icon">⚡</div>
+                  <div className="highlight-icon-box" aria-hidden="true">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                    </svg>
+                  </div>
                   <h4>Universal Multi-Format Export</h4>
                   <p>
                     Compile once, deploy everywhere. Generates optimized lists for
@@ -187,7 +263,18 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   </p>
                 </div>
                 <div className="onboarding-highlight-card">
-                  <div className="highlight-icon">🛡️</div>
+                  <div className="highlight-icon-box" aria-hidden="true">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                    </svg>
+                  </div>
                   <h4>Intelligent Deduplication</h4>
                   <p>
                     Consolidates overlapping loopback rules, prunes redundant subdomains,
@@ -195,7 +282,20 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                   </p>
                 </div>
                 <div className="onboarding-highlight-card">
-                  <div className="highlight-icon">🔄</div>
+                  <div className="highlight-icon-box" aria-hidden="true">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="23 4 23 10 17 10" />
+                      <polyline points="1 20 1 14 7 14" />
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                    </svg>
+                  </div>
                   <h4>Direct Sinkhole Sync</h4>
                   <p>
                     Automatically push fresh rule bundles straight into your local Pi-hole
@@ -234,8 +334,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                         </div>
                         <span className="pack-cat">{bundle.category}</span>
                       </div>
-                      <div className="pack-radio-indicator">
-                        {selectedBundleId === bundle.id ? '●' : '○'}
+                      <div
+                        className={`pack-radio-indicator ${
+                          selectedBundleId === bundle.id ? 'active' : ''
+                        }`}
+                        aria-hidden="true"
+                      >
+                        <span className="pack-radio-dot" />
                       </div>
                     </div>
                     <p className="pack-desc">{bundle.description}</p>
@@ -263,8 +368,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       </div>
                       <span className="pack-cat">Pre-installed Feeds</span>
                     </div>
-                    <div className="pack-radio-indicator">
-                      {selectedBundleId === 'current' ? '●' : '○'}
+                    <div
+                      className={`pack-radio-indicator ${
+                        selectedBundleId === 'current' ? 'active' : ''
+                      }`}
+                      aria-hidden="true"
+                    >
+                      <span className="pack-radio-dot" />
                     </div>
                   </div>
                   <p className="pack-desc">

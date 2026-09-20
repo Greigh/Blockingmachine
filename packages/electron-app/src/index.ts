@@ -429,8 +429,9 @@ function getTrayIcon(): Electron.NativeImage {
       try {
         const loaded = nativeImage.createFromPath(templateCandidate);
         if (!loaded.isEmpty()) {
-          loaded.setTemplateImage(true);
-          return loaded;
+          const resized = loaded.resize({ width: 18, height: 18 });
+          resized.setTemplateImage(true);
+          return resized;
         }
       } catch {
         // fallback
@@ -675,9 +676,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     );
 
     ipcMain.handle('get-sources', async (_event: IpcMainInvokeEvent) => {
-      console.log('[IPC Main] Received request for sources.');
       const sources: FilterSource[] = store.get('filterSources');
-      console.log('[IPC Main] Sent sources from store.');
       return sources;
     });
 
