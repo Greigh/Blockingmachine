@@ -53,7 +53,19 @@ export async function loadConfig(): Promise<Config> {
   const result = await explorer.search();
 
   if (!result) {
-    throw new Error("No configuration file found");
+    return {
+      debug: false,
+      output: { directory: "./filters/output" },
+      sources: [
+        {
+          name: "Blockingmachine Rules",
+          url: "https://raw.githubusercontent.com/greigh/blockingmachine/main/filters/output/adguard.txt",
+          category: "blockingmachine" as CategoryName,
+          enabled: true,
+          priority: 50,
+        },
+      ],
+    };
   }
 
   try {

@@ -37,11 +37,7 @@ export type GenericRuleType = Extract<
 >;
 
 export type RuleClassificationType =
-  | RuleType
-  | "preprocessor"
-  | "hint"
-  | "comment"
-  | null;
+  RuleType | "preprocessor" | "hint" | "comment" | null;
 
 // --- Rule Interfaces ---
 export interface RuleModifier {
@@ -230,8 +226,7 @@ export class RuleStore {
         type: type as RuleType,
         domain: metadata.domain || undefined,
         isException:
-          originalRule.startsWith("@@") ||
-          originalRule.includes("#@#"),
+          originalRule.startsWith("@@") || originalRule.includes("#@#"),
         metadata: {
           sources: metadata.sources || [],
           dateAdded: new Date(),
@@ -452,7 +447,8 @@ export class RuleStore {
     originalRule: string,
     metadata: RuleMetadata,
   ): void {
-    const selector = metadata.selector || this.extractSelectorFromRule(originalRule);
+    const selector =
+      metadata.selector || this.extractSelectorFromRule(originalRule);
 
     if (!selector) {
       if (!originalRule.includes("#$#") && !originalRule.includes("#%#")) {

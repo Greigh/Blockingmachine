@@ -99,7 +99,8 @@ export async function exportWithOptions(
       lastUpdated: new Date().toISOString(),
       stats: {
         totalRules: formatRules.length,
-        blockingRules: formatRules.filter((rule) => rule.type === "blocking").length,
+        blockingRules: formatRules.filter((rule) => rule.type === "blocking")
+          .length,
         exceptionRules: formatRules.filter(
           (rule) => rule.type === "unblocking" || rule.isException,
         ).length,

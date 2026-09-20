@@ -1,13 +1,71 @@
 import mongoose from "mongoose";
 import type { StoredRule, MongoConfig } from "../types.js";
 
-export async function connectDB(config: MongoConfig): Promise<void> {
-  await mongoose.connect(config.uri, config.options);
+let dbConnected = false;
+let offlineMode = false;
+
+export function isDBConnected(): boolean {
+  return dbConnected;
+}
+
+export function isOfflineMode(): boolean {
+  return offlineMode;
+}
+
+export async function connectDB(
+  config?: MongoConfig,
+  optional = true,
+): Promise<boolean> {
+  if (!config || !config.uri) {
+    offlineMode = true;
+    dbConnected = false;
+    return false;
+  }
+  try {
+    await mongoose.connect(config.uri, {
+      serverSelectionTimeoutMS: 2500,
+      ...config.options,
+    });
+    dbConnected = true;
+    offlineMode = false;
+    return true;
+  } catch (err: any) {
+    if (optional) {
+      offlineMode = true;
+      dbConnected = false;
+      console.warn(
+        `⚠️ MongoDB connection failed (${err?.message || err}). Falling back to offline file mode.`,
+      );
+      return false;
+    }
+    throw err;
+  }
 }
 
 export async function disconnectDB(): Promise<void> {
-  await mongoose.disconnect();
+  if (dbConnected) {
+    await mongoose.disconnect();
+    dbConnected = false;
+  }
 }
+
+export interface RuleAuditEntry {
+  timestamp: string;
+  action: "import" | "export" | "prune" | "delete" | "test";
+  count?: number;
+  details?: string;
+  metadata?: Record<string, any>;
+}
+
+const auditLogSchema = new mongoose.Schema({
+  timestamp: { type: Date, default: Date.now },
+  action: { type: String, required: true },
+  count: Number,
+  details: String,
+  metadata: mongoose.Schema.Types.Mixed,
+});
+
+export const AuditLogModel = mongoose.model("AuditLog", auditLogSchema);
 
 const ruleSchema = new mongoose.Schema({
   raw: { type: String, required: true },

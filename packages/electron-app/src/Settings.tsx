@@ -26,6 +26,20 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
   const [webhookMessage, setWebhookMessage] = useState('');
   const [isSavingWebhook, setIsSavingWebhook] = useState(false);
 
+  // Network Sinkholes state
+  const [sinkholeConfig, setSinkholeConfig] = useState({
+    piholeUrl: '',
+    piholeApiKey: '',
+    adguardHomeUrl: '',
+    adguardHomeUser: '',
+    adguardHomePassword: '',
+    syncOnCompile: false,
+  });
+  const [isSavingSinkhole, setIsSavingSinkhole] = useState(false);
+  const [isSyncingSinkhole, setIsSyncingSinkhole] = useState(false);
+  const [sinkholeMessage, setSinkholeMessage] = useState('');
+  const [syncResults, setSyncResults] = useState<Array<{ service: string; status: 'success' | 'error' | 'skipped'; message: string }>>([]);
+
   // Path state variables
   const [savePath, setSavePath] = useState('');
   const [isLoadingPath, setIsLoadingPath] = useState(true);
@@ -87,6 +101,10 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
 
     window.electron.getWebhookUrl().then((url) => {
       if (isMounted) setWebhookUrl(url || '');
+    }).catch(console.error);
+
+    window.electron.getSinkholeConfig().then((cfg) => {
+      if (isMounted && cfg) setSinkholeConfig(cfg);
     }).catch(console.error);
 
     loadExportFormat();
@@ -221,6 +239,32 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
     safeSetTimeout(() => {
       setMessage({ text: '', type: null });
     }, 3000);
+  };
+
+  const handleSaveSinkhole = async () => {
+    setIsSavingSinkhole(true);
+    try {
+      await window.electron.setSinkholeConfig(sinkholeConfig);
+      setSinkholeMessage('Sinkhole integration settings saved!');
+      safeSetTimeout(() => setSinkholeMessage(''), 3000);
+    } catch (err: any) {
+      setSinkholeMessage(`Failed to save: ${err.message}`);
+      safeSetTimeout(() => setSinkholeMessage(''), 4000);
+    } finally {
+      setIsSavingSinkhole(false);
+    }
+  };
+
+  const handleTriggerSync = async () => {
+    setIsSyncingSinkhole(true);
+    try {
+      const res = await window.electron.syncSinkholes();
+      setSyncResults(res.results || []);
+    } catch (err: any) {
+      console.error('Sinkhole sync failed:', err);
+    } finally {
+      setIsSyncingSinkhole(false);
+    }
   };
 
   return (
@@ -458,6 +502,142 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, onThemeChange }) => {
               Sends an HTTP POST payload with compilation statistics whenever blocklists are updated, allowing Pi-hole, AdGuard Home, or DNS servers to reload automatically.
             </p>
           </div>
+        </div>
+
+        {/* Network Sinkholes & DNS Integration Card */}
+        <div className="setting-card">
+          <div className="setting-card-header">
+            <h3>
+              <span className="setting-icon-svg">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-.778.099-1.533.284-2.253" />
+                </svg>
+              </span>
+              Network Sinkholes (Pi-hole & AdGuard Home)
+            </h3>
+            <span className="setting-badge primary">DNS Sync</span>
+          </div>
+          <p>Automatically push compiled blocklists and trigger gravity updates on local DNS appliances</p>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '14px' }}>
+            {/* Pi-hole Section */}
+            <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>🥧</span> Pi-hole Integration
+              </div>
+              <div style={{ marginBottom: '10px' }}>
+                <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>API Endpoint URL</label>
+                <input
+                  type="text"
+                  className="path-input"
+                  style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                  placeholder="http://pi.hole/admin/api.php"
+                  value={sinkholeConfig.piholeUrl}
+                  onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: e.target.value })}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Auth API Token</label>
+                <input
+                  type="password"
+                  className="path-input"
+                  style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                  placeholder="Pi-hole web password hash"
+                  value={sinkholeConfig.piholeApiKey}
+                  onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, piholeApiKey: e.target.value })}
+                />
+              </div>
+            </div>
+
+            {/* AdGuard Home Section */}
+            <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>🛡️</span> AdGuard Home Integration
+              </div>
+              <div style={{ marginBottom: '10px' }}>
+                <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Instance URL</label>
+                <input
+                  type="text"
+                  className="path-input"
+                  style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                  placeholder="http://192.168.1.1:3000"
+                  value={sinkholeConfig.adguardHomeUrl}
+                  onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
+                />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Username</label>
+                  <input
+                    type="text"
+                    className="path-input"
+                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                    placeholder="admin"
+                    value={sinkholeConfig.adguardHomeUser}
+                    onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Password</label>
+                  <input
+                    type="password"
+                    className="path-input"
+                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                    placeholder="••••••••"
+                    value={sinkholeConfig.adguardHomePassword}
+                    onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+              <input
+                type="checkbox"
+                checked={sinkholeConfig.syncOnCompile}
+                onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, syncOnCompile: e.target.checked })}
+              />
+              <span>Trigger sinkhole reload automatically on every compilation</span>
+            </label>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                className="browse-button secondary"
+                onClick={handleTriggerSync}
+                disabled={isSyncingSinkhole}
+              >
+                {isSyncingSinkhole ? 'Syncing...' : 'Sync Now'}
+              </button>
+              <button
+                className="browse-button"
+                onClick={handleSaveSinkhole}
+                disabled={isSavingSinkhole}
+              >
+                {isSavingSinkhole ? 'Saving...' : 'Save Sinkholes'}
+              </button>
+            </div>
+          </div>
+
+          {sinkholeMessage && (
+            <p className="setting-message success" style={{ marginTop: '10px' }}>
+              {sinkholeMessage}
+            </p>
+          )}
+
+          {syncResults.length > 0 && (
+            <div style={{ marginTop: '12px', padding: '10px', background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', borderRadius: '8px', fontSize: '0.8rem' }}>
+              {syncResults.map((r, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: i < syncResults.length - 1 ? '6px' : 0 }}>
+                  <span style={{ fontWeight: 600 }}>{r.service}:</span>
+                  <span style={{ color: r.status === 'success' ? '#10b981' : r.status === 'error' ? '#ef4444' : 'inherit', opacity: r.status === 'skipped' ? 0.6 : 1 }}>
+                    {r.message}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* About & Contact Section */}

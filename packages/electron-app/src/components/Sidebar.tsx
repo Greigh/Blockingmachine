@@ -180,6 +180,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="sidebar-shortcut">⌘5</span>
         </button>
 
+        <button
+          className={`sidebar-nav-item ${currentView === 'browser' ? 'active' : ''}`}
+          onClick={() => setCurrentView('browser')}
+          title="Compiled Rules Browser (Cmd+6)"
+        >
+          <span className="sidebar-icon">
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"
+              />
+            </svg>
+          </span>
+          <span className="sidebar-label">Rule Browser</span>
+          <span className="sidebar-shortcut">⌘6</span>
+        </button>
+
         <div className="sidebar-section-label">Preferences</div>
 
         <button

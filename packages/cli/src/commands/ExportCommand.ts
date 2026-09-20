@@ -13,6 +13,7 @@ import {
 import type { FilterListMetadata } from "../types.js";
 import fs from "fs/promises";
 import path from "path";
+import fetch from "node-fetch";
 
 export class ExportCommand extends BaseCommand<ExportOptions> {
   constructor(options: CommandOptions) {
@@ -146,6 +147,52 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
           results.push({ format, filename, rules: rules.length });
         } catch (error) {
           this.logger.error(`✗ Error generating ${format} format:`, error);
+        }
+      }
+
+      // Handle external sync hooks
+      if (options.syncPihole) {
+        try {
+          this.logger.info(`Syncing with Pi-hole at: ${options.syncPihole}`);
+          const res = await fetch(options.syncPihole, { method: "GET" });
+          if (res.ok) {
+            this.logger.info(
+              `✓ Pi-hole sync triggered successfully (${res.status})`,
+            );
+          } else {
+            this.logger.warn(`⚠️ Pi-hole responded with status ${res.status}`);
+          }
+        } catch (err: any) {
+          this.logger.warn(
+            `⚠️ Failed to sync with Pi-hole: ${err?.message || err}`,
+          );
+        }
+      }
+
+      if (options.webhook) {
+        try {
+          this.logger.info(
+            `Sending webhook notification to: ${options.webhook}`,
+          );
+          const res = await fetch(options.webhook, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              event: "filter_list_exported",
+              timestamp: new Date().toISOString(),
+              totalRules: rules.length,
+              formats: results,
+            }),
+          });
+          if (res.ok) {
+            this.logger.info(`✓ Webhook notified successfully (${res.status})`);
+          } else {
+            this.logger.warn(`⚠️ Webhook responded with status ${res.status}`);
+          }
+        } catch (err: any) {
+          this.logger.warn(
+            `⚠️ Failed to trigger webhook: ${err?.message || err}`,
+          );
         }
       }
 

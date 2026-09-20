@@ -24,7 +24,9 @@ export function cleanDomainPattern(originalRule: string): string | null {
     trimmedRule = trimmedRule.replace(/#.*$/, "").trim();
 
     // Strip hosts file IP prefix if present (e.g. 0.0.0.0, 127.0.0.1, ::1)
-    trimmedRule = trimmedRule.replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+/, "").trim();
+    trimmedRule = trimmedRule
+      .replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+/, "")
+      .trim();
 
     // Remove AdGuard/uBO specific options starting with $
     const parts = trimmedRule.split("$", 1);

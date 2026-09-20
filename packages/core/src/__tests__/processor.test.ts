@@ -45,9 +45,15 @@ describe("RuleProcessor & parseFilterList", () => {
 
   test("cleanDomainPattern handles various formats correctly", () => {
     expect(cleanDomainPattern("||example.com^")).toBe("example.com");
-    expect(cleanDomainPattern("||adserver.com^$third-party,important")).toBe("adserver.com");
-    expect(cleanDomainPattern("0.0.0.0 telemetry.app.com")).toBe("telemetry.app.com");
-    expect(cleanDomainPattern("127.0.0.1 ads.com # inline comment")).toBe("ads.com");
+    expect(cleanDomainPattern("||adserver.com^$third-party,important")).toBe(
+      "adserver.com",
+    );
+    expect(cleanDomainPattern("0.0.0.0 telemetry.app.com")).toBe(
+      "telemetry.app.com",
+    );
+    expect(cleanDomainPattern("127.0.0.1 ads.com # inline comment")).toBe(
+      "ads.com",
+    );
     expect(cleanDomainPattern("@@||allowed.com^")).toBe("allowed.com");
 
     // Path rules should not be extracted as pure domain names
@@ -60,11 +66,15 @@ describe("RuleProcessor & parseFilterList", () => {
     const processor = new RuleProcessor();
 
     // Secondary modifier 'script' should be detected as a browser modifier and classified as blocking
-    const type = processor.classifyRule("||example.com^$domain=example.org,script");
+    const type = processor.classifyRule(
+      "||example.com^$domain=example.org,script",
+    );
     expect(type).toBe("blocking");
 
     // $csp as secondary modifier should be recognized
-    const cspType = processor.classifyRule("||example.com^$third-party,csp=script-src 'none'");
+    const cspType = processor.classifyRule(
+      "||example.com^$third-party,csp=script-src 'none'",
+    );
     expect(cspType).toBe("csp");
   });
 
@@ -79,7 +89,9 @@ describe("RuleProcessor & parseFilterList", () => {
   test("classifyRule recognizes IPv6 addresses as blocking", () => {
     const processor = new RuleProcessor();
     expect(processor.classifyRule("::1")).toBe("blocking");
-    expect(processor.classifyRule("2001:0db8:85a3:0000:0000:8a2e:0370:7334")).toBe("blocking");
+    expect(
+      processor.classifyRule("2001:0db8:85a3:0000:0000:8a2e:0370:7334"),
+    ).toBe("blocking");
   });
 
   test("getErrors and clearErrors manage processor errors correctly", () => {

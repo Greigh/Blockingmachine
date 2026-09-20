@@ -24,7 +24,8 @@ export function generateHeader(
     case "hosts":
       additionalLines.push(
         c + "Format: Hosts",
-        c + "This file is in hosts file format and can be used as system hosts file",
+        c +
+          "This file is in hosts file format and can be used as system hosts file",
       );
       break;
     case "dnsmasq":

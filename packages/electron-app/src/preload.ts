@@ -42,6 +42,7 @@ const ALLOWED_CHANNELS = new Set([
   'update-status',
   'update-progress',
   'update-downloaded',
+  'trigger-compile',
 ]);
 
 // Expose the API to the renderer process
@@ -64,6 +65,10 @@ contextBridge.exposeInMainWorld('electron', {
   setAutoSchedule: (schedule: 'disabled' | '12h' | '24h' | 'weekly') => ipcRenderer.invoke('set-auto-schedule', schedule),
   getWebhookUrl: () => ipcRenderer.invoke('get-webhook-url') as Promise<string>,
   setWebhookUrl: (url: string) => ipcRenderer.invoke('set-webhook-url', url),
+  getCompiledRules: (options?: any) => ipcRenderer.invoke('get-compiled-rules', options),
+  getSinkholeConfig: () => ipcRenderer.invoke('get-sinkhole-config'),
+  setSinkholeConfig: (config: any) => ipcRenderer.invoke('set-sinkhole-config', config),
+  syncSinkholes: () => ipcRenderer.invoke('sync-sinkholes'),
   getCompilationHistory: () => ipcRenderer.invoke('get-compilation-history'),
   inspectDomain: (domain: string) => ipcRenderer.invoke('inspect-domain', domain),
   testFeedUrl: (url: string) => ipcRenderer.invoke('test-feed-url', url),
@@ -121,6 +126,13 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('open-settings', handler);
     return () => {
       ipcRenderer.removeListener('open-settings', handler);
+    };
+  },
+  onTriggerCompile: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('trigger-compile', handler);
+    return () => {
+      ipcRenderer.removeListener('trigger-compile', handler);
     };
   },
   getLastProcessTime: () => ipcRenderer.invoke('get-last-process-time'),

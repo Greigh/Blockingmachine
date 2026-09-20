@@ -133,7 +133,9 @@ export async function exportWithOptions(
     query["metadata.tags"] = { $in: options.tags };
   }
 
-  const rules = (await StoredRuleModel.find(query).lean()) as unknown as StoredRule[];
+  const rules = (await StoredRuleModel.find(
+    query,
+  ).lean()) as unknown as StoredRule[];
 
   for (const format of options.formats || ["adguard"]) {
     // Ensure format is a SupportedFormat

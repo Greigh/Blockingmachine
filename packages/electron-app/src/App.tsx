@@ -7,6 +7,7 @@ import { SourcesView } from './views/SourcesView';
 import { BulkImportView } from './views/BulkImportView';
 import { CustomRulesView } from './views/CustomRulesView';
 import { RuleInspectorView } from './views/RuleInspectorView';
+import { RuleBrowserView } from './views/RuleBrowserView';
 import type { FilterSource, ThemeType } from './types/';
 import './index.css';
 
@@ -201,7 +202,10 @@ function App() {
         } else if (e.key === '5') {
           e.preventDefault();
           setCurrentView('inspector');
-        } else if (e.key === '6' || e.key === ',') {
+        } else if (e.key === '6') {
+          e.preventDefault();
+          setCurrentView('browser');
+        } else if (e.key === ',') {
           e.preventDefault();
           setCurrentView('settings');
         }
@@ -216,10 +220,17 @@ function App() {
   useEffect(() => {
     let cleanupSettings: (() => void) | undefined;
     let cleanupUpdate: (() => void) | undefined;
+    let cleanupCompile: (() => void) | undefined;
 
     if (window.electron?.onOpenSettings) {
       cleanupSettings = window.electron.onOpenSettings(() => {
         setCurrentView('settings');
+      });
+    }
+
+    if (window.electron?.onTriggerCompile) {
+      cleanupCompile = window.electron.onTriggerCompile(() => {
+        setCurrentView('process');
       });
     }
 
@@ -232,6 +243,7 @@ function App() {
     return () => {
       cleanupSettings?.();
       cleanupUpdate?.();
+      cleanupCompile?.();
     };
   }, []);
 
@@ -312,6 +324,11 @@ function App() {
             />
           )}
           {currentView === 'inspector' && <RuleInspectorView />}
+          {currentView === 'browser' && (
+            <RuleBrowserView
+              onTriggerCompile={() => setCurrentView('process')}
+            />
+          )}
           {currentView === 'settings' && (
             <Settings
               currentTheme={selectedTheme}
