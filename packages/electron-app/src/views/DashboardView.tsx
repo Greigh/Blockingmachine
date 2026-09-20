@@ -16,9 +16,13 @@ import type { ProcessingResult, FilterSource, CompilationSnapshot } from '../typ
 
 interface DashboardViewProps {
   savePath: string;
+  autoTriggerCompile?: boolean;
 }
 
-export const DashboardView: React.FC<DashboardViewProps> = ({ savePath }) => {
+export const DashboardView: React.FC<DashboardViewProps> = ({
+  savePath,
+  autoTriggerCompile,
+}) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<ProcessingResult | null>(null);
@@ -121,6 +125,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ savePath }) => {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (autoTriggerCompile && !isLoading) {
+      handleRunProcess();
+    }
+  }, [autoTriggerCompile]);
 
   // Keyboard shortcut Cmd+R to compile
   useEffect(() => {
