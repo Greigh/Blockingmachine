@@ -49,7 +49,7 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
         content = await fs.readFile(inputFile, "utf-8");
         rules = content.split("\n").filter((rule) => rule.trim());
         this.logger.info(`Loaded ${rules.length} rules from: ${inputFile}`);
-      } catch (error) {
+      } catch {
         this.logger.warn(
           `Could not read rules from ${inputFile}, creating empty filter lists`,
         );

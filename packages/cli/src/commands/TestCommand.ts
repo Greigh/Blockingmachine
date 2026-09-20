@@ -127,6 +127,9 @@ export class TestCommand extends BaseCommand<TestOptions> {
       "\n" + chalk.bold.underline("Domain Inspection Analysis:") + "\n",
     );
     console.log(`  Target Domain:     ${chalk.bold.white(targetDomain)}`);
+    if (foundFile) {
+      console.log(`  Rule Source:       ${chalk.dim(foundFile)}`);
+    }
 
     if (isException) {
       console.log(

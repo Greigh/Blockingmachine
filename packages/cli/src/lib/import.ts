@@ -2,7 +2,6 @@ import type {
   FilterSource,
   CategoryName,
   RuleType,
-  RuleModifier,
   StoredRule,
   ImportStats,
 } from "../types.js";
@@ -10,7 +9,6 @@ import { CATEGORIES } from "../types.js";
 import type { CommandOptions } from "../commands/BaseCommand.js";
 import { StoredRuleModel } from "./db.js";
 import fetch from "node-fetch";
-import ProgressBar from "progress";
 import crypto from "crypto";
 
 function determineRuleType(rule: string): RuleType {
