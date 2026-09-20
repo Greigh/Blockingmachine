@@ -152,14 +152,28 @@ body {
 .brand-icon-shield {
   width: 28px;
   height: 28px;
-  border-radius: 7px;
-  background: linear-gradient(135deg, #007aff, #5856d6);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.15), rgba(88, 86, 214, 0.25));
+  border: 1px solid rgba(0, 122, 255, 0.3);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  box-shadow: 0 2px 6px rgba(0, 122, 255, 0.3);
+  box-shadow: 0 2px 6px rgba(0, 122, 255, 0.2);
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.brand-logo-img {
+  image-rendering: -webkit-optimize-contrast;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), filter 0.25s ease;
+}
+
+.brand-logo-img:hover {
+  transform: scale(1.06);
+}
+
+.brand-logo-glow {
+  filter: drop-shadow(0 2px 8px rgba(0, 122, 255, 0.45));
 }
 
 .brand-info {
@@ -1271,16 +1285,17 @@ input:checked + .mac-slider:before {
 }
 
 .about-app-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #007aff, #5856d6);
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.12), rgba(88, 86, 214, 0.2));
+  border: 1px solid rgba(0, 122, 255, 0.25);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
   flex-shrink: 0;
-  box-shadow: 0 4px 10px rgba(0, 122, 255, 0.25);
+  box-shadow: 0 4px 14px rgba(0, 122, 255, 0.2);
+  overflow: hidden;
 }
 
 .about-app-meta h4 {
@@ -3155,16 +3170,17 @@ input:checked + .mac-slider:before {
 }
 
 .ready-state-icon {
-  width: 54px;
-  height: 54px;
+  width: 58px;
+  height: 58px;
   border-radius: 16px;
-  background: rgba(0, 122, 255, 0.08);
-  color: var(--primary-color);
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.1), rgba(99, 102, 241, 0.18));
+  border: 1px solid rgba(0, 122, 255, 0.2);
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 14px;
-  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.12);
+  box-shadow: 0 4px 16px rgba(0, 122, 255, 0.18);
+  overflow: hidden;
 }
 
 .ready-state-title {
@@ -4624,17 +4640,17 @@ input:checked + .mac-slider:before {
 }
 
 .onboarding-badge-icon {
-  width: 60px;
-  height: 60px;
-  border-radius: 16px;
+  width: 62px;
+  height: 62px;
+  border-radius: 18px;
   background: linear-gradient(135deg, rgba(0, 122, 255, 0.15), rgba(99, 102, 241, 0.25));
-  border: 1px solid rgba(0, 122, 255, 0.25);
+  border: 1px solid rgba(0, 122, 255, 0.28);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--primary-color);
   margin-bottom: 12px;
-  box-shadow: 0 4px 20px rgba(0, 122, 255, 0.2);
+  box-shadow: 0 6px 24px rgba(0, 122, 255, 0.25);
+  overflow: hidden;
 }
 
 .onboarding-badge-icon.ready-pulse {
