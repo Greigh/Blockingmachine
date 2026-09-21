@@ -19,6 +19,8 @@ import { DiffCommand } from "./commands/DiffCommand.js";
 import { DoctorCommand } from "./commands/DoctorCommand.js";
 import { ShellCommand } from "./commands/ShellCommand.js";
 import { ServeCommand } from "./commands/ServeCommand.js";
+import { AiScanCommand } from "./commands/AiScanCommand.js";
+import { AiCrawlCommand } from "./commands/AiCrawlCommand.js";
 import { listRuleSnapshots, rollbackSnapshot } from "./lib/db.js";
 import type { MetaConfig } from "./types.js";
 
@@ -253,6 +255,78 @@ program
       logger.error(
         `Server failed: ${error instanceof Error ? error.message : String(error)}`,
       );
+      process.exit(1);
+    }
+  });
+
+program
+  .command("ai-scan [target]")
+  .description("Scan domain, URL, or sinkhole query logs using AI Radar")
+  .option("--provider <type>", "AI provider: ollama, gemini, openai, local-heuristics", "local-heuristics")
+  .option("--ollama-url <url>", "Ollama server URL", "http://127.0.0.1:11434")
+  .option("--model <name>", "Model name (e.g. llama3.2, gemini-2.0-flash, gpt-4o-mini)")
+  .option("--api-key <key>", "API key for Gemini or OpenAI")
+  .option("--querylog <service>", "Pull and scan live query logs from 'adguard' or 'pihole'")
+  .option("--adguard-url <url>", "AdGuard Home base URL", "http://127.0.0.1:3000")
+  .option("--adguard-user <user>", "AdGuard Home username")
+  .option("--adguard-pass <pass>", "AdGuard Home password")
+  .option("--pihole-url <url>", "Pi-hole base URL", "http://127.0.0.1")
+  .option("--pihole-token <token>", "Pi-hole web API token")
+  .option("--limit <number>", "Number of queries to analyze", "50")
+  .option("--json", "Output machine-readable JSON result")
+  .action(async (target, cmdOptions) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new AiScanCommand({ config, logger });
+      const res = await cmd.execute({
+        target,
+        provider: cmdOptions.provider,
+        ollamaUrl: cmdOptions.ollamaUrl,
+        model: cmdOptions.model,
+        apiKey: cmdOptions.apiKey,
+        querylog: cmdOptions.querylog,
+        adguardUrl: cmdOptions.adguardUrl,
+        adguardUser: cmdOptions.adguardUser,
+        adguardPass: cmdOptions.adguardPass,
+        piholeUrl: cmdOptions.piholeUrl,
+        piholeToken: cmdOptions.piholeToken,
+        limit: parseInt(cmdOptions.limit, 10) || 50,
+        json: cmdOptions.json,
+      });
+      if (!res.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(`AI Scan failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("ai-crawl <url>")
+  .description("Crawl web page, extract third-party origins, and detect ad servers")
+  .option("--provider <type>", "AI provider: ollama, gemini, openai, local-heuristics", "local-heuristics")
+  .option("--ollama-url <url>", "Ollama server URL", "http://127.0.0.1:11434")
+  .option("--model <name>", "Model name")
+  .option("--api-key <key>", "API key for Gemini or OpenAI")
+  .option("--json", "Output machine-readable JSON result")
+  .action(async (url, cmdOptions) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new AiCrawlCommand({ config, logger });
+      const res = await cmd.execute({
+        url,
+        provider: cmdOptions.provider,
+        ollamaUrl: cmdOptions.ollamaUrl,
+        model: cmdOptions.model,
+        apiKey: cmdOptions.apiKey,
+        json: cmdOptions.json,
+      });
+      if (!res.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(`AI Crawl failed: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
     }
   });

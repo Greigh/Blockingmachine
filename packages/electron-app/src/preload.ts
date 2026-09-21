@@ -51,6 +51,16 @@ contextBridge.exposeInMainWorld('electron', {
   setTheme: (theme: ThemeType) => ipcRenderer.invoke('set-theme', theme),
   getModuleContent: (moduleName: string) => ipcRenderer.invoke('get-module-content', moduleName) as Promise<string | null>,
 
+  // AI Radar Methods
+  aiScanDomain: (domain: string, config?: any) => ipcRenderer.invoke('ai-scan-domain', domain, config),
+  aiScanQueryLog: (options: { service: 'adguard' | 'pihole'; limit?: number }, config?: any) =>
+    ipcRenderer.invoke('ai-scan-querylog', options, config),
+  aiCrawlUrl: (url: string, config?: any) => ipcRenderer.invoke('ai-crawl-url', url, config),
+  getAiConfig: () => ipcRenderer.invoke('get-ai-config'),
+  setAiConfig: (config: any) => ipcRenderer.invoke('set-ai-config', config),
+  testAiConnection: (config: any) => ipcRenderer.invoke('test-ai-connection', config),
+  addCustomRules: (rules: string[]) => ipcRenderer.invoke('add-custom-rules', rules),
+
   onUpdateAvailable: (callback: (info: UpdateInfo) => void) => {
     const handler = (_event: IpcRendererEvent, info: UpdateInfo) => callback(info);
     ipcRenderer.on('update-available', handler);

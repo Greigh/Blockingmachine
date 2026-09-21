@@ -30,6 +30,9 @@ import {
   RuleDeduplicator,
   generateFilterList,
   filterLists,
+  AiDetectorService,
+  type AiProviderConfig,
+  type RawDnsQuery,
 } from '@blockingmachine/core';
 import type {
   FilterSource,
@@ -1878,6 +1881,200 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       } catch (error) {
         console.error('Failed to open external URL:', error);
         return { success: false, error: String(error) };
+      }
+    });
+
+    // ==========================================
+    // AI Radar IPC Handlers
+    // ==========================================
+    ipcMain.handle('get-ai-config', async () => {
+      const saved = store.get('aiConfig') as Partial<AiProviderConfig> | undefined;
+      return {
+        provider: saved?.provider || 'local-heuristics',
+        ollamaUrl: saved?.ollamaUrl || 'http://127.0.0.1:11434',
+        ollamaModel: saved?.ollamaModel || 'llama3.2',
+        apiKey: saved?.apiKey || '',
+        apiEndpoint: saved?.apiEndpoint || '',
+        modelName: saved?.modelName || '',
+      };
+    });
+
+    ipcMain.handle('set-ai-config', async (_event, config: Partial<AiProviderConfig>) => {
+      try {
+        const existing = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+        store.set('aiConfig', { ...existing, ...config });
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err?.message || String(err) };
+      }
+    });
+
+    ipcMain.handle('test-ai-connection', async (_event, config: Partial<AiProviderConfig>) => {
+      const start = Date.now();
+      const provider = config?.provider || 'local-heuristics';
+
+      if (provider === 'local-heuristics') {
+        return { success: true, latencyMs: 1, message: 'Local heuristic & Shannon entropy engine active (0ms offline)' };
+      }
+
+      if (provider === 'ollama') {
+        const url = config?.ollamaUrl || 'http://127.0.0.1:11434';
+        try {
+          const res = await fetch(`${url}/api/tags`);
+          const latencyMs = Date.now() - start;
+          if (res.ok) {
+            const data: any = await res.json();
+            const models = Array.isArray(data?.models) ? data.models.map((m: any) => m.name).join(', ') : '';
+            return { success: true, latencyMs, message: `Connected to Ollama. Models: ${models || 'ready'}` };
+          }
+          return { success: false, latencyMs, message: `Ollama returned HTTP ${res.status}: ${res.statusText}` };
+        } catch (err: any) {
+          return { success: false, latencyMs: Date.now() - start, message: `Cannot connect to Ollama at ${url} (${err?.message || err})` };
+        }
+      }
+
+      if (provider === 'gemini') {
+        const key = config?.apiKey;
+        if (!key) return { success: false, message: 'Missing Gemini API key' };
+        try {
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
+          const latencyMs = Date.now() - start;
+          if (res.ok) {
+            return { success: true, latencyMs, message: 'Successfully authenticated with Google Gemini API' };
+          }
+          return { success: false, latencyMs, message: `Gemini API authentication failed (HTTP ${res.status})` };
+        } catch (err: any) {
+          return { success: false, latencyMs: Date.now() - start, message: `Gemini test failed: ${err?.message || err}` };
+        }
+      }
+
+      if (provider === 'openai') {
+        const key = config?.apiKey;
+        const endpoint = config?.apiEndpoint || 'https://api.openai.com/v1';
+        if (!key) return { success: false, message: 'Missing API key' };
+        try {
+          const res = await fetch(`${endpoint}/models`, {
+            headers: { Authorization: `Bearer ${key}` },
+          });
+          const latencyMs = Date.now() - start;
+          if (res.ok) {
+            return { success: true, latencyMs, message: 'Successfully authenticated with OpenAI API' };
+          }
+          return { success: false, latencyMs, message: `OpenAI authentication failed (HTTP ${res.status})` };
+        } catch (err: any) {
+          return { success: false, latencyMs: Date.now() - start, message: `Connection test failed: ${err?.message || err}` };
+        }
+      }
+
+      return { success: true, message: 'Provider ready' };
+    });
+
+    ipcMain.handle('ai-scan-domain', async (_event, domain: string, overrideConfig?: Partial<AiProviderConfig>) => {
+      const savedConfig = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+      const activeConfig = { ...savedConfig, ...overrideConfig };
+      const service = new AiDetectorService(activeConfig);
+      return await service.scanDomain(domain, activeConfig);
+    });
+
+    ipcMain.handle('ai-scan-querylog', async (_event, options: { service: 'adguard' | 'pihole'; limit?: number }, overrideConfig?: Partial<AiProviderConfig>) => {
+      const savedConfig = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+      const activeConfig = { ...savedConfig, ...overrideConfig };
+      const service = new AiDetectorService(activeConfig);
+
+      const queries: RawDnsQuery[] = [];
+      const limit = options.limit || 50;
+
+      if (options.service === 'adguard') {
+        const baseUrl = store.get('adguardHomeUrl') || 'http://127.0.0.1:3000';
+        const user = store.get('adguardHomeUser') || '';
+        const pass = store.get('adguardHomePassword') || '';
+
+        try {
+          const headers: Record<string, string> = {};
+          if (user || pass) {
+            const auth = Buffer.from(`${user}:${pass}`).toString('base64');
+            headers.Authorization = `Basic ${auth}`;
+          }
+          const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/control/querylog?limit=${limit}`, { headers });
+          if (res.ok) {
+            const json: any = await res.json();
+            const data = Array.isArray(json?.data) ? json.data : [];
+            for (const item of data) {
+              const name = item?.question?.name;
+              const isBlocked = Boolean(item?.filter_id && item.filter_id > 0);
+              if (name && !isBlocked) {
+                queries.push({
+                  domain: name,
+                  client: item?.client,
+                  elapsedMs: item?.elapsed_ms,
+                  blocked: false,
+                });
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[AI Radar] Failed to fetch AdGuard query log:', err);
+        }
+      } else if (options.service === 'pihole') {
+        const baseUrl = store.get('piholeUrl') || 'http://127.0.0.1';
+        const token = store.get('piholeApiKey') || '';
+
+        try {
+          const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`);
+          if (res.ok) {
+            const json: any = await res.json();
+            const data = Array.isArray(json?.data) ? json.data : [];
+            for (const item of data) {
+              const name = item?.[2];
+              const status = item?.[4];
+              if (name && (status === '2' || status === '3')) {
+                queries.push({
+                  domain: name,
+                  client: item?.[3],
+                  blocked: false,
+                });
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[AI Radar] Failed to fetch Pi-hole query log:', err);
+        }
+      }
+
+      return await service.scanQueryLog(queries, activeConfig);
+    });
+
+    ipcMain.handle('ai-crawl-url', async (_event, url: string, overrideConfig?: Partial<AiProviderConfig>) => {
+      const savedConfig = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+      const activeConfig = { ...savedConfig, ...overrideConfig };
+      const service = new AiDetectorService(activeConfig);
+      return await service.crawlAndScanUrl(url, activeConfig);
+    });
+
+    ipcMain.handle('add-custom-rules', async (_event, newRules: string[]) => {
+      try {
+        const currentCustomRules = (store.get('customRules') as string) || '';
+        const existingLines = new Set(
+          currentCustomRules.split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
+        );
+
+        const added: string[] = [];
+        for (const rule of newRules) {
+          const trimmed = rule.trim();
+          if (trimmed && !existingLines.has(trimmed)) {
+            existingLines.add(trimmed);
+            added.push(trimmed);
+          }
+        }
+
+        if (added.length > 0) {
+          const updated = `${currentCustomRules ? `${currentCustomRules}\n` : ''}${added.join('\n')}`;
+          store.set('customRules', updated);
+        }
+
+        return { success: true, count: added.length };
+      } catch (err: any) {
+        return { success: false, count: 0, error: err?.message || String(err) };
       }
     });
 

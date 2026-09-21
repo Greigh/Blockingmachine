@@ -64,3 +64,6 @@ export type {
   FilterListMetadata,
   SupportedFormat,
 } from "./types.js";
+
+// AI Ad & Tracker Discovery Engine
+export * from "./ai/index.js";
