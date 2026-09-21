@@ -35,7 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         <div className="brand-info">
           <span className="brand-title">Blockingmachine</span>
-          <span className="brand-version">v1.0.0-beta.9</span>
+          <span className="brand-version">v1.0.0-rc.1</span>
         </div>
       </div>
 
@@ -116,9 +116,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
             </svg>
           </span>
-          <span className="sidebar-label">Modules</span>
-          <span className="sidebar-badge" style={{ background: 'rgba(0, 122, 255, 0.2)', color: 'var(--primary-color)', fontWeight: 700 }}>
-            Beta
+          <span className="sidebar-label">
+            Modules
+            <span className="sidebar-badge-inline">Beta</span>
           </span>
           <span className="sidebar-shortcut">⌘8</span>
         </button>
@@ -266,9 +266,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 12l4-4" />
             </svg>
           </span>
-          <span className="sidebar-label">AI Radar</span>
-          <span className="sidebar-badge beta" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.4)', fontWeight: 700 }}>
-            Beta
+          <span className="sidebar-label">
+            AI Radar
+            <span className="sidebar-badge-inline beta">Beta</span>
           </span>
           <span className="sidebar-shortcut">⌘9</span>
         </button>

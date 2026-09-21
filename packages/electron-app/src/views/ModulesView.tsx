@@ -106,6 +106,10 @@ export const NATIVE_DEFENSE_MODULES: NativeModuleItem[] = [
   },
 ];
 
+const getCleanModuleName = (name: string): string => {
+  return name.replace(/^Blockingmachine\s+/i, '').replace(/\s*\[Beta\]/i, '').trim();
+};
+
 interface ModulesViewProps {
   sources: FilterSource[];
   saveSources: (sources: FilterSource[]) => Promise<void>;
@@ -145,7 +149,8 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
   const moduleStatusMap = useMemo(() => {
     const map = new Map<string, boolean>();
     for (const mod of NATIVE_DEFENSE_MODULES) {
-      const match = sources.find((s) => s.url === mod.url || s.name === mod.name);
+      const cleanName = getCleanModuleName(mod.name);
+      const match = sources.find((s) => s.url === mod.url || s.name === mod.name || s.name.includes(cleanName));
       map.set(mod.id, match ? match.enabled : false);
     }
     return map;
@@ -162,7 +167,7 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
       if (categoryFilter !== 'all' && mod.category !== categoryFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchesName = mod.name.toLowerCase().includes(q);
+        const matchesName = mod.name.toLowerCase().includes(q) || getCleanModuleName(mod.name).toLowerCase().includes(q);
         const matchesDesc = mod.description.toLowerCase().includes(q);
         const matchesFeatures = mod.features.some((f) => f.toLowerCase().includes(q));
         if (!matchesName && !matchesDesc && !matchesFeatures) return false;
@@ -176,9 +181,10 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
     try {
       const isCurrentlyEnabled = moduleStatusMap.get(mod.id) || false;
       const targetState = !isCurrentlyEnabled;
+      const cleanName = getCleanModuleName(mod.name);
 
       let nextSources: FilterSource[];
-      const existingIndex = sources.findIndex((s) => s.url === mod.url || s.name === mod.name);
+      const existingIndex = sources.findIndex((s) => s.url === mod.url || s.name === mod.name || s.name.includes(cleanName));
 
       if (existingIndex >= 0) {
         nextSources = sources.map((s, idx) =>
@@ -201,7 +207,7 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
 
       await saveSources(nextSources);
       setSuccessMessage?.(
-        `${mod.name} ${targetState ? 'activated' : 'deactivated'}.`
+        `${cleanName} ${targetState ? 'activated' : 'deactivated'}.`
       );
     } catch (err) {
       console.error('Failed to toggle module:', err);
@@ -215,7 +221,8 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
       const nextSources = [...sources];
 
       for (const mod of NATIVE_DEFENSE_MODULES) {
-        const existingIndex = nextSources.findIndex((s) => s.url === mod.url || s.name === mod.name);
+        const cleanName = getCleanModuleName(mod.name);
+        const existingIndex = nextSources.findIndex((s) => s.url === mod.url || s.name === mod.name || s.name.includes(cleanName));
         if (existingIndex >= 0) {
           nextSources[existingIndex] = { ...nextSources[existingIndex], enabled: true };
         } else {
@@ -232,7 +239,7 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
       }
 
       await saveSources(nextSources);
-      setSuccessMessage?.('All 8 Blockingmachine Defense Modules [Beta] have been activated.');
+      setSuccessMessage?.('All 8 Defense Modules have been activated.');
     } catch (err) {
       console.error('Failed to enable Defense Suite:', err);
       setError?.(err instanceof Error ? err.message : 'Failed to enable Defense Suite.');
@@ -244,16 +251,17 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
     try {
       const moduleUrls = new Set(NATIVE_DEFENSE_MODULES.map((m) => m.url));
       const moduleNames = new Set(NATIVE_DEFENSE_MODULES.map((m) => m.name));
+      const cleanNames = new Set(NATIVE_DEFENSE_MODULES.map((m) => getCleanModuleName(m.name)));
 
       const nextSources = sources.map((s) => {
-        if (moduleUrls.has(s.url) || moduleNames.has(s.name)) {
+        if (moduleUrls.has(s.url) || moduleNames.has(s.name) || Array.from(cleanNames).some((cn) => s.name.includes(cn))) {
           return { ...s, enabled: false };
         }
         return s;
       });
 
       await saveSources(nextSources);
-      setSuccessMessage?.('All Blockingmachine Defense Modules deactivated.');
+      setSuccessMessage?.('All Defense Modules deactivated.');
     } catch (err) {
       console.error('Failed to disable modules:', err);
       setError?.(err instanceof Error ? err.message : 'Failed to disable modules.');
@@ -310,7 +318,10 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
             <span className="modules-pulse-dot" />
             <span>First-Party Beta Architecture</span>
           </div>
-          <h2 className="modules-hero-title">Native Defense Modules [Beta]</h2>
+          <h2 className="modules-hero-title">
+            Native Defense Modules
+            <span className="title-beta-badge">Beta</span>
+          </h2>
           <p className="modules-hero-subtitle">
             Modular, high-performance filter lists crafted natively for Blockingmachine.
             Mix and match granular shields for DNS sinkholes, Home Assistant, routers, and desktop browsers.
@@ -346,7 +357,12 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
                 onClick={onNavigateDeploy}
                 title="Open Deploy Hub to connect active modules to AdGuard Home, Pi-hole, and routers"
               >
-                <span>📡 Deploy & Sync</span>
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 11a9 9 0 0 1 9 9" />
+                  <path d="M4 4a16 16 0 0 1 16 16" />
+                  <circle cx="5" cy="19" r="1" />
+                </svg>
+                <span>Deploy & Sync</span>
               </button>
             )}
             {onTriggerCompile && (
@@ -396,19 +412,32 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
             className={`modules-pill-btn ${scopeFilter === 'hybrid' ? 'active' : ''}`}
             onClick={() => setScopeFilter('hybrid')}
           >
-            ⚡ Hybrid (5)
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+            <span>Hybrid (5)</span>
           </button>
           <button
             className={`modules-pill-btn ${scopeFilter === 'dns' ? 'active' : ''}`}
             onClick={() => setScopeFilter('dns')}
           >
-            🌐 DNS Only (2)
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="2" y1="12" x2="22" y2="12" />
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+            </svg>
+            <span>DNS Only (2)</span>
           </button>
           <button
             className={`modules-pill-btn ${scopeFilter === 'browser' ? 'active' : ''}`}
             onClick={() => setScopeFilter('browser')}
           >
-            💻 Browser (2)
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+            <span>Browser (2)</span>
           </button>
         </div>
 
@@ -434,6 +463,7 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
       <div className="modules-grid">
         {filteredModules.map((mod) => {
           const isEnabled = moduleStatusMap.get(mod.id) || false;
+          const cleanName = getCleanModuleName(mod.name);
 
           return (
             <div
@@ -442,12 +472,40 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
             >
               <div className="module-card-header">
                 <div className="module-title-group">
-                  <span className="module-name">{mod.name}</span>
+                  <div className="module-title-heading-row">
+                    <span className="module-name">{cleanName}</span>
+                    <span className="module-card-beta-badge">Beta</span>
+                  </div>
                   <div className="module-tag-row">
                     <span className={`module-scope-tag scope-${mod.scope}`}>
-                      {mod.scope === 'dns' && '🌐 DNS Sinkhole'}
-                      {mod.scope === 'browser' && '💻 Browser Layer'}
-                      {mod.scope === 'hybrid' && '⚡ Hybrid (DNS + Browser)'}
+                      {mod.scope === 'dns' && (
+                        <>
+                          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="10" />
+                            <line x1="2" y1="12" x2="22" y2="12" />
+                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                          </svg>
+                          <span>DNS Sinkhole</span>
+                        </>
+                      )}
+                      {mod.scope === 'browser' && (
+                        <>
+                          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                            <line x1="8" y1="21" x2="16" y2="21" />
+                            <line x1="12" y1="17" x2="12" y2="21" />
+                          </svg>
+                          <span>Browser Layer</span>
+                        </>
+                      )}
+                      {mod.scope === 'hybrid' && (
+                        <>
+                          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                          </svg>
+                          <span>Hybrid (DNS + Browser)</span>
+                        </>
+                      )}
                     </span>
                     <span className="module-category-tag">{mod.category}</span>
                   </div>
@@ -516,16 +574,26 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
           <div className="module-viewer-modal" onClick={(e) => e.stopPropagation()}>
             <div className="module-viewer-header">
               <div className="module-viewer-title-group">
-                <span className="module-viewer-badge">★ First-Party Module [Beta]</span>
-                <h3>{viewingModule.name}</h3>
+                <span className="module-viewer-badge">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                  </svg>
+                  <span>First-Party Module</span>
+                  <span className="title-beta-badge">Beta</span>
+                </span>
+                <h3>{getCleanModuleName(viewingModule.name)}</h3>
                 <span className="module-viewer-sub">{viewingModule.filename}</span>
               </div>
               <button
                 className="module-viewer-close-btn"
                 onClick={() => setViewingModule(null)}
                 title="Close viewer"
+                aria-label="Close viewer"
               >
-                ✕
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
               </button>
             </div>
 

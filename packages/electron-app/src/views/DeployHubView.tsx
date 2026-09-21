@@ -270,7 +270,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
         <div className="deploy-card export-file-card">
           <div className="deploy-card-header">
             <div className="deploy-card-title-group">
-              <span className="deploy-card-icon">📁</span>
+              <span className="deploy-card-icon">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                </svg>
+              </span>
               <div>
                 <h4 className="deploy-card-title">Compiled Target List</h4>
                 <span className="deploy-card-subtitle">
@@ -357,7 +361,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
         <div className="deploy-card server-feed-card">
           <div className="deploy-card-header">
             <div className="deploy-card-title-group">
-              <span className="deploy-card-icon">📡</span>
+              <span className="deploy-card-icon">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 11a9 9 0 0 1 9 9" />
+                  <path d="M4 4a16 16 0 0 1 16 16" />
+                  <circle cx="5" cy="19" r="1" />
+                </svg>
+              </span>
               <div>
                 <h4 className="deploy-card-title">Local Network Feed Server</h4>
                 <span className="deploy-card-subtitle">
@@ -407,10 +417,22 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
             )}
           </div>
 
-          <p className="server-help-hint">
-            {serverStatus?.isRunning
-              ? '✅ Server is active on port 9191. Any device on your local Wi-Fi/Ethernet network can subscribe to this URL.'
-              : '💡 Turn on this server if Pi-hole or AdGuard Home is running on a Raspberry Pi or Docker container that cannot access local files directly.'}
+          <p className="server-help-hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {serverStatus?.isRunning ? (
+              <>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success, #10b981)', flexShrink: 0 }}>
+                  <path d="M20 6L9 17l-5-5" />
+                </svg>
+                <span>Server is active on port 9191. Any device on your local Wi-Fi/Ethernet network can subscribe to this URL.</span>
+              </>
+            ) : (
+              <>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--accent-primary, #6366f1)', flexShrink: 0 }}>
+                  <path d="M9 18h6m-4 4h2m-1-18a7 7 0 0 0-7 7c0 3 2 5 3 6v2h8v-2c1-1 3-3 3-6a7 7 0 0 0-7-7z" />
+                </svg>
+                <span>Turn on this server if Pi-hole or AdGuard Home is running on a Raspberry Pi or Docker container that cannot access local files directly.</span>
+              </>
+            )}
           </p>
         </div>
       </div>
@@ -423,7 +445,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
           className={`platform-tab-btn ${activeTab === 'adguard-home' ? 'active' : ''}`}
           onClick={() => setActiveTab('adguard-home')}
         >
-          <span className="platform-tab-icon">🛡️</span>
+          <span className="platform-tab-icon">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+          </span>
           <span className="platform-tab-label">AdGuard Home</span>
         </button>
 
@@ -433,7 +459,16 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
           className={`platform-tab-btn ${activeTab === 'pihole' ? 'active' : ''}`}
           onClick={() => setActiveTab('pihole')}
         >
-          <span className="platform-tab-icon">🥧</span>
+          <span className="platform-tab-icon">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="4" width="16" height="16" rx="2" />
+              <rect x="9" y="9" width="6" height="6" />
+              <line x1="9" y1="1" x2="9" y2="4" />
+              <line x1="15" y1="1" x2="15" y2="4" />
+              <line x1="9" y1="20" x2="9" y2="23" />
+              <line x1="15" y1="20" x2="15" y2="23" />
+            </svg>
+          </span>
           <span className="platform-tab-label">Pi-hole</span>
         </button>
 
@@ -443,7 +478,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
           className={`platform-tab-btn ${activeTab === 'adguard-desktop' ? 'active' : ''}`}
           onClick={() => setActiveTab('adguard-desktop')}
         >
-          <span className="platform-tab-icon">💻</span>
+          <span className="platform-tab-icon">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+          </span>
           <span className="platform-tab-label">AdGuard App</span>
         </button>
 
@@ -453,7 +494,12 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
           className={`platform-tab-btn ${activeTab === 'hosts' ? 'active' : ''}`}
           onClick={() => setActiveTab('hosts')}
         >
-          <span className="platform-tab-icon">🖥️</span>
+          <span className="platform-tab-icon">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+          </span>
           <span className="platform-tab-label">System Hosts</span>
         </button>
 
@@ -463,7 +509,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
           className={`platform-tab-btn ${activeTab === 'dnsmasq' ? 'active' : ''}`}
           onClick={() => setActiveTab('dnsmasq')}
         >
-          <span className="platform-tab-icon">🌐</span>
+          <span className="platform-tab-icon">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="2" y1="12" x2="22" y2="12" />
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+            </svg>
+          </span>
           <span className="platform-tab-label">Routers & DNS</span>
         </button>
       </div>
@@ -486,7 +538,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   onClick={() => handleTestConnection('adguard')}
                   disabled={testingService === 'adguard'}
                 >
-                  {testingService === 'adguard' ? 'Testing Connection…' : '⚡ Test AdGuard Connection'}
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6 }}>
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                  </svg>
+                  <span>{testingService === 'adguard' ? 'Testing Connection…' : 'Test AdGuard Connection'}</span>
                 </button>
                 {testResult?.service === 'adguard' && (
                   <span className={`test-status-pill ${testResult.success ? 'success' : 'error'}`}>
@@ -510,7 +565,12 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                     }
                   }}
                 >
-                  <span className="env-pill-icon">🏠</span>
+                  <span className="env-pill-icon">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                      <polyline points="9 22 9 12 15 12 15 22" />
+                    </svg>
+                  </span>
                   <span className="env-pill-label">Home Assistant Add-on</span>
                 </button>
 
@@ -519,7 +579,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   className={`env-pill-btn ${adguardEnv === 'docker' ? 'active' : ''}`}
                   onClick={() => setAdguardEnv('docker')}
                 >
-                  <span className="env-pill-icon">🐳</span>
+                  <span className="env-pill-icon">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                      <line x1="12" y1="22.08" x2="12" y2="12" />
+                    </svg>
+                  </span>
                   <span className="env-pill-label">Docker & NAS (Unraid / Synology)</span>
                 </button>
 
@@ -533,7 +599,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                     }
                   }}
                 >
-                  <span className="env-pill-icon">🌐</span>
+                  <span className="env-pill-icon">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="2" y1="12" x2="22" y2="12" />
+                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                    </svg>
+                  </span>
                   <span className="env-pill-label">GL.iNet & Routers</span>
                 </button>
 
@@ -542,7 +614,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   className={`env-pill-btn ${adguardEnv === 'standalone' ? 'active' : ''}`}
                   onClick={() => setAdguardEnv('standalone')}
                 >
-                  <span className="env-pill-icon">🖥️</span>
+                  <span className="env-pill-icon">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                      <line x1="8" y1="21" x2="16" y2="21" />
+                      <line x1="12" y1="17" x2="12" y2="21" />
+                    </svg>
+                  </span>
                   <span className="env-pill-label">Standalone / Linux / Pi</span>
                 </button>
               </div>
@@ -687,7 +765,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   {!serverStatus?.isRunning && (
                     <div className="inline-feed-alert">
                       <div className="inline-feed-alert-text">
-                        <span>⚠️</span>
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
                         <span>
                           <strong>Feed Server is Offline:</strong> Devices on your network ({adguardEnv === 'homeassistant' ? 'Home Assistant' : 'Pi / Router / Docker'}) cannot download your blocklists until this server is started.
                         </span>
@@ -828,7 +910,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        🏠 homeassistant.local:3000
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                          <polyline points="9 22 9 12 15 12 15 22" />
+                        </svg>
+                        homeassistant.local:3000
                       </button>
                       <button
                         type="button"
@@ -841,7 +927,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        🏠 homeassistant:3000
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                          <polyline points="9 22 9 12 15 12 15 22" />
+                        </svg>
+                        homeassistant:3000
                       </button>
                       <button
                         type="button"
@@ -854,7 +944,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        🏠 HA API (port 8123)
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                          <polyline points="9 22 9 12 15 12 15 22" />
+                        </svg>
+                        HA API (port 8123)
                       </button>
                       <button
                         type="button"
@@ -867,7 +961,12 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        🌐 GL.iNet (192.168.8.1)
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="2" y1="12" x2="22" y2="12" />
+                          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                        </svg>
+                        GL.iNet (192.168.8.1)
                       </button>
                       <button
                         type="button"
@@ -880,7 +979,12 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        🐳 Docker (localhost:3000)
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                          <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                          <line x1="12" y1="22.08" x2="12" y2="12" />
+                        </svg>
+                        Docker (localhost:3000)
                       </button>
                       <button
                         type="button"
@@ -893,7 +997,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        ☁️ Nabu Casa Cloud
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+                        </svg>
+                        Nabu Casa Cloud
                       </button>
                       <button
                         type="button"
@@ -906,7 +1013,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        ☁️ Nabu Casa Webhook
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+                        </svg>
+                        Nabu Casa Webhook
                       </button>
                     </div>
 
@@ -914,7 +1024,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                     {sinkholeConfig.adguardMode === 'direct' &&
                       sinkholeConfig.adguardHomeUrl?.includes('nabu.casa') && (
                         <div className="nabu-warning-banner">
-                          <span>⚠️</span>
+                          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                            <line x1="12" y1="9" x2="12" y2="13" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                          </svg>
                           <div>
                             <strong>Nabu Casa does not proxy AdGuard direct port 3000!</strong>
                             <div>
@@ -924,7 +1038,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                               <button
                                 type="button"
                                 className="secondary-button"
-                                style={{ fontSize: '11px', padding: '3px 8px' }}
+                                style={{ fontSize: '11px', padding: '3px 8px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
                                 onClick={() =>
                                   setSinkholeConfig({
                                     ...sinkholeConfig,
@@ -932,7 +1046,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                                   })
                                 }
                               >
-                                ⚡ Switch to Home Assistant REST API
+                                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                                </svg>
+                                <span>Switch to Home Assistant REST API</span>
                               </button>
                             </div>
                           </div>
@@ -973,13 +1090,28 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                                 onClick={() => setShowHaToken(!showHaToken)}
                                 title={showHaToken ? 'Hide token' : 'Show token'}
                               >
-                                {showHaToken ? '👁️' : '👁️‍🗨️'}
+                                {showHaToken ? (
+                                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                    <circle cx="12" cy="12" r="3" />
+                                  </svg>
+                                ) : (
+                                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                                    <line x1="1" y1="1" x2="23" y2="23" />
+                                  </svg>
+                                )}
                               </button>
                             </div>
                           </div>
 
-                          <div className="method-note">
-                            💡 In Home Assistant, click your user profile (bottom left) → Security tab → scroll down to <strong>Long-Lived Access Tokens</strong> → Create Token. Blockingmachine calls the native <code>adguard.refresh</code> service automatically. (Works seamlessly with local <code>http://homeassistant.local:8123</code> or Nabu Casa <code>https://*.ui.nabu.casa</code>).
+                          <div className="method-note" style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2, color: 'var(--accent-primary, #6366f1)' }}>
+                              <path d="M9 18h6m-4 4h2m-1-18a7 7 0 0 0-7 7c0 3 2 5 3 6v2h8v-2c1-1 3-3 3-6a7 7 0 0 0-7-7z" />
+                            </svg>
+                            <div>
+                              In Home Assistant, click your user profile (bottom left) → Security tab → scroll down to <strong>Long-Lived Access Tokens</strong> → Create Token. Blockingmachine calls the native <code>adguard.refresh</code> service automatically. (Works seamlessly with local <code>http://homeassistant.local:8123</code> or Nabu Casa <code>https://*.ui.nabu.casa</code>).
+                            </div>
                           </div>
                         </div>
                       ) : sinkholeConfig.adguardMode === 'webhook' ? (
@@ -996,8 +1128,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                               }
                             />
                           </div>
-                          <div className="method-note">
-                            💡 In Home Assistant: create an Automation with a <strong>Webhook Trigger</strong> (local or Nabu Casa Cloud Webhook) and an action that calls <code>adguard.refresh</code>. No passwords required!
+                          <div className="method-note" style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2, color: 'var(--accent-primary, #6366f1)' }}>
+                              <path d="M9 18h6m-4 4h2m-1-18a7 7 0 0 0-7 7c0 3 2 5 3 6v2h8v-2c1-1 3-3 3-6a7 7 0 0 0-7-7z" />
+                            </svg>
+                            <div>
+                              In Home Assistant: create an Automation with a <strong>Webhook Trigger</strong> (local or Nabu Casa Cloud Webhook) and an action that calls <code>adguard.refresh</code>. No passwords required!
+                            </div>
                           </div>
                         </div>
                       ) : (
@@ -1044,7 +1181,17 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                                 onClick={() => setShowAdguardPass(!showAdguardPass)}
                                 title={showAdguardPass ? 'Hide password' : 'Show password'}
                               >
-                                {showAdguardPass ? '👁️' : '👁️‍🗨️'}
+                                {showAdguardPass ? (
+                                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                    <circle cx="12" cy="12" r="3" />
+                                  </svg>
+                                ) : (
+                                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                                    <line x1="1" y1="1" x2="23" y2="23" />
+                                  </svg>
+                                )}
                               </button>
                             </div>
                           </div>
@@ -1068,7 +1215,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             onClick={() => handleTestConnection('adguard')}
                             disabled={testingService === 'adguard' || (!sinkholeConfig.adguardHomeUrl && !sinkholeConfig.haWebhookUrl)}
                           >
-                            {testingService === 'adguard' ? 'Testing…' : '⚡ Test Connection'}
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 5 }}>
+                              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                            </svg>
+                            <span>{testingService === 'adguard' ? 'Testing…' : 'Test Connection'}</span>
                           </button>
                         </div>
 
@@ -1101,7 +1251,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   onClick={() => handleTestConnection('pihole')}
                   disabled={testingService === 'pihole'}
                 >
-                  {testingService === 'pihole' ? 'Testing Connection…' : '⚡ Test Pi-hole Connection'}
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6 }}>
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                  </svg>
+                  <span>{testingService === 'pihole' ? 'Testing Connection…' : 'Test Pi-hole Connection'}</span>
                 </button>
                 {testResult?.service === 'pihole' && (
                   <span className={`test-status-pill ${testResult.success ? 'success' : 'error'}`}>
@@ -1150,7 +1303,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   {!serverStatus?.isRunning && (
                     <div className="inline-feed-alert">
                       <div className="inline-feed-alert-text">
-                        <span>⚠️</span>
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
                         <span>
                           <strong>Feed Server is Offline:</strong> Pi-hole (including Home Assistant Pi-hole Add-on) cannot download lists until this server is started.
                         </span>
@@ -1272,7 +1429,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        🏠 HA Add-on (port 8080)
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                          <polyline points="9 22 9 12 15 12 15 22" />
+                        </svg>
+                        HA Add-on (port 8080)
                       </button>
                       <button
                         type="button"
@@ -1284,7 +1445,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        🏠 homeassistant:8080
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                          <polyline points="9 22 9 12 15 12 15 22" />
+                        </svg>
+                        homeassistant:8080
                       </button>
                       <button
                         type="button"
@@ -1296,7 +1461,19 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        🥧 pi.hole/admin
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <rect x="4" y="4" width="16" height="16" rx="2" />
+                          <rect x="9" y="9" width="6" height="6" />
+                          <line x1="9" y1="1" x2="9" y2="4" />
+                          <line x1="15" y1="1" x2="15" y2="4" />
+                          <line x1="9" y1="20" x2="9" y2="23" />
+                          <line x1="15" y1="20" x2="15" y2="23" />
+                          <line x1="20" y1="9" x2="23" y2="9" />
+                          <line x1="20" y1="14" x2="23" y2="14" />
+                          <line x1="1" y1="9" x2="4" y2="9" />
+                          <line x1="1" y1="14" x2="4" y2="14" />
+                        </svg>
+                        pi.hole/admin
                       </button>
                       <button
                         type="button"
@@ -1308,7 +1485,12 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           })
                         }
                       >
-                        🐳 Docker (port 80)
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                          <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                          <line x1="12" y1="22.08" x2="12" y2="12" />
+                        </svg>
+                        Docker (port 80)
                       </button>
                     </div>
 
@@ -1344,7 +1526,17 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                               onClick={() => setShowPiholeKey(!showPiholeKey)}
                               title={showPiholeKey ? 'Hide key' : 'Show key'}
                             >
-                              {showPiholeKey ? '👁️' : '👁️‍🗨️'}
+                              {showPiholeKey ? (
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                  <circle cx="12" cy="12" r="3" />
+                                </svg>
+                              ) : (
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                                  <line x1="1" y1="1" x2="23" y2="23" />
+                                </svg>
+                              )}
                             </button>
                           </div>
                         </div>
@@ -1367,7 +1559,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             onClick={() => handleTestConnection('pihole')}
                             disabled={testingService === 'pihole' || !sinkholeConfig.piholeUrl}
                           >
-                            {testingService === 'pihole' ? 'Testing…' : '⚡ Test Connection'}
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 5 }}>
+                              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                            </svg>
+                            <span>{testingService === 'pihole' ? 'Testing…' : 'Test Connection'}</span>
                           </button>
                         </div>
 
@@ -1489,7 +1684,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   <div className="snippet-choice-group">
                     <div className="snippet-box">
                       <div className="snippet-header">
-                        <span>🍎 macOS Terminal Command</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 20.94c1.5 0 2.75-.5 3.5-1.5 1.5-2 1.5-5 0-7-1.25-1.5-3-1.5-4.5-1.5s-3.25 0-4.5 1.5c-1.5 2-1.5 5 0 7 .75 1 2 1.5 3.5 1.5" />
+                            <path d="M12 2a4 4 0 0 0-4 4" />
+                          </svg>
+                          macOS Terminal Command
+                        </span>
                         <button
                           className="copy-snippet-btn"
                           onClick={() => handleCopy(`sudo cp "${savePath}" /etc/hosts && sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`, 'hosts-mac')}
@@ -1502,7 +1703,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
 
                     <div className="snippet-box">
                       <div className="snippet-header">
-                        <span>🐧 Linux Terminal Command</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="4 17 10 11 4 5" />
+                            <line x1="12" y1="19" x2="20" y2="19" />
+                          </svg>
+                          Linux Terminal Command
+                        </span>
                         <button
                           className="copy-snippet-btn"
                           onClick={() => handleCopy(`sudo cp "${savePath}" /etc/hosts && sudo systemd-resolve --flush-caches`, 'hosts-linux')}
@@ -1515,7 +1722,15 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
 
                     <div className="snippet-box">
                       <div className="snippet-header">
-                        <span>🪟 Windows PowerShell (Run as Administrator)</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="3" width="8" height="8" />
+                            <rect x="13" y="3" width="8" height="8" />
+                            <rect x="3" y="13" width="8" height="8" />
+                            <rect x="13" y="13" width="8" height="8" />
+                          </svg>
+                          Windows PowerShell (Run as Administrator)
+                        </span>
                         <button
                           className="copy-snippet-btn"
                           onClick={() => handleCopy(`Copy-Item "${savePath}" -Destination "$env:SystemRoot\\System32\\drivers\\etc\\hosts" -Force; ipconfig /flushdns`, 'hosts-win')}
@@ -1615,7 +1830,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                       disabled={!customWebhookUrl}
                       title="Test webhook endpoint delivery"
                     >
-                      <span>⚡ Test Webhook URL</span>
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6 }}>
+                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                      </svg>
+                      <span>Test Webhook URL</span>
                     </button>
                   </div>
 
@@ -1662,7 +1880,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           onClick={() => handleTestConnection('webhook')}
                           disabled={!customWebhookUrl}
                         >
-                          ⚡ Test Webhook
+                          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 5 }}>
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                          </svg>
+                          <span>Test Webhook</span>
                         </button>
                       </div>
 

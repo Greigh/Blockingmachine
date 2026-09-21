@@ -270,8 +270,19 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
             <span className="bulk-templates-sub">Click to append popular filter lists directly into your import queue</span>
           </div>
           <div className="engine-feature-pills">
-            <span className="feature-pill">⚡ 5x Parallel Fetch</span>
-            <span className="feature-pill">🔍 Auto-Deduplication</span>
+            <span className="feature-pill">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+              </svg>
+              5x Parallel Fetch
+            </span>
+            <span className="feature-pill">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              Auto-Deduplication
+            </span>
           </div>
         </div>
 

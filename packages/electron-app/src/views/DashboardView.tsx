@@ -257,7 +257,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Snapshot Summary Cards (Pre-run overview) */}
       <div className="overview-stats-grid">
         <div className="desktop-card summary-card">
-          <div className="summary-icon-wrap icon-shield">🛡️</div>
+          <div className="summary-icon-wrap icon-shield">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+          </div>
           <div className="summary-data-col">
             <span className="summary-num">{dashboardStats.enabledSources}/{dashboardStats.totalSources}</span>
             <span className="summary-label">Active Sources</span>
@@ -265,7 +269,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         <div className="desktop-card summary-card">
-          <div className="summary-icon-wrap icon-pencil">✍️</div>
+          <div className="summary-icon-wrap icon-pencil">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+            </svg>
+          </div>
           <div className="summary-data-col">
             <span className="summary-num">{dashboardStats.customRulesCount}</span>
             <span className="summary-label">Custom Rules</span>
@@ -273,7 +281,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         <div className="desktop-card summary-card">
-          <div className="summary-icon-wrap icon-clock">🕒</div>
+          <div className="summary-icon-wrap icon-clock">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </div>
           <div className="summary-data-col">
             <span className="summary-num">{dashboardStats.lastProcessedTime ? dashboardStats.lastProcessedTime.split(',')[0] : 'Never'}</span>
             <span className="summary-label">Last Compilation</span>
@@ -282,7 +295,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {ruleDeltaText && (
           <div className={`desktop-card summary-card delta-card ${isPositiveDelta ? 'pos' : 'neg'}`}>
-            <div className="summary-icon-wrap">{isPositiveDelta ? '📈' : '📉'}</div>
+            <div className="summary-icon-wrap">
+              {isPositiveDelta ? (
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
+                  <polyline points="17 6 23 6 23 12" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#38bdf8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="23 18 13.5 8.5 8.5 13.5 1 6" />
+                  <polyline points="17 18 23 18 23 12" />
+                </svg>
+              )}
+            </div>
             <div className="summary-data-col">
               <span className="summary-num delta-num">{isPositiveDelta ? 'Expanding' : 'Optimized'}</span>
               <span className="summary-label" title={ruleDeltaText}>{ruleDeltaText}</span>
