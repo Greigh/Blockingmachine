@@ -1,334 +1,219 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/Greigh/Blockingmachine/main/assets/Blockingmachine.png" width="200" alt="Blockingmachine Logo" />
+  <img src="https://raw.githubusercontent.com/Greigh/Blockingmachine/main/assets/Blockingmachine.png" width="180" alt="Blockingmachine Logo" />
 
-# Blockingmachine Desktop
+# Blockingmachine
 
-[![LICENSE](https://img.shields.io/github/license/greigh/Blockingmachine)](LICENSE)
-[![ELECTRON](https://img.shields.io/badge/built%20with-Electron-blue.svg)](https://www.electronjs.org/)
-[![TYPESCRIPT](https://img.shields.io/badge/written%20in-TypeScript-3178c6.svg)](https://www.typescriptlang.org/)
+[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--beta.9-orange.svg)](https://github.com/greigh/Blockingmachine/releases)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/)
+[![Built with Electron](https://img.shields.io/badge/Built%20with-Electron-47848F.svg)](https://www.electronjs.org/)
+[![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript-3178C6.svg)](https://www.typescriptlang.org/)
+[![Tests](https://img.shields.io/badge/Tests-173%20Passing-brightgreen.svg)]()
 
-_Modern, lightweight ad-blocking filter management tool for your desktop_
+_Next-generation network-level ad blocking, telemetry defense, and AI-powered filter synthesis for homelabs and desktops._
 
 </div>
 
 ---
 
-# Related Projects
+## Overview
 
-- [Blockingmachine Core](https://github.com/greigh/Blockingmachine-core)
-- [Blockingmachine CLI](https://github.com/greigh/Blockingmachine-cli)
-- [Blockingmachine Database](https://github.com/greigh/Blockingmachine-database)
+**Blockingmachine** is a modern, modular monorepo that unifies high-performance filter list compilation, homelab sinkhole deployment (AdGuard Home, Pi-hole), and machine-learning heuristic ad/telemetry discovery into an integrated ecosystem:
+
+- **Desktop Application (`@blockingmachine/electron-app`)**: A cross-platform Electron + React desktop suite featuring the **AI Defense Radar**, **Deploy Hub**, **Defense Modules [Beta]**, and **Rule Browser**.
+- **Core Engine (`@blockingmachine/core`)**: Zero-dependency filter rule parser, hierarchy-aware subdomain deduplicator, ABP/AdGuard/Hosts export formatters, Shannon entropy analyzer, and CNAME uncloaker.
+- **CLI (`@blockingmachine/cli`)**: Production command-line tool (`blockingmachine`) for automated CI/CD pipelines, local feed servers, diffing, and DNS diagnostics.
+- **Database & Audit Layer (`blockingmachine-database`)**: Offline JSONL and MongoDB audit logging and rule snapshot rollback engine.
 
 ---
 
-## Features
+## Monorepo Architecture
 
-### 🚀 Advanced Filter Management
-- **Multiple Filter Sources**: Import and manage filter lists from various sources
-- **Custom Rules**: Add your own custom blocking rules alongside existing lists
-- **Smart Deduplication**: Automatically removes duplicate rules to optimize performance
-- **Rule Statistics**: View detailed information about processed rules
-
-### 💡 User-Friendly Interface
-- **Light & Dark Mode**: Adapts to your system theme or choose your preference
-- **Modern UI**: Clean, intuitive interface with responsive design
-- **Interactive Dashboard**: Visualize your filter statistics
-- **Progress Tracking**: Real-time progress indicators during processing
-
-### 🔄 Export Flexibility
-- **Multiple Application Support**: Export to various formats including:
-  - AdGuard Home
-  - AdBlock Plus
-  - uBlock Origin
-  - Hosts File
-  - dnsmasq
-  - Unbound
-  - Domain List
-  - Plain Text
-
-### ⚙️ Seamless Experience
-- **Automatic Updates**: Stay current with the latest app improvements
-- **Cross-Platform**: Works on Windows (Coming soon), macOS (Beta), and Linux (Linux support coming soon)
-- **Persistent Settings**: Your configuration is saved between sessions
-- **Fast Processing**: Efficient handling of even large filter lists
-- **User Feedback**: We welcome your feedback to improve the app
-- **Community Driven**: Open-source project with contributions from the community
-- **Privacy First**: No data collection, your filter lists stay local
-  - While this is a local application, we do not collect any data or telemetry. Your filter lists and rules are processed entirely on your machine.
-  - We may change this in the future to allow for cloud processing and **data sharing**, but this will be an opt-in feature and will be clearly communicated.
-  - We are committed to transparency regarding any future changes to data handling practices.
-
-## Installation
-
-### macOS (Beta)
-1. Download the latest `.dmg` file from [Releases](https://github.com/greigh/Blockingmachine/releases)
-2. Open the `.dmg` file and drag Blockingmachine to your Applications folder
-3. Open Blockingmachine from your Applications folder 
-4. The app should be properly signed and notarized. If you encounter a security warning, open Privacy & Security settings, scroll to the bottom, and allow the app to run
-
-### Windows (Coming Soon)
-1. Download the latest `.exe` installer from [Releases](https://github.com/greigh/Blockingmachine/releases)
-2. Run the installer and follow the prompts
-3. Launch Blockingmachine from the Start menu
-4. **Note**: Windows support is currently in beta. Please see the [Windows Support](#windows-support-beta) section for more details.
-5. **Known Limitations**: The Windows version may require additional permissions for filter list generation and update functionality.
-6. **Reporting Windows Issues**: If you encounter issues with the Windows version, please check our [GitHub Issues](https://github.com/greigh/Blockingmachine/issues) to see if it's already reported.
-
-### Linux (Coming Soon)
-1. Download the `.AppImage` or `.deb` package from [Releases](https://github.com/greigh/Blockingmachine/releases)
-2. Make the AppImage executable: `chmod +x Blockingmachine*.AppImage`
-3. Run the AppImage or install the .deb package
-4. **Note**: Linux support is coming soon. Please check back for updates.
-
-## Windows Support (Coming Soon)
-
-The Windows version of Blockingmachine is currently in beta testing. While we've implemented all the necessary components for Windows support, it hasn't been extensively tested on all Windows configurations.
-
-### Known Limitations
-
-- The Windows version may require additional permissions for filter list generation and update functionality
-- Some visual elements may appear differently compared to the macOS version
-- The app has been tested primarily on Windows 10/11, older versions may have compatibility issues
-
-### Windows-Specific Features
-
-- Installation includes automatic setup of application folders
-- Native Windows notifications for update alerts
-- Option to run at startup (configurable in Settings)
-- Context menu integration for .blocklist files
-
-### Reporting Windows Issues
-
-If you encounter issues with the Windows version:
-
-1. Please check our [GitHub Issues](https://github.com/greigh/Blockingmachine/issues) to see if it's already reported
-2. If not, submit a new issue with:
-   - Your Windows version
-   - Steps to reproduce the problem
-   - Any error messages you receive
-   - Screenshots if applicable
-
-We're actively working to improve the Windows experience and appreciate your feedback during this beta phase.
-
-## Quick Start
-
-1. **Add Filter Sources**
-   - Navigate to the Sources tab
-   - Add popular filter lists or custom sources
-   - Enable the sources you want to use
-
-2. **Add Custom Rules (Optional)**
-   - Navigate to the Custom Rules tab
-   - Add any specific rules you need
-
-3. **Process Rules**
-   - Go to the Process tab
-   - Click "Generate Filter Lists"
-   - Wait for processing to complete
-
-4. **Use Your Generated List**
-   - Find your exported file in the configured save location
-   - Import it into your ad-blocker or DNS blocker of choice
-
-## Development Timeline
-
-### Current Release (v1.0.0-beta.3)
-- 🚀 Core functionality implementation
-- 💻 macOS support (beta - stable)
-- 🔄 Automatic updates (beta)
-- 🌓 Light and dark mode
-- 📊 Basic statistics dashboard
-- 🗄️ Multiple export formats
-- 🔍 Rule filtering capabilities
-- 🐞 Initial bug fixes
-
-### Upcoming Features (v1.0.0)
-- 📱 Enhanced UI responsiveness
-- 🖥️ Windows support
-- 🐧 Linux support
-- ⚡ Performance optimizations for large lists
-- 💾 Better offline capabilities
-- 📝 Enhanced logging and diagnostics
-- 🔔 Customizable notifications
-- 🔄 Background list updates
-
-### Future Roadmap (v2.0+)
-- 🌐 Built-in network monitoring
-- ☁️ Optional cloud synchronization
-- 📊 Advanced analytics dashboard
-- 🧩 Extension/plugin system
-- 🛡️ Enhanced security features
-- 🔧 Rule editor with syntax highlighting
-- 🌍 Internationalization support
-- 📂 Profile management for different devices/networks
-
-### Version History
-
-#### 1.0.0-beta.3 (Latest)
-- Fixed critical stability issues
-- Enhanced dark mode implementation
-- Improved memory usage for large filter lists
-- Documentation improvements
-- Updated README for clarity and consistency
-- ** Had to delay Windows support due to critical issues with the installer. I am working on a fix and will release an update soon. **
-
-#### 1.0.0-beta.2
-- 🎉 Initial public beta release
-- Performance optimizations
-- Improved UI responsiveness
-- Added export to additional formats
-- Fixed file handling issues
-- Enhanced status reporting
-- Added auto-update functionality
-- Added basic dashboard statistics
-
-#### 1.0.0-beta.1
-- Initial macOS-only release
-- Basic UI implementation
-- Core filtering functionality
-- Settings persistence
-- Essential export options
-
-## Advanced Usage
-
-### Managing Filter Sources
-
-```json
-// Example filter source structure
-{
-  "name": "EasyList",
-  "url": "https://easylist.to/easylist/easylist.txt",
-  "enabled": true
-}
+```
+Blockingmachine/
+├── packages/
+│   ├── core/           # @blockingmachine/core (Rule engine, parsers, AI heuristic engine)
+│   ├── cli/            # @blockingmachine/cli (CLI binary, local server, diffing, diagnostics)
+│   ├── electron-app/   # @blockingmachine/electron-app (Desktop GUI, Deploy Hub, AI Radar)
+│   └── database/       # Database schemas, scripts, and snapshot management
+├── package.json        # Root npm workspaces configuration (Node.js >= 24.0.0)
+└── README.md
 ```
 
-### Custom Rules Syntax 
+---
 
-Blockingmachine supports standard AdGuard/AdBlock Plus syntax:
+## Key Features
+
+### 📡 AI Defense Radar [Beta] (⌘9)
+- **Autonomous Ad & Tracker Discovery**: Combines Shannon entropy calculation ($H(X)$), DGA machine-generated hostname detection, CNAME cloaking unmasking, and multi-provider LLM reasoning (local offline Ollama, Google Gemini, OpenAI).
+- **False Positive Guard**: Built-in whitelist protection for essential infrastructure (Cloudflare, CDNs, GitHub, Google/Apple identity providers) and custom user allowlists.
+- **AI Sentinel Watchdog**: Periodic background query scout that silently inspects unblocked queries from your homelab sinkhole and quarantines emerging ad bidding hosts.
+- **Threat Quarantine Ledger**: Persistent ledger with category filtering, batch exports (ABP, Hosts, JSON), 1-click blocking, and false-positive whitelisting.
+- **Web Canary Crawler**: Crawls web pages to identify and flag third-party ad networks and telemetry beacons before you browse them.
+- **SSRF Hardened & Memory Safe**: Strict RFC 1918, loopback, and metadata address blocking with response stream limits to prevent resource exhaustion.
+
+### 🛡️ The 8-Part First-Party Defense Suite [Beta] (⌘8)
+Modular, curated blocking profiles synchronized across desktop, core, and CLI:
+1. **Base Ad Shield**: Network blocking for major ad exchanges, programmatic bidding, and banner injection.
+2. **Privacy Engine**: Web beacons, browser fingerprinting, and analytics telemetry neutralizer.
+3. **Smart TV & IoT Shield**: ACR telemetry and ad blocker for Roku, Samsung Tizen, LG webOS, Fire TV, and smart speakers.
+4. **Web Annoyances & Cookie Banners**: Eliminates GDPR cookie prompts, CMP modals (OneTrust, Cookiebot), and floating nags.
+5. **Social Tracker Neutralizer**: Cross-site tracking beacons and pixels (Meta, TikTok, X, LinkedIn).
+6. **Threat & Malicious Domain Defense**: Malicious drive-by payloads, phishing gateways, and cryptominers.
+7. **URL Tracking Stripper**: Strips link tracking parameters (`fbclid`, `gclid`, `utm_*`, `twclid`).
+8. **Unbreak & Safe Exceptions**: Hand-crafted allowlist rules (`@@`) for banking, SSO logins, and DRM streaming playback.
+
+### 🚀 Deploy Hub (⌘6)
+- **AdGuard Home Integration**: Push compiled blocklists directly to AdGuard Home instances via REST API with live status checks.
+- **Pi-hole Integration**: Sync blocklists directly to Pi-hole gravity databases via API.
+- **High-Availability (HA) SSH Sync**: Synchronize secondary or redundant Pi-hole / AdGuard nodes over SSH with automated gravity updates.
+- **Custom Webhook Dispatch**: Trigger router updates or CI/CD pipelines via HMAC-signed webhooks.
+- **Built-in Local Feed Server**: Host your compiled rules on `http://localhost:9191/rules.txt` for automatic router updates.
+
+### 🔍 Rule Browser & Inspector (⌘7)
+- Search through tens of thousands of active rules with instant filtering.
+- Visual breakdown of blocking, exception (`@@`), and cosmetic (`##`) rules.
+- **Live Domain Diagnostic**: Test any domain to see whether it is blocked, allowed by an exception, or unblocked, with the exact matching rule highlighted.
+
+---
+
+## Prerequisites
+
+To build and run Blockingmachine from source, ensure your machine has:
+
+- **Node.js**: `v24.0.0` or higher (required by `package.json` engines)
+- **npm**: `v10.0.0` or higher
+- **Git**: Installed and available in your `PATH`
+- **Build Tools**: Standard C/C++ compilation tools (for native node modules like `@parcel/watcher`):
+  - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
+  - **Linux (Ubuntu/Debian)**: `sudo apt-get install build-essential python3`
+  - **Windows**: Visual Studio C++ Build Tools or `windows-build-tools`
+
+---
+
+## Installing & Building From Scratch
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/greigh/Blockingmachine.git
+cd Blockingmachine
+```
+
+### 2. Install Monorepo Dependencies
+Install all workspace dependencies from the root directory:
+```bash
+npm install
+```
+
+### 3. Build All Packages
+Compile the TypeScript core, CLI tools, and Electron Webpack bundles:
+```bash
+npm run build
+```
+
+### 4. Run the Desktop Application
+Launch the Electron desktop application in development mode:
+```bash
+npm start
+```
+
+### 5. Run the CLI Tool
+Link or run the CLI command directly from the monorepo:
+```bash
+# Direct execution via npm workspace
+npx --workspace=@blockingmachine/cli blockingmachine --help
+
+# Or link globally
+cd packages/cli
+npm link
+blockingmachine --help
+```
+
+---
+
+## CLI Usage Guide
+
+The `@blockingmachine/cli` provides full command-line access to all features:
 
 ```bash
-  ! Comment line (ignored)
-  ||example.com^
-  @@||whitelisted-domain.com^
-  domain.com/ads/*
+# Scan a domain with AI Radar (local heuristics)
+blockingmachine ai-scan doubleclick.net
+
+# Scan using local Ollama LLM
+blockingmachine ai-scan suspicious-bidder.com --provider ollama --model llama3.2
+
+# Crawl a webpage for outbound ad trackers and beacons
+blockingmachine ai-crawl https://example-news.com
+
+# Inspect if a domain is blocked by your compiled filter list
+blockingmachine test malware-domain.com
+
+# Compare changes between two filter list snapshots
+blockingmachine diff baseline-rules.txt updated-rules.txt
+
+# Start local HTTP subscription feed server
+blockingmachine serve --port 9191
+
+# Run system diagnostic health check
+blockingmachine doctor
 ```
 
-### Export Format Details
+---
 
-| Format    | Description               | Best For                  |
-| --------- | ------------------------- | ------------------------- |
-| `adguard` | AdGuard Home compatible   | AdGuard Home, AdGuard DNS |
-| `abp`     | AdBlock Plus compatible   | Browser extensions        |
-| `hosts`   | Hosts file format         | System-level blocking     |
-| `dnsmasq` | dnsmasq configuration     | Routers, Pi-hole          |
-| `unbound` | Unbound DNS configuration | Custom DNS servers        |
-| `domains` | Simple domain list        | DNS blocklists            |
-| `plain`   | Raw text list             | Custom implementations    |
+## Testing & Quality Assurance
 
-## Troubleshooting
-
-### Common Issues
-
-1. **Application doesn't start**
-   - Check for error logs in the console
-   - Verify your system meets the minimum requirements
-   - Try reinstalling the application
-
-2. **Filter processing fails**
-   - Check your internet connection
-   - Verify that filter source URLs are valid and accessible
-   - Try with fewer sources if processing large lists
-
-3. **Export file not generated**
-   - Ensure you have write permissions to the save location
-   - Check for error messages in the application
-   - Try choosing a different save location
-
-### Debug Mode
-
-Run Blockingmachine in debug mode to view detailed logs:
+Blockingmachine maintains a strict 100% pass rate with zero ESLint warnings across all workspaces:
 
 ```bash
-  # macOS/Linux
-  DEBUG=blockingmachine:* /Applications/Blockingmachine.app/Contents/MacOS/Blockingmachine
+# Run all 173 automated tests across the monorepo
+npm test
 
-  # Windows
-  set DEBUG=blockingmachine:* & "C:\Program Files\Blockingmachine\Blockingmachine.exe"
+# Run tests with open handle detection (verifies 0 leaks)
+npm test --workspace=@blockingmachine/core -- --detectOpenHandles
+
+# Run linter across all workspaces
+npm run lint
+
+# Build production packages
+npm run build
 ```
 
-## Building From Source
+---
 
-### Prerequisites
+## Supported Export Formats
 
-- Node.js 18.x or later
-- npm or yarn
-- Git
+| Format | Syntax Example | Primary Target |
+| :--- | :--- | :--- |
+| **AdGuard Home** | `\|\|example.com^` | AdGuard Home, AdGuard DNS |
+| **AdBlock Plus** | `\|\|example.com^$third-party` | uBlock Origin, Brave, ABP |
+| **Standard Hosts** | `0.0.0.0 example.com` | System `/etc/hosts`, Pi-hole |
+| **dnsmasq** | `address=/example.com/0.0.0.0` | OpenWrt, DD-WRT, dnsmasq |
+| **Unbound** | `local-zone: "example.com" static` | OPNsense, pfSense, Unbound |
+| **Domains List** | `example.com` | Plain domain sinkholes |
 
-### Setup
+---
 
-  ```bash
-  # Clone the repository
-  git clone https://github.com/greigh/Blockingmachine.git
+## Optional Integrations
 
-  # Navigate to the electron app directory
-  cd Blockingmachine/packages/electron-app
+- **Local AI (Ollama)**: Install [Ollama](https://ollama.ai/) (`ollama pull llama3.2`) for 100% offline private LLM reasoning.
+- **Homelab Sinkholes**: Connect [AdGuard Home](https://adguard.com/adguard-home.html) or [Pi-hole](https://pi-hole.net/) via the Deploy Hub.
+- **Cloud AI**: Optional Google Gemini or OpenAI API keys can be entered in AI Radar Settings.
 
-  # Install dependencies
-  npm install
-
-  # Start the development server
-  npm start
-
-  # Build the application
-  npm run make
-  
-## Build Options
-
-``` bash
-  # Build for macOS
-  npm run make -- --platform=darwin
-
-  # Build for Windows
-  npm run make -- --platform=win32
-
-  # Build for Linux
-  npm run make -- --platform=linux
-```
+---
 
 ## Contributing
 
-We welcome contributions to Blockingmachine Desktop! Here's how to get started:
+We welcome contributions! Please ensure:
+1. All changes include tests in the appropriate `__tests__` directory.
+2. Code passes `npm run lint` with **0 errors and 0 warnings**.
+3. Code compiles with `npm run build`.
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature-name`
-3. Commit your changes: `git commit -m 'Add some feature'`
-4. Push to the branch: `git push origin feature/your-feature-name`
-5. Submit a pull request
-
-Please read our Contributing Guide for more details.
-
-### Code Style
-
-We use ESLint and Prettier to maintain code quality. Before submitting a pull request:
-
-```bash
-# Run linter
-  npm run lint
-
-  # Fix linting issues automatically
-  npm run lint:fix
-```
-
-### Technology Stack
-
-- **Electron**: Cross-platform desktop application framework
-- **React**: UI library for building interactive interfaces
-- **TypeScript**: Type-safe JavaScript
-- **Recharts**: Responsive charting library
-- **Electron Store**: Persistent settings storage
-- **@blockingmachine/core**: Core rule processing functionality
+---
 
 ## License
-This project is licensed under the BSD-3-Clause License. Read the [LICENSE](LICENSE) file for details.
 
-<div align="center"> Made with ❤️ by <a href="https://danielhipskind.com/">Daniel Hipskind</a> </div>
+This project is licensed under the **BSD-3-Clause License**. See the [LICENSE](LICENSE) file for details.
+
+<div align="center">
+  <sub>Engineered with precision by <a href="https://danielhipskind.com/">Daniel Hipskind</a>.</sub>
+</div>
