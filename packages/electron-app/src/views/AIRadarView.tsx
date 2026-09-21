@@ -7,6 +7,7 @@ import type {
   SinkholeConfig,
   ThreatQuarantineItem,
   AiWatchdogConfig,
+  RuleConflictResult,
 } from '../types/';
 
 interface AIRadarViewProps {
@@ -82,6 +83,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
   const [customSynthesizedRules, setCustomSynthesizedRules] = useState<string[] | null>(null);
   const [learnedFeedbackCount, setLearnedFeedbackCount] = useState<number>(0);
   const [compactionSummary, setCompactionSummary] = useState<any>(null);
+  const [ruleConflict, setRuleConflict] = useState<RuleConflictResult | null>(null);
 
   const loadFeedbackStats = useCallback(async () => {
     if (window.electron?.getMiniAiFeedbackStats) {
@@ -345,6 +347,15 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       });
       if (res.success && isMountedRef.current) {
         setCustomSynthesizedRules(res.rules);
+        if (window.electron?.checkRuleConflict && res.rules.length > 0) {
+          window.electron.checkRuleConflict(res.rules[0]).then((conflict) => {
+            if (isMountedRef.current) {
+              setRuleConflict(conflict.hasConflict ? conflict : null);
+            }
+          }).catch(console.error);
+        } else {
+          setRuleConflict(null);
+        }
       }
     } catch (err) {
       console.error('Failed to synthesize custom target rules:', err);
@@ -377,6 +388,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     setIsInspecting(true);
     setInspectorResult(null);
     setCustomSynthesizedRules(null);
+    setRuleConflict(null);
     setTargetSyntax('all');
     setError?.(null);
     try {
@@ -387,6 +399,15 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           if (coverage.isCovered) {
             res.coveredByRule = coverage.coveringRule;
           }
+        }
+        if (window.electron?.checkRuleConflict && res.generatedRules.length > 0) {
+          window.electron.checkRuleConflict(res.generatedRules[0]).then((conflict) => {
+            if (isMountedRef.current) {
+              setRuleConflict(conflict.hasConflict ? conflict : null);
+            }
+          }).catch(console.error);
+        } else {
+          setRuleConflict(null);
         }
         setInspectorResult(res);
 
@@ -984,6 +1005,45 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                     100% In-Memory Air-Gapped
                   </span>
                 </div>
+
+                {/* Whitelist Conflict Override Banner */}
+                {ruleConflict && ruleConflict.hasConflict && (
+                  <div style={{
+                    margin: '12px 0',
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    background: 'rgba(234, 179, 8, 0.1)',
+                    border: '1px solid rgba(234, 179, 8, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                  }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-color)' }}>
+                      <span style={{ fontWeight: 600, color: '#eab308' }}>⚠️ Allowlist Conflict Detected:</span> {ruleConflict.reason}
+                      {ruleConflict.suggestedOverrideRule && (
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                          Suggested Override: <code style={{ color: 'var(--primary-color)' }}>{ruleConflict.suggestedOverrideRule}</code>
+                        </div>
+                      )}
+                    </div>
+                    {ruleConflict.suggestedOverrideRule && (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        style={{ fontSize: 11, padding: '4px 10px', fontWeight: 600 }}
+                        onClick={() => {
+                          if (ruleConflict.suggestedOverrideRule) {
+                            setCustomSynthesizedRules([ruleConflict.suggestedOverrideRule]);
+                          }
+                        }}
+                      >
+                        ⚡ Use $important Override
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {/* Generated Rules */}
                 <div className="generated-rules-section">
