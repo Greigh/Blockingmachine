@@ -1,6 +1,7 @@
 {
   "name": "@blockingmachine/core",
   "version": "1.0.0-rc.1",
+  "description": "Core rule parsing, deduplication, format export, and embedded Mini-AI classification engine for Blockingmachine.",
   "type": "module",
   "author": {
     "name": "Daniel Hipskind",

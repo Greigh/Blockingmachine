@@ -1,7 +1,7 @@
 {
   "name": "@blockingmachine/cli",
   "version": "1.0.0-rc.1",
-  "description": "Generates comprehensive ad-blocking/privacy filter lists in the command line.",
+  "description": "Production command-line interface for automated filter list compilation, local feed serving, diffing, and DNS diagnostics.",
   "homepage": "https://github.com/greigh/BlockingMachin-CLI#readme",
   "license": "BSD-3-Clause",
   "type": "module",
