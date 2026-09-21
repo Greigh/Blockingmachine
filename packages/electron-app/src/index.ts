@@ -1002,6 +1002,30 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
     );
 
+    ipcMain.handle(
+      'get-module-content',
+      async (_event: IpcMainInvokeEvent, moduleFileName: string) => {
+        try {
+          const cleanName = basename(moduleFileName);
+          const candidatePaths = [
+            join(__dirname, '../filters/modules', cleanName),
+            join(process.cwd(), 'packages/electron-app/filters/modules', cleanName),
+            join(process.cwd(), 'filters/modules', cleanName),
+            join(app.getAppPath(), 'filters/modules', cleanName),
+          ];
+          for (const candidate of candidatePaths) {
+            if (existsSync(candidate)) {
+              return await fs.readFile(candidate, 'utf-8');
+            }
+          }
+          return null;
+        } catch (err) {
+          console.error('[IPC Main] Error reading module content:', err);
+          return null;
+        }
+      }
+    );
+
     // High-performance concurrent filter processor
     ipcMain.handle('run-import-process', async (_event: IpcMainInvokeEvent) => {
       const startTime = Date.now();

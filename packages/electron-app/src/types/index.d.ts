@@ -222,6 +222,7 @@ export interface ElectronAPI {
   stopFeedServer: () => Promise<FeedServerStatus>;
   getFeedServerStatus: () => Promise<FeedServerStatus>;
   testSinkholeConnection: (service: 'pihole' | 'adguard' | 'webhook') => Promise<SinkholeTestResult>;
+  getModuleContent?: (moduleName: string) => Promise<string | null>;
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   showItemInFolder: (path: string) => void;

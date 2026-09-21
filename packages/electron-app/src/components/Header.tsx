@@ -18,6 +18,11 @@ export const Header: React.FC<HeaderProps> = ({
           title: 'Filter Sources',
           desc: 'Manage remote blocklist subscriptions and feed health',
         };
+      case 'modules':
+        return {
+          title: 'Defense Modules [Beta]',
+          desc: 'First-party modular filter list engine modeled after modern ad-blocking architecture',
+        };
       case 'bulkImport':
         return {
           title: 'Bulk Import',

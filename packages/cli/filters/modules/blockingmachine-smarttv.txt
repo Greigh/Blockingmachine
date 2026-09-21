@@ -1,6 +1,6 @@
 ! Title: Blockingmachine Smart TV & IoT Shield [Beta]
 ! Description: Targets telemetry, automated content recognition (ACR), diagnostics, and in-app ads on smart TVs and IoT hardware.
-! Version: 1.0.0-beta.1
+! Version: 1.0.0-beta.2
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
@@ -15,6 +15,8 @@
 ||ads.roku.com^
 ||track.sr.roku.com^
 ||identity.web.roku.com^
+||p.ads.roku.com^
+||cloudservices.roku.com/api/v1/telemetry^
 
 ! --- Samsung Smart TV (Tizen) Telemetry & ACR ---
 ||samsungadhub.com^
@@ -27,6 +29,8 @@
 ||otn.samsungcloudsolution.net^
 ||notice.samsungcloudsolution.com^
 ||sas.samsungcloudsolution.com^
+||acr0.samsungcloudsolution.com^
+||vd.emp.samsung.com^
 
 ! --- LG Smart TV (webOS) Telemetry & Ads ---
 ||lgsmartad.com^
@@ -37,16 +41,28 @@
 ||ngfts.lge.com^
 ||us.lgtvsdp.com^
 ||yup.lgtvcommon.com^
+||aic.lgtvcommon.com^
+||lgtvonline.lge.com^
 
 ! --- Amazon Fire TV / Echo Telemetry ---
 ||device-metrics-us.amazon.com^
 ||device-metrics-us-2.amazon.com^
 ||arcus-uswest.amazon.com^
 ||scribe.api.amazon.com^
+||firetv-ad-metrics.amazon.com^
+||aax-us-east.amazon-adsystem.com^
 
-! --- Sony Bravia, Vizio & Other Smart Devices ---
+! --- Sony Bravia, Vizio, Hisense & TCL ---
 ||bravia.sony.tv^
 ||tv.vizio.com^
 ||scribe.vizio.com^
 ||api.tv.hisense.com^
+||tcl.api.myhismart.com^
+
+! --- Xiaomi TV, Nvidia Shield & Android TV Beacons ---
 ||tracking.miui.com^
+||data.mistat.xiaomi.com^
+||ad.xiaomi.com^
+||ota.nvidia.com^
+||telemetry.nvidia.com^
+||android.clients.google.com/auth^$domain=~android.com
