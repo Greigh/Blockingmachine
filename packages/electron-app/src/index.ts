@@ -944,7 +944,8 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
     return getFeedServerStatus();
   }
 
-  feedServerPort = port;
+  const safePort = Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : 9191;
+  feedServerPort = safePort;
 
   return new Promise<{ isRunning: boolean; port: number; localUrl: string; lanUrl: string; lanIp: string; error?: string }>((resolve) => {
     try {
@@ -968,6 +969,11 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         let targetFilePath = savePath;
         if (pathname !== '/' && pathname.length > 1) {
           const cleanName = basename(pathname);
+          if (cleanName.startsWith('.')) {
+            res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('403 Forbidden: Hidden files cannot be served.');
+            return;
+          }
           targetFilePath = join(outputDir, cleanName);
         }
 
@@ -1543,8 +1549,25 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     // --- Feed Diagnostic Test Handler ---
     ipcMain.handle('test-feed-url', async (_event, url: string): Promise<FeedDiagnostic> => {
       const startTime = Date.now();
+      if (!url || typeof url !== 'string') {
+        return {
+          url: String(url || ''),
+          status: 'error',
+          latencyMs: 0,
+          error: 'URL must be a non-empty string',
+        };
+      }
       try {
-        const rules = await downloadAndParseSource(url);
+        const parsed = new URL(url.trim());
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          return {
+            url,
+            status: 'error',
+            latencyMs: 0,
+            error: `Unsupported protocol "${parsed.protocol}". Only HTTP and HTTPS feeds are supported.`,
+          };
+        }
+        const rules = await downloadAndParseSource(url.trim());
         return {
           url,
           status: 'ok',
@@ -2199,6 +2222,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     ipcMain.handle('add-custom-rules', async (_event, newRules: string[]) => {
       try {
+        if (!Array.isArray(newRules)) {
+          return { success: false, count: 0, error: 'newRules must be an array of rule strings' };
+        }
         const currentCustomRules = (store.get('customRules') as string) || '';
         const existingLines = new Set(
           currentCustomRules.split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
@@ -2308,6 +2334,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     // Check Rule Coverage [Beta]
     ipcMain.handle('is-domain-covered-by-rules', async (_event, domain: string) => {
+      if (!domain || typeof domain !== 'string') return { isCovered: false };
       const currentCustomRules = (store.get('customRules') as string) || '';
       const rulesArray = currentCustomRules.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
       return isDomainCoveredByRules(domain, rulesArray);
@@ -2315,6 +2342,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     // On-Device Mini-AI Feedback Tuning [Beta]
     ipcMain.handle('tune-mini-ai-feedback', async (_event, domain: string, action: 'whitelist' | 'block' | 'reset') => {
+      if (!domain || typeof domain !== 'string' || !['whitelist', 'block', 'reset'].includes(action)) {
+        return { success: false, error: 'Invalid domain or action parameter' };
+      }
       globalMiniAiClassifier.tuneDomainFeedback(domain, action);
       store.set('miniAiFeedback', globalMiniAiClassifier.exportFeedback());
       return { success: true };
@@ -2330,11 +2360,24 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     // Subdomain Clustering Compaction [Beta]
     ipcMain.handle('compact-subdomain-rules', async (_event, domains: string[], threshold?: number) => {
-      return compactSubdomainRules(domains, threshold);
+      if (!Array.isArray(domains)) {
+        return {
+          originalCount: 0,
+          compactedCount: 0,
+          compactedRules: [],
+          savingsPercent: 0,
+          collapsedGroups: [],
+        };
+      }
+      const safeThreshold = typeof threshold === 'number' && Number.isFinite(threshold) && threshold >= 2 ? threshold : 3;
+      return compactSubdomainRules(domains, safeThreshold);
     });
 
     // Whitelist Conflict Detection [Beta]
     ipcMain.handle('check-rule-conflict', async (_event, rule: string) => {
+      if (!rule || typeof rule !== 'string') {
+        return { hasConflict: false };
+      }
       const currentCustomRules = (store.get('customRules') as string) || '';
       const allowRules = currentCustomRules.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('@@'));
       return checkRuleConflict(rule, allowRules);
@@ -2343,6 +2386,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     // Target-Specific Rule Synthesizer [Beta]
     ipcMain.handle('synthesize-custom-rules', async (_event, input: any) => {
       try {
+        if (!input || typeof input !== 'object') {
+          return { success: false, rules: [], error: 'Input must be a valid synthesis object' };
+        }
         const rules = synthesizeRules(input);
         return { success: true, rules };
       } catch (err: any) {

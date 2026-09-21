@@ -501,14 +501,17 @@ export class MiniAiClassifier {
 
   public importFeedback(feedback: Record<string, number>): void {
     if (!feedback || typeof feedback !== 'object') return;
-    for (const [domain, bias] of Object.entries(feedback)) {
-      if (typeof domain === 'string' && typeof bias === 'number') {
+    const entries = Object.entries(feedback).slice(0, this.maxFeedbackEntries);
+    for (const [domain, bias] of entries) {
+      if (typeof domain === 'string' && typeof bias === 'number' && Number.isFinite(bias)) {
         const clean = domain.toLowerCase().trim();
+        if (!clean) continue;
+        const clampedBias = Math.max(-1.0, Math.min(1.0, bias));
         if (this.userFeedbackMap.size >= this.maxFeedbackEntries && !this.userFeedbackMap.has(clean)) {
           const oldestKey = this.userFeedbackMap.keys().next().value;
           if (oldestKey) this.userFeedbackMap.delete(oldestKey);
         }
-        this.userFeedbackMap.set(clean, bias);
+        this.userFeedbackMap.set(clean, clampedBias);
       }
     }
   }

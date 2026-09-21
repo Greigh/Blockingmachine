@@ -406,6 +406,31 @@ describe('AI Ad & Tracker Discovery Engine', () => {
       expect(res.compactedRules).toHaveLength(2);
       expect(res.savingsPercent).toBe(0);
     });
+
+    it('prevents over-compaction onto compound ccTLDs (.co.uk, .com.au)', () => {
+      const ukDomains = [
+        'sub1.bbc.co.uk',
+        'sub2.telegraph.co.uk',
+        'sub3.guardian.co.uk',
+        'sub4.independent.co.uk',
+      ];
+      const res = compactSubdomainRules(ukDomains, 3);
+      // Must NOT compact to ||co.uk^ !
+      expect(res.compactedRules).not.toContain('||co.uk^');
+      expect(res.collapsedGroups.some((g) => g.parentDomain === 'co.uk')).toBe(false);
+      expect(res.compactedRules).toHaveLength(4);
+    });
+
+    it('correctly compacts subdomains under a valid domain with a compound ccTLD', () => {
+      const bbcDomains = [
+        'news.bbc.co.uk',
+        'weather.bbc.co.uk',
+        'sport.bbc.co.uk',
+      ];
+      const res = compactSubdomainRules(bbcDomains, 3);
+      expect(res.compactedRules).toContain('||bbc.co.uk^');
+      expect(res.collapsedGroups[0].parentDomain).toBe('bbc.co.uk');
+    });
   });
 
   describe('Allowlist Conflict & Shadow Resolution', () => {
@@ -420,6 +445,20 @@ describe('AI Ad & Tracker Discovery Engine', () => {
       expect(conflict.hasConflict).toBe(true);
       expect(conflict.conflictingAllowRule).toBe('@@||tracker.com^');
       expect(conflict.suggestedOverrideRule).toBe('||tracker.com^$important');
+    });
+
+    it('preserves existing rule options when adding $important modifier to ABP rules', () => {
+      const existingAllowRules = ['@@||tracker.com^'];
+      const conflict = checkRuleConflict('||tracker.com^$third-party', existingAllowRules);
+      expect(conflict.hasConflict).toBe(true);
+      expect(conflict.suggestedOverrideRule).toBe('||tracker.com^$third-party,important');
+    });
+
+    it('detects shadow conflict for Pi-hole regex and converts to ABP $important rule', () => {
+      const existingAllowRules = ['@@||badsite.com^'];
+      const conflict = checkRuleConflict('(^|\\.)badsite\\.com$', existingAllowRules);
+      expect(conflict.hasConflict).toBe(true);
+      expect(conflict.suggestedOverrideRule).toBe('||badsite.com^$important');
     });
 
     it('detects subdomain shadow conflicts against apex allowlists', () => {
