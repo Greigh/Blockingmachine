@@ -36,6 +36,9 @@ import {
   isSafePublicWebUrl,
   isDomainCoveredByRules,
   globalMiniAiClassifier,
+  compactSubdomainRules,
+  checkRuleConflict,
+  synthesizeRules,
   type AiProviderConfig,
   type RawDnsQuery,
 } from '@blockingmachine/core';
@@ -2313,7 +2316,38 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     // On-Device Mini-AI Feedback Tuning [Beta]
     ipcMain.handle('tune-mini-ai-feedback', async (_event, domain: string, action: 'whitelist' | 'block' | 'reset') => {
       globalMiniAiClassifier.tuneDomainFeedback(domain, action);
+      store.set('miniAiFeedback', globalMiniAiClassifier.exportFeedback());
       return { success: true };
+    });
+
+    // Get Mini-AI Feedback Stats [Beta]
+    ipcMain.handle('get-mini-ai-feedback-stats', async () => {
+      return {
+        count: globalMiniAiClassifier.getFeedbackCount(),
+        feedback: globalMiniAiClassifier.exportFeedback(),
+      };
+    });
+
+    // Subdomain Clustering Compaction [Beta]
+    ipcMain.handle('compact-subdomain-rules', async (_event, domains: string[], threshold?: number) => {
+      return compactSubdomainRules(domains, threshold);
+    });
+
+    // Whitelist Conflict Detection [Beta]
+    ipcMain.handle('check-rule-conflict', async (_event, rule: string) => {
+      const currentCustomRules = (store.get('customRules') as string) || '';
+      const allowRules = currentCustomRules.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('@@'));
+      return checkRuleConflict(rule, allowRules);
+    });
+
+    // Target-Specific Rule Synthesizer [Beta]
+    ipcMain.handle('synthesize-custom-rules', async (_event, input: any) => {
+      try {
+        const rules = synthesizeRules(input);
+        return { success: true, rules };
+      } catch (err: any) {
+        return { success: false, rules: [], error: err?.message || String(err) };
+      }
     });
 
     console.log('[Main Process] All IPC handlers registered successfully');
@@ -2441,6 +2475,11 @@ async function initialize() {
 
     await installExtensions();
     setupDefaultFilterSources();
+    const savedFeedback = store.get('miniAiFeedback');
+    if (savedFeedback) {
+      globalMiniAiClassifier.importFeedback(savedFeedback);
+      console.log(`[Main Process] Restored ${globalMiniAiClassifier.getFeedbackCount()} Mini-AI domain feedback tunings from persistent store.`);
+    }
     registerIPCHandlers(store);
     await createWindow();
     createTray();

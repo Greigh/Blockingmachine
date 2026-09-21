@@ -78,6 +78,21 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
   const [quarantineSearch, setQuarantineSearch] = useState<string>('');
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [targetSyntax, setTargetSyntax] = useState<'all' | 'adguard' | 'pihole' | 'ublock' | 'unbound' | 'hosts'>('all');
+  const [customSynthesizedRules, setCustomSynthesizedRules] = useState<string[] | null>(null);
+  const [learnedFeedbackCount, setLearnedFeedbackCount] = useState<number>(0);
+  const [compactionSummary, setCompactionSummary] = useState<any>(null);
+
+  const loadFeedbackStats = useCallback(async () => {
+    if (window.electron?.getMiniAiFeedbackStats) {
+      try {
+        const stats = await window.electron.getMiniAiFeedbackStats();
+        if (isMountedRef.current && stats) setLearnedFeedbackCount(stats.count);
+      } catch (err) {
+        console.error('Failed to load feedback stats:', err);
+      }
+    }
+  }, []);
 
   const loadQuarantine = useCallback(async () => {
     if (window.electron?.getThreatQuarantine) {
@@ -126,6 +141,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
 
     loadQuarantine();
     loadWatchdog();
+    loadFeedbackStats();
 
     return () => {
       isMountedRef.current = false;
@@ -254,6 +270,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
         }
         setSuccessMessage?.(`Added ${res.count} blocking rule(s) to Custom Rules.`);
         loadQuarantine();
+        loadFeedbackStats();
       } else {
         setError?.(res.error || 'Failed to add custom rules');
       }
@@ -273,6 +290,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
         }
         setSuccessMessage?.(`Whitelisted ${domain} (${res.rule}). Added exception rule to Custom Rules.`);
         loadQuarantine();
+        loadFeedbackStats();
       } else {
         setError?.(res.error || 'Failed to whitelist domain');
       }
@@ -312,6 +330,43 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     }
   };
 
+  // Target syntax selector change
+  const handleTargetSyntaxChange = async (target: 'all' | 'adguard' | 'pihole' | 'ublock' | 'unbound' | 'hosts') => {
+    setTargetSyntax(target);
+    if (!inspectorResult || !window.electron?.synthesizeCustomRules) return;
+    try {
+      const res = await window.electron.synthesizeCustomRules({
+        domain: inspectorResult.domain,
+        verdict: inspectorResult.verdict,
+        category: inspectorResult.category,
+        cnames: inspectorResult.cnames,
+        target,
+        confidence: inspectorResult.confidence,
+      });
+      if (res.success && isMountedRef.current) {
+        setCustomSynthesizedRules(res.rules);
+      }
+    } catch (err) {
+      console.error('Failed to synthesize custom target rules:', err);
+    }
+  };
+
+  // Compute Subdomain Compaction when scoutResult updates
+  useEffect(() => {
+    if (scoutResult && scoutResult.results.length > 0 && window.electron?.compactSubdomainRules) {
+      const flagged = scoutResult.results.filter((r) => r.verdict !== 'clean').map((r) => r.domain);
+      if (flagged.length >= 3) {
+        window.electron.compactSubdomainRules(flagged, 3).then((res) => {
+          if (isMountedRef.current) setCompactionSummary(res);
+        }).catch(console.error);
+      } else {
+        setCompactionSummary(null);
+      }
+    } else {
+      setCompactionSummary(null);
+    }
+  }, [scoutResult]);
+
   // Run Domain Inspector
   const handleInspectDomain = async (overrideDomain?: string) => {
     const target = (overrideDomain || inspectorInput).trim();
@@ -321,6 +376,8 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     if (!window.electron?.aiScanDomain) return;
     setIsInspecting(true);
     setInspectorResult(null);
+    setCustomSynthesizedRules(null);
+    setTargetSyntax('all');
     setError?.(null);
     try {
       const res = await window.electron.aiScanDomain(target);
@@ -667,6 +724,37 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
               </div>
             )}
 
+            {/* Subdomain Compaction Notice Banner */}
+            {compactionSummary && compactionSummary.savingsPercent > 0 && (
+              <div style={{
+                margin: '12px 0',
+                padding: '12px 16px',
+                borderRadius: 8,
+                background: 'rgba(99, 102, 241, 0.08)',
+                border: '1px solid rgba(99, 102, 241, 0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: 12,
+              }}>
+                <div style={{ fontSize: 13, color: 'var(--text-color)' }}>
+                  <span style={{ fontWeight: 600, color: '#6366f1' }}>⚡ Subdomain Wildcard Compaction:</span> Collapsed {compactionSummary.originalCount} subdomains into {compactionSummary.compactedCount} parent zone rules ({compactionSummary.savingsPercent}% list bloat reduction).
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+                    Zones: {compactionSummary.collapsedGroups.map((g: any) => g.parentDomain).join(', ')}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  style={{ fontSize: 12, padding: '6px 12px', fontWeight: 600 }}
+                  onClick={() => handleAddRulesToCustom(compactionSummary.compactedRules, 'compacted-subdomains')}
+                >
+                  ＋ Add Compacted Rules ({compactionSummary.compactedCount})
+                </button>
+              </div>
+            )}
+
             {/* Query Results List */}
             {scoutResult && (
               <div className="scout-results-list">
@@ -888,6 +976,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   <span>Engine: {inspectorResult.modelUsed || 'Mini-AI Embedded Classifier'}</span>
                   <span style={{ color: 'var(--text-secondary)' }}>•</span>
                   <span>Entropy Index: {inspectorResult.entropy.toFixed(2)}</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>•</span>
+                  <span style={{ color: '#3b82f6', fontWeight: 600 }}>
+                    🧠 Learned Domains: {learnedFeedbackCount} saved to disk
+                  </span>
                   <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10b981', fontWeight: 600 }}>
                     100% In-Memory Air-Gapped
                   </span>
@@ -898,6 +990,27 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   <div className="rules-section-header">
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-color)' }}>Synthesized Filter Rules</span>
+                      <div style={{ display: 'inline-flex', gap: 4, background: 'rgba(0,0,0,0.15)', padding: '2px 4px', borderRadius: 6 }}>
+                        {(['all', 'adguard', 'pihole', 'ublock', 'unbound', 'hosts'] as const).map((fmt) => (
+                          <button
+                            key={fmt}
+                            type="button"
+                            style={{
+                              padding: '2px 8px',
+                              fontSize: 10,
+                              borderRadius: 4,
+                              border: 'none',
+                              cursor: 'pointer',
+                              background: targetSyntax === fmt ? 'var(--primary-color)' : 'transparent',
+                              color: targetSyntax === fmt ? '#fff' : 'var(--text-secondary)',
+                              fontWeight: targetSyntax === fmt ? 600 : 400,
+                            }}
+                            onClick={() => handleTargetSyntaxChange(fmt)}
+                          >
+                            {fmt === 'all' ? 'Universal' : fmt.toUpperCase()}
+                          </button>
+                        ))}
+                      </div>
                       {inspectorResult.coveredByRule && (
                         <span
                           style={{
@@ -922,12 +1035,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                       >
                         ⚪ Whitelist (False Positive)
                       </button>
-                      {inspectorResult.generatedRules.length > 0 && (
+                      {(customSynthesizedRules !== null ? customSynthesizedRules : inspectorResult.generatedRules).length > 0 && (
                         <>
                           <button
                             type="button"
                             className="secondary-button"
-                            onClick={() => handleCopy(inspectorResult.generatedRules.join('\n'), 'inspector-rules')}
+                            onClick={() => handleCopy((customSynthesizedRules !== null ? customSynthesizedRules : inspectorResult.generatedRules).join('\n'), 'inspector-rules')}
                           >
                             {copiedKey === 'inspector-rules' ? '✓ Copied' : 'Copy All Rules'}
                           </button>
@@ -935,7 +1048,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                             type="button"
                             className="primary-button"
                             disabled={blockedItemsMap.has(inspectorResult.domain) || Boolean(inspectorResult.coveredByRule)}
-                            onClick={() => handleAddRulesToCustom(inspectorResult.generatedRules, inspectorResult.domain)}
+                            onClick={() => handleAddRulesToCustom(customSynthesizedRules !== null ? customSynthesizedRules : inspectorResult.generatedRules, inspectorResult.domain)}
                           >
                             {inspectorResult.coveredByRule ? '✓ Covered in Rules' : blockedItemsMap.has(inspectorResult.domain) ? '✓ In Custom Rules' : '＋ Add to Custom Rules'}
                           </button>
@@ -943,9 +1056,9 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                       )}
                     </div>
                   </div>
-                  {inspectorResult.generatedRules.length > 0 ? (
+                  {(customSynthesizedRules !== null ? customSynthesizedRules : inspectorResult.generatedRules).length > 0 ? (
                     <div className="rules-code-block">
-                      {inspectorResult.generatedRules.map((rule, idx) => (
+                      {(customSynthesizedRules !== null ? customSynthesizedRules : inspectorResult.generatedRules).map((rule, idx) => (
                         <div key={idx} className="rule-code-line">{rule}</div>
                       ))}
                     </div>

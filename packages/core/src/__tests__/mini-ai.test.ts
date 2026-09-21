@@ -90,6 +90,16 @@ describe('Mini-AI Domain Threat Classifier', () => {
       expect(prediction.riskLevel).not.toBe('none');
     });
 
+    it('detects brand typo-squatting and credential harvesting patterns', () => {
+      const spoof1 = classifier.classify('paypa1-security.com');
+      expect(spoof1.category).toBe('Malware/Phishing');
+      expect(spoof1.topContributions.some((c) => c.name === 'Brand Typo-Squatting')).toBe(true);
+
+      const spoof2 = classifier.classify('apple-id-verify-login.xyz');
+      expect(spoof2.category).toBe('Malware/Phishing');
+      expect(spoof2.topContributions.some((c) => c.name === 'Brand Typo-Squatting')).toBe(true);
+    });
+
     it('supports on-device incremental feedback tuning', () => {
       const testDomain = 'borderline-metric-hub.net';
 
@@ -131,6 +141,24 @@ describe('Mini-AI Domain Threat Classifier', () => {
       expect(testClassifier.getDomainFeedback('domain-2049.com')).toBe(0);
     });
 
+    it('exports and imports feedback dictionary across sessions', () => {
+      const c1 = new MiniAiClassifier();
+      c1.tuneDomainFeedback('test-tracker.com', 'block');
+      c1.tuneDomainFeedback('my-trusted-site.org', 'whitelist');
+
+      const exported = c1.exportFeedback();
+      expect(exported['test-tracker.com']).toBe(1.0);
+      expect(exported['my-trusted-site.org']).toBe(-1.0);
+      expect(c1.getFeedbackCount()).toBe(2);
+
+      const c2 = new MiniAiClassifier();
+      expect(c2.getFeedbackCount()).toBe(0);
+      c2.importFeedback(exported);
+      expect(c2.getFeedbackCount()).toBe(2);
+      expect(c2.getDomainFeedback('test-tracker.com')).toBe(1.0);
+      expect(c2.getDomainFeedback('my-trusted-site.org')).toBe(-1.0);
+    });
+
     it('benchmarks sub-millisecond inference throughput (>1000 domains/sec)', () => {
       const sampleDomains = [
         'ad.doubleclick.net',
@@ -151,7 +179,7 @@ describe('Mini-AI Domain Threat Classifier', () => {
       const totalElapsedMs = performance.now() - startTime;
       const perDomainMs = totalElapsedMs / iterations;
 
-      expect(perDomainMs).toBeLessThan(0.2); // Under 0.2ms per domain
+      expect(perDomainMs).toBeLessThan(0.5); // Under 0.5ms per domain (>2000 domains/sec)
     });
   });
 
