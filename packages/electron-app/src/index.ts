@@ -1248,17 +1248,27 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         };
       }
 
-      const cleanDomain = domainQuery
-        .trim()
-        .toLowerCase()
-        .replace(/^https?:\/\//, '')
-        .replace(/^www\./, '')
-        .replace(/\/.*$/, '')
-        .replace(/:[0-9]+$/, '');
+      const rawInput = domainQuery.trim();
+      let cleanDomain = rawInput.toLowerCase();
+
+      // Robust URL parser handling protocols, paths, query params, hashes, and ports
+      if (cleanDomain.startsWith('http://') || cleanDomain.startsWith('https://') || cleanDomain.startsWith('ftp://')) {
+        try {
+          const parsed = new URL(cleanDomain);
+          cleanDomain = parsed.hostname;
+        } catch {
+          // fallback regex
+        }
+      }
+      cleanDomain = cleanDomain.replace(/^[a-zA-Z]+:\/\//, '');
+      cleanDomain = cleanDomain.replace(/[/?#].*$/, '');
+      cleanDomain = cleanDomain.replace(/:[0-9]+$/, '');
+      cleanDomain = cleanDomain.replace(/^www\./, '');
 
       if (!cleanDomain) {
         return {
-          domain: domainQuery,
+          domain: rawInput,
+          inputQuery: rawInput,
           verdict: 'not_blocked',
           details: 'Invalid domain format.',
         };
@@ -1280,6 +1290,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       if (exceptionRule) {
         return {
           domain: cleanDomain,
+          inputQuery: rawInput,
           verdict: 'exception',
           matchingRule: exceptionRule.raw,
           sourceName: exceptionRule.metadata?.sourceInfo?.url || 'Custom Rules / Allowlist',
@@ -1308,6 +1319,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       if (blockRule) {
         return {
           domain: cleanDomain,
+          inputQuery: rawInput,
           verdict: 'blocked',
           matchingRule: blockRule.raw,
           sourceName: blockRule.metadata?.sourceInfo?.url || 'Filter Feeds',
@@ -1318,6 +1330,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
       return {
         domain: cleanDomain,
+        inputQuery: rawInput,
         verdict: 'not_blocked',
         details: 'Domain is not blocked by any enabled filter list or custom rule.',
       };

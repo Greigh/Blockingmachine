@@ -136,14 +136,25 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       { raw: '0.0.0.0 malware.org', domain: 'malware.org', isException: false },
     ];
 
+    function extractCleanDomain(domainQuery: string): string {
+      let cleaned = domainQuery.trim().toLowerCase();
+      if (cleaned.startsWith('http://') || cleaned.startsWith('https://') || cleaned.startsWith('ftp://')) {
+        try {
+          const parsed = new URL(cleaned);
+          cleaned = parsed.hostname;
+        } catch {
+          // fallback
+        }
+      }
+      cleaned = cleaned.replace(/^[a-zA-Z]+:\/\//, '');
+      cleaned = cleaned.replace(/[/?#].*$/, '');
+      cleaned = cleaned.replace(/:[0-9]+$/, '');
+      cleaned = cleaned.replace(/^www\./, '');
+      return cleaned;
+    }
+
     function inspect(domainQuery: string) {
-      const cleanDomain = domainQuery
-        .trim()
-        .toLowerCase()
-        .replace(/^https?:\/\//, '')
-        .replace(/^www\./, '')
-        .replace(/\/.*$/, '')
-        .replace(/:[0-9]+$/, '');
+      const cleanDomain = extractCleanDomain(domainQuery);
 
       // Check exception rules first
       const exceptionRule = rules.find((r) => {
@@ -157,7 +168,7 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       });
 
       if (exceptionRule) {
-        return { verdict: 'exception', rule: exceptionRule.raw };
+        return { verdict: 'exception', rule: exceptionRule.raw, domain: cleanDomain };
       }
 
       // Check blocking rules
@@ -178,10 +189,10 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       });
 
       if (blockRule) {
-        return { verdict: 'blocked', rule: blockRule.raw };
+        return { verdict: 'blocked', rule: blockRule.raw, domain: cleanDomain };
       }
 
-      return { verdict: 'not_blocked' };
+      return { verdict: 'not_blocked', domain: cleanDomain };
     }
 
     test('resolves subdomains blocked by parent wildcard rule', () => {
@@ -200,6 +211,18 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       const res = inspect('safe.tracker.io');
       expect(res.verdict).toBe('exception');
       expect(res.rule).toBe('@@||safe.tracker.io^');
+    });
+
+    test('extracts clean domain from complex URLs with ports, query params, and hashes', () => {
+      expect(extractCleanDomain('https://www.roku.com:8080/products/streaming?source=ad#specs')).toBe('roku.com');
+      expect(extractCleanDomain('http://malware.org?ref=phish')).toBe('malware.org');
+      expect(extractCleanDomain('www.tracker.io/api/v1/event')).toBe('tracker.io');
+      expect(extractCleanDomain('roku.com/channel/123')).toBe('roku.com');
+
+      const urlRes = inspect('https://www.malware.org:8443/auth?utm=test#frag');
+      expect(urlRes.domain).toBe('malware.org');
+      expect(urlRes.verdict).toBe('blocked');
+      expect(urlRes.rule).toBe('0.0.0.0 malware.org');
     });
 
     test('returns not_blocked for unlisted domains', () => {
