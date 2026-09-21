@@ -31,6 +31,7 @@ import {
   generateFilterList,
   filterLists,
   AiDetectorService,
+  synthesizeAllowlistRule,
   type AiProviderConfig,
   type RawDnsQuery,
 } from '@blockingmachine/core';
@@ -43,6 +44,8 @@ import type {
   CompilationSnapshot,
   DomainInspectionResult,
   FeedDiagnostic,
+  ThreatQuarantineItem,
+  AiWatchdogConfig,
 } from './types';
 
 async function installExtensions() {
@@ -393,6 +396,113 @@ function setupAutoScheduleTimer(schedule: 'disabled' | '12h' | '24h' | 'weekly',
     }, intervalMs);
     autoScheduleTimer?.unref?.();
   }
+}
+
+// AI Sentinel Watchdog Background Timer [Beta]
+let aiWatchdogTimer: NodeJS.Timeout | null = null;
+
+function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<StoreSchema>): void {
+  if (aiWatchdogTimer) {
+    clearInterval(aiWatchdogTimer);
+    aiWatchdogTimer = null;
+  }
+
+  if (!config.enabled) {
+    console.log('[AI Watchdog] Disabled');
+    return;
+  }
+
+  const intervalMs = Math.max(5, config.intervalMinutes || 60) * 60 * 1000;
+  console.log(`[AI Watchdog] Started with interval: ${config.intervalMinutes || 60}m`);
+
+  aiWatchdogTimer = setInterval(async () => {
+    try {
+      console.log('[AI Watchdog] Running periodic background query scout...');
+      const savedConfig = (storeRef.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+      const service = new AiDetectorService(savedConfig);
+
+      const queries: RawDnsQuery[] = [];
+      const limit = 50;
+
+      if (config.service === 'adguard') {
+        const baseUrl = storeRef.get('adguardHomeUrl') || 'http://127.0.0.1:3000';
+        const user = storeRef.get('adguardHomeUser') || '';
+        const pass = storeRef.get('adguardHomePassword') || '';
+        const headers: Record<string, string> = {};
+        if (user || pass) {
+          headers.Authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+        }
+        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/control/querylog?limit=${limit}`, { headers });
+        if (res.ok) {
+          const json: any = await res.json();
+          const data = Array.isArray(json?.data) ? json.data : [];
+          for (const item of data) {
+            const name = item?.question?.name;
+            const isBlocked = Boolean(item?.filter_id && item.filter_id > 0);
+            if (name && !isBlocked) {
+              queries.push({ domain: name, client: item?.client, blocked: false });
+            }
+          }
+        }
+      } else if (config.service === 'pihole') {
+        const baseUrl = storeRef.get('piholeUrl') || 'http://127.0.0.1';
+        const token = storeRef.get('piholeApiKey') || '';
+        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`);
+        if (res.ok) {
+          const json: any = await res.json();
+          const data = Array.isArray(json?.data) ? json.data : [];
+          for (const item of data) {
+            const name = item?.[2];
+            const status = item?.[4];
+            if (name && (status === '2' || status === '3')) {
+              queries.push({ domain: name, client: item?.[3], blocked: false });
+            }
+          }
+        }
+      }
+
+      if (queries.length > 0) {
+        const scan = await service.scanQueryLog(queries, savedConfig);
+        const threats = scan.results.filter((r) => r.verdict !== 'clean');
+        if (threats.length > 0) {
+          const existingQuarantine: ThreatQuarantineItem[] = storeRef.get('aiThreatQuarantine') || [];
+          const existingDomains = new Set(existingQuarantine.map((q) => q.domain));
+          const newItems: ThreatQuarantineItem[] = threats
+            .filter((t) => !existingDomains.has(t.domain))
+            .map((t) => ({
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              domain: t.domain,
+              category: t.category,
+              verdict: t.verdict,
+              riskLevel: t.riskLevel,
+              confidence: t.confidence,
+              reasons: t.reasons,
+              generatedRules: t.generatedRules,
+              source: 'watchdog',
+              timestamp: new Date().toISOString(),
+              blocked: false,
+            }));
+
+          if (newItems.length > 0) {
+            const updatedQuarantine = [...newItems, ...existingQuarantine].slice(0, 200);
+            storeRef.set('aiThreatQuarantine', updatedQuarantine);
+            console.log(`[AI Watchdog] Quarantined ${newItems.length} new threat domains`);
+          }
+        }
+
+        const currentWatchdog = storeRef.get('aiWatchdogConfig') || config;
+        storeRef.set('aiWatchdogConfig', {
+          ...currentWatchdog,
+          lastRun: new Date().toISOString(),
+          lastThreatsFound: threats.length,
+        });
+      }
+    } catch (err) {
+      console.error('[AI Watchdog] Background scan error:', err);
+    }
+  }, intervalMs);
+
+  aiWatchdogTimer?.unref?.();
 }
 
 let appTray: Tray | null = null;
@@ -941,6 +1051,12 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     const initialSchedule = store.get('autoSchedule') || 'disabled';
     if (initialSchedule !== 'disabled') {
       setupAutoScheduleTimer(initialSchedule, store);
+    }
+
+    // Initialize AI Sentinel Watchdog if configured [Beta]
+    const initialWatchdog = store.get('aiWatchdogConfig') as AiWatchdogConfig | undefined;
+    if (initialWatchdog?.enabled) {
+      setupAiWatchdogTimer(initialWatchdog, store);
     }
 
     ipcMain.handle('get-custom-rules', async () => {
@@ -2078,6 +2194,83 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
     });
 
+    // AI Threat Quarantine Ledger [Beta]
+    ipcMain.handle('get-threat-quarantine', async () => {
+      return store.get('aiThreatQuarantine') || [];
+    });
+
+    ipcMain.handle('add-threat-quarantine', async (_event, items: ThreatQuarantineItem[]) => {
+      try {
+        const existing: ThreatQuarantineItem[] = store.get('aiThreatQuarantine') || [];
+        const existingMap = new Map(existing.map((i) => [i.domain, i]));
+        for (const it of items) {
+          existingMap.set(it.domain, it);
+        }
+        const merged = Array.from(existingMap.values())
+          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+          .slice(0, 200);
+        store.set('aiThreatQuarantine', merged);
+        return { success: true, count: merged.length };
+      } catch (err: any) {
+        return { success: false, count: 0, error: err?.message || String(err) };
+      }
+    });
+
+    ipcMain.handle('remove-threat-quarantine-item', async (_event, id: string) => {
+      const existing: ThreatQuarantineItem[] = store.get('aiThreatQuarantine') || [];
+      store.set('aiThreatQuarantine', existing.filter((i) => i.id !== id));
+      return { success: true };
+    });
+
+    ipcMain.handle('clear-threat-quarantine', async () => {
+      store.set('aiThreatQuarantine', []);
+      return { success: true };
+    });
+
+    // AI Sentinel Watchdog Settings [Beta]
+    ipcMain.handle('get-ai-watchdog-config', async () => {
+      return store.get('aiWatchdogConfig') || {
+        enabled: false,
+        intervalMinutes: 60,
+        service: 'adguard',
+      };
+    });
+
+    ipcMain.handle('set-ai-watchdog-config', async (_event, cfg: Partial<AiWatchdogConfig>) => {
+      const current = (store.get('aiWatchdogConfig') || {
+        enabled: false,
+        intervalMinutes: 60,
+        service: 'adguard',
+      }) as AiWatchdogConfig;
+      const updated: AiWatchdogConfig = { ...current, ...cfg };
+      store.set('aiWatchdogConfig', updated);
+      setupAiWatchdogTimer(updated, store);
+      return { success: true };
+    });
+
+    // Smart False Positive Whitelisting [Beta]
+    ipcMain.handle('add-custom-allowlist', async (_event, domain: string) => {
+      try {
+        const cleanDomain = domain.toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0];
+        const allowRule = synthesizeAllowlistRule(cleanDomain);
+        const currentCustomRules = (store.get('customRules') as string) || '';
+        const existingLines = new Set(
+          currentCustomRules.split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
+        );
+        if (!existingLines.has(allowRule)) {
+          const updated = `${currentCustomRules ? `${currentCustomRules}\n` : ''}${allowRule}`;
+          store.set('customRules', updated);
+        }
+        // Remove from quarantine if present
+        const existing: ThreatQuarantineItem[] = store.get('aiThreatQuarantine') || [];
+        store.set('aiThreatQuarantine', existing.filter((i) => i.domain !== cleanDomain));
+
+        return { success: true, rule: allowRule };
+      } catch (err: any) {
+        return { success: false, rule: '', error: err?.message || String(err) };
+      }
+    });
+
     console.log('[Main Process] All IPC handlers registered successfully');
   } catch (error) {
     console.error('[Main Process] Error registering IPC handlers:', error);
@@ -2212,6 +2405,10 @@ async function initialize() {
       if (autoScheduleTimer) {
         clearInterval(autoScheduleTimer);
         autoScheduleTimer = null;
+      }
+      if (aiWatchdogTimer) {
+        clearInterval(aiWatchdogTimer);
+        aiWatchdogTimer = null;
       }
       if (appTray) {
         try {

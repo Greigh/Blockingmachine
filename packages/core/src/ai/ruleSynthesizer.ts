@@ -42,3 +42,13 @@ export function synthesizeRules(input: RuleSynthesisInput): string[] {
 
   return Array.from(new Set(rules));
 }
+
+/**
+ * Synthesizes an ABP/AdGuard-compatible exception/allowlist rule for false positives.
+ * @beta
+ */
+export function synthesizeAllowlistRule(domain: string): string {
+  const cleanDomain = domain.toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0];
+  return `@@||${cleanDomain}^`;
+}
+

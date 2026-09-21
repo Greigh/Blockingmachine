@@ -40,7 +40,7 @@ export class AiCrawlCommand extends BaseCommand<AiCrawlOptions> {
 
     const service = new AiDetectorService(aiConfig);
 
-    this.logger.info(chalk.bold.cyan(`\n🕷️ Web Canary Crawler visiting: ${chalk.white(rawUrl)}`));
+    this.logger.info(chalk.bold.cyan(`\n🕷️ Web Canary Crawler [Beta] visiting: ${chalk.white(rawUrl)}`));
     this.logger.info(chalk.dim('Extracting third-party scripts, iframes, and tracking endpoints...'));
 
     try {
@@ -51,7 +51,7 @@ export class AiCrawlCommand extends BaseCommand<AiCrawlOptions> {
         return this.success(crawlResult, 'Crawl complete');
       }
 
-      console.log('\n' + chalk.bold.underline('Canary Crawl Analysis Report:'));
+      console.log('\n' + chalk.bold.underline('Canary Crawl Analysis Report [Beta]:'));
       console.log(`  Scanned URL:         ${chalk.white(crawlResult.url)}`);
       console.log(`  Discovered Hosts:    ${crawlResult.extractedHosts.length} external origins`);
       console.log(`  Flagged Ad/Trackers: ${chalk.bold.red(crawlResult.flaggedHosts.length)}`);

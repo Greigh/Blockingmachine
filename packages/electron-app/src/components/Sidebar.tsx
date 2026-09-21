@@ -249,7 +249,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <button
           className={`sidebar-nav-item ${currentView === 'ai-radar' ? 'active' : ''}`}
           onClick={() => setCurrentView('ai-radar')}
-          title="AI Ad & Tracker Discovery Radar (Cmd+9)"
+          title="AI Ad & Tracker Discovery Radar [Beta] (Cmd+9)"
         >
           <span className="sidebar-icon">
             <svg
@@ -267,8 +267,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </svg>
           </span>
           <span className="sidebar-label">AI Radar</span>
-          <span className="sidebar-badge beta" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.4)' }}>
-            AI
+          <span className="sidebar-badge beta" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.4)', fontWeight: 700 }}>
+            Beta
           </span>
           <span className="sidebar-shortcut">⌘9</span>
         </button>

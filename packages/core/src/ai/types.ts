@@ -1,3 +1,7 @@
+/**
+ * AI Radar [Beta] - Types & Domain Models
+ * @beta
+ */
 export type ThreatCategory =
   | 'Advertising'
   | 'Telemetry/Analytics'
@@ -19,6 +23,20 @@ export interface AiProviderConfig {
   apiKey?: string;
   apiEndpoint?: string;
   modelName?: string;
+  allowlist?: string[];
+}
+
+export interface DomainLabelEntropy {
+  label: string;
+  entropy: number;
+  isSuspicious: boolean;
+}
+
+export interface DomainDecomposition {
+  sld: string;
+  tld: string;
+  subdomains: string[];
+  labelEntropies: DomainLabelEntropy[];
 }
 
 export interface AiScanResult {
@@ -31,6 +49,7 @@ export interface AiScanResult {
   reasons: string[];
   entropy: number;
   isLikelyDga: boolean;
+  decomposition?: DomainDecomposition;
   cnames: string[];
   resolvedIps: string[];
   generatedRules: string[];

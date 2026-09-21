@@ -75,5 +75,45 @@ describe('Electron App AI Radar Helpers & Workflows', () => {
       expect(rules).toContain('||bad-tracker.io^$third-party');
       expect(rules).toContain('0.0.0.0 bad-tracker.io');
     });
+
+    it('synthesizes exception rules for false positive whitelisting', () => {
+      const service = new AiDetectorService({ provider: 'local-heuristics' });
+      expect(service.isSafeInfrastructure('cdnjs.cloudflare.com')).toBe(true);
+      expect(service.isSafeInfrastructure('appleid.apple.com')).toBe(true);
+    });
+  });
+
+  describe('Threat Quarantine & History Ledger Helpers', () => {
+    it('creates well-formed quarantine records from scan results', async () => {
+      const service = new AiDetectorService({ provider: 'local-heuristics' });
+      const scan = await service.scanDomain('adserver.traffic-exchange.com');
+
+      const quarantineRecord = {
+        id: 'test-1',
+        domain: scan.domain,
+        category: scan.category,
+        verdict: scan.verdict,
+        riskLevel: scan.riskLevel,
+        confidence: scan.confidence,
+        reasons: scan.reasons,
+        generatedRules: scan.generatedRules,
+        source: 'sinkhole' as const,
+        timestamp: new Date().toISOString(),
+        blocked: false,
+      };
+
+      expect(quarantineRecord.domain).toBe('adserver.traffic-exchange.com');
+      expect(quarantineRecord.generatedRules.length).toBeGreaterThan(0);
+      expect(quarantineRecord.source).toBe('sinkhole');
+    });
+
+    it('returns domain decomposition with label breakdown', async () => {
+      const service = new AiDetectorService({ provider: 'local-heuristics' });
+      const scan = await service.scanDomain('bidding.dsp-ad-network.bid');
+      expect(scan.decomposition).toBeDefined();
+      expect(scan.decomposition?.sld).toBe('dsp-ad-network');
+      expect(scan.decomposition?.tld).toBe('bid');
+      expect(scan.decomposition?.labelEntropies.length).toBeGreaterThanOrEqual(3);
+    });
   });
 });

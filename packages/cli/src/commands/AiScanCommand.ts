@@ -59,7 +59,7 @@ export class AiScanCommand extends BaseCommand<AiScanOptions> {
       );
     }
 
-    this.logger.info(chalk.bold.cyan(`\n🔍 AI Radar scanning target: ${chalk.white(target)}`));
+    this.logger.info(chalk.bold.cyan(`\n🔍 AI Radar [Beta] scanning target: ${chalk.white(target)}`));
     this.logger.info(chalk.dim(`  Provider: ${provider} | Engine: Local Heuristics + Entropy + CNAME`));
 
     try {
@@ -71,7 +71,7 @@ export class AiScanCommand extends BaseCommand<AiScanOptions> {
       }
 
       // Visual Terminal Presentation
-      console.log('\n' + chalk.bold.underline('AI Threat Assessment Report:'));
+      console.log('\n' + chalk.bold.underline('AI Threat Assessment Report [Beta]:'));
       console.log(`  Target Domain:   ${chalk.bold.white(result.domain)}`);
 
       let verdictBadge = chalk.bgGreen.black(' CLEAN ');
@@ -84,6 +84,11 @@ export class AiScanCommand extends BaseCommand<AiScanOptions> {
       console.log(`  Confidence:      ${this.formatConfidence(result.confidence)}`);
       console.log(`  Threat Category: ${chalk.yellow(result.category)}`);
       console.log(`  Shannon Entropy: ${result.entropy} ${result.isLikelyDga ? chalk.red('(Elevated DGA score)') : chalk.dim('(Normal range)')}`);
+
+      if (result.decomposition) {
+        const d = result.decomposition;
+        console.log(`  Decomposition:   ${chalk.dim(`SLD: ${chalk.white(d.sld)} | TLD: .${chalk.white(d.tld)}${d.subdomains.length > 0 ? ` | Subdomains: ${d.subdomains.join('.')}` : ''}`)}`);
+      }
 
       if (result.cnames.length > 0) {
         console.log(`  CNAME Chain:     ${chalk.cyan(result.cnames.join(' ➔ '))}`);

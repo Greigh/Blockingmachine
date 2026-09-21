@@ -173,6 +173,41 @@ export interface AiProviderConfig {
   modelName?: string;
 }
 
+export interface DomainLabelEntropy {
+  label: string;
+  entropy: number;
+  isSuspicious: boolean;
+}
+
+export interface DomainDecomposition {
+  sld: string;
+  tld: string;
+  subdomains: string[];
+  labelEntropies: DomainLabelEntropy[];
+}
+
+export interface ThreatQuarantineItem {
+  id: string;
+  domain: string;
+  category: ThreatCategory;
+  verdict: AiVerdict;
+  riskLevel: RiskLevel;
+  confidence: number;
+  reasons: string[];
+  generatedRules: string[];
+  source: 'sinkhole' | 'inspector' | 'crawler' | 'watchdog';
+  timestamp: string;
+  blocked?: boolean;
+}
+
+export interface AiWatchdogConfig {
+  enabled: boolean;
+  intervalMinutes: number;
+  service: 'adguard' | 'pihole';
+  lastRun?: string;
+  lastThreatsFound?: number;
+}
+
 export interface AiScanResult {
   target: string;
   domain: string;
@@ -183,6 +218,7 @@ export interface AiScanResult {
   reasons: string[];
   entropy: number;
   isLikelyDga: boolean;
+  decomposition?: DomainDecomposition;
   cnames: string[];
   resolvedIps: string[];
   generatedRules: string[];
@@ -230,6 +266,8 @@ export interface StoreSchema {
   haWebhookUrl?: string;
   customWebhookUrl?: string;
   aiConfig?: Partial<AiProviderConfig>;
+  aiThreatQuarantine?: ThreatQuarantineItem[];
+  aiWatchdogConfig?: AiWatchdogConfig;
 }
 
 // Electron API interface
@@ -274,7 +312,7 @@ export interface ElectronAPI {
   testSinkholeConnection: (service: 'pihole' | 'adguard' | 'webhook') => Promise<SinkholeTestResult>;
   getModuleContent?: (moduleName: string) => Promise<string | null>;
 
-  // AI Radar Methods
+  // AI Radar Methods [Beta]
   aiScanDomain?: (domain: string, config?: Partial<AiProviderConfig>) => Promise<AiScanResult>;
   aiScanQueryLog?: (options: { service: 'adguard' | 'pihole'; limit?: number }, config?: Partial<AiProviderConfig>) => Promise<QueryLogScanResult>;
   aiCrawlUrl?: (url: string, config?: Partial<AiProviderConfig>) => Promise<CrawlScanResult>;
@@ -282,6 +320,13 @@ export interface ElectronAPI {
   setAiConfig?: (config: Partial<AiProviderConfig>) => Promise<{ success: boolean; error?: string }>;
   testAiConnection?: (config: Partial<AiProviderConfig>) => Promise<{ success: boolean; latencyMs?: number; message: string }>;
   addCustomRules?: (rules: string[]) => Promise<{ success: boolean; count: number; error?: string }>;
+  getThreatQuarantine?: () => Promise<ThreatQuarantineItem[]>;
+  addThreatQuarantine?: (items: ThreatQuarantineItem[]) => Promise<{ success: boolean; count: number }>;
+  removeThreatQuarantineItem?: (id: string) => Promise<{ success: boolean }>;
+  clearThreatQuarantine?: () => Promise<{ success: boolean }>;
+  getAiWatchdogConfig?: () => Promise<AiWatchdogConfig>;
+  setAiWatchdogConfig?: (config: Partial<AiWatchdogConfig>) => Promise<{ success: boolean }>;
+  addCustomAllowlist?: (domain: string) => Promise<{ success: boolean; rule: string; error?: string }>;
 
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;

@@ -1,4 +1,4 @@
-import { calculateShannonEntropy, detectDgaPatterns } from './entropy.js';
+import { calculateShannonEntropy, detectDgaPatterns, decomposeDomain } from './entropy.js';
 import { resolveCnameChain } from './cnameResolver.js';
 import { synthesizeRules } from './ruleSynthesizer.js';
 import type {
@@ -24,6 +24,43 @@ const SUSPICIOUS_AD_TOKENS = new Set([
   'pubmatic', 'rubiconproject', 'openx', 'casalemedia', 'smartadserver',
 ]);
 
+// Curated high-reputation infrastructure, CDNs, and identity providers to protect against false positives
+const KNOWN_SAFE_INFRASTRUCTURE = new Set([
+  'github.com',
+  'githubassets.com',
+  'githubusercontent.com',
+  'cloudflare.com',
+  'cloudflare.net',
+  'cdnjs.cloudflare.com',
+  'jsdelivr.net',
+  'unpkg.com',
+  'googleapis.com',
+  'gstatic.com',
+  'google.com',
+  'accounts.google.com',
+  'apple.com',
+  'appleid.apple.com',
+  'icloud.com',
+  'microsoft.com',
+  'microsoftonline.com',
+  'live.com',
+  'windowsupdate.com',
+  'amazon.com',
+  'amazonaws.com',
+  'aws.amazon.com',
+  'wikipedia.org',
+  'wikimedia.org',
+  'mozilla.org',
+  'mozilla.net',
+  'one.one.one.one',
+  'dns.google',
+]);
+
+/**
+ * Intelligent AI Ad & Tracker Discovery Service [Beta]
+ * Combines Shannon entropy, DGA detection, CNAME uncloaking, and multi-provider LLMs.
+ * @beta
+ */
 export class AiDetectorService {
   private defaultConfig: AiProviderConfig;
 
@@ -35,6 +72,7 @@ export class AiDetectorService {
       apiKey: config?.apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || '',
       apiEndpoint: config?.apiEndpoint,
       modelName: config?.modelName,
+      allowlist: config?.allowlist || [],
     };
   }
 
@@ -47,6 +85,27 @@ export class AiDetectorService {
   }
 
   /**
+   * Checks whether domain matches verified essential infrastructure or user allowlist.
+   */
+  public isSafeInfrastructure(domain: string, allowlist?: string[]): boolean {
+    const clean = domain.toLowerCase().trim();
+    if (allowlist && allowlist.length > 0) {
+      if (allowlist.some((al) => clean === al.toLowerCase() || clean.endsWith(`.${al.toLowerCase()}`))) {
+        return true;
+      }
+    }
+    if (KNOWN_SAFE_INFRASTRUCTURE.has(clean)) {
+      return true;
+    }
+    for (const safe of KNOWN_SAFE_INFRASTRUCTURE) {
+      if (clean.endsWith(`.${safe}`)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Scans a single domain or URL for ad/tracker characteristics.
    */
   public async scanDomain(
@@ -56,9 +115,32 @@ export class AiDetectorService {
     const config = { ...this.defaultConfig, ...overrideConfig };
     const cleanDomain = this.normalizeDomain(domainOrUrl);
 
+    // False positive protection guard
+    if (this.isSafeInfrastructure(cleanDomain, config.allowlist)) {
+      const decomposition = decomposeDomain(cleanDomain);
+      return {
+        target: domainOrUrl,
+        domain: cleanDomain,
+        verdict: 'clean',
+        confidence: 99,
+        riskLevel: 'none',
+        category: 'Clean',
+        reasons: ['Verified Essential Infrastructure / Whitelisted (Protected by False Positive Guard)'],
+        entropy: calculateShannonEntropy(cleanDomain),
+        isLikelyDga: false,
+        decomposition,
+        cnames: [],
+        resolvedIps: [],
+        generatedRules: [],
+        provider: config.provider,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
     // 1. Run local lexical and entropy analysis
     const entropy = calculateShannonEntropy(cleanDomain);
     const dgaResult = detectDgaPatterns(cleanDomain);
+    const decomposition = decomposeDomain(cleanDomain);
 
     // 2. Uncloak CNAME records and resolve destination IPs
     const cnameInfo = await resolveCnameChain(cleanDomain);
@@ -116,6 +198,7 @@ export class AiDetectorService {
       reasons: Array.from(new Set(allReasons)),
       entropy,
       isLikelyDga: dgaResult.isLikelyDga,
+      decomposition,
       cnames: cnameInfo.cnames,
       resolvedIps: cnameInfo.ips,
       generatedRules,
@@ -245,7 +328,10 @@ export class AiDetectorService {
     }
 
     if (matchedTokens.length > 0) {
-      score += Math.min(80, matchedTokens.length * 35);
+      const hasSpecificAdNetwork = matchedTokens.some((t) =>
+        ['taboola', 'criteo', 'doubleclick', 'googleadservices', 'googlesyndication', 'outbrain', 'moatads', 'adnxs', 'rubiconproject', 'pubmatic'].includes(t),
+      );
+      score += hasSpecificAdNetwork ? 75 : Math.min(85, matchedTokens.length * 45);
       reasons.push(`Contains ad/telemetry keyword token(s): ${matchedTokens.join(', ')}`);
       if (category === 'Clean') {
         category = matchedTokens.some((t) => ['pixel', 'telemetry', 'analytics', 'beacon'].includes(t))

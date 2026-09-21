@@ -261,7 +261,7 @@ program
 
 program
   .command("ai-scan [target]")
-  .description("Scan domain, URL, or sinkhole query logs using AI Radar")
+  .description("[Beta] Scan domain, URL, or sinkhole query logs using AI Radar")
   .option("--provider <type>", "AI provider: ollama, gemini, openai, local-heuristics", "local-heuristics")
   .option("--ollama-url <url>", "Ollama server URL", "http://127.0.0.1:11434")
   .option("--model <name>", "Model name (e.g. llama3.2, gemini-2.0-flash, gpt-4o-mini)")
@@ -290,21 +290,23 @@ program
         adguardPass: cmdOptions.adguardPass,
         piholeUrl: cmdOptions.piholeUrl,
         piholeToken: cmdOptions.piholeToken,
-        limit: parseInt(cmdOptions.limit, 10) || 50,
+        limit: cmdOptions.limit ? parseInt(cmdOptions.limit, 10) : 50,
         json: cmdOptions.json,
       });
-      if (!res.success) {
+      if (!res.success && !cmdOptions.json) {
         process.exit(1);
       }
     } catch (error) {
-      logger.error(`AI Scan failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error(
+        `AI Scan failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       process.exit(1);
     }
   });
 
 program
   .command("ai-crawl <url>")
-  .description("Crawl web page, extract third-party origins, and detect ad servers")
+  .description("[Beta] Crawl web page, extract third-party origins, and detect ad servers")
   .option("--provider <type>", "AI provider: ollama, gemini, openai, local-heuristics", "local-heuristics")
   .option("--ollama-url <url>", "Ollama server URL", "http://127.0.0.1:11434")
   .option("--model <name>", "Model name")
