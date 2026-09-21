@@ -14,7 +14,26 @@ export type RiskLevel = 'critical' | 'high' | 'medium' | 'low' | 'none';
 
 export type AiVerdict = 'ad_server' | 'tracker' | 'malicious' | 'clean' | 'suspicious';
 
-export type AiProviderType = 'local-heuristics' | 'ollama' | 'gemini' | 'openai';
+export type AiProviderType = 'mini-ai' | 'local-heuristics' | 'ollama' | 'gemini' | 'openai';
+
+export interface MiniAiFeatureContribution {
+  name: string;
+  value: number;
+  weight: number;
+  impact: 'threat' | 'clean' | 'neutral';
+  description: string;
+}
+
+export interface MiniAiPrediction {
+  verdict: AiVerdict;
+  category: ThreatCategory;
+  confidence: number;
+  riskLevel: RiskLevel;
+  classProbabilities: Record<ThreatCategory, number>;
+  topContributions: MiniAiFeatureContribution[];
+  inferenceTimeMs: number;
+  reasons: string[];
+}
 
 export interface AiProviderConfig {
   provider: AiProviderType;
@@ -25,6 +44,8 @@ export interface AiProviderConfig {
   modelName?: string;
   allowlist?: string[];
   bypassCache?: boolean;
+  skipDns?: boolean;
+  dnsTimeoutMs?: number;
 }
 
 export interface RuleCoverageResult {
@@ -60,6 +81,8 @@ export interface AiScanResult {
   resolvedIps: string[];
   generatedRules: string[];
   coveredByRule?: string;
+  featureScores?: Record<string, number>;
+  inferenceTimeMs?: number;
   provider: AiProviderType;
   modelUsed?: string;
   timestamp: string;

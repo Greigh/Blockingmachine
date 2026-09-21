@@ -68,6 +68,7 @@ contextBridge.exposeInMainWorld('electron', {
   setAiWatchdogConfig: (config: any) => ipcRenderer.invoke('set-ai-watchdog-config', config),
   addCustomAllowlist: (domain: string) => ipcRenderer.invoke('add-custom-allowlist', domain),
   isDomainCoveredByRules: (domain: string) => ipcRenderer.invoke('is-domain-covered-by-rules', domain),
+  tuneMiniAiFeedback: (domain: string, action: string) => ipcRenderer.invoke('tune-mini-ai-feedback', domain, action),
 
   onUpdateAvailable: (callback: (info: UpdateInfo) => void) => {
     const handler = (_event: IpcRendererEvent, info: UpdateInfo) => callback(info);

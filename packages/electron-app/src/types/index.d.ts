@@ -162,7 +162,7 @@ export interface SinkholeTestResult {
 export type AiVerdict = 'ad_server' | 'tracker' | 'malicious' | 'clean' | 'suspicious';
 export type ThreatCategory = 'Advertising' | 'Telemetry/Analytics' | 'CNAME Cloaking' | 'Malware/Phishing' | 'Clean' | 'Unknown';
 export type RiskLevel = 'critical' | 'high' | 'medium' | 'low' | 'none';
-export type AiProviderType = 'local-heuristics' | 'ollama' | 'gemini' | 'openai';
+export type AiProviderType = 'mini-ai' | 'local-heuristics' | 'ollama' | 'gemini' | 'openai';
 
 export interface AiProviderConfig {
   provider: AiProviderType;
@@ -171,6 +171,10 @@ export interface AiProviderConfig {
   apiKey?: string;
   apiEndpoint?: string;
   modelName?: string;
+  allowlist?: string[];
+  bypassCache?: boolean;
+  skipDns?: boolean;
+  dnsTimeoutMs?: number;
 }
 
 export interface DomainLabelEntropy {
@@ -223,6 +227,8 @@ export interface AiScanResult {
   resolvedIps: string[];
   generatedRules: string[];
   coveredByRule?: string;
+  featureScores?: Record<string, number>;
+  inferenceTimeMs?: number;
   provider: AiProviderType;
   modelUsed?: string;
   timestamp: string;
@@ -329,6 +335,7 @@ export interface ElectronAPI {
   setAiWatchdogConfig?: (config: Partial<AiWatchdogConfig>) => Promise<{ success: boolean }>;
   addCustomAllowlist?: (domain: string) => Promise<{ success: boolean; rule: string; error?: string }>;
   isDomainCoveredByRules?: (domain: string) => Promise<{ isCovered: boolean; coveringRule?: string }>;
+  tuneMiniAiFeedback?: (domain: string, action: 'whitelist' | 'block' | 'reset') => Promise<{ success: boolean }>;
 
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;

@@ -35,6 +35,7 @@ import {
   sanitizeDomain,
   isSafePublicWebUrl,
   isDomainCoveredByRules,
+  globalMiniAiClassifier,
   type AiProviderConfig,
   type RawDnsQuery,
 } from '@blockingmachine/core';
@@ -2014,7 +2015,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle('get-ai-config', async () => {
       const saved = store.get('aiConfig') as Partial<AiProviderConfig> | undefined;
       return {
-        provider: saved?.provider || 'local-heuristics',
+        provider: saved?.provider || 'mini-ai',
         ollamaUrl: saved?.ollamaUrl || 'http://127.0.0.1:11434',
         ollamaModel: saved?.ollamaModel || 'llama3.2',
         apiKey: saved?.apiKey || '',
@@ -2035,7 +2036,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     ipcMain.handle('test-ai-connection', async (_event, config: Partial<AiProviderConfig>) => {
       const start = Date.now();
-      const provider = config?.provider || 'local-heuristics';
+      const provider = config?.provider || 'mini-ai';
+
+      if (provider === 'mini-ai') {
+        return { success: true, latencyMs: 0, message: 'Mini-AI Embedded Classifier ready (<0.05ms in-memory neural model)' };
+      }
 
       if (provider === 'local-heuristics') {
         return { success: true, latencyMs: 1, message: 'Local heuristic & Shannon entropy engine active (0ms offline)' };
@@ -2301,6 +2306,12 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       const currentCustomRules = (store.get('customRules') as string) || '';
       const rulesArray = currentCustomRules.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
       return isDomainCoveredByRules(domain, rulesArray);
+    });
+
+    // On-Device Mini-AI Feedback Tuning [Beta]
+    ipcMain.handle('tune-mini-ai-feedback', async (_event, domain: string, action: 'whitelist' | 'block' | 'reset') => {
+      globalMiniAiClassifier.tuneDomainFeedback(domain, action);
+      return { success: true };
     });
 
     console.log('[Main Process] All IPC handlers registered successfully');
