@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrandLogo } from './components/BrandLogo';
-import './index.css';
-import type { ThemeType, FilterFormat, SinkholeConfig, SinkholeTestResult } from './types/';
+import type {
+  ThemeType,
+  FilterFormat,
+  SinkholeConfig,
+  SinkholeTestResult,
+  AiProviderConfig,
+  AiWatchdogConfig,
+} from './types/';
 import {
   ACCENT_PALETTE,
   applyAccentColor,
@@ -75,6 +81,27 @@ const Settings: React.FC<SettingsProps> = ({
   const [testingService, setTestingService] = useState<'pihole' | 'adguard' | 'webhook' | null>(null);
   const [testResults, setTestResults] = useState<{ [key: string]: SinkholeTestResult }>({});
 
+  // AI & Threat Intelligence state
+  const [aiConfig, setAiConfig] = useState<AiProviderConfig>({
+    provider: 'mini-ai',
+    ollamaUrl: 'http://127.0.0.1:11434',
+    ollamaModel: 'llama3.2',
+    apiKey: '',
+    apiEndpoint: 'https://api.openai.com/v1',
+    modelName: 'gpt-4o-mini',
+  });
+  const [watchdogConfig, setWatchdogConfig] = useState<AiWatchdogConfig>({
+    enabled: false,
+    intervalMinutes: 60,
+    service: 'adguard',
+  });
+  const [isSavingAi, setIsSavingAi] = useState(false);
+  const [isTestingAi, setIsTestingAi] = useState(false);
+  const [aiMessage, setAiMessage] = useState<{ text: string; type: 'success' | 'error' | null }>({ text: '', type: null });
+  const [aiTestResult, setAiTestResult] = useState<{ success: boolean; latencyMs?: number; message: string } | null>(null);
+  const [showAiKey, setShowAiKey] = useState(false);
+  const [learnedFeedbackCount, setLearnedFeedbackCount] = useState<number>(0);
+
   // Path state variables
   const [savePath, setSavePath] = useState('');
   const [isLoadingPath, setIsLoadingPath] = useState(true);
@@ -141,6 +168,24 @@ const Settings: React.FC<SettingsProps> = ({
     window.electron.getSinkholeConfig().then((cfg) => {
       if (isMounted && cfg) setSinkholeConfig(cfg);
     }).catch(console.error);
+
+    if (window.electron?.getAiConfig) {
+      window.electron.getAiConfig().then((cfg) => {
+        if (isMounted && cfg) setAiConfig(cfg);
+      }).catch(console.error);
+    }
+
+    if (window.electron?.getAiWatchdogConfig) {
+      window.electron.getAiWatchdogConfig().then((wCfg) => {
+        if (isMounted && wCfg) setWatchdogConfig(wCfg);
+      }).catch(console.error);
+    }
+
+    if (window.electron?.getMiniAiFeedbackStats) {
+      window.electron.getMiniAiFeedbackStats().then((stats) => {
+        if (isMounted && stats) setLearnedFeedbackCount(stats.count || 0);
+      }).catch(console.error);
+    }
 
     loadExportFormat();
     loadSavePath();
@@ -316,6 +361,56 @@ const Settings: React.FC<SettingsProps> = ({
       }));
     } finally {
       setTestingService(null);
+    }
+  };
+
+  const handleSaveAiSettings = async () => {
+    setIsSavingAi(true);
+    setAiMessage({ text: '', type: null });
+    try {
+      if (window.electron?.setAiConfig) {
+        await window.electron.setAiConfig(aiConfig);
+      }
+      if (window.electron?.setAiWatchdogConfig) {
+        await window.electron.setAiWatchdogConfig(watchdogConfig);
+      }
+      setAiMessage({ text: 'AI engine & Sentinel Watchdog settings saved successfully!', type: 'success' });
+      safeSetTimeout(() => setAiMessage({ text: '', type: null }), 3500);
+    } catch (err: any) {
+      console.error('Failed to save AI settings:', err);
+      setAiMessage({ text: err?.message || 'Failed to save AI configuration.', type: 'error' });
+    } finally {
+      setIsSavingAi(false);
+    }
+  };
+
+  const handleTestAiConnection = async () => {
+    setIsTestingAi(true);
+    setAiTestResult(null);
+    try {
+      if (window.electron?.testAiConnection) {
+        const res = await window.electron.testAiConnection(aiConfig);
+        setAiTestResult(res);
+      }
+    } catch (err: any) {
+      setAiTestResult({
+        success: false,
+        message: err?.message || 'Connection test failed',
+      });
+    } finally {
+      setIsTestingAi(false);
+    }
+  };
+
+  const handleResetAiFeedback = async () => {
+    if (!window.electron?.tuneMiniAiFeedback) return;
+    try {
+      await window.electron.tuneMiniAiFeedback('', 'reset');
+      setLearnedFeedbackCount(0);
+      setAiMessage({ text: 'Mini-AI learned feedback database reset successfully.', type: 'success' });
+      safeSetTimeout(() => setAiMessage({ text: '', type: null }), 3000);
+    } catch (err: any) {
+      setAiMessage({ text: err?.message || 'Failed to reset feedback.', type: 'error' });
     }
   };
 
@@ -1056,6 +1151,392 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               ))}
             </div>
+          )}
+        </div>
+
+        {/* AI & Threat Intelligence Engine Card */}
+        <div className="setting-card">
+          <div className="setting-card-header">
+            <h3>
+              <span className="setting-icon-svg">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+                </svg>
+              </span>
+              AI & Threat Intelligence Engine
+            </h3>
+            <span className="setting-badge primary">Intelligence</span>
+          </div>
+          <p>
+            Configure on-device neural classification, local LLMs, or cloud AI providers to detect algorithmic ad trackers, cloaked CNAMEs, and anomalous queries.
+          </p>
+
+          {/* Provider Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '10px', marginTop: '14px', marginBottom: '14px' }}>
+            <button
+              type="button"
+              className={`provider-option-btn ${aiConfig.provider === 'mini-ai' ? 'active' : ''}`}
+              onClick={() => setAiConfig({ ...aiConfig, provider: 'mini-ai' })}
+              style={{ position: 'relative' }}
+            >
+              <span style={{ position: 'absolute', top: 8, right: 8, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#10b981', color: '#fff', fontWeight: 700 }}>RECOMMENDED</span>
+              <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="4" y="4" width="16" height="16" rx="2" />
+                  <rect x="9" y="9" width="6" height="6" />
+                  <line x1="9" y1="2" x2="9" y2="4" />
+                  <line x1="15" y1="2" x2="15" y2="4" />
+                  <line x1="9" y1="20" x2="9" y2="22" />
+                  <line x1="15" y1="20" x2="15" y2="22" />
+                  <line x1="2" y1="9" x2="4" y2="9" />
+                  <line x1="2" y1="14" x2="4" y2="14" />
+                  <line x1="20" y1="9" x2="22" y2="9" />
+                  <line x1="20" y1="14" x2="22" y2="14" />
+                </svg>
+                <span>Mini-AI Classifier (Built-in)</span>
+              </span>
+              <span className="opt-desc">Embedded 25-feature mathematical neural network. &lt;0.05ms execution, zero daemons, zero network calls.</span>
+            </button>
+
+            <button
+              type="button"
+              className={`provider-option-btn ${aiConfig.provider === 'local-heuristics' ? 'active' : ''}`}
+              onClick={() => setAiConfig({ ...aiConfig, provider: 'local-heuristics' })}
+            >
+              <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                </svg>
+                <span>Local Heuristics</span>
+              </span>
+              <span className="opt-desc">Shannon entropy, lexical token boundaries, and CNAME uncloaking. 0ms latency, pure offline math.</span>
+            </button>
+
+            <button
+              type="button"
+              className={`provider-option-btn ${aiConfig.provider === 'ollama' ? 'active' : ''}`}
+              onClick={() => setAiConfig({ ...aiConfig, provider: 'ollama' })}
+            >
+              <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+                  <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+                  <line x1="6" y1="6" x2="6.01" y2="6" />
+                  <line x1="6" y1="18" x2="6.01" y2="18" />
+                </svg>
+                <span>Ollama Local LLM</span>
+              </span>
+              <span className="opt-desc">Private on-device large language model (e.g. llama3.2). Highly accurate reasoning without cloud telemetry.</span>
+            </button>
+
+            <button
+              type="button"
+              className={`provider-option-btn ${aiConfig.provider === 'gemini' ? 'active' : ''}`}
+              onClick={() => setAiConfig({ ...aiConfig, provider: 'gemini' })}
+            >
+              <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                </svg>
+                <span>Google Gemini Flash</span>
+              </span>
+              <span className="opt-desc">Gemini 2.0 Flash reasoning for deep pattern synthesis and evasive ad script detection.</span>
+            </button>
+
+            <button
+              type="button"
+              className={`provider-option-btn ${aiConfig.provider === 'openai' ? 'active' : ''}`}
+              onClick={() => setAiConfig({ ...aiConfig, provider: 'openai' })}
+            >
+              <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                </svg>
+                <span>OpenAI / Compatible</span>
+              </span>
+              <span className="opt-desc">OpenAI, Groq, LM Studio, Mistral, or any standard OpenAI-compatible API endpoint.</span>
+            </button>
+          </div>
+
+          {/* Subform for selected provider */}
+          <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))', marginBottom: '14px' }}>
+            {aiConfig.provider === 'mini-ai' && (
+              <div>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary, #fff)', marginBottom: '4px' }}>
+                  Built-in Embedded Mini-AI Active
+                </div>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary, #9ca3af)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+                  The Mini-AI classifier extracts 25 domain features (Shannon entropy, consonant clustering, hex string density, brand squatting, vowel ratios) directly on your device without sending any data over the network.
+                </p>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.08))' }}>
+                  <span style={{ fontSize: '0.78rem' }}>
+                    Learned Feedback Corrections: <strong>{learnedFeedbackCount}</strong> {learnedFeedbackCount === 1 ? 'entry' : 'entries'} stored
+                  </span>
+                  {learnedFeedbackCount > 0 && (
+                    <button
+                      type="button"
+                      className="browse-button secondary"
+                      style={{ padding: '3px 8px', fontSize: '0.72rem', height: '24px' }}
+                      onClick={handleResetAiFeedback}
+                    >
+                      Reset Learned Memory
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {aiConfig.provider === 'local-heuristics' && (
+              <div>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary, #fff)', marginBottom: '4px' }}>
+                  Mathematical Heuristics Engine Active
+                </div>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary, #9ca3af)', margin: 0, lineHeight: 1.4 }}>
+                  Evaluates target domains using algorithmic Shannon entropy analysis, subdomain depth thresholds, top-level domain risk scoring, and asynchronous CNAME resolution.
+                </p>
+              </div>
+            )}
+
+            {aiConfig.provider === 'ollama' && (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>Model Presets:</span>
+                  {['llama3.2', 'mistral', 'qwen2.5', 'deepseek-r1'].map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                      onClick={() => setAiConfig({ ...aiConfig, ollamaModel: m })}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Ollama Host URL</label>
+                    <input
+                      type="text"
+                      className="path-input"
+                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                      value={aiConfig.ollamaUrl || 'http://127.0.0.1:11434'}
+                      onChange={(e) => setAiConfig({ ...aiConfig, ollamaUrl: e.target.value })}
+                      placeholder="http://127.0.0.1:11434"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Model Name</label>
+                    <input
+                      type="text"
+                      className="path-input"
+                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                      value={aiConfig.ollamaModel || 'llama3.2'}
+                      onChange={(e) => setAiConfig({ ...aiConfig, ollamaModel: e.target.value })}
+                      placeholder="llama3.2"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {aiConfig.provider === 'gemini' && (
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Google Gemini API Key</label>
+                  <button
+                    type="button"
+                    style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                    onClick={() => setShowAiKey(!showAiKey)}
+                  >
+                    {showAiKey ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+                <input
+                  type={showAiKey ? 'text' : 'password'}
+                  className="path-input"
+                  style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                  value={aiConfig.apiKey || ''}
+                  onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
+                  placeholder="AIzaSy..."
+                />
+              </div>
+            )}
+
+            {aiConfig.provider === 'openai' && (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>Presets:</span>
+                  <button
+                    type="button"
+                    style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                    onClick={() => setAiConfig({ ...aiConfig, apiEndpoint: 'https://api.openai.com/v1', modelName: 'gpt-4o-mini' })}
+                  >
+                    OpenAI (gpt-4o-mini)
+                  </button>
+                  <button
+                    type="button"
+                    style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                    onClick={() => setAiConfig({ ...aiConfig, apiEndpoint: 'https://api.groq.com/openai/v1', modelName: 'llama-3.3-70b-versatile' })}
+                  >
+                    Groq (Llama 3.3 70B)
+                  </button>
+                  <button
+                    type="button"
+                    style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                    onClick={() => setAiConfig({ ...aiConfig, apiEndpoint: 'http://localhost:1234/v1', modelName: 'local-model' })}
+                  >
+                    LM Studio (Local 1234)
+                  </button>
+                  <button
+                    type="button"
+                    style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                    onClick={() => setAiConfig({ ...aiConfig, apiEndpoint: 'https://openrouter.ai/api/v1', modelName: 'meta-llama/llama-3.2-3b-instruct' })}
+                  >
+                    OpenRouter
+                  </button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '12px', marginBottom: '10px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>API Endpoint URL</label>
+                    <input
+                      type="text"
+                      className="path-input"
+                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                      value={aiConfig.apiEndpoint || 'https://api.openai.com/v1'}
+                      onChange={(e) => setAiConfig({ ...aiConfig, apiEndpoint: e.target.value })}
+                      placeholder="https://api.openai.com/v1"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Model Name</label>
+                    <input
+                      type="text"
+                      className="path-input"
+                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                      value={aiConfig.modelName || 'gpt-4o-mini'}
+                      onChange={(e) => setAiConfig({ ...aiConfig, modelName: e.target.value })}
+                      placeholder="gpt-4o-mini"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>API Key</label>
+                    <button
+                      type="button"
+                      style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                      onClick={() => setShowAiKey(!showAiKey)}
+                    >
+                      {showAiKey ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  <input
+                    type={showAiKey ? 'text' : 'password'}
+                    className="path-input"
+                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                    value={aiConfig.apiKey || ''}
+                    onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
+                    placeholder="sk-..."
+                  />
+                </div>
+              </div>
+            )}
+
+            {aiTestResult && (
+              <div style={{ marginTop: '10px', padding: '8px 10px', borderRadius: '6px', fontSize: '0.75rem', background: aiTestResult.success ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: aiTestResult.success ? '#10b981' : '#ef4444' }}>
+                <strong>{aiTestResult.success ? '✓' : '✗'} {aiTestResult.message}</strong> {aiTestResult.latencyMs ? `(${aiTestResult.latencyMs}ms)` : ''}
+              </div>
+            )}
+          </div>
+
+          {/* Sentinel Watchdog Automation */}
+          <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))', marginBottom: '14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+                <span>Sentinel Watchdog (Background Threat Sweep)</span>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.78rem' }}>
+                <input
+                  type="checkbox"
+                  checked={watchdogConfig.enabled}
+                  onChange={(e) => setWatchdogConfig({ ...watchdogConfig, enabled: e.target.checked })}
+                />
+                <span>Enable Watchdog</span>
+              </label>
+            </div>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #9ca3af)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+              Periodically queries your local sinkhole query logs in the background, flags emerging ad/tracker hostnames with the selected AI engine, and records them in the Quarantine Ledger.
+            </p>
+
+            {watchdogConfig.enabled && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Sweep Interval</label>
+                  <select
+                    className="styled-select"
+                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                    value={watchdogConfig.intervalMinutes}
+                    onChange={(e) => setWatchdogConfig({ ...watchdogConfig, intervalMinutes: parseInt(e.target.value, 10) || 60 })}
+                  >
+                    <option value={15}>Every 15 Minutes</option>
+                    <option value={30}>Every 30 Minutes</option>
+                    <option value={60}>Every 1 Hour</option>
+                    <option value={120}>Every 2 Hours</option>
+                    <option value={360}>Every 6 Hours</option>
+                    <option value={720}>Every 12 Hours</option>
+                    <option value={1440}>Every 24 Hours</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Sinkhole Query Target</label>
+                  <select
+                    className="styled-select"
+                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                    value={watchdogConfig.service}
+                    onChange={(e) => setWatchdogConfig({ ...watchdogConfig, service: e.target.value as 'adguard' | 'pihole' })}
+                  >
+                    <option value="adguard">AdGuard Home</option>
+                    <option value="pihole">Pi-hole</option>
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Action Footer */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+            <button
+              type="button"
+              className="browse-button secondary"
+              onClick={handleTestAiConnection}
+              disabled={isTestingAi}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+              </svg>
+              <span>{isTestingAi ? 'Testing Connection...' : 'Test AI Connection'}</span>
+            </button>
+
+            <button
+              type="button"
+              className="browse-button"
+              onClick={handleSaveAiSettings}
+              disabled={isSavingAi}
+            >
+              {isSavingAi ? 'Saving...' : 'Save AI Settings'}
+            </button>
+          </div>
+
+          {aiMessage.text && (
+            <p className={`setting-message ${aiMessage.type}`} style={{ marginTop: '10px' }}>
+              {aiMessage.text}
+            </p>
           )}
         </div>
 

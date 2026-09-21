@@ -48,6 +48,7 @@ function App() {
     }
   });
   const [autoTriggerCompile, setAutoTriggerCompile] = useState<boolean>(false);
+  const [inspectorInitialDomain, setInspectorInitialDomain] = useState<string>('');
 
   useEffect(() => {
     window.electron.getSavePath().then(setSavePath);
@@ -428,7 +429,12 @@ function App() {
                 setSuccessMessage={setGlobalSuccessMessage}
               />
             )}
-            {currentView === 'inspector' && <RuleInspectorView />}
+            {currentView === 'inspector' && (
+              <RuleInspectorView
+                initialDomain={inspectorInitialDomain}
+                onNavigateCustomRules={() => setCurrentView('custom')}
+              />
+            )}
             {currentView === 'browser' && (
               <RuleBrowserView
                 onTriggerCompile={() => setCurrentView('process')}
@@ -445,6 +451,11 @@ function App() {
               <AIRadarView
                 onTriggerCompile={() => setCurrentView('process')}
                 onNavigateDeploy={() => setCurrentView('deploy')}
+                onNavigateInspector={(domain) => {
+                  if (domain) setInspectorInitialDomain(domain);
+                  setCurrentView('inspector');
+                }}
+                onNavigateSettings={() => setCurrentView('settings')}
                 setError={setGlobalError}
                 setSuccessMessage={setGlobalSuccessMessage}
               />

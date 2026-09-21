@@ -39,9 +39,9 @@ export const Header: React.FC<HeaderProps> = ({
         };
       case 'inspector':
         return {
-          title: 'Rule Inspector',
+          title: 'Rule & AI Inspector',
           isBeta: false,
-          desc: 'Verify if any domain is blocked and trace its origin rule',
+          desc: 'Simultaneously evaluate compiled filter rules and live AI threat intelligence for any domain',
         };
       case 'browser':
         return {
@@ -59,13 +59,13 @@ export const Header: React.FC<HeaderProps> = ({
         return {
           title: 'AI Defense Radar',
           isBeta: true,
-          desc: 'Real-time AI scanner for shifting ad servers, ephemeral bidding hostnames, and CNAME cloaking',
+          desc: 'Threat hunting hub: sinkhole query log scout, live page canary crawler, and quarantine ledger',
         };
       case 'settings':
         return {
           title: 'Preferences',
           isBeta: false,
-          desc: 'Configure export formats, auto-schedule, and file locations',
+          desc: 'Configure export formats, AI intelligence engine, auto-schedule, and file locations',
         };
       case 'process':
       default:
