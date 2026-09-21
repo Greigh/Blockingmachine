@@ -52,7 +52,11 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
     }
 
     try {
-      new URL(newSourceUrl);
+      const parsed = new URL(newSourceUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        setError('URL must use http: or https: protocol.');
+        return;
+      }
     } catch {
       setError('Invalid URL format. Please provide a valid HTTP or HTTPS URL.');
       return;
@@ -140,9 +144,13 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
       return;
     }
     try {
-      new URL(editUrl);
+      const parsed = new URL(editUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        setError('URL must use http: or https: protocol.');
+        return;
+      }
     } catch {
-      setError('Invalid URL format.');
+      setError('Invalid URL format. Please provide a valid HTTP or HTTPS URL.');
       return;
     }
 

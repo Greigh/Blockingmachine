@@ -1,4 +1,4 @@
-import { join, dirname, isAbsolute, basename, resolve as pathResolve } from 'path';
+import { join, dirname, isAbsolute, basename, resolve as pathResolve, sep } from 'path';
 import { createServer, Server as HttpServer } from 'http';
 import { networkInterfaces } from 'os';
 import {
@@ -972,7 +972,8 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         const resolvedTarget = pathResolve(targetFilePath);
         const resolvedOutputDir = pathResolve(outputDir);
         const resolvedSavePath = pathResolve(savePath);
-        if (!resolvedTarget.startsWith(resolvedOutputDir) && resolvedTarget !== resolvedSavePath) {
+        const safeDir = resolvedOutputDir.endsWith(sep) ? resolvedOutputDir : `${resolvedOutputDir}${sep}`;
+        if (!resolvedTarget.startsWith(safeDir) && resolvedTarget !== resolvedSavePath) {
           res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end('403 Forbidden: Access denied.');
           return;
@@ -1694,13 +1695,16 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           u.searchParams.set('type', 'version');
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 6000);
-          const res = await fetch(u.toString(), { signal: controller.signal });
-          clearTimeout(timeout);
-          const latencyMs = Date.now() - startTime;
-          if (res.ok) {
-            return { service: 'pihole', success: true, statusCode: res.status, latencyMs, message: `Connected to Pi-hole (${latencyMs}ms, HTTP ${res.status})` };
-          } else {
-            return { service: 'pihole', success: false, statusCode: res.status, latencyMs, message: `Pi-hole returned HTTP ${res.status}: ${res.statusText}` };
+          try {
+            const res = await fetch(u.toString(), { signal: controller.signal });
+            const latencyMs = Date.now() - startTime;
+            if (res.ok) {
+              return { service: 'pihole', success: true, statusCode: res.status, latencyMs, message: `Connected to Pi-hole (${latencyMs}ms, HTTP ${res.status})` };
+            } else {
+              return { service: 'pihole', success: false, statusCode: res.status, latencyMs, message: `Pi-hole returned HTTP ${res.status}: ${res.statusText}` };
+            }
+          } finally {
+            clearTimeout(timeout);
           }
         } else if (service === 'webhook') {
           const customWebhookUrl = store.get('customWebhookUrl') as string | undefined;
@@ -1752,7 +1756,6 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
                 headers: { Authorization: `Bearer ${haToken.trim()}` },
                 signal: controller.signal,
               });
-              clearTimeout(timeout);
               const latencyMs = Date.now() - startTime;
               if (res.ok) {
                 const cloudMsg = urlStr.includes('nabu.casa')
@@ -1764,9 +1767,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               } else {
                 return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `Home Assistant returned HTTP ${res.status}: ${res.statusText}` };
               }
-            } catch (err: any) {
+            } finally {
               clearTimeout(timeout);
-              throw err;
             }
           } else if (adguardMode === 'webhook') {
             const target = haWebhookUrl?.trim() || rawUrl?.trim();
@@ -1837,7 +1839,6 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             const timeout = setTimeout(() => controller.abort(), 6000);
             try {
               const res = await fetch(u, { headers, signal: controller.signal });
-              clearTimeout(timeout);
               const latencyMs = Date.now() - startTime;
               if (res.ok) {
                 return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: `Connected to AdGuard Home (${latencyMs}ms, HTTP ${res.status})` };
@@ -1847,7 +1848,6 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
                 return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `AdGuard Home returned HTTP ${res.status}: ${res.statusText}` };
               }
             } catch (err: any) {
-              clearTimeout(timeout);
               const latencyMs = Date.now() - startTime;
               if (urlStr.includes('homeassistant') || urlStr.includes(':3000')) {
                 return {
@@ -1859,6 +1859,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
                 };
               }
               throw err;
+            } finally {
+              clearTimeout(timeout);
             }
           }
         }

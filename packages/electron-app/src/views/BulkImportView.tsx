@@ -135,7 +135,11 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
 
     urls.forEach((url, index) => {
       try {
-        new URL(url); // validate
+        const parsed = new URL(url); // validate
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          importErrors.push(`Line ${index + 1}: Disallowed protocol "${parsed.protocol}" in "${url}". Only http:// and https:// feeds are permitted.`);
+          return;
+        }
         const lower = url.trim().toLowerCase();
         if (seenUrls.has(lower)) {
           skippedCount++;
