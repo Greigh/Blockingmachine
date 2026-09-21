@@ -316,8 +316,15 @@ describe('AI Ad & Tracker Discovery Engine', () => {
   describe('Domain Decomposition', () => {
     it('correctly separates subdomains, SLD, and TLD with entropy measurements', () => {
       const decomp = decomposeDomain('eu-west-1.telemetry.example.co.uk');
-      expect(decomp.subdomains.length).toBeGreaterThan(0);
+      expect(decomp.tld).toBe('co.uk');
+      expect(decomp.sld).toBe('example');
+      expect(decomp.subdomains).toEqual(['eu-west-1', 'telemetry']);
       expect(decomp.labelEntropies.length).toBe(5);
+
+      const standardDecomp = decomposeDomain('adserver.doubleclick.net');
+      expect(standardDecomp.tld).toBe('net');
+      expect(standardDecomp.sld).toBe('doubleclick');
+      expect(standardDecomp.subdomains).toEqual(['adserver']);
     });
   });
 });
