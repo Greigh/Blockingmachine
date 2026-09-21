@@ -1616,24 +1616,23 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle('get-compiled-rules', async (_event, options?: { search?: string; limit?: number; offset?: number; typeFilter?: string }) => {
       const allCompiled = await getOrLoadCompiledRules(store);
 
-      let filtered = allCompiled;
       const search = options?.search?.trim().toLowerCase();
-      if (search) {
-        filtered = filtered.filter((r) =>
-          (r.raw && r.raw.toLowerCase().includes(search)) ||
-          (r.domain && r.domain.toLowerCase().includes(search))
-        );
-      }
+      const typeFilter = options?.typeFilter;
 
-      if (options?.typeFilter && options.typeFilter !== 'all') {
-        if (options.typeFilter === 'exceptions') {
-          filtered = filtered.filter((r) => r.isException || r.raw?.startsWith('@@'));
-        } else if (options.typeFilter === 'cosmetic') {
-          filtered = filtered.filter((r) => r.raw?.includes('##') || r.raw?.includes('#@#'));
-        } else if (options.typeFilter === 'blocking') {
-          filtered = filtered.filter((r) => !r.isException && !r.raw?.startsWith('@@'));
+      const filtered = allCompiled.filter((r) => {
+        if (typeFilter && typeFilter !== 'all') {
+          if (typeFilter === 'exceptions' && !(r.isException || r.raw?.startsWith('@@'))) return false;
+          if (typeFilter === 'cosmetic' && !(r.raw?.includes('##') || r.raw?.includes('#@#'))) return false;
+          if (typeFilter === 'blocking' && (r.isException || r.raw?.startsWith('@@'))) return false;
         }
-      }
+        if (search) {
+          const rawMatch = r.raw ? r.raw.toLowerCase().includes(search) : false;
+          if (rawMatch) return true;
+          const domMatch = r.domain ? r.domain.toLowerCase().includes(search) : false;
+          return domMatch;
+        }
+        return true;
+      });
 
       const total = filtered.length;
       const offset = Math.max(0, options?.offset || 0);

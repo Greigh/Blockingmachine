@@ -51,6 +51,11 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
     return () => clearTimeout(timer);
   }, [fetchRules]);
 
+  // Reset pagination to first page when search query or type filter changes
+  useEffect(() => {
+    setPage(0);
+  }, [searchQuery, typeFilter]);
+
   const handleCopy = (raw: string, idx: number) => {
     navigator.clipboard.writeText(raw);
     setCopiedIndex(idx);

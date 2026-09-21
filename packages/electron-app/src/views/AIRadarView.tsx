@@ -150,7 +150,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       }
       timersRef.current = [];
     };
-  }, [loadQuarantine, loadWatchdog]);
+  }, [loadQuarantine, loadWatchdog, loadFeedbackStats]);
 
   const handleCopy = useCallback((text: string, key: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {

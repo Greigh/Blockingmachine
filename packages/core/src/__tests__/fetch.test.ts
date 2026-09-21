@@ -79,4 +79,20 @@ describe("fetchWithConditionalCache", () => {
     expect(res.status).toBe(400);
     expect(res.content).toBeNull();
   });
+
+  test("rejects URLs containing null-byte character with 400", async () => {
+    const res = await fetchWithConditionalCache(tempFilePath + "\0.malicious");
+    expect(res.status).toBe(400);
+    expect(res.content).toBeNull();
+  });
+
+  test("rejects URLs containing newline or carriage return characters with 400", async () => {
+    const resNewline = await fetchWithConditionalCache("https://example.com/filter\n.txt");
+    expect(resNewline.status).toBe(400);
+    expect(resNewline.content).toBeNull();
+
+    const resCR = await fetchWithConditionalCache("https://example.com/filter\r.txt");
+    expect(resCR.status).toBe(400);
+    expect(resCR.content).toBeNull();
+  });
 });

@@ -491,17 +491,17 @@ export class RuleProcessor {
     const metadata: Partial<FilterMetadata> & { sources: string[] } = {
       sources: [],
     };
+    const headerLines = lines.length > 100 ? lines.slice(0, 100) : lines;
 
     const extractMeta = (
       regex: RegExp,
       key: keyof Omit<FilterMetadata, "sources">,
     ) => {
-      const line = lines.find((l) => regex.test(l));
+      const line = headerLines.find((l) => regex.test(l));
       if (line) {
         const value = line.split(/:(.*)/s)[1]?.trim();
         // Assign if value exists (key !== 'sources' check removed as redundant)
         if (value) {
-          // <<< Simplified check
           metadata[key] = value;
         }
       }

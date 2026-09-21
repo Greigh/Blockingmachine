@@ -94,6 +94,18 @@ describe("RuleStore", () => {
     );
   });
 
+  test("caps merged sources at 50 to prevent unbounded memory growth", () => {
+    for (let i = 0; i < 60; i++) {
+      store.addRule("||doubleclick.net^", `source-${i}`);
+    }
+    const rules = store.getUniqueRules();
+    expect(rules).toHaveLength(1);
+    expect(rules[0].metadata.sources).toHaveLength(50);
+    expect(rules[0].metadata.sources).toContain("source-0");
+    expect(rules[0].metadata.sources).toContain("source-49");
+    expect(rules[0].metadata.sources).not.toContain("source-50");
+  });
+
   test("clears all stored rules and resets statistics", () => {
     store.addRule("||tracker.com^", "source-1");
     store.addRule("@@||safe.com^", "source-2");

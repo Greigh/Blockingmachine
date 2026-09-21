@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 
 interface CustomRulesViewProps {
   setError: (error: string | null) => void;
@@ -57,44 +57,50 @@ export const CustomRulesView: React.FC<CustomRulesViewProps> = ({
     }
   };
 
-  // Real-time syntax breakdown
-  const lines = customRules.split('\n');
-  let blockCount = 0;
-  let exceptionCount = 0;
-  let cosmeticCount = 0;
-  let hostsCount = 0;
-  let commentCount = 0;
+  // Real-time syntax breakdown (single pass, memoized to prevent render latency on large sets)
+  const { totalLines, totalActiveRules, blockCount, exceptionCount, cosmeticCount, hostsCount, commentCount } = useMemo(() => {
+    let blocks = 0;
+    let exceptions = 0;
+    let cosmetics = 0;
+    let hosts = 0;
+    let comments = 0;
+    let active = 0;
 
-  const isCosmeticRule = (line: string) =>
-    line.includes('##') || line.includes('#?#') || line.includes('#@#') || line.includes('#$#');
+    const allLines = customRules.split('\n');
 
-  const isCommentOrHeader = (line: string) => {
-    if (line.startsWith('!')) return true;
-    if (line.startsWith('[') && line.endsWith(']')) return true;
-    if (line.startsWith('#') && !isCosmeticRule(line)) return true;
-    return false;
-  };
+    for (let i = 0; i < allLines.length; i++) {
+      const l = allLines[i].trim();
+      if (!l) continue;
 
-  lines.forEach((rawLine) => {
-    const l = rawLine.trim();
-    if (!l) return;
-    if (isCommentOrHeader(l)) {
-      commentCount++;
-    } else if (l.startsWith('@@')) {
-      exceptionCount++;
-    } else if (isCosmeticRule(l)) {
-      cosmeticCount++;
-    } else if (l.startsWith('0.0.0.0') || l.startsWith('127.0.0.1')) {
-      hostsCount++;
-    } else {
-      blockCount++;
+      const isCosmetic = l.includes('##') || l.includes('#?#') || l.includes('#@#') || l.includes('#$#');
+      const isComment = l.startsWith('!') || (l.startsWith('[') && l.endsWith(']')) || (l.startsWith('#') && !isCosmetic);
+
+      if (isComment) {
+        comments++;
+      } else {
+        active++;
+        if (l.startsWith('@@')) {
+          exceptions++;
+        } else if (isCosmetic) {
+          cosmetics++;
+        } else if (l.startsWith('0.0.0.0') || l.startsWith('127.0.0.1')) {
+          hosts++;
+        } else {
+          blocks++;
+        }
+      }
     }
-  });
 
-  const totalActiveRules = lines.filter((l) => {
-    const trimmed = l.trim();
-    return trimmed.length > 0 && !isCommentOrHeader(trimmed);
-  }).length;
+    return {
+      totalLines: allLines.length,
+      totalActiveRules: active,
+      blockCount: blocks,
+      exceptionCount: exceptions,
+      cosmeticCount: cosmetics,
+      hostsCount: hosts,
+      commentCount: comments,
+    };
+  }, [customRules]);
 
   return (
     <div className="custom-rules-container">
@@ -154,7 +160,7 @@ export const CustomRulesView: React.FC<CustomRulesViewProps> = ({
 
         <div className="rules-actions-footer">
           <div className="rules-hint-text">
-            <span>{lines.length} total lines • {commentCount} comments</span>
+            <span>{totalLines} total lines • {commentCount} comments</span>
           </div>
 
           <button

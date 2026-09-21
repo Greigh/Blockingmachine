@@ -76,7 +76,7 @@ export function cleanDomainPattern(originalRule: string): string | null {
   }
 }
 
-function extractSelector(originalRule: string): string | null {
+export function extractSelector(originalRule: string): string | null {
   if (!originalRule || typeof originalRule !== "string") return null;
   try {
     // Matches common cosmetic rule patterns (##, #@#, #?#, #$#, #$?#, #%#, #@%#, #., #,)
