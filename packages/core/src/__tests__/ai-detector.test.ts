@@ -7,6 +7,9 @@ import {
   synthesizeAllowlistRule,
   sanitizeDomain,
   isDomainCoveredByRules,
+  RuleCoverageTrie,
+  compactSubdomainRules,
+  checkRuleConflict,
   isSafePublicWebUrl,
   AiDetectorService,
   KNOWN_CLOAKED_TARGETS,
@@ -247,6 +250,189 @@ describe('AI Ad & Tracker Discovery Engine', () => {
     it('ignores allowlist exception rules', () => {
       const res = isDomainCoveredByRules('allowed.com', existingRules);
       expect(res.isCovered).toBe(false);
+    });
+  });
+
+  describe('RuleCoverageTrie Data Structure', () => {
+    it('accurately indexes and queries wildcard and exact rules', () => {
+      const trie = new RuleCoverageTrie();
+      trie.insertRules([
+        '||doubleclick.net^',
+        '||telemetry.app.io^',
+        '0.0.0.0 adservice.google.com',
+        'exact-block.org',
+      ]);
+
+      expect(trie.size).toBe(4);
+
+      // Wildcard parent covers apex and all deeper subdomains
+      expect(trie.isCovered('doubleclick.net').isCovered).toBe(true);
+      expect(trie.isCovered('ad.doubleclick.net').isCovered).toBe(true);
+      expect(trie.isCovered('deep.sub.ad.doubleclick.net').isCovered).toBe(true);
+      expect(trie.isCovered('otherdoubleclick.net').isCovered).toBe(false);
+
+      // Exact host rule only covers exact match
+      expect(trie.isCovered('adservice.google.com').isCovered).toBe(true);
+      expect(trie.isCovered('sub.adservice.google.com').isCovered).toBe(false);
+      expect(trie.isCovered('google.com').isCovered).toBe(false);
+
+      // Clears cleanly
+      trie.clear();
+      expect(trie.size).toBe(0);
+      expect(trie.isCovered('doubleclick.net').isCovered).toBe(false);
+    });
+
+    it('benchmarks sub-millisecond throughput over 2,000 synthetic rules', () => {
+      const trie = new RuleCoverageTrie();
+      const syntheticRules: string[] = [];
+      for (let i = 0; i < 2000; i++) {
+        syntheticRules.push(`||tracker-${i}.telemetry-network.net^`);
+      }
+      trie.insertRules(syntheticRules);
+
+      const start = performance.now();
+      for (let i = 0; i < 500; i++) {
+        trie.isCovered(`sub.tracker-${i % 2000}.telemetry-network.net`);
+      }
+      const elapsed = performance.now() - start;
+      expect(elapsed).toBeLessThan(50); // Under 50ms for 500 queries
+    });
+  });
+
+  describe('Target-Specific Rule Synthesis', () => {
+    it('generates AdGuard Home specific rules with $dnsrewrite and $important', () => {
+      const adRules = synthesizeRules({
+        domain: 'adservice.google.com',
+        verdict: 'ad_server',
+        category: 'Advertising',
+        target: 'adguard',
+      });
+      expect(adRules).toContain('||adservice.google.com^');
+      expect(adRules).toContain('||adservice.google.com^$dnsrewrite=NOERROR;NODATA');
+
+      const malRules = synthesizeRules({
+        domain: 'phishing-site.xyz',
+        verdict: 'malicious',
+        category: 'Malware/Phishing',
+        target: 'adguard',
+      });
+      expect(malRules).toContain('||phishing-site.xyz^$important');
+    });
+
+    it('generates Pi-hole v5/v6 regex rules', () => {
+      const piRules = synthesizeRules({
+        domain: 'tracking.beacon.io',
+        verdict: 'tracker',
+        category: 'Telemetry/Analytics',
+        target: 'pihole',
+      });
+      expect(piRules).toContain('(^|\\.)tracking\\.beacon\\.io$');
+      expect(piRules).toContain('0.0.0.0 tracking.beacon.io');
+    });
+
+    it('generates uBlock Origin scriptlet defusers and third-party modifiers', () => {
+      const ublockRules = synthesizeRules({
+        domain: 'adserver.com',
+        verdict: 'ad_server',
+        category: 'Advertising',
+        target: 'ublock',
+      });
+      expect(ublockRules).toContain('||adserver.com^');
+      expect(ublockRules).toContain('adserver.com##+js(set, adsBlocked, true)');
+    });
+
+    it('generates Unbound, dnsmasq, and hosts formats', () => {
+      const unboundRules = synthesizeRules({
+        domain: 'bad.net',
+        verdict: 'malicious',
+        category: 'Malware/Phishing',
+        target: 'unbound',
+      });
+      expect(unboundRules).toContain('local-zone: "bad.net" always_nxdomain');
+
+      const dnsmasqRules = synthesizeRules({
+        domain: 'bad.net',
+        verdict: 'malicious',
+        category: 'Malware/Phishing',
+        target: 'dnsmasq',
+      });
+      expect(dnsmasqRules).toContain('address=/bad.net/0.0.0.0');
+
+      const hostRules = synthesizeRules({
+        domain: 'bad.net',
+        verdict: 'malicious',
+        category: 'Malware/Phishing',
+        target: 'hosts',
+      });
+      expect(hostRules).toEqual(['0.0.0.0 bad.net']);
+    });
+
+    it('includes reproducible metadata comments when requested', () => {
+      const rules = synthesizeRules({
+        domain: 'ad.doubleclick.net',
+        verdict: 'ad_server',
+        category: 'Advertising',
+        confidence: 95,
+        includeComments: true,
+      });
+      expect(rules.some((r) => r.startsWith('! [Blockingmachine AI]'))).toBe(true);
+      expect(rules.some((r) => r.includes('95% confidence'))).toBe(true);
+    });
+  });
+
+  describe('Subdomain Clustering & Wildcard Compaction', () => {
+    it('collapses >= 3 subdomains under a common parent zone', () => {
+      const rawDomains = [
+        's1.metrics.tracker.io',
+        's2.metrics.tracker.io',
+        's3.metrics.tracker.io',
+        'api.metrics.tracker.io',
+        'standalone-ad.com',
+      ];
+
+      const res = compactSubdomainRules(rawDomains, 3);
+      expect(res.originalCount).toBe(5);
+      expect(res.compactedRules).toContain('||metrics.tracker.io^');
+      expect(res.compactedRules).toContain('||standalone-ad.com^');
+      expect(res.compactedRules.length).toBeLessThan(res.originalCount);
+      expect(res.savingsPercent).toBeGreaterThan(0);
+      expect(res.collapsedGroups.length).toBe(1);
+      expect(res.collapsedGroups[0].parentDomain).toBe('metrics.tracker.io');
+    });
+
+    it('returns original set if no cluster meets threshold', () => {
+      const rawDomains = ['a.foo.com', 'b.bar.com'];
+      const res = compactSubdomainRules(rawDomains, 3);
+      expect(res.compactedRules).toHaveLength(2);
+      expect(res.savingsPercent).toBe(0);
+    });
+  });
+
+  describe('Allowlist Conflict & Shadow Resolution', () => {
+    it('detects when a proposed block rule is shadowed by an allowlist rule', () => {
+      const existingAllowRules = [
+        '! Whitelist filters',
+        '@@||tracker.com^',
+        '@@||partner.cdn.com^$document',
+      ];
+
+      const conflict = checkRuleConflict('||tracker.com^', existingAllowRules);
+      expect(conflict.hasConflict).toBe(true);
+      expect(conflict.conflictingAllowRule).toBe('@@||tracker.com^');
+      expect(conflict.suggestedOverrideRule).toBe('||tracker.com^$important');
+    });
+
+    it('detects subdomain shadow conflicts against apex allowlists', () => {
+      const existingAllowRules = ['@@||cdn.com^'];
+      const conflict = checkRuleConflict('||sub.cdn.com^', existingAllowRules);
+      expect(conflict.hasConflict).toBe(true);
+      expect(conflict.suggestedOverrideRule).toBe('||sub.cdn.com^$important');
+    });
+
+    it('reports no conflict when no allowlist shadows the rule', () => {
+      const existingAllowRules = ['@@||allowed.org^'];
+      const conflict = checkRuleConflict('||blocked.org^', existingAllowRules);
+      expect(conflict.hasConflict).toBe(false);
     });
   });
 

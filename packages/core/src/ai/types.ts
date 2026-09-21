@@ -112,3 +112,44 @@ export interface CrawlScanResult {
   flaggedHosts: AiScanResult[];
   synthesizedRules: string[];
 }
+
+/**
+ * Target environments supported by the Rule Synthesizer.
+ * @beta
+ */
+export type SynthesisTarget =
+  | 'all'
+  | 'adguard'
+  | 'pihole'
+  | 'ublock'
+  | 'unbound'
+  | 'dnsmasq'
+  | 'hosts';
+
+/**
+ * Result of subdomain clustering and wildcard compaction.
+ * @beta
+ */
+export interface CompactionResult {
+  originalCount: number;
+  compactedCount: number;
+  compactedRules: string[];
+  savingsPercent: number;
+  collapsedGroups: Array<{
+    parentDomain: string;
+    subdomains: string[];
+    rule: string;
+  }>;
+}
+
+/**
+ * Result of checking a block rule against existing allowlist rules.
+ * @beta
+ */
+export interface RuleConflictResult {
+  hasConflict: boolean;
+  conflictingAllowRule?: string;
+  suggestedOverrideRule?: string;
+  reason?: string;
+}
+

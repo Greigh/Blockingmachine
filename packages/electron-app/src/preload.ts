@@ -69,6 +69,10 @@ contextBridge.exposeInMainWorld('electron', {
   addCustomAllowlist: (domain: string) => ipcRenderer.invoke('add-custom-allowlist', domain),
   isDomainCoveredByRules: (domain: string) => ipcRenderer.invoke('is-domain-covered-by-rules', domain),
   tuneMiniAiFeedback: (domain: string, action: string) => ipcRenderer.invoke('tune-mini-ai-feedback', domain, action),
+  compactSubdomainRules: (domains: string[], threshold?: number) => ipcRenderer.invoke('compact-subdomain-rules', domains, threshold),
+  checkRuleConflict: (rule: string) => ipcRenderer.invoke('check-rule-conflict', rule),
+  getMiniAiFeedbackStats: () => ipcRenderer.invoke('get-mini-ai-feedback-stats'),
+  synthesizeCustomRules: (input: any) => ipcRenderer.invoke('synthesize-custom-rules', input),
 
   onUpdateAvailable: (callback: (info: UpdateInfo) => void) => {
     const handler = (_event: IpcRendererEvent, info: UpdateInfo) => callback(info);

@@ -52,6 +52,31 @@ const KNOWN_SAFE_INFRASTRUCTURE = new Set([
   'one.one.one.one', 'dns.google',
 ]);
 
+const HIGH_PROFILE_BRANDS = [
+  'paypal', 'google', 'apple', 'microsoft', 'amazon', 'netflix', 'github',
+  'chase', 'bankofamerica', 'wellsfargo', 'facebook', 'instagram', 'dropbox',
+  'coinbase', 'binance', 'steam', 'twitter', 'discord', 'roblox',
+];
+
+function computeLevenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost,
+      );
+    }
+  }
+  return dp[m][n];
+}
+
 export interface DomainFeatureVector {
   entropyFull: number;
   entropySld: number;
@@ -78,6 +103,7 @@ export interface DomainFeatureVector {
   syllableCadence: number;
   numericSubdomain: number;
   userTuneBias: number;
+  brandSpoofScore: number;
 }
 
 /**
@@ -221,6 +247,46 @@ export function extractDomainFeatures(
 
   const userTuneBias = Math.max(-1.0, Math.min(1.0, context?.userFeedbackBias || 0));
 
+  // 13. Brand Typo-Squatting / Impersonation Detection
+  let brandSpoofScore = 0;
+  if (knownSafeInfra === 0) {
+    const sldLower = sld.toLowerCase();
+    const tokens = sldLower.split(/[-_.]/).filter(Boolean);
+
+    for (const brand of HIGH_PROFILE_BRANDS) {
+      if (sldLower === brand) {
+        brandSpoofScore = 1.0;
+        break;
+      }
+      const directDist = computeLevenshtein(sldLower, brand);
+      if (directDist === 1 || (brand.length >= 6 && directDist === 2)) {
+        brandSpoofScore = 1.0;
+        break;
+      }
+      if (sldLower.includes(brand) && sldLower.length > brand.length) {
+        if (/login|verify|security|auth|update|account|support|wallet|token|claim/i.test(sldLower)) {
+          brandSpoofScore = 1.0;
+          break;
+        }
+      }
+      // Check tokens within hyphenated SLDs (e.g. paypa1-security, apple-id-verify)
+      for (const tok of tokens) {
+        if (tok === brand) {
+          if (/login|verify|security|auth|update|account|support|wallet|token|claim/i.test(sldLower)) {
+            brandSpoofScore = 1.0;
+            break;
+          }
+        }
+        const tokDist = computeLevenshtein(tok, brand);
+        if (tokDist === 1 || (brand.length >= 6 && tokDist === 2)) {
+          brandSpoofScore = 1.0;
+          break;
+        }
+      }
+      if (brandSpoofScore > 0) break;
+    }
+  }
+
   return {
     entropyFull,
     entropySld,
@@ -247,6 +313,7 @@ export function extractDomainFeatures(
     syllableCadence,
     numericSubdomain,
     userTuneBias,
+    brandSpoofScore,
   };
 }
 
@@ -270,6 +337,7 @@ interface ModelClassWeights {
   digitRatio: number;
   punycode: number;
   userTuneBias: number;
+  brandSpoofScore: number;
 }
 
 const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
@@ -287,45 +355,48 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     cnameExternal: -2.5,
     knownSafeInfra: 20.0,
     highRiskTld: -3.0,
-    digitRatio: -2.0,
-    punycode: -2.0,
-    userTuneBias: -5.0, // Negative bias promotes Clean
+    digitRatio: 0,
+    punycode: 0,
+    userTuneBias: -4.0,
+    brandSpoofScore: -8.0,
   },
   Advertising: {
     bias: -2.0,
     entropyFull: 1.0,
-    entropySld: 0.5,
-    lenSld: 0.2,
+    entropySld: 1.2,
+    lenSld: 0.8,
     consecutiveConsonants: 0.5,
-    hexScore: 1.5,
-    trigramPerplexity: 0.8,
-    adKeywordWeight: 10.0,
-    trackerKeywordWeight: -1.0,
+    hexScore: 0.5,
+    trigramPerplexity: 0.5,
+    adKeywordWeight: 16.0,
+    trackerKeywordWeight: 0.5,
     cnameKnownTracker: 0.0,
-    cnameExternal: 1.0,
-    knownSafeInfra: -10.0,
+    cnameExternal: 0.5,
+    knownSafeInfra: -12.0,
     highRiskTld: 1.5,
-    digitRatio: 1.5,
-    punycode: 0.5,
-    userTuneBias: 4.0, // Positive bias promotes Flagging
+    digitRatio: 0.5,
+    punycode: 0.2,
+    userTuneBias: 3.5,
+    brandSpoofScore: 0,
   },
   'Telemetry/Analytics': {
     bias: -2.0,
     entropyFull: 0.8,
-    entropySld: 0.5,
-    lenSld: 0.2,
-    consecutiveConsonants: 0.5,
-    hexScore: 2.0,
-    trigramPerplexity: 0.8,
-    adKeywordWeight: -1.0,
-    trackerKeywordWeight: 10.0,
-    cnameKnownTracker: 1.0,
-    cnameExternal: 1.5,
-    knownSafeInfra: -10.0,
-    highRiskTld: 1.0,
-    digitRatio: 1.2,
-    punycode: 0.5,
-    userTuneBias: 4.0,
+    entropySld: 1.0,
+    lenSld: 0.5,
+    consecutiveConsonants: 0.2,
+    hexScore: 1.0,
+    trigramPerplexity: 0.2,
+    adKeywordWeight: 0.5,
+    trackerKeywordWeight: 16.0,
+    cnameKnownTracker: 0.0,
+    cnameExternal: 0.8,
+    knownSafeInfra: -12.0,
+    highRiskTld: 0.8,
+    digitRatio: 0.5,
+    punycode: 0.2,
+    userTuneBias: 3.5,
+    brandSpoofScore: 0,
   },
   'CNAME Cloaking': {
     bias: -3.0,
@@ -344,6 +415,7 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     digitRatio: 0.5,
     punycode: 0.2,
     userTuneBias: 3.5,
+    brandSpoofScore: 0,
   },
   'Malware/Phishing': {
     bias: -3.0,
@@ -362,6 +434,7 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     digitRatio: 2.5,
     punycode: 3.0,
     userTuneBias: 4.5,
+    brandSpoofScore: 12.0,
   },
   Unknown: {
     bias: -5.0,
@@ -380,6 +453,7 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     digitRatio: 0,
     punycode: 0,
     userTuneBias: 0,
+    brandSpoofScore: 0,
   },
 };
 
@@ -419,6 +493,28 @@ export class MiniAiClassifier {
 
   public getDomainFeedback(domain: string): number {
     return this.userFeedbackMap.get(domain.toLowerCase().trim()) || 0;
+  }
+
+  public exportFeedback(): Record<string, number> {
+    return Object.fromEntries(this.userFeedbackMap.entries());
+  }
+
+  public importFeedback(feedback: Record<string, number>): void {
+    if (!feedback || typeof feedback !== 'object') return;
+    for (const [domain, bias] of Object.entries(feedback)) {
+      if (typeof domain === 'string' && typeof bias === 'number') {
+        const clean = domain.toLowerCase().trim();
+        if (this.userFeedbackMap.size >= this.maxFeedbackEntries && !this.userFeedbackMap.has(clean)) {
+          const oldestKey = this.userFeedbackMap.keys().next().value;
+          if (oldestKey) this.userFeedbackMap.delete(oldestKey);
+        }
+        this.userFeedbackMap.set(clean, bias);
+      }
+    }
+  }
+
+  public getFeedbackCount(): number {
+    return this.userFeedbackMap.size;
   }
 
   /**
@@ -478,6 +574,7 @@ export class MiniAiClassifier {
       z += features.digitRatio * w.digitRatio;
       z += features.punycode * w.punycode;
       z += features.userTuneBias * w.userTuneBias;
+      z += features.brandSpoofScore * w.brandSpoofScore;
 
       logits[cat] = z;
     }
@@ -627,6 +724,17 @@ export class MiniAiClassifier {
         description: 'High information entropy in hostname',
       });
       reasons.push(`High Shannon entropy (${features.entropyFull.toFixed(2)}) indicates pseudo-random hostname`);
+    }
+
+    if (features.brandSpoofScore > 0) {
+      contributions.push({
+        name: 'Brand Typo-Squatting',
+        value: 1.0,
+        weight: 6.5,
+        impact: 'threat',
+        description: 'Impersonates or typo-squats a high-profile brand domain',
+      });
+      reasons.push('Brand impersonation or typo-squatting credential harvesting pattern detected');
     }
 
     if (features.highRiskTld > 0) {

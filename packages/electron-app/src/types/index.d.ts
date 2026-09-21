@@ -21,6 +21,9 @@ export type {
   FilterListMetadata,
   StoredRule,
   FilterFormat,
+  CompactionResult,
+  RuleConflictResult,
+  SynthesisTarget,
 } from '@blockingmachine/core';
 export type ThemeType = 'light' | 'dark' | 'system';
 
@@ -275,6 +278,7 @@ export interface StoreSchema {
   aiConfig?: Partial<AiProviderConfig>;
   aiThreatQuarantine?: ThreatQuarantineItem[];
   aiWatchdogConfig?: AiWatchdogConfig;
+  miniAiFeedback?: Record<string, number>;
 }
 
 // Electron API interface
@@ -333,9 +337,12 @@ export interface ElectronAPI {
   clearThreatQuarantine?: () => Promise<{ success: boolean }>;
   getAiWatchdogConfig?: () => Promise<AiWatchdogConfig>;
   setAiWatchdogConfig?: (config: Partial<AiWatchdogConfig>) => Promise<{ success: boolean }>;
-  addCustomAllowlist?: (domain: string) => Promise<{ success: boolean; rule: string; error?: string }>;
   isDomainCoveredByRules?: (domain: string) => Promise<{ isCovered: boolean; coveringRule?: string }>;
   tuneMiniAiFeedback?: (domain: string, action: 'whitelist' | 'block' | 'reset') => Promise<{ success: boolean }>;
+  compactSubdomainRules?: (domains: string[], threshold?: number) => Promise<CompactionResult>;
+  checkRuleConflict?: (rule: string) => Promise<RuleConflictResult>;
+  getMiniAiFeedbackStats?: () => Promise<{ count: number; feedback: Record<string, number> }>;
+  synthesizeCustomRules?: (input: { domain: string; verdict: any; category: any; target?: string; includeComments?: boolean }) => Promise<{ success: boolean; rules: string[] }>;
 
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
