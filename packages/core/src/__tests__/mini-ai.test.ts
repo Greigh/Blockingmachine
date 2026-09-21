@@ -159,6 +159,25 @@ describe('Mini-AI Domain Threat Classifier', () => {
       expect(c2.getDomainFeedback('my-trusted-site.org')).toBe(-1.0);
     });
 
+    it('safely handles NaN, Infinity, out-of-bound biases during importFeedback', () => {
+      const c = new MiniAiClassifier();
+      c.importFeedback({
+        'nan-domain.com': NaN,
+        'inf-domain.com': Infinity,
+        '-inf-domain.com': -Infinity,
+        'too-high.com': 99.9,
+        'too-low.com': -50.0,
+        'valid-domain.com': 0.8,
+      });
+
+      expect(c.getDomainFeedback('nan-domain.com')).toBe(0);
+      expect(c.getDomainFeedback('inf-domain.com')).toBe(0);
+      expect(c.getDomainFeedback('-inf-domain.com')).toBe(0);
+      expect(c.getDomainFeedback('too-high.com')).toBe(1.0); // clamped
+      expect(c.getDomainFeedback('too-low.com')).toBe(-1.0); // clamped
+      expect(c.getDomainFeedback('valid-domain.com')).toBe(0.8);
+    });
+
     it('benchmarks sub-millisecond inference throughput (>1000 domains/sec)', () => {
       const sampleDomains = [
         'ad.doubleclick.net',

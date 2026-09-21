@@ -6,6 +6,7 @@ import type {
   SynthesisTarget,
   ThreatCategory,
 } from './types.js';
+import { COMPOUND_CCTLDS } from './entropy.js';
 
 export interface RuleSynthesisInput {
   domain: string;
@@ -358,6 +359,30 @@ export function synthesizeAllowlistRule(domain: string): string {
 }
 
 /**
+ * Determines whether a domain string is a valid parent zone eligible for wildcard compaction.
+ * Protects against over-compaction onto TLDs or compound ccTLDs (e.g. .co.uk, .com.au),
+ * which would dangerously block entire public suffixes.
+ * @beta
+ */
+export function isValidParentZone(parent: string): boolean {
+  if (!parent || !parent.includes('.')) return false;
+  if (COMPOUND_CCTLDS.has(parent)) return false;
+
+  const parts = parent.split('.');
+  if (parts.length < 2) return false;
+
+  // If the last two labels form a compound ccTLD (e.g. 'co.uk'),
+  // the parent zone must have at least 3 labels (e.g. 'domain.co.uk')
+  const lastTwo = `${parts[parts.length - 2]}.${parts[parts.length - 1]}`;
+  if (COMPOUND_CCTLDS.has(lastTwo)) {
+    return parts.length >= 3;
+  }
+
+  // Standard TLD requires at least 2 labels (e.g. 'domain.com')
+  return parts.length >= 2;
+}
+
+/**
  * Clusters subdomains and collapses them into parent wildcard rules when >= threshold
  * subdomains share the same parent zone. Eliminates list bloat by 70–90%.
  *
@@ -391,18 +416,22 @@ export function compactSubdomainRules(domains: string[], threshold = 3): Compact
     if (parts.length >= 3) {
       // 1. One level up (e.g. sub.analytics.domain.com -> analytics.domain.com)
       const directParent = parts.slice(1).join('.');
-      if (!parentZoneMap.has(directParent)) {
-        parentZoneMap.set(directParent, new Set());
+      if (isValidParentZone(directParent)) {
+        if (!parentZoneMap.has(directParent)) {
+          parentZoneMap.set(directParent, new Set());
+        }
+        parentZoneMap.get(directParent)!.add(domain);
       }
-      parentZoneMap.get(directParent)!.add(domain);
 
       // 2. Two levels up if deeper (e.g. a.b.tracker.com -> tracker.com)
       if (parts.length >= 4) {
         const apexParent = parts.slice(2).join('.');
-        if (!parentZoneMap.has(apexParent)) {
-          parentZoneMap.set(apexParent, new Set());
+        if (isValidParentZone(apexParent)) {
+          if (!parentZoneMap.has(apexParent)) {
+            parentZoneMap.set(apexParent, new Set());
+          }
+          parentZoneMap.get(apexParent)!.add(domain);
         }
-        parentZoneMap.get(apexParent)!.add(domain);
       }
     }
   }
@@ -471,7 +500,7 @@ export function checkRuleConflict(rule: string, existingAllowRules: string[]): R
     return { hasConflict: false };
   }
 
-  // Extract domain from block rule (e.g. ||tracker.com^ or 0.0.0.0 tracker.com)
+  // Extract domain from block rule (e.g. ||tracker.com^, 0.0.0.0 tracker.com, (^|\.)tracker\.com$)
   let targetDomain = '';
   const abpMatch = rule.match(/^\|\|([a-z0-9_.-]+)\^/i);
   if (abpMatch) {
@@ -481,13 +510,34 @@ export function checkRuleConflict(rule: string, existingAllowRules: string[]): R
     if (hostsMatch) {
       targetDomain = hostsMatch[1].toLowerCase().trim();
     } else {
-      targetDomain = rule.replace(/[$^|!#]/g, '').trim().toLowerCase();
+      const piholeMatch = rule.match(/^\(\^\|\\\.\)([a-z0-9_\\.-]+)\$$/i);
+      if (piholeMatch) {
+        targetDomain = piholeMatch[1].replace(/\\/g, '').toLowerCase().trim();
+      } else {
+        targetDomain = rule.replace(/[$^|!#]/g, '').trim().toLowerCase();
+      }
     }
   }
 
   if (!targetDomain) {
     return { hasConflict: false };
   }
+
+  const buildOverride = (originalRule: string, domain: string): string => {
+    if (originalRule.startsWith('||')) {
+      if (originalRule.includes('$')) {
+        const [base, optsStr] = originalRule.split('$', 2);
+        const opts = optsStr.split(',').map((o) => o.trim()).filter(Boolean);
+        if (!opts.includes('important')) {
+          opts.push('important');
+        }
+        return `${base}$${opts.join(',')}`;
+      }
+      return `${originalRule}$important`;
+    }
+    // For hosts format (0.0.0.0 domain) or Pi-hole regex, synthesize canonical ABP $important override
+    return `||${domain}^$important`;
+  };
 
   for (const rawAllow of existingAllowRules) {
     if (!rawAllow || !rawAllow.startsWith('@@')) continue;
@@ -498,11 +548,10 @@ export function checkRuleConflict(rule: string, existingAllowRules: string[]): R
     if (allowAbpMatch) {
       const allowDomain = allowAbpMatch[1].toLowerCase().trim();
       if (targetDomain === allowDomain || targetDomain.endsWith(`.${allowDomain}`)) {
-        const cleanRule = rule.includes('$') ? rule.split('$')[0] : rule;
         return {
           hasConflict: true,
           conflictingAllowRule: allowRule,
-          suggestedOverrideRule: `${cleanRule}$important`,
+          suggestedOverrideRule: buildOverride(rule, targetDomain),
           reason: `Proposed rule is neutralized by allowlist rule "${allowRule}". Use $important to enforce blocking.`,
         };
       }
@@ -511,11 +560,10 @@ export function checkRuleConflict(rule: string, existingAllowRules: string[]): R
     // Direct domain allow: @@domain
     const cleanAllow = allowRule.replace(/^(?:@@\|\||@@)/, '').split('^')[0].split('$')[0].toLowerCase().trim();
     if (cleanAllow && (targetDomain === cleanAllow || targetDomain.endsWith(`.${cleanAllow}`))) {
-      const cleanRule = rule.includes('$') ? rule.split('$')[0] : rule;
       return {
         hasConflict: true,
         conflictingAllowRule: allowRule,
-        suggestedOverrideRule: `${cleanRule}$important`,
+        suggestedOverrideRule: buildOverride(rule, targetDomain),
         reason: `Proposed rule is neutralized by allowlist rule "${allowRule}". Use $important to enforce blocking.`,
       };
     }

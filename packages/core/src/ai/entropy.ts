@@ -88,7 +88,7 @@ export function detectDgaPatterns(domain: string): DgaDetectionResult {
 }
 
 // Common two-part public suffixes / ccTLDs
-const COMPOUND_CCTLDS = new Set([
+export const COMPOUND_CCTLDS = new Set([
   'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'me.uk',
   'com.au', 'net.au', 'org.au', 'edu.au',
   'co.nz', 'net.nz', 'org.nz',

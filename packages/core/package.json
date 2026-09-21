@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/core",
-  "version": "1.0.0-beta.9",
+  "version": "1.0.0-rc.1",
   "type": "module",
   "author": {
     "name": "Daniel Hipskind",
