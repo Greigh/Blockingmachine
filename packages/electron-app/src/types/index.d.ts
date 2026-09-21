@@ -337,12 +337,22 @@ export interface ElectronAPI {
   clearThreatQuarantine?: () => Promise<{ success: boolean }>;
   getAiWatchdogConfig?: () => Promise<AiWatchdogConfig>;
   setAiWatchdogConfig?: (config: Partial<AiWatchdogConfig>) => Promise<{ success: boolean }>;
+  addCustomAllowlist?: (domain: string) => Promise<{ success: boolean; rule: string; error?: string }>;
   isDomainCoveredByRules?: (domain: string) => Promise<{ isCovered: boolean; coveringRule?: string }>;
   tuneMiniAiFeedback?: (domain: string, action: 'whitelist' | 'block' | 'reset') => Promise<{ success: boolean }>;
   compactSubdomainRules?: (domains: string[], threshold?: number) => Promise<CompactionResult>;
   checkRuleConflict?: (rule: string) => Promise<RuleConflictResult>;
   getMiniAiFeedbackStats?: () => Promise<{ count: number; feedback: Record<string, number> }>;
-  synthesizeCustomRules?: (input: { domain: string; verdict: any; category: any; target?: string; includeComments?: boolean }) => Promise<{ success: boolean; rules: string[] }>;
+  synthesizeCustomRules?: (input: {
+    domain: string;
+    verdict: any;
+    category: any;
+    cnames?: string[];
+    isSubdomain?: boolean;
+    target?: string;
+    includeComments?: boolean;
+    confidence?: number;
+  }) => Promise<{ success: boolean; rules: string[]; error?: string }>;
 
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
