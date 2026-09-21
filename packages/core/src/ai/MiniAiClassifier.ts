@@ -390,20 +390,31 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
  */
 export class MiniAiClassifier {
   private userFeedbackMap = new Map<string, number>();
+  private readonly maxFeedbackEntries = 2000;
 
   /**
    * Adjusts the classification bias for a domain based on user confirmation.
    * Whitelisting sets a negative bias (-1.0), Blocking sets a positive bias (+1.0).
+   * Implements LRU cap to prevent unbounded memory growth.
    */
   public tuneDomainFeedback(domain: string, action: 'whitelist' | 'block' | 'reset'): void {
     const clean = domain.toLowerCase().trim();
-    if (action === 'whitelist') {
-      this.userFeedbackMap.set(clean, -1.0);
-    } else if (action === 'block') {
-      this.userFeedbackMap.set(clean, 1.0);
-    } else {
+    if (action === 'reset') {
       this.userFeedbackMap.delete(clean);
+      return;
     }
+
+    if (this.userFeedbackMap.size >= this.maxFeedbackEntries && !this.userFeedbackMap.has(clean)) {
+      const oldestKey = this.userFeedbackMap.keys().next().value;
+      if (oldestKey) this.userFeedbackMap.delete(oldestKey);
+    }
+
+    this.userFeedbackMap.delete(clean);
+    this.userFeedbackMap.set(clean, action === 'whitelist' ? -1.0 : 1.0);
+  }
+
+  public clearFeedback(): void {
+    this.userFeedbackMap.clear();
   }
 
   public getDomainFeedback(domain: string): number {

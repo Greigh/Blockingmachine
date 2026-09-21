@@ -108,6 +108,29 @@ describe('Mini-AI Domain Threat Classifier', () => {
       expect(afterBlock.classProbabilities.Clean).toBeLessThan(afterWhitelist.classProbabilities.Clean);
     });
 
+    it('caps user feedback entries at maxFeedbackEntries and evicts least recently used', () => {
+      const testClassifier = new MiniAiClassifier();
+      testClassifier.clearFeedback();
+
+      // Insert 2,050 feedback entries
+      for (let i = 0; i < 2050; i++) {
+        testClassifier.tuneDomainFeedback(`domain-${i}.com`, 'whitelist');
+      }
+
+      // Oldest domains should have been evicted (e.g. domain-0 to domain-49)
+      expect(testClassifier.getDomainFeedback('domain-0.com')).toBe(0);
+      expect(testClassifier.getDomainFeedback('domain-10.com')).toBe(0);
+      expect(testClassifier.getDomainFeedback('domain-49.com')).toBe(0);
+
+      // Most recent entries should be retained
+      expect(testClassifier.getDomainFeedback('domain-2049.com')).toBe(-1.0);
+      expect(testClassifier.getDomainFeedback('domain-1000.com')).toBe(-1.0);
+
+      // Reset / clear
+      testClassifier.clearFeedback();
+      expect(testClassifier.getDomainFeedback('domain-2049.com')).toBe(0);
+    });
+
     it('benchmarks sub-millisecond inference throughput (>1000 domains/sec)', () => {
       const sampleDomains = [
         'ad.doubleclick.net',

@@ -509,20 +509,26 @@ export class RuleStore {
   // Combine rules from all relevant maps
   getUniqueRules(): StoredRule[] {
     console.log("\nCombining rules from all categories...");
-    const allRules = [
-      ...this.blockingRules.values(),
-      ...this.unblockingRules.values(),
-      ...this.cosmeticRules.values(),
-      ...this.scriptletRules.values(),
-      ...this.cspRules.values(),
-      ...this.redirectRules.values(),
-      ...this.replaceRules.values(),
-      ...this.removeHeaderRules.values(),
-      ...this.removeParamRules.values(),
-      ...this.htmlFilteringRules.values(),
-      ...this.permissionsRules.values(),
-      ...this.extendedCssRules.values(),
+    const allRules: StoredRule[] = [];
+    const maps = [
+      this.blockingRules,
+      this.unblockingRules,
+      this.cosmeticRules,
+      this.scriptletRules,
+      this.cspRules,
+      this.redirectRules,
+      this.replaceRules,
+      this.removeHeaderRules,
+      this.removeParamRules,
+      this.htmlFilteringRules,
+      this.permissionsRules,
+      this.extendedCssRules,
     ];
+    for (const map of maps) {
+      for (const rule of map.values()) {
+        allRules.push(rule);
+      }
+    }
     console.log(`   Combined ${allRules.length} rules.`);
 
     // Note: This combines rules based on their storage keys.

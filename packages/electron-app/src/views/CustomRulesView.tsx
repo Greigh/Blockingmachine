@@ -65,25 +65,36 @@ export const CustomRulesView: React.FC<CustomRulesViewProps> = ({
   let hostsCount = 0;
   let commentCount = 0;
 
+  const isCosmeticRule = (line: string) =>
+    line.includes('##') || line.includes('#?#') || line.includes('#@#') || line.includes('#$#');
+
+  const isCommentOrHeader = (line: string) => {
+    if (line.startsWith('!')) return true;
+    if (line.startsWith('[') && line.endsWith(']')) return true;
+    if (line.startsWith('#') && !isCosmeticRule(line)) return true;
+    return false;
+  };
+
   lines.forEach((rawLine) => {
     const l = rawLine.trim();
     if (!l) return;
-    if (l.startsWith('!') || l.startsWith('# ') || l === '#') {
+    if (isCommentOrHeader(l)) {
       commentCount++;
     } else if (l.startsWith('@@')) {
       exceptionCount++;
-    } else if (l.includes('##') || l.includes('#?#') || l.includes('#@#') || l.includes('#$#')) {
+    } else if (isCosmeticRule(l)) {
       cosmeticCount++;
     } else if (l.startsWith('0.0.0.0') || l.startsWith('127.0.0.1')) {
       hostsCount++;
-    } else if (l.startsWith('||') || l.startsWith('|') || l.startsWith('/')) {
-      blockCount++;
     } else {
       blockCount++;
     }
   });
 
-  const totalActiveRules = lines.filter((l) => l.trim() && !l.trim().startsWith('!') && !l.trim().startsWith('# ')).length;
+  const totalActiveRules = lines.filter((l) => {
+    const trimmed = l.trim();
+    return trimmed.length > 0 && !isCommentOrHeader(trimmed);
+  }).length;
 
   return (
     <div className="custom-rules-container">
