@@ -1,6 +1,7 @@
 import { calculateShannonEntropy, detectDgaPatterns, decomposeDomain } from './entropy.js';
 import { resolveCnameChain } from './cnameResolver.js';
 import { sanitizeDomain, synthesizeRules } from './ruleSynthesizer.js';
+import { classifyDomainWithMiniAi } from './MiniAiClassifier.js';
 import type {
   AiProviderConfig,
   AiScanResult,
@@ -192,7 +193,7 @@ export class AiDetectorService {
 
   constructor(config?: Partial<AiProviderConfig>) {
     this.defaultConfig = {
-      provider: config?.provider || 'local-heuristics',
+      provider: config?.provider || 'mini-ai',
       ollamaUrl: config?.ollamaUrl || 'http://127.0.0.1:11434',
       ollamaModel: config?.ollamaModel || 'llama3.2',
       apiKey: config?.apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || '',
@@ -311,7 +312,9 @@ export class AiDetectorService {
     const decomposition = decomposeDomain(cleanDomain);
 
     // 2. Uncloak CNAME records and resolve destination IPs
-    const cnameInfo = await resolveCnameChain(cleanDomain);
+    const cnameInfo = config.skipDns
+      ? { domain: cleanDomain, cnames: [], ips: [], hasCnameCloaking: false }
+      : await resolveCnameChain(cleanDomain, config.dnsTimeoutMs ?? 600);
 
     // 3. Run heuristic pre-scoring
     const heuristicResult = this.evaluateHeuristics(cleanDomain, entropy, dgaResult, cnameInfo);
@@ -322,9 +325,34 @@ export class AiDetectorService {
     let finalRisk: RiskLevel = heuristicResult.riskLevel;
     const allReasons = [...heuristicResult.reasons];
     let modelUsed: string | undefined;
+    let featureScores: Record<string, number> | undefined;
+    let inferenceTimeMs: number | undefined;
 
-    // 4. If LLM provider is enabled, enhance with model reasoning
-    if (config.provider !== 'local-heuristics') {
+    // 4. If Mini-AI is selected (Default), run embedded neural/logistic model (<0.05ms)
+    if (config.provider === 'mini-ai') {
+      const miniPrediction = classifyDomainWithMiniAi(cleanDomain, {
+        cnames: cnameInfo.cnames,
+        hasCnameCloaking: cnameInfo.hasCnameCloaking,
+        knownTrackerTarget: cnameInfo.knownTrackerTarget,
+        allowlist: config.allowlist,
+      });
+
+      finalVerdict = miniPrediction.verdict;
+      finalConfidence = miniPrediction.confidence;
+      finalCategory = miniPrediction.category;
+      finalRisk = miniPrediction.riskLevel;
+      allReasons.length = 0;
+      allReasons.push(...miniPrediction.reasons);
+      modelUsed = 'Mini-AI Embedded Classifier (v1)';
+      inferenceTimeMs = miniPrediction.inferenceTimeMs;
+      featureScores = {
+        entropy,
+        dgaScore: dgaResult.score,
+        confidence: miniPrediction.confidence,
+        ...miniPrediction.classProbabilities,
+      };
+    } else if (config.provider !== 'local-heuristics') {
+      // If external LLM provider is enabled (Ollama, Gemini, OpenAI)
       try {
         const llmResult = await this.queryLlm(cleanDomain, config, {
           entropy,
@@ -370,6 +398,8 @@ export class AiDetectorService {
       cnames: cnameInfo.cnames,
       resolvedIps: cnameInfo.ips,
       generatedRules,
+      featureScores,
+      inferenceTimeMs,
       provider: config.provider,
       modelUsed,
       timestamp: new Date().toISOString(),
@@ -400,7 +430,11 @@ export class AiDetectorService {
     queries: RawDnsQuery[],
     overrideConfig?: Partial<AiProviderConfig>,
   ): Promise<QueryLogScanResult> {
-    const config = { ...this.defaultConfig, ...overrideConfig };
+    const config: AiProviderConfig = {
+      ...this.defaultConfig,
+      skipDns: true,
+      ...overrideConfig,
+    };
 
     // Deduplicate queries by domain
     const uniqueDomains = Array.from(
@@ -408,7 +442,7 @@ export class AiDetectorService {
     );
 
     const results: AiScanResult[] = [];
-    const batchSize = 4;
+    const batchSize = (config.provider === 'mini-ai' || config.provider === 'local-heuristics') ? 32 : 4;
 
     for (let i = 0; i < uniqueDomains.length; i += batchSize) {
       const batch = uniqueDomains.slice(i, i + batchSize);

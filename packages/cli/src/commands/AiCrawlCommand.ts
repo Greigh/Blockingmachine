@@ -30,7 +30,7 @@ export class AiCrawlCommand extends BaseCommand<AiCrawlOptions> {
       return this.failure('Please specify a web URL to crawl.\nExample: blockingmachine ai-crawl https://example-news.com');
     }
 
-    const provider = (options.provider as AiProviderType) || 'local-heuristics';
+    const provider = (options.provider as AiProviderType) || 'mini-ai';
     const aiConfig: AiProviderConfig = {
       provider,
       ollamaUrl: options.ollamaUrl || 'http://127.0.0.1:11434',

@@ -262,7 +262,7 @@ program
 program
   .command("ai-scan [target]")
   .description("[Beta] Scan domain, URL, or sinkhole query logs using AI Radar")
-  .option("--provider <type>", "AI provider: ollama, gemini, openai, local-heuristics", "local-heuristics")
+  .option("--provider <type>", "AI provider: mini-ai, local-heuristics, ollama, gemini, openai", "mini-ai")
   .option("--ollama-url <url>", "Ollama server URL", "http://127.0.0.1:11434")
   .option("--model <name>", "Model name (e.g. llama3.2, gemini-2.0-flash, gpt-4o-mini)")
   .option("--api-key <key>", "API key for Gemini or OpenAI")
@@ -307,7 +307,7 @@ program
 program
   .command("ai-crawl <url>")
   .description("[Beta] Crawl web page, extract third-party origins, and detect ad servers")
-  .option("--provider <type>", "AI provider: ollama, gemini, openai, local-heuristics", "local-heuristics")
+  .option("--provider <type>", "AI provider: mini-ai, local-heuristics, ollama, gemini, openai", "mini-ai")
   .option("--ollama-url <url>", "Ollama server URL", "http://127.0.0.1:11434")
   .option("--model <name>", "Model name")
   .option("--api-key <key>", "API key for Gemini or OpenAI")

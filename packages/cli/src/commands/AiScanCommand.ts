@@ -34,7 +34,7 @@ export class AiScanCommand extends BaseCommand<AiScanOptions> {
   }
 
   async execute(options: AiScanOptions): Promise<CommandResult> {
-    const provider = (options.provider as AiProviderType) || 'local-heuristics';
+    const provider = (options.provider as AiProviderType) || 'mini-ai';
     const aiConfig: AiProviderConfig = {
       provider,
       ollamaUrl: options.ollamaUrl || 'http://127.0.0.1:11434',
@@ -60,7 +60,7 @@ export class AiScanCommand extends BaseCommand<AiScanOptions> {
     }
 
     this.logger.info(chalk.bold.cyan(`\n🔍 AI Radar [Beta] scanning target: ${chalk.white(target)}`));
-    this.logger.info(chalk.dim(`  Provider: ${provider} | Engine: Local Heuristics + Entropy + CNAME`));
+    this.logger.info(chalk.dim(`  Provider: ${provider} | Engine: ${provider === 'mini-ai' ? 'Mini-AI Embedded Classifier' : 'Local Heuristics'}`));
 
     try {
       const result = await service.scanDomain(target, aiConfig);
@@ -83,6 +83,9 @@ export class AiScanCommand extends BaseCommand<AiScanOptions> {
       console.log(`  Verdict:         ${verdictBadge} (${chalk.cyan(result.verdict)})`);
       console.log(`  Confidence:      ${this.formatConfidence(result.confidence)}`);
       console.log(`  Threat Category: ${chalk.yellow(result.category)}`);
+      if (result.inferenceTimeMs !== undefined) {
+        console.log(`  Inference Speed: ${chalk.green(`${result.inferenceTimeMs}ms`)} ${chalk.dim('(Air-gapped in-memory)')}`);
+      }
       console.log(`  Shannon Entropy: ${result.entropy} ${result.isLikelyDga ? chalk.red('(Elevated DGA score)') : chalk.dim('(Normal range)')}`);
 
       if (result.decomposition) {
