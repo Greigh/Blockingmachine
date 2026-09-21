@@ -13,6 +13,8 @@ import type {
 interface AIRadarViewProps {
   onTriggerCompile?: () => void;
   onNavigateDeploy?: () => void;
+  onNavigateInspector?: (domain?: string) => void;
+  onNavigateSettings?: () => void;
   setError?: (msg: string | null) => void;
   setSuccessMessage?: (msg: string | null) => void;
 }
@@ -22,6 +24,8 @@ type RadarTab = 'sinkhole-scout' | 'domain-inspector' | 'canary-crawler' | 'quar
 export const AIRadarView: React.FC<AIRadarViewProps> = ({
   onTriggerCompile,
   onNavigateDeploy,
+  onNavigateInspector,
+  onNavigateSettings,
   setError,
   setSuccessMessage,
 }) => {
@@ -378,11 +382,16 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     }
   }, [scoutResult]);
 
-  // Run Domain Inspector
+  // Run Domain Inspector (or delegate to Unified Inspector)
   const handleInspectDomain = async (overrideDomain?: string) => {
     const target = (overrideDomain || inspectorInput).trim();
     if (!target) return;
     if (overrideDomain) setInspectorInput(overrideDomain);
+
+    if (onNavigateInspector) {
+      onNavigateInspector(target);
+      return;
+    }
 
     if (!window.electron?.aiScanDomain) return;
     setIsInspecting(true);
@@ -549,7 +558,11 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
         </div>
 
         <div className="ai-radar-hero-right">
-          <div className="ai-provider-pill" onClick={() => setIsConfigOpen(true)}>
+          <div
+            className="ai-provider-pill"
+            onClick={() => (onNavigateSettings ? onNavigateSettings() : setIsConfigOpen(true))}
+            title="Configure AI Engine in Preferences"
+          >
             <span className="provider-status-dot" />
             <div className="provider-info-col">
               <span className="provider-label-small">Active Engine</span>
@@ -561,7 +574,16 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 {aiConfig.provider === 'openai' && 'OpenAI Model'}
               </span>
             </div>
-            <button type="button" className="provider-settings-btn" title="Configure AI Provider">
+            <button
+              type="button"
+              className="provider-settings-btn"
+              title="Configure AI Engine in Preferences"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onNavigateSettings) onNavigateSettings();
+                else setIsConfigOpen(true);
+              }}
+            >
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -589,20 +611,6 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           {sinkholeConfig && (sinkholeConfig.adguardHomeUrl || sinkholeConfig.piholeUrl) && (
             <span className="tab-connected-pill">Homelab Linked</span>
           )}
-        </button>
-
-        <button
-          type="button"
-          className={`radar-tab-btn ${activeTab === 'domain-inspector' ? 'active' : ''}`}
-          onClick={() => setActiveTab('domain-inspector')}
-        >
-          <span className="tab-icon">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-          </span>
-          <span>Domain & Payload Inspector</span>
         </button>
 
         <button
@@ -635,6 +643,24 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             <span className="tab-count-badge">{quarantineList.length}</span>
           )}
         </button>
+
+        {onNavigateInspector && (
+          <button
+            type="button"
+            className="radar-tab-btn"
+            style={{ marginLeft: 'auto', background: 'rgba(168, 85, 247, 0.1)', borderColor: 'rgba(168, 85, 247, 0.35)', color: '#c084fc' }}
+            onClick={() => onNavigateInspector()}
+            title="Open Unified Rule & AI Inspector (Cmd+5)"
+          >
+            <span className="tab-icon">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </span>
+            <span>Rule & AI Inspector (⌘5) ↗</span>
+          </button>
+        )}
       </div>
 
       {/* ========================================================================= */}
@@ -897,6 +923,20 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                               </svg>
                               <span>{copiedKey === `scout-${idx}` ? 'Copied' : 'Copy'}</span>
                             </button>
+                            {onNavigateInspector && (
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                onClick={() => onNavigateInspector(item.domain)}
+                                title="Inspect in Unified Rule & AI Inspector"
+                              >
+                                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <circle cx="11" cy="11" r="8" />
+                                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                                </svg>
+                                <span>Inspect</span>
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -920,6 +960,42 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       {activeTab === 'domain-inspector' && (
         <div className="radar-tab-content">
           <div className="radar-card">
+            <div style={{
+              marginBottom: 16,
+              padding: '14px 16px',
+              borderRadius: 8,
+              background: 'rgba(168, 85, 247, 0.08)',
+              border: '1px solid rgba(168, 85, 247, 0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}>
+              <div>
+                <strong style={{ color: '#c084fc', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  Consolidated in Rule & AI Inspector:
+                </strong>
+                <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Domain heuristics and compiled filter list rules are now evaluated simultaneously in the Unified Rule & AI Inspector (⌘5).
+                </p>
+              </div>
+              {onNavigateInspector && (
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => onNavigateInspector(inspectorInput)}
+                  style={{ whiteSpace: 'nowrap' }}
+                >
+                  Open in Unified Inspector ↗
+                </button>
+              )}
+            </div>
+
             <h3 className="radar-card-title">
               Real-Time Domain & Payload Inspector <span className="title-beta-badge">Beta</span>
             </h3>
@@ -1332,6 +1408,20 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                             </svg>
                             <span>Whitelist</span>
                           </button>
+                          {onNavigateInspector && (
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => onNavigateInspector(host.domain)}
+                              title="Inspect in Unified Rule & AI Inspector"
+                            >
+                              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="11" cy="11" r="8" />
+                                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                              </svg>
+                              <span>Inspect</span>
+                            </button>
+                          )}
                         </div>
                       </div>
                       <div className="threat-reasons">
@@ -1494,6 +1584,21 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                               </svg>
                               <span>Whitelist</span>
                             </button>
+                            {onNavigateInspector && (
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                style={{ padding: '4px 8px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                                onClick={() => onNavigateInspector(item.domain)}
+                                title="Inspect in Unified Rule & AI Inspector"
+                              >
+                                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <circle cx="11" cy="11" r="8" />
+                                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                                </svg>
+                                <span>Inspect</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               className="secondary-button"

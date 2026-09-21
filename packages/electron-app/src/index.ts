@@ -191,10 +191,10 @@ const template: Electron.MenuItemConstructorOptions[] = [
         },
       },
       {
-        label: 'Bulk Import',
+        label: 'Defense Modules',
         accelerator: 'Cmd+3',
         click: () => {
-          mainWindow?.webContents.send('navigate-view', 'bulkImport');
+          mainWindow?.webContents.send('navigate-view', 'modules');
         },
       },
       {
@@ -205,7 +205,7 @@ const template: Electron.MenuItemConstructorOptions[] = [
         },
       },
       {
-        label: 'Rule Inspector',
+        label: 'Rule & AI Inspector',
         accelerator: 'Cmd+5',
         click: () => {
           mainWindow?.webContents.send('navigate-view', 'inspector');
@@ -219,10 +219,24 @@ const template: Electron.MenuItemConstructorOptions[] = [
         },
       },
       {
-        label: 'Deploy & Sync',
+        label: 'Bulk Import',
         accelerator: 'Cmd+7',
         click: () => {
+          mainWindow?.webContents.send('navigate-view', 'bulkImport');
+        },
+      },
+      {
+        label: 'Deploy & Sync',
+        accelerator: 'Cmd+8',
+        click: () => {
           mainWindow?.webContents.send('navigate-view', 'deploy');
+        },
+      },
+      {
+        label: 'AI Radar Hub',
+        accelerator: 'Cmd+9',
+        click: () => {
+          mainWindow?.webContents.send('navigate-view', 'ai-radar');
         },
       },
       { type: 'separator' as const },

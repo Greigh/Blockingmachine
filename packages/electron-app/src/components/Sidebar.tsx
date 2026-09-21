@@ -90,15 +90,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </svg>
           </span>
           <span className="sidebar-label">Sources</span>
-          <span className="sidebar-badge">
-            {enabledSourcesCount}/{totalSourcesCount}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span className="sidebar-badge">
+              {enabledSourcesCount}/{totalSourcesCount}
+            </span>
+            <span className="sidebar-shortcut">⌘2</span>
+          </div>
         </button>
 
         <button
           className={`sidebar-nav-item ${currentView === 'modules' ? 'active' : ''}`}
           onClick={() => setCurrentView('modules')}
-          title="Defense Modules [Beta] (First-Party Curated Shields)"
+          title="Defense Modules [Beta] (First-Party Curated Shields) (Cmd+3)"
         >
           <span className="sidebar-icon">
             <svg
@@ -120,31 +123,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             Modules
             <span className="sidebar-badge-inline">Beta</span>
           </span>
-          <span className="sidebar-shortcut">⌘8</span>
-        </button>
-
-        <button
-          className={`sidebar-nav-item ${currentView === 'bulkImport' ? 'active' : ''}`}
-          onClick={() => setCurrentView('bulkImport')}
-          title="Bulk Import Feeds (Cmd+3)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
-              />
-            </svg>
-          </span>
-          <span className="sidebar-label">Bulk Import</span>
           <span className="sidebar-shortcut">⌘3</span>
         </button>
 
@@ -176,7 +154,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <button
           className={`sidebar-nav-item ${currentView === 'inspector' ? 'active' : ''}`}
           onClick={() => setCurrentView('inspector')}
-          title="Rule & Domain Inspector (Cmd+5)"
+          title="Rule & AI Inspector (Cmd+5)"
         >
           <span className="sidebar-icon">
             <svg
@@ -194,7 +172,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
             </svg>
           </span>
-          <span className="sidebar-label">Rule Inspector</span>
+          <span className="sidebar-label">Rule & AI Inspector</span>
           <span className="sidebar-shortcut">⌘5</span>
         </button>
 
@@ -224,9 +202,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
 
         <button
+          className={`sidebar-nav-item ${currentView === 'bulkImport' ? 'active' : ''}`}
+          onClick={() => setCurrentView('bulkImport')}
+          title="Bulk Import Feeds (Cmd+7)"
+        >
+          <span className="sidebar-icon">
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+              />
+            </svg>
+          </span>
+          <span className="sidebar-label">Bulk Import</span>
+          <span className="sidebar-shortcut">⌘7</span>
+        </button>
+
+        <button
           className={`sidebar-nav-item ${currentView === 'deploy' ? 'active' : ''}`}
           onClick={() => setCurrentView('deploy')}
-          title="Deploy & Sinkhole Sync (Cmd+7)"
+          title="Deploy & Sinkhole Sync (Cmd+8)"
         >
           <span className="sidebar-icon">
             <svg
@@ -243,7 +246,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </svg>
           </span>
           <span className="sidebar-label">Deploy & Sync</span>
-          <span className="sidebar-shortcut">⌘7</span>
+          <span className="sidebar-shortcut">⌘8</span>
         </button>
 
         <button
