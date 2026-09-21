@@ -14,6 +14,7 @@
     "dev": "tsc -w",
     "clean": "rimraf dist",
     "format": "prettier --write \"src/**/*.ts\"",
+    "lint": "eslint .",
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
     "type-check": "tsc --noEmit",
     "prepublishOnly": "npm run build"

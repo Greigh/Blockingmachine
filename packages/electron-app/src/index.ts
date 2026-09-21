@@ -1,4 +1,4 @@
-import { join, dirname, isAbsolute, basename } from 'path';
+import { join, dirname, isAbsolute, basename, resolve as pathResolve } from 'path';
 import { createServer, Server as HttpServer } from 'http';
 import { networkInterfaces } from 'os';
 import {
@@ -14,7 +14,7 @@ import {
   Tray,
   nativeImage,
 } from 'electron';
-import { promises as fs, existsSync } from 'fs';
+import { promises as fs, existsSync, createReadStream } from 'fs';
 import isDev from 'electron-is-dev';
 
 if (isDev) {
@@ -845,16 +845,33 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           targetFilePath = join(outputDir, cleanName);
         }
 
+        // Security check: verify resolved target is within outputDir or matches savePath
+        const resolvedTarget = pathResolve(targetFilePath);
+        const resolvedOutputDir = pathResolve(outputDir);
+        const resolvedSavePath = pathResolve(savePath);
+        if (!resolvedTarget.startsWith(resolvedOutputDir) && resolvedTarget !== resolvedSavePath) {
+          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('403 Forbidden: Access denied.');
+          return;
+        }
+
         try {
           if (existsSync(targetFilePath)) {
             const stat = await fs.stat(targetFilePath);
             if (stat.isFile()) {
-              const content = await fs.readFile(targetFilePath);
               res.writeHead(200, {
                 'Content-Type': 'text/plain; charset=utf-8',
-                'Content-Length': content.length,
+                'Content-Length': stat.size,
               });
-              res.end(content);
+              const stream = createReadStream(targetFilePath);
+              stream.on('error', (streamErr) => {
+                console.error('[Feed Server Stream Error]:', streamErr);
+                if (!res.headersSent) {
+                  res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+                }
+                res.end();
+              });
+              stream.pipe(res);
               return;
             }
           }
@@ -896,6 +913,9 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
 function stopFeedServer() {
   if (feedHttpServer) {
     try {
+      if (typeof (feedHttpServer as any).closeAllConnections === 'function') {
+        (feedHttpServer as any).closeAllConnections();
+      }
       feedHttpServer.close();
     } catch {
       // ignore

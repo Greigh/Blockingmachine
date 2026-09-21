@@ -1,0 +1,41 @@
+! Title: Blockingmachine Web Annoyances & Cookie Banners [Beta]
+! Description: Blocks GDPR cookie overlays, newsletter popups, floating prompts, and anti-adblock nags.
+! Version: 1.0.0-beta.1
+! Expires: 2 days
+! Homepage: https://github.com/greigh/blockingmachine
+! License: BSD-3-Clause
+
+! --- Cookie Consent Managers & CMPs ---
+||onetrust.com^
+||cdn.cookielaw.org^
+||cookiebot.com^
+||consent.cookiebot.com^
+||trustarc.com^
+||consent.trustarc.com^
+||consent.cmp.oath.com^
+||quantcast.mgr.consensu.org^
+||usercentrics.eu^
+||app.usercentrics.eu^
+||cmp.inmobi.com^
+||civicuk.com/cookie-control^
+||osano.com^
+||cmp.osano.com^
+||ketch.com^
+||global.ketchcdn.com^
+||didomi.io^
+||privacy-center.org^
+
+! --- Generic Cosmetic Annoyance Suppressions ---
+##.cookie-banner
+##.cookie-modal
+##.cookie-notice
+##.cookie-consent
+##.gdpr-banner
+##.gdpr-modal
+##.consent-modal
+##.consent-banner
+##.newsletter-popup
+##.newsletter-modal
+##.email-signup-modal
+##.app-download-banner
+##.smart-app-banner

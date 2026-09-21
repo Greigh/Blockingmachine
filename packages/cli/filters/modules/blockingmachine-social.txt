@@ -1,0 +1,29 @@
+! Title: Blockingmachine Social Tracker Neutralizer [Beta]
+! Description: Neutralizes cross-site tracking beacons, embedded share widgets, and social pixels without breaking direct visits to social media sites.
+! Version: 1.0.0-beta.1
+! Expires: 2 days
+! Homepage: https://github.com/greigh/blockingmachine
+! License: BSD-3-Clause
+
+! --- Meta / Facebook Cross-Site Trackers ---
+||connect.facebook.net/*/sdk.js$third-party
+||connect.facebook.net/en_US/fbevents.js$third-party
+||pixel.facebook.com^
+||facebook.com/tr$third-party
+||graph.facebook.com^$domain=~facebook.com|~instagram.com|~messenger.com|~whatsapp.com
+
+! --- Twitter / X Embedded Widgets ---
+||platform.twitter.com/widgets.js$third-party
+||syndication.twitter.com^$third-party
+||static.ads-twitter.com^
+
+! --- LinkedIn & Professional Trackers ---
+||platform.linkedin.com/in.js$third-party
+||snap.licdn.com/li.lms-analytics/insight.min.js$third-party
+
+! --- TikTok, Snapchat & Pinterest Pixels ---
+||analytics.tiktok.com^$third-party
+||tr.snapchat.com^$third-party
+||sc-static.net/scevent.min.js$third-party
+||widgets.pinterest.com^$third-party
+||ct.pinterest.com^$third-party

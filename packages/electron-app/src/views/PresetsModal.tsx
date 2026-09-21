@@ -115,6 +115,61 @@ export const PRESET_CATALOG: PresetItem[] = [
     features: ['Social widget hiding', 'Facebook Pixel neutralization', 'Like button removal'],
     recommendedFor: 'Browser extensions (removes embedded social widgets from web layouts)',
   },
+  {
+    name: 'Blockingmachine Privacy Engine [Beta]',
+    url: './filters/modules/blockingmachine-privacy.txt',
+    scope: 'hybrid',
+    category: 'Privacy',
+    description: 'First-party high-precision telemetry, fingerprinting, diagnostic beacon, and analytics blocker.',
+    features: ['Zero telemetry', 'OS diagnostic shielding', 'Analytics suppression'],
+    recommendedFor: 'All devices and browsers seeking maximum privacy without site breakage',
+  },
+  {
+    name: 'Blockingmachine Smart TV & IoT Shield [Beta]',
+    url: './filters/modules/blockingmachine-smarttv.txt',
+    scope: 'dns',
+    category: 'Privacy',
+    description: 'First-party blocker targeting smart TV ACR telemetry, diagnostics, and in-app ads on Roku, Samsung, LG, and FireTV.',
+    features: ['Smart TV ACR blocking', 'IoT telemetry shield', 'Pure DNS rules'],
+    recommendedFor: 'Home network DNS sinkholes, AdGuard Home, and Pi-hole',
+  },
+  {
+    name: 'Blockingmachine Web Annoyances & Cookie Banners [Beta]',
+    url: './filters/modules/blockingmachine-annoyances.txt',
+    scope: 'browser',
+    category: 'Annoyances',
+    description: 'First-party shield eliminating intrusive GDPR cookie banners, CMP modals, newsletter popups, and floating nag screens.',
+    features: ['Cookie banner removal', 'GDPR overlay suppression', 'Element hiding'],
+    recommendedFor: 'Browser extensions and desktop content blockers',
+    warning: 'Contains cosmetic rules (##) that require DOM inspection; ineffective on pure DNS sinkholes',
+  },
+  {
+    name: 'Blockingmachine Social Tracker Neutralizer [Beta]',
+    url: './filters/modules/blockingmachine-social.txt',
+    scope: 'hybrid',
+    category: 'Social',
+    description: 'First-party filter neutralizing cross-site tracking beacons, embedded share widgets, and Meta/TikTok/X pixels.',
+    features: ['Cross-site pixel blocking', 'Third-party beacon neutralization', 'Social widget hiding'],
+    recommendedFor: 'Browser extensions, DNS sinkholes, and desktop ad-blockers',
+  },
+  {
+    name: 'Blockingmachine Threat & Malicious Domain Defense [Beta]',
+    url: './filters/modules/blockingmachine-security.txt',
+    scope: 'dns',
+    category: 'Security',
+    description: 'First-party proactive network-level blocking of phishing gateways, rogue redirects, and in-browser cryptominers.',
+    features: ['Anti-cryptomining', 'Malicious redirect shield', 'Phishing defense'],
+    recommendedFor: 'Network firewalls, routers, Pi-hole, and AdGuard Home',
+  },
+  {
+    name: 'Blockingmachine Unbreak & Safe Exceptions [Beta]',
+    url: './filters/modules/blockingmachine-unbreak.txt',
+    scope: 'hybrid',
+    category: 'Privacy',
+    description: 'First-party hand-crafted exception allowlist rules for banking portals, SSO logins, delivery tracking, and essential apps.',
+    features: ['Banking portal fixes', 'SSO allowlists', 'Anti-breakage rules (@@)'],
+    recommendedFor: 'Essential for all configurations to guarantee normal app functionality',
+  },
 ];
 
 export interface PresetBundle {
@@ -127,6 +182,21 @@ export interface PresetBundle {
 }
 
 export const PRESET_BUNDLES: PresetBundle[] = [
+  {
+    id: 'blockingmachine-suite',
+    name: 'Blockingmachine Defense Suite [Beta]',
+    description: 'Our complete native modular defense suite: Privacy Engine, Smart TV & IoT Shield, Web Annoyances, Social Neutralizer, Threat Defense, and Safe Exceptions.',
+    badge: '★ First-Party Beta',
+    category: 'Full Defense [Beta]',
+    items: [
+      PRESET_CATALOG[11], // Privacy Engine [Beta]
+      PRESET_CATALOG[12], // Smart TV & IoT Shield [Beta]
+      PRESET_CATALOG[13], // Web Annoyances [Beta]
+      PRESET_CATALOG[14], // Social Tracker Neutralizer [Beta]
+      PRESET_CATALOG[15], // Threat Defense [Beta]
+      PRESET_CATALOG[16], // Unbreak & Exceptions [Beta]
+    ],
+  },
   {
     id: 'essential',
     name: 'Essential Shield Pack',

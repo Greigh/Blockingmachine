@@ -1,0 +1,52 @@
+! Title: Blockingmachine Smart TV & IoT Shield [Beta]
+! Description: Targets telemetry, automated content recognition (ACR), diagnostics, and in-app ads on smart TVs and IoT hardware.
+! Version: 1.0.0-beta.1
+! Expires: 2 days
+! Homepage: https://github.com/greigh/blockingmachine
+! License: BSD-3-Clause
+
+! --- Roku Telemetry & Ad Delivery ---
+||logs.roku.com^
+||austin.logs.roku.com^
+||swat.logs.roku.com^
+||bryant.logs.roku.com^
+||cooper.logs.roku.com^
+||liberty.logs.roku.com^
+||ads.roku.com^
+||track.sr.roku.com^
+||identity.web.roku.com^
+
+! --- Samsung Smart TV (Tizen) Telemetry & ACR ---
+||samsungadhub.com^
+||config.samsungads.com^
+||gpm.samsungqbe.com^
+||log-config.samsungacr.com^
+||samsungcloudsolution.com^
+||samsungcloudsolution.net^
+||lcprd1.samsungcloudsolution.net^
+||otn.samsungcloudsolution.net^
+||notice.samsungcloudsolution.com^
+||sas.samsungcloudsolution.com^
+
+! --- LG Smart TV (webOS) Telemetry & Ads ---
+||lgsmartad.com^
+||ibs.lgappstv.com^
+||ibis.lgappstv.com^
+||rdx2.lgtvcommon.com^
+||ad.lgappstv.com^
+||ngfts.lge.com^
+||us.lgtvsdp.com^
+||yup.lgtvcommon.com^
+
+! --- Amazon Fire TV / Echo Telemetry ---
+||device-metrics-us.amazon.com^
+||device-metrics-us-2.amazon.com^
+||arcus-uswest.amazon.com^
+||scribe.api.amazon.com^
+
+! --- Sony Bravia, Vizio & Other Smart Devices ---
+||bravia.sony.tv^
+||tv.vizio.com^
+||scribe.vizio.com^
+||api.tv.hisense.com^
+||tracking.miui.com^

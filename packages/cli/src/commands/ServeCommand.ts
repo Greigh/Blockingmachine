@@ -111,7 +111,7 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
             return;
           }
 
-          const target = domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split(/[/:]/)[0];
+          const target = domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split(/[/?#:]/)[0];
 
           // Match against loaded rules
           const matchedRules: string[] = [];
