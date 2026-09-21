@@ -128,6 +128,10 @@ export interface SinkholeConfig {
   adguardHomeUser: string;
   adguardHomePassword: string;
   syncOnCompile: boolean;
+  adguardMode?: 'direct' | 'ha-api' | 'webhook';
+  haToken?: string;
+  haWebhookUrl?: string;
+  customWebhookUrl?: string;
 }
 
 export interface SinkholeSyncResult {
@@ -146,11 +150,12 @@ export interface FeedServerStatus {
 }
 
 export interface SinkholeTestResult {
-  service: 'pihole' | 'adguard';
+  service: 'pihole' | 'adguard' | 'webhook';
   success: boolean;
   statusCode?: number;
   latencyMs?: number;
   message: string;
+  details?: string;
 }
 
 export interface StoreSchema {
@@ -170,6 +175,10 @@ export interface StoreSchema {
   adguardHomeUser?: string;
   adguardHomePassword?: string;
   syncOnCompile?: boolean;
+  adguardMode?: 'direct' | 'ha-api' | 'webhook';
+  haToken?: string;
+  haWebhookUrl?: string;
+  customWebhookUrl?: string;
 }
 
 // Electron API interface
@@ -211,7 +220,7 @@ export interface ElectronAPI {
   startFeedServer: (port?: number) => Promise<FeedServerStatus>;
   stopFeedServer: () => Promise<FeedServerStatus>;
   getFeedServerStatus: () => Promise<FeedServerStatus>;
-  testSinkholeConnection: (service: 'pihole' | 'adguard') => Promise<SinkholeTestResult>;
+  testSinkholeConnection: (service: 'pihole' | 'adguard' | 'webhook') => Promise<SinkholeTestResult>;
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   showItemInFolder: (path: string) => void;
