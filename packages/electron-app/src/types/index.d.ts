@@ -83,6 +83,7 @@ export interface FilterSource {
 
 export interface DomainInspectionResult {
   domain: string;
+  inputQuery?: string;
   verdict: 'blocked' | 'exception' | 'not_blocked';
   matchingRule?: string;
   sourceName?: string;

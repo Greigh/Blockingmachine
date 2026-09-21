@@ -14,6 +14,32 @@ export const RuleInspectorView: React.FC = () => {
     'adservice.google.com',
   ];
 
+  const extractDomain = (input: string): string => {
+    let cleaned = input.trim().toLowerCase();
+    if (cleaned.startsWith('http://') || cleaned.startsWith('https://') || cleaned.startsWith('ftp://')) {
+      try {
+        const parsed = new URL(cleaned);
+        cleaned = parsed.hostname;
+      } catch {
+        // fallback regex
+      }
+    }
+    cleaned = cleaned.replace(/^[a-zA-Z]+:\/\//, '');
+    cleaned = cleaned.replace(/[/?#].*$/, '');
+    cleaned = cleaned.replace(/:[0-9]+$/, '');
+    cleaned = cleaned.replace(/^www\./, '');
+    return cleaned;
+  };
+
+  const isUrlInput = Boolean(
+    query.trim() &&
+      (query.includes('://') ||
+        query.includes('/') ||
+        query.includes('?') ||
+        query.startsWith('www.'))
+  );
+  const detectedDomain = isUrlInput ? extractDomain(query) : '';
+
   const handleInspect = async (domainToTest?: string) => {
     const target = (domainToTest !== undefined ? domainToTest : query).trim();
     if (!target) return;
@@ -26,6 +52,7 @@ export const RuleInspectorView: React.FC = () => {
     } catch (err) {
       setResult({
         domain: target,
+        inputQuery: target,
         verdict: 'not_blocked',
         details: err instanceof Error ? err.message : 'Error inspecting domain',
       });
@@ -67,14 +94,22 @@ export const RuleInspectorView: React.FC = () => {
             <input
               type="text"
               className="inspector-text-input"
-              placeholder="Enter domain or hostname (e.g. tracking.example.com)..."
+              placeholder="Enter domain, hostname, or full URL (e.g. roku.com or https://doubleclick.net)..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
               autoFocus
             />
             {query && (
-              <button className="inspector-clear-btn" onClick={() => setQuery('')}>
+              <button
+                className="inspector-clear-btn"
+                onClick={() => {
+                  setQuery('');
+                  setResult(null);
+                }}
+                aria-label="Clear input"
+                title="Clear input"
+              >
                 ✕
               </button>
             )}
@@ -87,6 +122,15 @@ export const RuleInspectorView: React.FC = () => {
             {isSearching ? 'Analyzing…' : 'Inspect Rule'}
           </button>
         </div>
+
+        {isUrlInput && detectedDomain && (
+          <div className="inspector-url-hint">
+            <span className="hint-badge">URL Detected</span>
+            <span className="hint-text">
+              Target host domain: <strong>{detectedDomain}</strong>
+            </span>
+          </div>
+        )}
 
         {/* Sample Pills */}
         <div className="inspector-samples-row">
@@ -130,6 +174,11 @@ export const RuleInspectorView: React.FC = () => {
 
             <div className="verdict-domain-name">
               <code>{result.domain}</code>
+              {result.inputQuery && result.inputQuery.toLowerCase() !== result.domain.toLowerCase() && (
+                <span className="original-url-caption">
+                  Resolved from input: <code>{result.inputQuery}</code>
+                </span>
+              )}
             </div>
           </div>
 
