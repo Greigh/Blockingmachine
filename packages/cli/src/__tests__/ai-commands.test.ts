@@ -61,14 +61,24 @@ describe('CLI AI Radar Commands', () => {
       expect(result.message).toContain('Please specify a web URL');
     });
 
-    it('crawls url and handles non-existent or local endpoints gracefully', async () => {
+    it('rejects SSRF attacks targeting loopback or metadata endpoints', async () => {
       const cmd = new AiCrawlCommand({ config: mockConfig, logger: mockLogger });
       const result = await cmd.execute({
         url: 'http://127.0.0.1:59999/test-non-existent-page',
         provider: 'local-heuristics',
       });
 
-      // Even if network fails to connect, it returns graceful result
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('SSRF Guard blocked crawl request');
+    });
+
+    it('crawls public url and handles non-existent pages gracefully without crashing', async () => {
+      const cmd = new AiCrawlCommand({ config: mockConfig, logger: mockLogger });
+      const result = await cmd.execute({
+        url: 'https://non-existent-crawl-domain-testing-12345.org',
+        provider: 'local-heuristics',
+      });
+
       expect(result.success).toBe(true);
       expect(result.data.extractedHosts).toEqual([]);
     });

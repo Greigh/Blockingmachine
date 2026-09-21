@@ -24,6 +24,12 @@ export interface AiProviderConfig {
   apiEndpoint?: string;
   modelName?: string;
   allowlist?: string[];
+  bypassCache?: boolean;
+}
+
+export interface RuleCoverageResult {
+  isCovered: boolean;
+  coveringRule?: string;
 }
 
 export interface DomainLabelEntropy {
@@ -53,6 +59,7 @@ export interface AiScanResult {
   cnames: string[];
   resolvedIps: string[];
   generatedRules: string[];
+  coveredByRule?: string;
   provider: AiProviderType;
   modelUsed?: string;
   timestamp: string;
