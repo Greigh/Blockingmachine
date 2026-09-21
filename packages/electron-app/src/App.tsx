@@ -10,6 +10,7 @@ import { CustomRulesView } from './views/CustomRulesView';
 import { RuleInspectorView } from './views/RuleInspectorView';
 import { RuleBrowserView } from './views/RuleBrowserView';
 import { DeployHubView } from './views/DeployHubView';
+import { AIRadarView } from './views/AIRadarView';
 import { OnboardingModal, type OnboardingConfig } from './views/OnboardingModal';
 import { PRESET_BUNDLES } from './views/PresetsModal';
 import type { FilterSource, ThemeType } from './types/';
@@ -265,6 +266,9 @@ function App() {
         } else if (e.key === '8') {
           e.preventDefault();
           setCurrentView('modules');
+        } else if (e.key === '9') {
+          e.preventDefault();
+          setCurrentView('ai-radar');
         } else if (e.key === ',') {
           e.preventDefault();
           setCurrentView('settings');
@@ -435,6 +439,14 @@ function App() {
                 savePath={savePath}
                 onNavigateSettings={() => setCurrentView('settings')}
                 onTriggerCompile={() => setCurrentView('process')}
+              />
+            )}
+            {currentView === 'ai-radar' && (
+              <AIRadarView
+                onTriggerCompile={() => setCurrentView('process')}
+                onNavigateDeploy={() => setCurrentView('deploy')}
+                setError={setGlobalError}
+                setSuccessMessage={setGlobalSuccessMessage}
               />
             )}
             {currentView === 'settings' && (

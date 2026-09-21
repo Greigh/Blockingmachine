@@ -48,6 +48,11 @@ export const Header: React.FC<HeaderProps> = ({
           title: 'Deploy & Sync',
           desc: 'Connect your compiled blocklists to AdGuard Home, Pi-hole, desktop apps, and LAN devices',
         };
+      case 'ai-radar':
+        return {
+          title: 'AI Defense Radar',
+          desc: 'Real-time AI scanner for shifting ad servers, ephemeral bidding hostnames, and CNAME cloaking',
+        };
       case 'settings':
         return {
           title: 'Preferences',

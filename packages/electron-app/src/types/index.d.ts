@@ -159,6 +159,55 @@ export interface SinkholeTestResult {
   details?: string;
 }
 
+export type AiVerdict = 'ad_server' | 'tracker' | 'malicious' | 'clean' | 'suspicious';
+export type ThreatCategory = 'Advertising' | 'Telemetry/Analytics' | 'CNAME Cloaking' | 'Malware/Phishing' | 'Clean' | 'Unknown';
+export type RiskLevel = 'critical' | 'high' | 'medium' | 'low' | 'none';
+export type AiProviderType = 'local-heuristics' | 'ollama' | 'gemini' | 'openai';
+
+export interface AiProviderConfig {
+  provider: AiProviderType;
+  ollamaUrl?: string;
+  ollamaModel?: string;
+  apiKey?: string;
+  apiEndpoint?: string;
+  modelName?: string;
+}
+
+export interface AiScanResult {
+  target: string;
+  domain: string;
+  verdict: AiVerdict;
+  confidence: number;
+  riskLevel: RiskLevel;
+  category: ThreatCategory;
+  reasons: string[];
+  entropy: number;
+  isLikelyDga: boolean;
+  cnames: string[];
+  resolvedIps: string[];
+  generatedRules: string[];
+  provider: AiProviderType;
+  modelUsed?: string;
+  timestamp: string;
+}
+
+export interface QueryLogScanResult {
+  totalQueriesAnalyzed: number;
+  flaggedCount: number;
+  cleanCount: number;
+  results: AiScanResult[];
+  timestamp: string;
+}
+
+export interface CrawlScanResult {
+  url: string;
+  scannedAt: string;
+  extractedHosts: string[];
+  newUnblockedHosts: string[];
+  flaggedHosts: AiScanResult[];
+  synthesizedRules: string[];
+}
+
 export interface StoreSchema {
   filterSources: FilterSource[];
   customRules: string;
@@ -180,6 +229,7 @@ export interface StoreSchema {
   haToken?: string;
   haWebhookUrl?: string;
   customWebhookUrl?: string;
+  aiConfig?: Partial<AiProviderConfig>;
 }
 
 // Electron API interface
@@ -223,6 +273,16 @@ export interface ElectronAPI {
   getFeedServerStatus: () => Promise<FeedServerStatus>;
   testSinkholeConnection: (service: 'pihole' | 'adguard' | 'webhook') => Promise<SinkholeTestResult>;
   getModuleContent?: (moduleName: string) => Promise<string | null>;
+
+  // AI Radar Methods
+  aiScanDomain?: (domain: string, config?: Partial<AiProviderConfig>) => Promise<AiScanResult>;
+  aiScanQueryLog?: (options: { service: 'adguard' | 'pihole'; limit?: number }, config?: Partial<AiProviderConfig>) => Promise<QueryLogScanResult>;
+  aiCrawlUrl?: (url: string, config?: Partial<AiProviderConfig>) => Promise<CrawlScanResult>;
+  getAiConfig?: () => Promise<AiProviderConfig>;
+  setAiConfig?: (config: Partial<AiProviderConfig>) => Promise<{ success: boolean; error?: string }>;
+  testAiConnection?: (config: Partial<AiProviderConfig>) => Promise<{ success: boolean; latencyMs?: number; message: string }>;
+  addCustomRules?: (rules: string[]) => Promise<{ success: boolean; count: number; error?: string }>;
+
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   showItemInFolder: (path: string) => void;
