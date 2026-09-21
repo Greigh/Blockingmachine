@@ -132,9 +132,14 @@ contextBridge.exposeInMainWorld('electron', {
   // Secure channel-checked fallback for legacy listeners
   receive: (channel: string, callback: (...args: unknown[]) => void) => {
     if (ALLOWED_CHANNELS.has(channel)) {
-      ipcRenderer.on(channel, (_event: IpcRendererEvent, ...args: unknown[]) => callback(...args));
+      const handler = (_event: IpcRendererEvent, ...args: unknown[]) => callback(...args);
+      ipcRenderer.on(channel, handler);
+      return () => {
+        ipcRenderer.removeListener(channel, handler);
+      };
     } else {
       console.warn(`[Preload] Blocked unauthorized receive on channel: ${channel}`);
+      return () => {};
     }
   },
   removeAllListeners: (channel: string) => {

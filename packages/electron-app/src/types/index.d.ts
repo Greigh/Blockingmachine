@@ -237,7 +237,7 @@ export interface ElectronAPI {
   onTriggerCompile?: (callback: () => void) => () => void;
   onNavigateView?: (callback: (view: string) => void) => () => void;
   onLaunchOnboarding?: (callback: () => void) => () => void;
-  receive?: (channel: string, func: (...args: any[]) => void) => void;
+  receive?: (channel: string, func: (...args: any[]) => void) => (() => void) | void;
   removeAllListeners?: (channel: string) => void;
 }
 

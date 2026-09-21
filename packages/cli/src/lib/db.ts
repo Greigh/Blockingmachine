@@ -65,7 +65,8 @@ const auditLogSchema = new mongoose.Schema({
   metadata: mongoose.Schema.Types.Mixed,
 });
 
-export const AuditLogModel = mongoose.model("AuditLog", auditLogSchema);
+export const AuditLogModel =
+  mongoose.models.AuditLog || mongoose.model("AuditLog", auditLogSchema);
 
 export async function logRuleAudit(
   entry: RuleAuditEntry,

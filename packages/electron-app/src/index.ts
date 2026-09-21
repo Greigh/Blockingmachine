@@ -388,6 +388,7 @@ function setupAutoScheduleTimer(schedule: 'disabled' | '12h' | '24h' | 'weekly',
       console.log('[AutoSchedule] Triggering scheduled filter list compilation...');
       // Internal trigger can use existing sources
     }, intervalMs);
+    autoScheduleTimer?.unref?.();
   }
 }
 
@@ -870,6 +871,9 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
                   res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
                 }
                 res.end();
+              });
+              res.on('close', () => {
+                stream.destroy();
               });
               stream.pipe(res);
               return;

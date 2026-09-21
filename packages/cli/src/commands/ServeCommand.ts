@@ -53,6 +53,13 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("!") && !l.startsWith("#"));
 
+    // Pre-parse patterns once at startup to avoid repeated regex operations on every HTTP check request
+    const parsedRules = lines.map((line) => {
+      const isEx = line.startsWith("@@");
+      const pattern = cleanDomainPattern(line);
+      return { line, isEx, pattern };
+    });
+
     const server = http.createServer(async (req, res) => {
       try {
         res.setHeader("Access-Control-Allow-Origin", "*");
@@ -113,21 +120,17 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
 
           const target = domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split(/[/?#:]/)[0];
 
-          // Match against loaded rules
+          // Match against pre-parsed rules
           const matchedRules: string[] = [];
           let exceptionRule: string | null = null;
 
-          for (const line of lines) {
-            if (line.startsWith("@@")) {
-              const pattern = cleanDomainPattern(line);
-              if (pattern && (target === pattern || target.endsWith(`.${pattern}`))) {
-                exceptionRule = line;
+          for (const item of parsedRules) {
+            if (item.pattern && (target === item.pattern || target.endsWith(`.${item.pattern}`))) {
+              if (item.isEx) {
+                exceptionRule = item.line;
                 break;
-              }
-            } else {
-              const pattern = cleanDomainPattern(line);
-              if (pattern && (target === pattern || target.endsWith(`.${pattern}`))) {
-                matchedRules.push(line);
+              } else {
+                matchedRules.push(item.line);
               }
             }
           }
@@ -204,6 +207,16 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
         this.logger.info(`  • Health:  ${chalk.cyan(`http://${host}:${port}/health`)}`);
         this.logger.info(`  • Check:   ${chalk.cyan(`http://${host}:${port}/v1/check?domain=example.com`)}`);
         this.logger.info(`  • Rules:   ${chalk.cyan(`http://${host}:${port}/v1/rules`)}\n`);
+
+        if (process.env.NODE_ENV !== "test") {
+          const onSignal = () => {
+            server.close(() => {
+              process.exit(0);
+            });
+          };
+          process.once("SIGINT", onSignal);
+          process.once("SIGTERM", onSignal);
+        }
 
         resolve(
           this.success(

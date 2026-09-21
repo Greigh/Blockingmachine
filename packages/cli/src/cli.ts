@@ -29,6 +29,19 @@ const pkg = JSON.parse(
 );
 
 const logger = createLogger();
+
+process.on("unhandledRejection", (reason) => {
+  logger.error(
+    `Unhandled rejection: ${reason instanceof Error ? reason.stack || reason.message : String(reason)}`,
+  );
+  process.exit(1);
+});
+
+process.on("uncaughtException", (error) => {
+  logger.error(`Uncaught exception: ${error.stack || error.message}`);
+  process.exit(1);
+});
+
 const program = new Command();
 
 async function loadConfig(): Promise<AppConfig> {

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import type { FilterSource } from '../types/';
 
 export interface NativeModuleItem {
@@ -131,6 +131,15 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
   const [isLoadingContent, setIsLoadingContent] = useState(false);
   const [ruleSearchQuery, setRuleSearchQuery] = useState('');
   const [copiedNotification, setCopiedNotification] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Map module enabled status from active sources
   const moduleStatusMap = useMemo(() => {
@@ -277,7 +286,10 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
     if (!moduleRawContent) return;
     navigator.clipboard.writeText(moduleRawContent);
     setCopiedNotification(true);
-    setTimeout(() => setCopiedNotification(false), 2000);
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+    }
+    copyTimeoutRef.current = setTimeout(() => setCopiedNotification(false), 2000);
   };
 
   // Filter rules inside the viewer modal
