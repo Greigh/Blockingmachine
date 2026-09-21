@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrandLogo } from './components/BrandLogo';
 import './index.css';
-import type { ThemeType, FilterFormat } from './types/';
+import type { ThemeType, FilterFormat, SinkholeConfig, SinkholeTestResult } from './types/';
 import {
   ACCENT_PALETTE,
   applyAccentColor,
@@ -53,13 +53,17 @@ const Settings: React.FC<SettingsProps> = ({
   const [isSavingWebhook, setIsSavingWebhook] = useState(false);
 
   // Network Sinkholes state
-  const [sinkholeConfig, setSinkholeConfig] = useState({
+  const [sinkholeConfig, setSinkholeConfig] = useState<SinkholeConfig>({
     piholeUrl: '',
     piholeApiKey: '',
     adguardHomeUrl: '',
     adguardHomeUser: '',
     adguardHomePassword: '',
     syncOnCompile: false,
+    adguardMode: 'direct',
+    haToken: '',
+    haWebhookUrl: '',
+    customWebhookUrl: '',
   });
   const [isSavingSinkhole, setIsSavingSinkhole] = useState(false);
   const [isSyncingSinkhole, setIsSyncingSinkhole] = useState(false);
@@ -67,6 +71,9 @@ const Settings: React.FC<SettingsProps> = ({
   const [syncResults, setSyncResults] = useState<Array<{ service: string; status: 'success' | 'error' | 'skipped'; message: string }>>([]);
   const [showPiholeKey, setShowPiholeKey] = useState(false);
   const [showAdguardPass, setShowAdguardPass] = useState(false);
+  const [showHaToken, setShowHaToken] = useState(false);
+  const [testingService, setTestingService] = useState<'pihole' | 'adguard' | 'webhook' | null>(null);
+  const [testResults, setTestResults] = useState<{ [key: string]: SinkholeTestResult }>({});
 
   // Path state variables
   const [savePath, setSavePath] = useState('');
@@ -293,6 +300,22 @@ const Settings: React.FC<SettingsProps> = ({
       console.error('Sinkhole sync failed:', err);
     } finally {
       setIsSyncingSinkhole(false);
+    }
+  };
+
+  const handleTestService = async (service: 'pihole' | 'adguard' | 'webhook') => {
+    setTestingService(service);
+    try {
+      await window.electron.setSinkholeConfig(sinkholeConfig);
+      const res = await window.electron.testSinkholeConnection(service);
+      setTestResults((prev) => ({ ...prev, [service]: res }));
+    } catch (err: any) {
+      setTestResults((prev) => ({
+        ...prev,
+        [service]: { success: false, service, message: err?.message || 'Connection test failed' },
+      }));
+    } finally {
+      setTestingService(null);
     }
   };
 
@@ -602,12 +625,50 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
           <p>Automatically push compiled blocklists and trigger gravity updates on local DNS appliances</p>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '14px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginTop: '14px' }}>
             {/* Pi-hole Section */}
             <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
-              <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span>🥧</span> Pi-hole Integration
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>🥧</span> Pi-hole Integration
+                </div>
+                <button
+                  type="button"
+                  className="browse-button secondary"
+                  style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px' }}
+                  onClick={() => handleTestService('pihole')}
+                  disabled={testingService === 'pihole'}
+                >
+                  {testingService === 'pihole' ? 'Testing…' : '⚡ Test Connection'}
+                </button>
               </div>
+
+              {/* Pi-hole Presets */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>Presets:</span>
+                <button
+                  type="button"
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://pi.hole/admin/api.php' })}
+                >
+                  pi.hole
+                </button>
+                <button
+                  type="button"
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://homeassistant.local:8080/admin/api.php' })}
+                >
+                  HA Add-on (8080)
+                </button>
+                <button
+                  type="button"
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://localhost/admin/api.php' })}
+                >
+                  Docker (Port 80)
+                </button>
+              </div>
+
               <div style={{ marginBottom: '10px' }}>
                 <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>API Endpoint URL</label>
                 <input
@@ -639,58 +700,251 @@ const Settings: React.FC<SettingsProps> = ({
                   onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, piholeApiKey: e.target.value })}
                 />
               </div>
+
+              {testResults['pihole'] && (
+                <div style={{ marginTop: '8px', padding: '8px', borderRadius: '6px', fontSize: '0.75rem', background: testResults['pihole'].success ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: testResults['pihole'].success ? '#10b981' : '#ef4444' }}>
+                  <div><strong>{testResults['pihole'].success ? '✓' : '✗'} {testResults['pihole'].message}</strong></div>
+                  {testResults['pihole'].details && <div style={{ marginTop: '4px', opacity: 0.85, fontSize: '0.7rem' }}>{testResults['pihole'].details}</div>}
+                </div>
+              )}
             </div>
 
             {/* AdGuard Home Section */}
             <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
-              <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span>🛡️</span> AdGuard Home Integration
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>🛡️</span> AdGuard Home Integration
+                </div>
+                <button
+                  type="button"
+                  className="browse-button secondary"
+                  style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px' }}
+                  onClick={() => handleTestService('adguard')}
+                  disabled={testingService === 'adguard'}
+                >
+                  {testingService === 'adguard' ? 'Testing…' : '⚡ Test Connection'}
+                </button>
               </div>
+
+              {/* Mode Selector */}
               <div style={{ marginBottom: '10px' }}>
-                <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Instance URL</label>
-                <input
-                  type="text"
-                  className="path-input"
-                  style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
-                  placeholder="http://192.168.1.1:3000"
-                  value={sinkholeConfig.adguardHomeUrl}
-                  onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
-                />
+                <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Integration Method</label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className={`env-pill-btn ${(!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct') ? 'active' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                    onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'direct' })}
+                  >
+                    Direct (Port 3000)
+                  </button>
+                  <button
+                    type="button"
+                    className={`env-pill-btn ${sinkholeConfig.adguardMode === 'ha-api' ? 'active' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                    onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'ha-api' })}
+                  >
+                    HA API (Port 8123)
+                  </button>
+                  <button
+                    type="button"
+                    className={`env-pill-btn ${sinkholeConfig.adguardMode === 'webhook' ? 'active' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                    onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'webhook' })}
+                  >
+                    HA Webhook
+                  </button>
+                </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+
+              {/* Quick Presets Row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>Presets:</span>
+                <button
+                  type="button"
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://homeassistant.local:3000', adguardMode: 'direct' })}
+                >
+                  HA Port 3000
+                </button>
+                <button
+                  type="button"
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://homeassistant.local:8123', adguardMode: 'ha-api' })}
+                >
+                  HA Port 8123 API
+                </button>
+                <button
+                  type="button"
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://localhost:3000', adguardMode: 'direct' })}
+                >
+                  Docker 3000
+                </button>
+                <button
+                  type="button"
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://192.168.8.1:3000', adguardMode: 'direct' })}
+                >
+                  GL.iNet 3000
+                </button>
+              </div>
+
+              {/* Direct Mode Fields */}
+              {(!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct') && (
+                <>
+                  <div style={{ marginBottom: '10px' }}>
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Instance URL (AdGuard Port 3000)</label>
+                    <input
+                      type="text"
+                      className="path-input"
+                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                      placeholder="http://homeassistant.local:3000 or http://192.168.1.1:3000"
+                      value={sinkholeConfig.adguardHomeUrl}
+                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
+                    />
+                    {sinkholeConfig.adguardHomeUrl?.includes(':8123') && (
+                      <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '6px', fontSize: '0.72rem', color: '#f59e0b' }}>
+                        ⚠️ Port 8123 is Home Assistant&rsquo;s frontend. For direct AdGuard API, expose and use port 3000 in Add-on Network settings, or switch to &quot;HA API&quot; mode above.
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Username</label>
+                      <input
+                        type="text"
+                        className="path-input"
+                        style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                        placeholder="admin"
+                        value={sinkholeConfig.adguardHomeUser}
+                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                        <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Password</label>
+                        <button
+                          type="button"
+                          style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                          onClick={() => setShowAdguardPass(!showAdguardPass)}
+                        >
+                          {showAdguardPass ? 'Hide' : 'Show'}
+                        </button>
+                      </div>
+                      <input
+                        type={showAdguardPass ? 'text' : 'password'}
+                        className="path-input"
+                        style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                        placeholder="••••••••"
+                        value={sinkholeConfig.adguardHomePassword}
+                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Home Assistant REST API Mode Fields */}
+              {sinkholeConfig.adguardMode === 'ha-api' && (
+                <>
+                  <div style={{ marginBottom: '10px' }}>
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Home Assistant URL (Port 8123)</label>
+                    <input
+                      type="text"
+                      className="path-input"
+                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                      placeholder="http://homeassistant.local:8123"
+                      value={sinkholeConfig.adguardHomeUrl}
+                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Long-Lived Access Token</label>
+                      <button
+                        type="button"
+                        style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                        onClick={() => setShowHaToken(!showHaToken)}
+                      >
+                        {showHaToken ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                    <input
+                      type={showHaToken ? 'text' : 'password'}
+                      className="path-input"
+                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                      placeholder="eyJhbGciOi..."
+                      value={sinkholeConfig.haToken || ''}
+                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haToken: e.target.value })}
+                    />
+                    <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
+                      Generate in HA: Profile → Security → Long-Lived Access Tokens. Calls service <code>adguard.refresh</code>.
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {/* Home Assistant Automation Webhook Mode Fields */}
+              {sinkholeConfig.adguardMode === 'webhook' && (
                 <div>
-                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Username</label>
+                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Home Assistant Automation Webhook URL</label>
                   <input
                     type="text"
                     className="path-input"
                     style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
-                    placeholder="admin"
-                    value={sinkholeConfig.adguardHomeUser}
-                    onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })}
+                    placeholder="http://homeassistant.local:8123/api/webhook/agh_bm_reload"
+                    value={sinkholeConfig.haWebhookUrl || ''}
+                    onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: e.target.value })}
                   />
+                  <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
+                    Triggered without credentials. Set an Automation in HA with a Webhook Trigger calling the action <code>adguard.refresh</code>.
+                  </p>
                 </div>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Password</label>
-                    <button
-                      type="button"
-                      style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
-                      onClick={() => setShowAdguardPass(!showAdguardPass)}
-                    >
-                      {showAdguardPass ? 'Hide' : 'Show'}
-                    </button>
-                  </div>
-                  <input
-                    type={showAdguardPass ? 'text' : 'password'}
-                    className="path-input"
-                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
-                    placeholder="••••••••"
-                    value={sinkholeConfig.adguardHomePassword}
-                    onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
-                  />
+              )}
+
+              {testResults['adguard'] && (
+                <div style={{ marginTop: '8px', padding: '8px', borderRadius: '6px', fontSize: '0.75rem', background: testResults['adguard'].success ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: testResults['adguard'].success ? '#10b981' : '#ef4444' }}>
+                  <div><strong>{testResults['adguard'].success ? '✓' : '✗'} {testResults['adguard'].message}</strong></div>
+                  {testResults['adguard'].details && <div style={{ marginTop: '4px', opacity: 0.85, fontSize: '0.7rem' }}>{testResults['adguard'].details}</div>}
                 </div>
-              </div>
+              )}
             </div>
+          </div>
+
+          {/* Homelab & Custom Webhook Endpoint ("Or Any Other Thing") */}
+          <div style={{ marginTop: '14px', background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>🌐</span> Homelab &amp; Custom Automation Webhook (&quot;Or Any Other Thing&quot;)
+              </div>
+              <button
+                type="button"
+                className="browse-button secondary"
+                style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px' }}
+                onClick={() => handleTestService('webhook')}
+                disabled={testingService === 'webhook'}
+              >
+                {testingService === 'webhook' ? 'Testing…' : '⚡ Test Webhook'}
+              </button>
+            </div>
+            <p style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: '8px' }}>
+              For Technitium DNS, pfSense, OPNsense, Blocky, Node-RED, or n8n: sends an HTTP POST event with compilation statistics whenever blocklists update.
+            </p>
+            <input
+              type="text"
+              className="path-input"
+              style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+              placeholder="http://technitium.lan:5380/api/reload or http://pfsense.lan/api/hook"
+              value={sinkholeConfig.customWebhookUrl || ''}
+              onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, customWebhookUrl: e.target.value })}
+            />
+            {testResults['webhook'] && (
+              <div style={{ marginTop: '8px', padding: '8px', borderRadius: '6px', fontSize: '0.75rem', background: testResults['webhook'].success ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: testResults['webhook'].success ? '#10b981' : '#ef4444' }}>
+                <div><strong>{testResults['webhook'].success ? '✓' : '✗'} {testResults['webhook'].message}</strong></div>
+                {testResults['webhook'].details && <div style={{ marginTop: '4px', opacity: 0.85, fontSize: '0.7rem' }}>{testResults['webhook'].details}</div>}
+              </div>
+            )}
           </div>
 
           <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>

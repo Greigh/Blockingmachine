@@ -46,7 +46,7 @@ contextBridge.exposeInMainWorld('electron', {
   startFeedServer: (port?: number) => ipcRenderer.invoke('start-feed-server', port),
   stopFeedServer: () => ipcRenderer.invoke('stop-feed-server'),
   getFeedServerStatus: () => ipcRenderer.invoke('get-feed-server-status'),
-  testSinkholeConnection: (service: 'pihole' | 'adguard') => ipcRenderer.invoke('test-sinkhole-connection', service),
+  testSinkholeConnection: (service: 'pihole' | 'adguard' | 'webhook') => ipcRenderer.invoke('test-sinkhole-connection', service),
   getTheme: () => ipcRenderer.invoke('get-theme'),
   setTheme: (theme: ThemeType) => ipcRenderer.invoke('set-theme', theme),
 

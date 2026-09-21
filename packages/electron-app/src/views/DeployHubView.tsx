@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { FilterFormat, FeedServerStatus, SinkholeTestResult } from '../types/';
+import type { FilterFormat, FeedServerStatus, SinkholeTestResult, SinkholeConfig } from '../types/';
 
 interface DeployHubViewProps {
   savePath: string;
@@ -23,17 +23,28 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   const [uniqueRulesCount, setUniqueRulesCount] = useState<number | null>(null);
 
   // Connection tester states
-  const [testingService, setTestingService] = useState<'pihole' | 'adguard' | null>(null);
+  const [testingService, setTestingService] = useState<'pihole' | 'adguard' | 'webhook' | null>(null);
   const [testResult, setTestResult] = useState<SinkholeTestResult | null>(null);
 
+  // Environment presets
+  const [adguardEnv, setAdguardEnv] = useState<'homeassistant' | 'docker' | 'router' | 'standalone'>('homeassistant');
+  const [showHaToken, setShowHaToken] = useState(false);
+  const [customWebhookUrl, setCustomWebhookUrl] = useState('');
+  const [isTestingWebhook, setIsTestingWebhook] = useState(false);
+  const [webhookTestResult, setWebhookTestResult] = useState<string | null>(null);
+
   // Sinkhole live sync configuration & monitoring
-  const [sinkholeConfig, setSinkholeConfig] = useState({
+  const [sinkholeConfig, setSinkholeConfig] = useState<SinkholeConfig>({
     piholeUrl: '',
     piholeApiKey: '',
     adguardHomeUrl: '',
     adguardHomeUser: '',
     adguardHomePassword: '',
     syncOnCompile: false,
+    adguardMode: 'direct',
+    haToken: '',
+    haWebhookUrl: '',
+    customWebhookUrl: '',
   });
   const [isSavingSinkhole, setIsSavingSinkhole] = useState(false);
   const [isSyncingSinkhole, setIsSyncingSinkhole] = useState(false);
@@ -77,7 +88,21 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
 
     if (window.electron?.getSinkholeConfig) {
       window.electron.getSinkholeConfig().then((cfg) => {
-        if (isMounted && cfg) setSinkholeConfig(cfg);
+        if (isMounted && cfg) {
+          setSinkholeConfig({
+            ...cfg,
+            adguardMode: cfg.adguardMode || 'direct',
+            haToken: cfg.haToken || '',
+            haWebhookUrl: cfg.haWebhookUrl || '',
+            customWebhookUrl: cfg.customWebhookUrl || '',
+          });
+          if (cfg.customWebhookUrl) {
+            setCustomWebhookUrl(cfg.customWebhookUrl);
+          }
+          if (cfg.adguardMode === 'ha-api' || cfg.adguardHomeUrl?.includes('homeassistant')) {
+            setAdguardEnv('homeassistant');
+          }
+        }
       });
     }
 
@@ -112,11 +137,17 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     }
   };
 
-  const handleTestConnection = async (service: 'pihole' | 'adguard') => {
+  const handleTestConnection = async (service: 'pihole' | 'adguard' | 'webhook') => {
     if (!window.electron?.testSinkholeConnection) return;
     setTestingService(service);
     setTestResult(null);
     try {
+      if (window.electron?.setSinkholeConfig) {
+        await window.electron.setSinkholeConfig({
+          ...sinkholeConfig,
+          customWebhookUrl,
+        });
+      }
       const res = await window.electron.testSinkholeConnection(service);
       setTestResult(res);
     } catch (err: any) {
@@ -407,8 +438,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
               <div className="guide-hero-text">
                 <h3>Connecting to AdGuard Home</h3>
                 <p>
-                  Deploy your compiled lists as an active DNS blocklist in AdGuard Home with optional
-                  zero-touch automated API reload whenever you compile.
+                  Deploy your compiled lists as an active DNS blocklist in AdGuard Home with zero-touch automated API reload whenever you compile.
                 </p>
               </div>
               <div className="guide-quick-test">
@@ -417,7 +447,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   onClick={() => handleTestConnection('adguard')}
                   disabled={testingService === 'adguard'}
                 >
-                  {testingService === 'adguard' ? 'Testing Connection…' : '⚡ Test AdGuard Home Connection'}
+                  {testingService === 'adguard' ? 'Testing Connection…' : '⚡ Test AdGuard Connection'}
                 </button>
                 {testResult?.service === 'adguard' && (
                   <span className={`test-status-pill ${testResult.success ? 'success' : 'error'}`}>
@@ -427,12 +457,119 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
               </div>
             </div>
 
+            {/* Environment Selection Segment */}
+            <div className="guide-env-selector">
+              <span className="env-selector-title">Environment Setup:</span>
+              <div className="env-pill-group">
+                <button
+                  type="button"
+                  className={`env-pill-btn ${adguardEnv === 'homeassistant' ? 'active' : ''}`}
+                  onClick={() => {
+                    setAdguardEnv('homeassistant');
+                    if (!sinkholeConfig.adguardHomeUrl || sinkholeConfig.adguardHomeUrl.includes('192.168.1.100')) {
+                      setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://homeassistant.local:3000' });
+                    }
+                  }}
+                >
+                  <span className="env-pill-icon">🏠</span>
+                  <span className="env-pill-label">Home Assistant Add-on</span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`env-pill-btn ${adguardEnv === 'docker' ? 'active' : ''}`}
+                  onClick={() => setAdguardEnv('docker')}
+                >
+                  <span className="env-pill-icon">🐳</span>
+                  <span className="env-pill-label">Docker & NAS (Unraid / Synology)</span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`env-pill-btn ${adguardEnv === 'router' ? 'active' : ''}`}
+                  onClick={() => {
+                    setAdguardEnv('router');
+                    if (!sinkholeConfig.adguardHomeUrl) {
+                      setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://192.168.8.1:3000' });
+                    }
+                  }}
+                >
+                  <span className="env-pill-icon">🌐</span>
+                  <span className="env-pill-label">GL.iNet & Routers</span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`env-pill-btn ${adguardEnv === 'standalone' ? 'active' : ''}`}
+                  onClick={() => setAdguardEnv('standalone')}
+                >
+                  <span className="env-pill-icon">🖥️</span>
+                  <span className="env-pill-label">Standalone / Linux / Pi</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Home Assistant Specific Guidance Callout */}
+            {adguardEnv === 'homeassistant' && (
+              <div className="ha-callout-card">
+                <div className="ha-callout-header">
+                  <span className="ha-callout-badge">Home Assistant Integration</span>
+                  <h4>Setting Up with Home Assistant Add-on</h4>
+                </div>
+                <div className="ha-callout-grid">
+                  <div className="ha-callout-item">
+                    <span className="ha-callout-num">1</span>
+                    <div>
+                      <strong>Expose Port 3000 in Add-on Network</strong>
+                      <p>
+                        In Home Assistant: go to <strong>Settings → Add-ons → AdGuard Home → Configuration</strong>.
+                        Scroll down to <strong>Network</strong>, set the Web Interface port to <code>3000</code>, and click <strong>Save &amp; Restart Add-on</strong>.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="ha-callout-item">
+                    <span className="ha-callout-num">2</span>
+                    <div>
+                      <strong>Subscribe via LAN Feed URL</strong>
+                      <p>
+                        Because Home Assistant runs on your local network (e.g. Raspberry Pi or VM), it cannot open macOS local file paths.
+                        Use the <strong>LAN Feed URL</strong> generated below.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="ha-callout-item">
+                    <span className="ha-callout-num">3</span>
+                    <div>
+                      <strong>Direct API vs Home Assistant Token</strong>
+                      <p>
+                        You can connect directly to <code>http://homeassistant.local:3000</code> with your AdGuard credentials, or call Home Assistant&rsquo;s <code>adguard.refresh</code> service via port 8123 with a Long-Lived Access Token.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="guide-steps-flow">
               <div className="guide-step-card">
                 <div className="step-num-pill">1</div>
                 <div className="step-content">
                   <h4>Open AdGuard Home Web Interface</h4>
-                  <p>Open your browser and navigate to your AdGuard Home dashboard (default: <code>http://&lt;ip&gt;:3000</code>).</p>
+                  {adguardEnv === 'homeassistant' ? (
+                    <p>
+                      In Home Assistant, click <strong>AdGuard Home</strong> in the left sidebar, or open your browser directly to <code>http://homeassistant.local:3000</code> (once port 3000 is enabled).
+                    </p>
+                  ) : adguardEnv === 'router' ? (
+                    <p>
+                      Open your router web portal (e.g. <code>http://192.168.8.1:3000</code> on GL.iNet routers or <code>http://192.168.1.1:3000</code> on OpenWrt).
+                    </p>
+                  ) : (
+                    <p>
+                      Open your browser and navigate to your AdGuard Home dashboard (default: <code>http://&lt;ip&gt;:3000</code>).
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -456,12 +593,12 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                 <div className="step-num-pill">4</div>
                 <div className="step-content">
                   <h4>Enter Name & Subscription URL</h4>
-                  <p>Set the name to <code>Blockingmachine Compiled</code>. For the URL or path:</p>
+                  <p>Set the name to <code>Blockingmachine Compiled</code>. For the subscription URL:</p>
                   
                   <div className="snippet-choice-group">
                     <div className="snippet-box">
                       <div className="snippet-header">
-                        <span>Option A: Over Local Network (Recommended for Remote / Docker)</span>
+                        <span>Option A: Over Local Network ({adguardEnv === 'homeassistant' ? 'Required for Home Assistant' : 'Recommended for Remote / Docker / Routers'})</span>
                         <button
                           className="copy-snippet-btn"
                           onClick={() => handleCopy(lanFeedUrl, 'agh-lan')}
@@ -474,7 +611,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
 
                     <div className="snippet-box">
                       <div className="snippet-header">
-                        <span>Option B: Local File Path (If AdGuard Home runs on this Mac)</span>
+                        <span>Option B: Local File Path (Only if AdGuard Home runs natively on this Mac)</span>
                         <button
                           className="copy-snippet-btn"
                           onClick={() => handleCopy(fileUrl, 'agh-file')}
@@ -485,6 +622,26 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                       <code>{fileUrl}</code>
                     </div>
                   </div>
+
+                  {/* Inline Feed Server status check */}
+                  {!serverStatus?.isRunning && (
+                    <div className="inline-feed-alert">
+                      <div className="inline-feed-alert-text">
+                        <span>⚠️</span>
+                        <span>
+                          <strong>Feed Server is Offline:</strong> Devices on your network ({adguardEnv === 'homeassistant' ? 'Home Assistant' : 'Pi / Router / Docker'}) cannot download your blocklists until this server is started.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="inline-feed-start-btn"
+                        onClick={handleToggleFeedServer}
+                        disabled={isServerLoading}
+                      >
+                        {isServerLoading ? 'Starting…' : '▶ Start Feed Server Now'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -496,7 +653,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                       <h4>Automated Live API Reload & Monitoring</h4>
                       <p>
                         Enable zero-touch automatic reloads: whenever you compile rules in Blockingmachine,
-                        it will immediately signal AdGuard Home via API to reload in under 1 second without touching the web browser.
+                        it will immediately signal AdGuard Home or Home Assistant to reload without touching the web browser.
                       </p>
                     </div>
 
@@ -513,8 +670,8 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                       <button
                         className="live-push-btn"
                         onClick={() => handleTriggerLiveSync('adguard')}
-                        disabled={isSyncingSinkhole || !sinkholeConfig.adguardHomeUrl}
-                        title="Send immediate API reload signal to AdGuard Home"
+                        disabled={isSyncingSinkhole || (!sinkholeConfig.adguardHomeUrl && !sinkholeConfig.haWebhookUrl)}
+                        title="Send immediate API reload signal"
                       >
                         {isSyncingSinkhole ? (
                           <>
@@ -539,9 +696,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                       <div className="monitor-indicator-group">
                         <span className={`monitor-dot ${sinkholeConfig.adguardHomeUrl ? 'active' : 'idle'}`} />
                         <span className="monitor-target-name">
-                          {sinkholeConfig.adguardHomeUrl
-                            ? `Target: ${sinkholeConfig.adguardHomeUrl}`
-                            : 'Target: Not Configured'}
+                          {sinkholeConfig.adguardMode === 'ha-api'
+                            ? `Home Assistant API: ${sinkholeConfig.adguardHomeUrl || 'Not Configured'}`
+                            : sinkholeConfig.adguardMode === 'webhook'
+                            ? `Webhook: ${sinkholeConfig.haWebhookUrl || 'Not Configured'}`
+                            : `AdGuard Direct: ${sinkholeConfig.adguardHomeUrl || 'Not Configured'}`}
                         </span>
                       </div>
 
@@ -559,55 +718,223 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                       </div>
                     </div>
 
+                    {/* Connection Method Selector */}
+                    <div className="connection-mode-selector">
+                      <span className="mode-selector-label">Integration Method:</span>
+                      <div className="mode-options-row">
+                        <label className={`mode-option-btn ${(!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct') ? 'active' : ''}`}>
+                          <input
+                            type="radio"
+                            name="adguardMode"
+                            checked={!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct'}
+                            onChange={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'direct' })}
+                          />
+                          <span>Direct AdGuard Port 3000 (Recommended)</span>
+                        </label>
+
+                        <label className={`mode-option-btn ${sinkholeConfig.adguardMode === 'ha-api' ? 'active' : ''}`}>
+                          <input
+                            type="radio"
+                            name="adguardMode"
+                            checked={sinkholeConfig.adguardMode === 'ha-api'}
+                            onChange={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'ha-api' })}
+                          />
+                          <span>Home Assistant REST API (Port 8123 + Token)</span>
+                        </label>
+
+                        <label className={`mode-option-btn ${sinkholeConfig.adguardMode === 'webhook' ? 'active' : ''}`}>
+                          <input
+                            type="radio"
+                            name="adguardMode"
+                            checked={sinkholeConfig.adguardMode === 'webhook'}
+                            onChange={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'webhook' })}
+                          />
+                          <span>Home Assistant Webhook</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Quick Fast-Fill Preset Buttons */}
+                    <div className="quick-presets-row">
+                      <span className="quick-presets-label">Fast Fill:</span>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            adguardHomeUrl: 'http://homeassistant.local:3000',
+                            adguardMode: 'direct',
+                          })
+                        }
+                      >
+                        🏠 homeassistant.local:3000
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            adguardHomeUrl: 'http://homeassistant:3000',
+                            adguardMode: 'direct',
+                          })
+                        }
+                      >
+                        🏠 homeassistant:3000
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            adguardHomeUrl: 'http://homeassistant.local:8123',
+                            adguardMode: 'ha-api',
+                          })
+                        }
+                      >
+                        🏠 HA API (port 8123)
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            adguardHomeUrl: 'http://192.168.8.1:3000',
+                            adguardMode: 'direct',
+                          })
+                        }
+                      >
+                        🌐 GL.iNet (192.168.8.1)
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            adguardHomeUrl: 'http://localhost:3000',
+                            adguardMode: 'direct',
+                          })
+                        }
+                      >
+                        🐳 Docker (localhost:3000)
+                      </button>
+                    </div>
+
                     {/* Quick In-Place Credentials & Endpoint Editor */}
                     <div className="inline-config-editor">
-                      <div className="inline-fields-row">
-                        <div className="inline-field-group url-field">
-                          <label>AdGuard Home URL</label>
-                          <input
-                            type="text"
-                            placeholder="http://192.168.1.100:3000 or http://adguard.home"
-                            value={sinkholeConfig.adguardHomeUrl || ''}
-                            onChange={(e) =>
-                              setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })
-                            }
-                          />
-                        </div>
-
-                        <div className="inline-field-group user-field">
-                          <label>Username</label>
-                          <input
-                            type="text"
-                            placeholder="admin"
-                            value={sinkholeConfig.adguardHomeUser || ''}
-                            onChange={(e) =>
-                              setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })
-                            }
-                          />
-                        </div>
-
-                        <div className="inline-field-group pass-field">
-                          <label>Password</label>
-                          <div className="inline-input-with-eye">
+                      {sinkholeConfig.adguardMode === 'ha-api' ? (
+                        /* Home Assistant REST API Mode */
+                        <div className="inline-fields-row">
+                          <div className="inline-field-group url-field">
+                            <label>Home Assistant Instance URL</label>
                             <input
-                              type={showAdguardPass ? 'text' : 'password'}
-                              placeholder="••••••••"
-                              value={sinkholeConfig.adguardHomePassword || ''}
+                              type="text"
+                              placeholder="http://homeassistant.local:8123 or https://your-ha.duckdns.org"
+                              value={sinkholeConfig.adguardHomeUrl || ''}
                               onChange={(e) =>
-                                setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })
+                                setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })
                               }
                             />
-                            <button
-                              type="button"
-                              className="eye-toggle-btn"
-                              onClick={() => setShowAdguardPass(!showAdguardPass)}
-                              title={showAdguardPass ? 'Hide password' : 'Show password'}
-                            >
-                              {showAdguardPass ? '👁️' : '👁️‍🗨️'}
-                            </button>
+                          </div>
+
+                          <div className="inline-field-group" style={{ flex: 2 }}>
+                            <label>Home Assistant Long-Lived Access Token</label>
+                            <div className="inline-input-with-eye">
+                              <input
+                                type={showHaToken ? 'text' : 'password'}
+                                placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+                                value={sinkholeConfig.haToken || ''}
+                                onChange={(e) =>
+                                  setSinkholeConfig({ ...sinkholeConfig, haToken: e.target.value })
+                                }
+                              />
+                              <button
+                                type="button"
+                                className="eye-toggle-btn"
+                                onClick={() => setShowHaToken(!showHaToken)}
+                                title={showHaToken ? 'Hide token' : 'Show token'}
+                              >
+                                {showHaToken ? '👁️' : '👁️‍🗨️'}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="method-note">
+                            💡 In Home Assistant, click your user profile (bottom left) → Security tab → scroll down to <strong>Long-Lived Access Tokens</strong> → Create Token. Blockingmachine calls the native <code>adguard.refresh</code> service automatically.
                           </div>
                         </div>
-                      </div>
+                      ) : sinkholeConfig.adguardMode === 'webhook' ? (
+                        /* Home Assistant Webhook Mode */
+                        <div className="inline-fields-row">
+                          <div className="inline-field-group url-field" style={{ flex: 1 }}>
+                            <label>Home Assistant Webhook URL</label>
+                            <input
+                              type="text"
+                              placeholder="http://homeassistant.local:8123/api/webhook/blockingmachine_reload"
+                              value={sinkholeConfig.haWebhookUrl || ''}
+                              onChange={(e) =>
+                                setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: e.target.value })
+                              }
+                            />
+                          </div>
+                          <div className="method-note">
+                            💡 In Home Assistant: create an Automation with a <strong>Webhook Trigger</strong> (e.g. <code>blockingmachine_reload</code>) and an action that calls <code>adguard.refresh</code>. No passwords required!
+                          </div>
+                        </div>
+                      ) : (
+                        /* Direct AdGuard Home Mode */
+                        <div className="inline-fields-row">
+                          <div className="inline-field-group url-field">
+                            <label>AdGuard Home URL</label>
+                            <input
+                              type="text"
+                              placeholder="http://homeassistant.local:3000 or http://192.168.1.100:3000"
+                              value={sinkholeConfig.adguardHomeUrl || ''}
+                              onChange={(e) =>
+                                setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })
+                              }
+                            />
+                          </div>
+
+                          <div className="inline-field-group user-field">
+                            <label>Username</label>
+                            <input
+                              type="text"
+                              placeholder="admin"
+                              value={sinkholeConfig.adguardHomeUser || ''}
+                              onChange={(e) =>
+                                setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })
+                              }
+                            />
+                          </div>
+
+                          <div className="inline-field-group pass-field">
+                            <label>Password</label>
+                            <div className="inline-input-with-eye">
+                              <input
+                                type={showAdguardPass ? 'text' : 'password'}
+                                placeholder="••••••••"
+                                value={sinkholeConfig.adguardHomePassword || ''}
+                                onChange={(e) =>
+                                  setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })
+                                }
+                              />
+                              <button
+                                type="button"
+                                className="eye-toggle-btn"
+                                onClick={() => setShowAdguardPass(!showAdguardPass)}
+                                title={showAdguardPass ? 'Hide password' : 'Show password'}
+                              >
+                                {showAdguardPass ? '👁️' : '👁️‍🗨️'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       <div className="inline-actions-row">
                         <div className="inline-actions-left">
@@ -624,7 +951,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             type="button"
                             className="secondary-button test-inline-btn"
                             onClick={() => handleTestConnection('adguard')}
-                            disabled={testingService === 'adguard' || !sinkholeConfig.adguardHomeUrl}
+                            disabled={testingService === 'adguard' || (!sinkholeConfig.adguardHomeUrl && !sinkholeConfig.haWebhookUrl)}
                           >
                             {testingService === 'adguard' ? 'Testing…' : '⚡ Test Connection'}
                           </button>
@@ -704,7 +1031,25 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                     </div>
                     <code>{lanFeedUrl}</code>
                   </div>
-                  <span className="step-subtext">Note: Pi-hole requires rules to be delivered via HTTP/HTTPS. Ensure the Local Feed Server is running above!</span>
+                  {/* Inline Feed Server status check */}
+                  {!serverStatus?.isRunning && (
+                    <div className="inline-feed-alert">
+                      <div className="inline-feed-alert-text">
+                        <span>⚠️</span>
+                        <span>
+                          <strong>Feed Server is Offline:</strong> Pi-hole (including Home Assistant Pi-hole Add-on) cannot download lists until this server is started.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="inline-feed-start-btn"
+                        onClick={handleToggleFeedServer}
+                        disabled={isServerLoading}
+                      >
+                        {isServerLoading ? 'Starting…' : '▶ Start Feed Server Now'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -797,6 +1142,59 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           </span>
                         )}
                       </div>
+                    </div>
+
+                    {/* Quick Fast-Fill Preset Buttons */}
+                    <div className="quick-presets-row">
+                      <span className="quick-presets-label">Fast Fill:</span>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            piholeUrl: 'http://homeassistant.local:8080/admin',
+                          })
+                        }
+                      >
+                        🏠 HA Add-on (port 8080)
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            piholeUrl: 'http://homeassistant:8080/admin',
+                          })
+                        }
+                      >
+                        🏠 homeassistant:8080
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            piholeUrl: 'http://pi.hole/admin',
+                          })
+                        }
+                      >
+                        🥧 pi.hole/admin
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            piholeUrl: 'http://localhost:80/admin',
+                          })
+                        }
+                      >
+                        🐳 Docker (port 80)
+                      </button>
                     </div>
 
                     {/* Quick In-Place Credentials & Endpoint Editor */}
@@ -1081,6 +1479,87 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                     In OPNsense, go to <strong>Services</strong> → <strong>Unbound DNS</strong> → <strong>Blocklist</strong>.
                     Add a Custom URL with your LAN Feed URL and save changes.
                   </p>
+                </div>
+              </div>
+
+              {/* Step 4: Generic Homelab & Automation Webhook */}
+              <div className="guide-step-card live-sync-step-card">
+                <div className="step-num-pill">4</div>
+                <div className="step-content">
+                  <div className="step-header-row">
+                    <div>
+                      <h4>Homelab & Custom Webhook Automation ("Or Any Other System")</h4>
+                      <p>
+                        Trigger custom reload scripts, Home Assistant automations, Node-RED, n8n, Technitium DNS, Blocky, or pfSense/OPNsense webhook handlers on compile.
+                      </p>
+                    </div>
+
+                    <button
+                      className="live-push-btn"
+                      onClick={() => handleTestConnection('webhook')}
+                      disabled={!customWebhookUrl}
+                      title="Test webhook endpoint delivery"
+                    >
+                      <span>⚡ Test Webhook URL</span>
+                    </button>
+                  </div>
+
+                  <div className="inline-config-editor">
+                    <div className="inline-fields-row">
+                      <div className="inline-field-group url-field" style={{ flex: 1 }}>
+                        <label>Custom Webhook URL (HTTP POST)</label>
+                        <input
+                          type="text"
+                          placeholder="http://192.168.1.1:8080/reload or http://homeassistant.local:8123/api/webhook/dns_reload"
+                          value={customWebhookUrl}
+                          onChange={(e) => {
+                            setCustomWebhookUrl(e.target.value);
+                            setSinkholeConfig({ ...sinkholeConfig, customWebhookUrl: e.target.value });
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="inline-actions-row">
+                      <div className="inline-actions-left">
+                        <button
+                          type="button"
+                          className="primary-button save-config-btn"
+                          onClick={async () => {
+                            if (window.electron?.setSinkholeConfig) {
+                              await window.electron.setSinkholeConfig({
+                                ...sinkholeConfig,
+                                customWebhookUrl,
+                              });
+                              setSinkholeMessage('✓ Custom webhook URL saved!');
+                              setTimeout(() => setSinkholeMessage(null), 3000);
+                            }
+                          }}
+                        >
+                          Save Webhook
+                        </button>
+
+                        <button
+                          type="button"
+                          className="secondary-button test-inline-btn"
+                          onClick={() => handleTestConnection('webhook')}
+                          disabled={!customWebhookUrl}
+                        >
+                          ⚡ Test Webhook
+                        </button>
+                      </div>
+
+                      {testResult?.service === 'webhook' && (
+                        <span className={`test-status-pill ${testResult.success ? 'success' : 'error'}`}>
+                          {testResult.message}
+                        </span>
+                      )}
+
+                      {sinkholeMessage && (
+                        <span className="sinkhole-feedback-msg">{sinkholeMessage}</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

@@ -366,5 +366,105 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       expect(winCmd).toContain('$env:SystemRoot\\System32\\drivers\\etc\\hosts');
     });
   });
+
+  describe('Home Assistant & AdGuard Multi-Mode Integration Helpers', () => {
+    function normalizeUrl(raw: string): string {
+      let url = raw.trim();
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = `http://${url}`;
+      }
+      return url.replace(/\/$/, '');
+    }
+
+    function checkAdguardPortDiagnostic(urlStr: string, mode: 'direct' | 'ha-api' | 'webhook'): {
+      isPort8123Warning: boolean;
+      diagnosticMessage?: string;
+    } {
+      const normalized = normalizeUrl(urlStr);
+      if (mode === 'direct' && normalized.includes(':8123')) {
+        return {
+          isPort8123Warning: true,
+          diagnosticMessage:
+            'Port 8123 detected (Home Assistant web interface). For AdGuard Home direct API, use port 3000 (e.g. http://homeassistant.local:3000) after mapping it in Add-ons > AdGuard Home > Configuration > Network, or select "Home Assistant API" mode.',
+        };
+      }
+      return { isPort8123Warning: false };
+    }
+
+    function buildHaApiServiceRequest(rawUrl: string, token: string) {
+      const base = normalizeUrl(rawUrl);
+      return {
+        url: `${base}/api/services/adguard/refresh`,
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token.trim()}`,
+          'Content-Type': 'application/json',
+        },
+      };
+    }
+
+    function buildCustomWebhookPayload(event = 'blockingmachine_compiled') {
+      return {
+        event,
+        timestamp: new Date('2026-09-20T20:00:00.000Z').toISOString(),
+      };
+    }
+
+    test('detects port 8123 in direct AdGuard Home mode and returns helpful diagnostic guidance', () => {
+      const diag1 = checkAdguardPortDiagnostic('http://homeassistant.local:8123', 'direct');
+      expect(diag1.isPort8123Warning).toBe(true);
+      expect(diag1.diagnosticMessage).toContain('Port 8123 detected');
+      expect(diag1.diagnosticMessage).toContain('port 3000');
+
+      const diag2 = checkAdguardPortDiagnostic('192.168.1.100:8123/', 'direct');
+      expect(diag2.isPort8123Warning).toBe(true);
+
+      // In HA API mode, port 8123 is expected and valid, so no warning
+      const diag3 = checkAdguardPortDiagnostic('http://homeassistant.local:8123', 'ha-api');
+      expect(diag3.isPort8123Warning).toBe(false);
+
+      // Port 3000 in direct mode has no warning
+      const diag4 = checkAdguardPortDiagnostic('http://homeassistant.local:3000', 'direct');
+      expect(diag4.isPort8123Warning).toBe(false);
+    });
+
+    test('constructs valid Home Assistant adguard.refresh service endpoint and Bearer authorization header', () => {
+      const req = buildHaApiServiceRequest('homeassistant.local:8123', 'my-llat-token-xyz');
+      expect(req.url).toBe('http://homeassistant.local:8123/api/services/adguard/refresh');
+      expect(req.method).toBe('POST');
+      expect(req.headers.Authorization).toBe('Bearer my-llat-token-xyz');
+      expect(req.headers['Content-Type']).toBe('application/json');
+    });
+
+    test('formats custom homelab webhook payload with event metadata', () => {
+      const payload = buildCustomWebhookPayload();
+      expect(payload.event).toBe('blockingmachine_compiled');
+      expect(payload.timestamp).toBe('2026-09-20T20:00:00.000Z');
+    });
+
+    test('validates presets for Home Assistant, Docker, and Router environments', () => {
+      const presets = [
+        { env: 'homeassistant', directUrl: 'http://homeassistant.local:3000', haApiUrl: 'http://homeassistant.local:8123' },
+        { env: 'docker', directUrl: 'http://localhost:3000' },
+        { env: 'router', directUrl: 'http://192.168.8.1:3000' },
+        { env: 'pihole_ha', url: 'http://homeassistant.local:8080/admin/api.php' },
+      ];
+
+      for (const p of presets) {
+        if ('directUrl' in p) {
+          expect(normalizeUrl(p.directUrl!)).toBe(p.directUrl);
+          expect(() => new URL(p.directUrl!)).not.toThrow();
+        }
+        if ('haApiUrl' in p) {
+          expect(normalizeUrl(p.haApiUrl!)).toBe(p.haApiUrl);
+          expect(() => new URL(p.haApiUrl!)).not.toThrow();
+        }
+        if ('url' in p) {
+          expect(normalizeUrl(p.url!)).toBe(p.url);
+          expect(() => new URL(p.url!)).not.toThrow();
+        }
+      }
+    });
+  });
 });
 

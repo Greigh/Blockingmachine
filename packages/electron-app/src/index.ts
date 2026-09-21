@@ -584,6 +584,10 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
   const rawAdguard = storeRef.get('adguardHomeUrl') as string | undefined;
   const adguardHomeUser = storeRef.get('adguardHomeUser') as string | undefined;
   const adguardHomePassword = storeRef.get('adguardHomePassword') as string | undefined;
+  const adguardMode = (storeRef.get('adguardMode') as 'direct' | 'ha-api' | 'webhook' | undefined) || 'direct';
+  const haToken = storeRef.get('haToken') as string | undefined;
+  const haWebhookUrl = storeRef.get('haWebhookUrl') as string | undefined;
+  const customWebhookUrl = storeRef.get('customWebhookUrl') as string | undefined;
 
   const results: { service: string; status: 'success' | 'error' | 'skipped'; message: string }[] = [];
 
@@ -617,7 +621,75 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
     results.push({ service: 'Pi-hole', status: 'skipped', message: 'Not configured' });
   }
 
-  if (rawAdguard && rawAdguard.trim()) {
+  // AdGuard Home Sync: supports Direct API, Home Assistant REST Service API, or Home Assistant Webhook
+  if (adguardMode === 'ha-api') {
+    const rawUrl = rawAdguard?.trim() || '';
+    if (rawUrl && haToken?.trim()) {
+      try {
+        let baseUrl = rawUrl;
+        if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+          baseUrl = `http://${baseUrl}`;
+        }
+        baseUrl = baseUrl.replace(/\/$/, '');
+        const serviceUrl = `${baseUrl}/api/services/adguard/refresh`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 7000);
+        try {
+          const res = await fetch(serviceUrl, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${haToken.trim()}`,
+              'Content-Type': 'application/json',
+            },
+            signal: controller.signal,
+          });
+          if (res.ok) {
+            results.push({ service: 'AdGuard Home (Home Assistant)', status: 'success', message: 'Filters refreshed via Home Assistant API' });
+          } else {
+            results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: `Home Assistant API returned HTTP ${res.status}: ${res.statusText}` });
+          }
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      } catch (err: any) {
+        results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: err.message || String(err) });
+      }
+    } else {
+      results.push({ service: 'AdGuard Home (Home Assistant)', status: 'skipped', message: 'Home Assistant URL or Bearer token missing' });
+    }
+  } else if (adguardMode === 'webhook') {
+    const targetWebhook = haWebhookUrl?.trim() || rawAdguard?.trim() || '';
+    if (targetWebhook) {
+      try {
+        let urlStr = targetWebhook;
+        if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+          urlStr = `http://${urlStr}`;
+        }
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        try {
+          const res = await fetch(urlStr, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event: 'adguard_refresh', timestamp: new Date().toISOString() }),
+            signal: controller.signal,
+          });
+          if (res.ok) {
+            results.push({ service: 'AdGuard Home (Webhook)', status: 'success', message: 'Automation webhook triggered successfully' });
+          } else {
+            results.push({ service: 'AdGuard Home (Webhook)', status: 'error', message: `Webhook returned HTTP ${res.status}` });
+          }
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      } catch (err: any) {
+        results.push({ service: 'AdGuard Home (Webhook)', status: 'error', message: err.message || String(err) });
+      }
+    } else {
+      results.push({ service: 'AdGuard Home (Webhook)', status: 'skipped', message: 'Webhook URL not configured' });
+    }
+  } else if (rawAdguard && rawAdguard.trim()) {
+    // Direct AdGuard Home API
     try {
       let adguardUrl = rawAdguard.trim();
       if (!adguardUrl.startsWith('http://') && !adguardUrl.startsWith('https://')) {
@@ -652,6 +724,35 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
     }
   } else {
     results.push({ service: 'AdGuard Home', status: 'skipped', message: 'Not configured' });
+  }
+
+  // Custom Homelab Webhook / Automation Endpoint ("or any other thing like it")
+  if (customWebhookUrl && customWebhookUrl.trim()) {
+    try {
+      let urlStr = customWebhookUrl.trim();
+      if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+        urlStr = `http://${urlStr}`;
+      }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      try {
+        const res = await fetch(urlStr, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'blockingmachine_compiled', timestamp: new Date().toISOString() }),
+          signal: controller.signal,
+        });
+        if (res.ok) {
+          results.push({ service: 'Custom Homelab Webhook', status: 'success', message: 'Homelab automation webhook triggered successfully' });
+        } else {
+          results.push({ service: 'Custom Homelab Webhook', status: 'error', message: `Webhook returned HTTP ${res.status}` });
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (err: any) {
+      results.push({ service: 'Custom Homelab Webhook', status: 'error', message: err.message || String(err) });
+    }
   }
 
   return results;
@@ -1316,6 +1417,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         adguardHomeUser: store.get('adguardHomeUser') || '',
         adguardHomePassword: store.get('adguardHomePassword') || '',
         syncOnCompile: Boolean(store.get('syncOnCompile')),
+        adguardMode: (store.get('adguardMode') as 'direct' | 'ha-api' | 'webhook') || 'direct',
+        haToken: store.get('haToken') || '',
+        haWebhookUrl: store.get('haWebhookUrl') || '',
+        customWebhookUrl: store.get('customWebhookUrl') || '',
       };
     });
 
@@ -1326,6 +1431,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       if (config.adguardHomeUser !== undefined) store.set('adguardHomeUser', config.adguardHomeUser);
       if (config.adguardHomePassword !== undefined) store.set('adguardHomePassword', config.adguardHomePassword);
       if (config.syncOnCompile !== undefined) store.set('syncOnCompile', Boolean(config.syncOnCompile));
+      if (config.adguardMode !== undefined) store.set('adguardMode', config.adguardMode);
+      if (config.haToken !== undefined) store.set('haToken', config.haToken);
+      if (config.haWebhookUrl !== undefined) store.set('haWebhookUrl', config.haWebhookUrl);
+      if (config.customWebhookUrl !== undefined) store.set('customWebhookUrl', config.customWebhookUrl);
       return { success: true };
     });
 
@@ -1346,18 +1455,26 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       return getFeedServerStatus();
     });
 
-    ipcMain.handle('test-sinkhole-connection', async (_event, service: 'pihole' | 'adguard') => {
+    ipcMain.handle('test-sinkhole-connection', async (_event, service: 'pihole' | 'adguard' | 'webhook') => {
       const startTime = Date.now();
       try {
         if (service === 'pihole') {
           const rawUrl = store.get('piholeUrl') as string | undefined;
           const apiKey = store.get('piholeApiKey') as string | undefined;
           if (!rawUrl || !rawUrl.trim()) {
-            return { service: 'pihole', success: false, message: 'Pi-hole URL is not configured in Settings.' };
+            return { service: 'pihole', success: false, message: 'Pi-hole URL is not configured.' };
           }
           let urlStr = rawUrl.trim();
           if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
             urlStr = `http://${urlStr}`;
+          }
+          if (urlStr.includes(':8123')) {
+            return {
+              service: 'pihole',
+              success: false,
+              message: 'Port 8123 is Home Assistant web UI. For Pi-hole Add-on web interface, check the mapped port in Home Assistant Settings > Add-ons > Pi-hole > Configuration (typically port 80 or 8080).',
+              details: 'ha_port_warning',
+            };
           }
           const u = new URL(urlStr);
           if (apiKey) u.searchParams.set('auth', apiKey.trim());
@@ -1372,33 +1489,133 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           } else {
             return { service: 'pihole', success: false, statusCode: res.status, latencyMs, message: `Pi-hole returned HTTP ${res.status}: ${res.statusText}` };
           }
-        } else {
-          const rawUrl = store.get('adguardHomeUrl') as string | undefined;
-          const user = store.get('adguardHomeUser') as string | undefined;
-          const pass = store.get('adguardHomePassword') as string | undefined;
-          if (!rawUrl || !rawUrl.trim()) {
-            return { service: 'adguard', success: false, message: 'AdGuard Home URL is not configured in Settings.' };
+        } else if (service === 'webhook') {
+          const customWebhookUrl = store.get('customWebhookUrl') as string | undefined;
+          if (!customWebhookUrl || !customWebhookUrl.trim()) {
+            return { service: 'webhook', success: false, message: 'Custom webhook URL is not configured.' };
           }
-          let urlStr = rawUrl.trim();
+          let urlStr = customWebhookUrl.trim();
           if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
             urlStr = `http://${urlStr}`;
           }
-          const base = urlStr.replace(/\/$/, '');
-          const u = `${base}/control/status`;
-          const headers: Record<string, string> = {};
-          if (user && pass) {
-            const credentials = Buffer.from(`${user}:${pass}`).toString('base64');
-            headers['Authorization'] = `Basic ${credentials}`;
+          try {
+            new URL(urlStr);
+            return { service: 'webhook', success: true, message: 'Custom webhook URL syntax is valid and ready.' };
+          } catch {
+            return { service: 'webhook', success: false, message: 'Invalid webhook URL syntax.' };
           }
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 6000);
-          const res = await fetch(u, { headers, signal: controller.signal });
-          clearTimeout(timeout);
-          const latencyMs = Date.now() - startTime;
-          if (res.ok) {
-            return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: `Connected to AdGuard Home (${latencyMs}ms, HTTP ${res.status})` };
+        } else {
+          // AdGuard Home connection testing
+          const adguardMode = (store.get('adguardMode') as 'direct' | 'ha-api' | 'webhook' | undefined) || 'direct';
+          const rawUrl = store.get('adguardHomeUrl') as string | undefined;
+          const user = store.get('adguardHomeUser') as string | undefined;
+          const pass = store.get('adguardHomePassword') as string | undefined;
+          const haToken = store.get('haToken') as string | undefined;
+          const haWebhookUrl = store.get('haWebhookUrl') as string | undefined;
+
+          if (adguardMode === 'ha-api') {
+            if (!rawUrl || !rawUrl.trim()) {
+              return { service: 'adguard', success: false, message: 'Home Assistant instance URL is not configured.' };
+            }
+            if (!haToken || !haToken.trim()) {
+              return { service: 'adguard', success: false, message: 'Home Assistant Long-Lived Access Token is required.' };
+            }
+            let urlStr = rawUrl.trim();
+            if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+              urlStr = `http://${urlStr}`;
+            }
+            const base = urlStr.replace(/\/$/, '');
+            const pingUrl = `${base}/api/`;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 6000);
+            try {
+              const res = await fetch(pingUrl, {
+                headers: { Authorization: `Bearer ${haToken.trim()}` },
+                signal: controller.signal,
+              });
+              clearTimeout(timeout);
+              const latencyMs = Date.now() - startTime;
+              if (res.ok) {
+                return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: `Connected to Home Assistant API (${latencyMs}ms, ready for adguard.refresh)` };
+              } else if (res.status === 401) {
+                return { service: 'adguard', success: false, statusCode: 401, latencyMs, message: 'Home Assistant token rejected (HTTP 401 Unauthorized). Verify your Long-Lived Access Token.' };
+              } else {
+                return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `Home Assistant returned HTTP ${res.status}: ${res.statusText}` };
+              }
+            } catch (err: any) {
+              clearTimeout(timeout);
+              throw err;
+            }
+          } else if (adguardMode === 'webhook') {
+            const target = haWebhookUrl?.trim() || rawUrl?.trim();
+            if (!target) {
+              return { service: 'adguard', success: false, message: 'Home Assistant Webhook URL is not configured.' };
+            }
+            let urlStr = target;
+            if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+              urlStr = `http://${urlStr}`;
+            }
+            try {
+              new URL(urlStr);
+              return { service: 'adguard', success: true, message: 'Home Assistant Webhook URL is configured and ready.' };
+            } catch {
+              return { service: 'adguard', success: false, message: 'Invalid Webhook URL format.' };
+            }
           } else {
-            return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `AdGuard Home returned HTTP ${res.status}: ${res.statusText}` };
+            // Direct AdGuard Home API
+            if (!rawUrl || !rawUrl.trim()) {
+              return { service: 'adguard', success: false, message: 'AdGuard Home URL is not configured.' };
+            }
+            let urlStr = rawUrl.trim();
+            if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+              urlStr = `http://${urlStr}`;
+            }
+
+            // Detect Home Assistant port 8123 in direct mode to prevent common mistake
+            if (urlStr.includes(':8123')) {
+              return {
+                service: 'adguard',
+                success: false,
+                statusCode: 8123,
+                message: 'Port 8123 detected (Home Assistant web interface). For AdGuard Home direct API, use port 3000 (e.g. http://homeassistant.local:3000) after mapping it in Add-ons > AdGuard Home > Configuration > Network, or select "Home Assistant API" mode.',
+                details: 'ha_port_warning',
+              };
+            }
+
+            const base = urlStr.replace(/\/$/, '');
+            const u = `${base}/control/status`;
+            const headers: Record<string, string> = {};
+            if (user && pass) {
+              const credentials = Buffer.from(`${user}:${pass}`).toString('base64');
+              headers['Authorization'] = `Basic ${credentials}`;
+            }
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 6000);
+            try {
+              const res = await fetch(u, { headers, signal: controller.signal });
+              clearTimeout(timeout);
+              const latencyMs = Date.now() - startTime;
+              if (res.ok) {
+                return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: `Connected to AdGuard Home (${latencyMs}ms, HTTP ${res.status})` };
+              } else if (res.status === 401) {
+                return { service: 'adguard', success: false, statusCode: 401, latencyMs, message: 'Authentication required. Check your AdGuard Home username and password.' };
+              } else {
+                return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `AdGuard Home returned HTTP ${res.status}: ${res.statusText}` };
+              }
+            } catch (err: any) {
+              clearTimeout(timeout);
+              const latencyMs = Date.now() - startTime;
+              if (urlStr.includes('homeassistant') || urlStr.includes(':3000')) {
+                return {
+                  service: 'adguard',
+                  success: false,
+                  latencyMs,
+                  message: `Cannot connect to port 3000 on Home Assistant. In Home Assistant, go to Settings > Add-ons > AdGuard Home > Configuration, ensure port 3000 is mapped under Network, and restart the add-on.`,
+                  details: 'ha_connection_failed',
+                };
+              }
+              throw err;
+            }
           }
         }
       } catch (err: any) {
