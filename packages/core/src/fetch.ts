@@ -165,6 +165,10 @@ export async function fetchWithConditionalCache(
   url: string,
   cacheOptions?: FetchOptions,
 ): Promise<FetchResult> {
+  if (!url || typeof url !== "string" || /[\0\r\n]/.test(url)) {
+    return { content: null, notModified: false, status: 400 };
+  }
+
   const headers: Record<string, string> = {
     "User-Agent":
       "Blockingmachine/3.0 (+https://github.com/greigh/blockingmachine)",

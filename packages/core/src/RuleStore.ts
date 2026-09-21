@@ -1,6 +1,8 @@
-import { createRuleMetadata, cleanDomainPattern } from "./createMetadata.js";
+import { createRuleMetadata, cleanDomainPattern, extractSelector } from "./createMetadata.js";
 import { RuleProcessor } from "./RuleProcessor.js";
 import crypto from "crypto";
+
+const EMPTY_TAGS: string[] = Object.freeze([]) as unknown as string[];
 
 // --- Base Types ---
 export type RuleType =
@@ -173,13 +175,13 @@ export class RuleStore {
     return crypto.createHash("sha256").update(rule).digest("hex");
   }
 
-  // Helper to merge sources between duplicate rules
+  // Helper to merge sources between duplicate rules with bounded growth
   private mergeSources(existingRule: StoredRule, newSources?: string[]): void {
     if (newSources && Array.isArray(newSources)) {
       const currentSources = new Set(existingRule.metadata.sources || []);
       let updated = false;
       for (const src of newSources) {
-        if (!currentSources.has(src)) {
+        if (!currentSources.has(src) && currentSources.size < 50) {
           currentSources.add(src);
           updated = true;
         }
@@ -213,49 +215,43 @@ export class RuleStore {
       return;
     }
 
-    const ruleHash = this.generateHash(originalRule);
-    const key = ruleHash; // Use hash as the key for generic rules
-
-    const existingRule = map.get(key);
-
-    if (!existingRule) {
-      map.set(key, {
-        raw: originalRule,
-        originalRule: originalRule,
-        hash: ruleHash,
-        type: type as RuleType,
-        domain: metadata.domain || undefined,
-        isException:
-          originalRule.startsWith("@@") || originalRule.includes("#@#"),
-        metadata: {
-          sources: metadata.sources || [],
-          dateAdded: new Date(),
-          lastUpdated: new Date(),
-          enabled: true,
-          sourceInfo: {
-            category: metadata.sourceInfo?.category || "unknown",
-            trusted: false,
-            url: metadata.sourceInfo?.url || "",
-            priority: metadata.sourceInfo?.priority || 0, // Add default priority
-          },
-          tags: [],
-          domain: metadata.domain || undefined,
-          selector: metadata.selector || undefined,
-        },
-      });
-      // Increment the specific stat count using the mapped statType
-      if (this.stats[statType] !== undefined) {
-        this.stats[statType]++;
-      } else {
-        // This should theoretically not happen due to the check above
-        console.warn(
-          `[addGenericRule] Stat key '${statType}' not found for incrementing.`,
-        );
-      }
-    } else {
-      // Handle duplicate: Merge sources
+    // Fast check: avoid SHA-256 generation on duplicates
+    const existingRule = map.get(originalRule);
+    if (existingRule) {
       this.mergeSources(existingRule, metadata?.sources);
       this.stats.duplicates++;
+      return;
+    }
+
+    const ruleHash = this.generateHash(originalRule);
+
+    map.set(originalRule, {
+      raw: originalRule,
+      originalRule: originalRule,
+      hash: ruleHash,
+      type: type as RuleType,
+      domain: metadata.domain || undefined,
+      isException:
+        originalRule.startsWith("@@") || originalRule.includes("#@#"),
+      metadata: {
+        sources: metadata.sources || [],
+        dateAdded: metadata.dateAdded || new Date(),
+        lastUpdated: metadata.lastUpdated || new Date(),
+        enabled: true,
+        sourceInfo: metadata.sourceInfo || {
+          category: "unknown",
+          trusted: false,
+          url: "",
+          priority: 0,
+        },
+        tags: EMPTY_TAGS,
+        domain: metadata.domain || undefined,
+        selector: metadata.selector || undefined,
+      },
+    });
+
+    if (this.stats[statType] !== undefined) {
+      this.stats[statType]++;
     }
   }
 
@@ -391,7 +387,7 @@ export class RuleStore {
     }
   }
 
-  // Handles blocking and unblocking rules (hash keyed to prevent dropping distinct rules on same domain)
+  // Handles blocking and unblocking rules (keyed by rule string to bypass SHA-256 for duplicates)
   private handleStandardRule(
     originalRule: string,
     type: "blocking" | "unblocking",
@@ -399,21 +395,20 @@ export class RuleStore {
   ): void {
     const cleanDomain =
       metadata.domain || cleanDomainPattern(originalRule) || undefined;
-    const ruleHash = this.generateHash(originalRule);
-    const key = ruleHash;
 
     const ruleMap =
       type === "unblocking" ? this.unblockingRules : this.blockingRules;
-    const existingRule = ruleMap.get(key);
+    const existingRule = ruleMap.get(originalRule);
 
     if (existingRule) {
-      // Exact duplicate based on hash: merge sources
+      // Exact duplicate: merge sources without hash recomputation
       this.mergeSources(existingRule, metadata?.sources);
       this.stats.duplicates++;
       return;
     }
 
     const isException = type === "unblocking" || originalRule.startsWith("@@");
+    const ruleHash = this.generateHash(originalRule);
 
     const ruleData: StoredRule = {
       raw: originalRule,
@@ -424,31 +419,31 @@ export class RuleStore {
       isException,
       metadata: {
         sources: metadata.sources || [],
-        dateAdded: new Date(),
-        lastUpdated: new Date(),
+        dateAdded: metadata.dateAdded || new Date(),
+        lastUpdated: metadata.lastUpdated || new Date(),
         enabled: true,
-        sourceInfo: {
-          category: metadata.sourceInfo?.category || "unknown",
+        sourceInfo: metadata.sourceInfo || {
+          category: "unknown",
           trusted: false,
-          url: metadata.sourceInfo?.url || "",
-          priority: metadata.sourceInfo?.priority || 0,
+          url: "",
+          priority: 0,
         },
-        tags: [],
+        tags: EMPTY_TAGS,
         domain: cleanDomain,
       },
     };
 
-    ruleMap.set(key, ruleData);
+    ruleMap.set(originalRule, ruleData);
     this.stats[type]++; // Increment specific stat
   }
 
-  // Handles cosmetic rules (hash keyed to prevent dropping rules with same selector across sites)
+  // Handles cosmetic rules
   private handleCosmeticRule(
     originalRule: string,
     metadata: RuleMetadata,
   ): void {
     const selector =
-      metadata.selector || this.extractSelectorFromRule(originalRule);
+      metadata.selector || extractSelector(originalRule);
 
     if (!selector) {
       if (!originalRule.includes("#$#") && !originalRule.includes("#%#")) {
@@ -465,18 +460,17 @@ export class RuleStore {
       return;
     }
 
-    const ruleHash = this.generateHash(originalRule);
-    const key = ruleHash;
-    const existingRule = this.cosmeticRules.get(key);
+    const existingRule = this.cosmeticRules.get(originalRule);
 
     if (existingRule) {
-      // Exact duplicate: merge sources
+      // Exact duplicate: merge sources without hash recomputation
       this.mergeSources(existingRule, metadata?.sources);
       this.stats.duplicates++;
       return;
     }
 
     const isException = originalRule.includes("#@#");
+    const ruleHash = this.generateHash(originalRule);
 
     const ruleData: StoredRule = {
       raw: originalRule,
@@ -487,22 +481,22 @@ export class RuleStore {
       domain: metadata.domain || undefined,
       metadata: {
         sources: metadata.sources || [],
-        dateAdded: new Date(),
-        lastUpdated: new Date(),
+        dateAdded: metadata.dateAdded || new Date(),
+        lastUpdated: metadata.lastUpdated || new Date(),
         enabled: true,
-        sourceInfo: {
-          category: metadata.sourceInfo?.category || "unknown",
+        sourceInfo: metadata.sourceInfo || {
+          category: "unknown",
           trusted: false,
-          url: metadata.sourceInfo?.url || "",
-          priority: metadata.sourceInfo?.priority || 0,
+          url: "",
+          priority: 0,
         },
-        tags: [],
+        tags: EMPTY_TAGS,
         selector: selector,
         domain: metadata.domain || undefined,
       },
     };
 
-    this.cosmeticRules.set(key, ruleData);
+    this.cosmeticRules.set(originalRule, ruleData);
     this.stats.cosmetic++;
   }
 
@@ -579,79 +573,4 @@ export class RuleStore {
     };
   }
 
-  // Add these helper methods to RuleStore
-  private extractDomainFromRule(rule: string): string | null {
-    // Simple domain extraction logic
-    const cleanRule = rule.replace(/^@@/, ""); // Remove exception marker
-
-    // Handle different rule formats
-    if (
-      cleanRule.includes("##") ||
-      cleanRule.includes("#@#") ||
-      cleanRule.includes("#?#") ||
-      cleanRule.includes("#$?#") ||
-      cleanRule.includes("#$#") ||
-      cleanRule.includes("#%#") ||
-      cleanRule.includes("$$")
-    ) {
-      // Cosmetic rule - extract domain part
-      const parts = cleanRule.split(/##|#@#|#\?#|#\$\?#|#\$#|#%#|\$\$/);
-      return parts[0]?.trim() || null;
-    }
-
-    if (cleanRule.includes("$")) {
-      // Rule with modifiers - extract part before $
-      const parts = cleanRule.split("$");
-      return parts[0]?.trim() || null;
-    }
-
-    // Simple domain or pattern
-    return cleanRule.trim() || null;
-  }
-
-  private extractSelectorFromRule(rule: string): string | null {
-    // Extract CSS/extended selector from cosmetic rules
-    if (rule.includes("##")) {
-      const parts = rule.split("##");
-      return parts.slice(1).join("##").trim() || null;
-    }
-
-    if (rule.includes("#@#")) {
-      const parts = rule.split("#@#");
-      return parts.slice(1).join("#@#").trim() || null;
-    }
-
-    if (rule.includes("#?#")) {
-      const parts = rule.split("#?#");
-      return parts.slice(1).join("#?#").trim() || null;
-    }
-
-    if (rule.includes("#$?#")) {
-      const parts = rule.split("#$?#");
-      return parts.slice(1).join("#$?#").trim() || null;
-    }
-
-    if (rule.includes("#$#")) {
-      const parts = rule.split("#$#");
-      return parts.slice(1).join("#$#").trim() || null;
-    }
-
-    if (rule.includes("#%#")) {
-      const parts = rule.split("#%#");
-      return parts.slice(1).join("#%#").trim() || null;
-    }
-
-    if (rule.includes("$$")) {
-      const parts = rule.split("$$");
-      return parts.slice(1).join("$$").trim() || null;
-    }
-
-    // Match short cosmetic rule syntax: example.com#.class or example.com#,selector
-    const shortMatch = rule.match(/(?:#\.|\#,)(.+)/);
-    if (shortMatch) {
-      return shortMatch[1].trim() || null;
-    }
-
-    return null;
-  }
 }
