@@ -2,7 +2,7 @@
   "name": "blockingmachine-monorepo",
   "version": "1.0.0-rc.1",
   "private": true,
-  "description": "Monorepo for Blockingmachine (Core, CLI, Database, Electron App).",
+  "description": "High-performance adblock compiler, DNS rule deduplicator, and AI-powered network defense suite for Pi-hole, AdGuard Home, and modern desktops.",
   "license": "BSD-3-Clause",
   "workspaces": [
     "packages/*"
