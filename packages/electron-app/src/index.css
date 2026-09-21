@@ -6326,3 +6326,35 @@ input:checked + .mac-slider:before {
   width: 100%;
   box-sizing: border-box;
 }
+
+.remote-access-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: rgba(0, 122, 255, 0.08);
+  border: 1px solid rgba(0, 122, 255, 0.25);
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-color);
+}
+
+.nabu-warning-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: rgba(255, 159, 10, 0.12);
+  border: 1px solid rgba(255, 159, 10, 0.35);
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-color);
+}
+
+.nabu-warning-banner strong {
+  color: #f59e0b;
+}

@@ -393,7 +393,13 @@ describe('Electron App Core Utilities & IPC Logic', () => {
   describe('Home Assistant & AdGuard Multi-Mode Integration Helpers', () => {
     function normalizeUrl(raw: string): string {
       let url = raw.trim();
-      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      if (url.includes('nabu.casa')) {
+        if (url.startsWith('http://')) {
+          url = url.replace(/^http:\/\//, 'https://');
+        } else if (!url.startsWith('https://')) {
+          url = `https://${url}`;
+        }
+      } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
         url = `http://${url}`;
       }
       return url.replace(/\/$/, '');
@@ -401,17 +407,27 @@ describe('Electron App Core Utilities & IPC Logic', () => {
 
     function checkAdguardPortDiagnostic(urlStr: string, mode: 'direct' | 'ha-api' | 'webhook'): {
       isPort8123Warning: boolean;
+      isNabuCasaDirectWarning: boolean;
       diagnosticMessage?: string;
     } {
       const normalized = normalizeUrl(urlStr);
+      if (mode === 'direct' && normalized.includes('nabu.casa')) {
+        return {
+          isPort8123Warning: false,
+          isNabuCasaDirectWarning: true,
+          diagnosticMessage:
+            'Nabu Casa Cloud remote URLs only proxy Home Assistant itself (port 8123), not AdGuard Home direct port 3000. Switch Mode to "Home Assistant REST API" or "Home Assistant Webhook" to reload AdGuard over Nabu Casa.',
+        };
+      }
       if (mode === 'direct' && normalized.includes(':8123')) {
         return {
           isPort8123Warning: true,
+          isNabuCasaDirectWarning: false,
           diagnosticMessage:
             'Port 8123 detected (Home Assistant web interface). For AdGuard Home direct API, use port 3000 (e.g. http://homeassistant.local:3000) after mapping it in Add-ons > AdGuard Home > Configuration > Network, or select "Home Assistant API" mode.',
         };
       }
-      return { isPort8123Warning: false };
+      return { isPort8123Warning: false, isNabuCasaDirectWarning: false };
     }
 
     function buildHaApiServiceRequest(rawUrl: string, token: string) {
@@ -451,12 +467,38 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       expect(diag4.isPort8123Warning).toBe(false);
     });
 
+    test('normalizes Nabu Casa remote access URLs to https protocol automatically', () => {
+      expect(normalizeUrl('myinstance.ui.nabu.casa')).toBe('https://myinstance.ui.nabu.casa');
+      expect(normalizeUrl('http://myinstance.ui.nabu.casa/')).toBe('https://myinstance.ui.nabu.casa');
+      expect(normalizeUrl('https://myinstance.ui.nabu.casa/api/services/adguard/refresh')).toBe('https://myinstance.ui.nabu.casa/api/services/adguard/refresh');
+      expect(normalizeUrl('http://hooks.nabu.casa/webhook-token-123')).toBe('https://hooks.nabu.casa/webhook-token-123');
+    });
+
+    test('flags Nabu Casa remote URLs when attempted in direct AdGuard port 3000 mode', () => {
+      const directNabu = checkAdguardPortDiagnostic('https://abc123xyz.ui.nabu.casa', 'direct');
+      expect(directNabu.isNabuCasaDirectWarning).toBe(true);
+      expect(directNabu.diagnosticMessage).toContain('Nabu Casa Cloud remote URLs only proxy Home Assistant itself');
+      expect(directNabu.diagnosticMessage).toContain('Switch Mode to "Home Assistant REST API"');
+
+      // Valid in HA API mode
+      const haApiNabu = checkAdguardPortDiagnostic('https://abc123xyz.ui.nabu.casa', 'ha-api');
+      expect(haApiNabu.isNabuCasaDirectWarning).toBe(false);
+
+      // Valid in Webhook mode
+      const webhookNabu = checkAdguardPortDiagnostic('https://hooks.nabu.casa/abc123xyz', 'webhook');
+      expect(webhookNabu.isNabuCasaDirectWarning).toBe(false);
+    });
+
     test('constructs valid Home Assistant adguard.refresh service endpoint and Bearer authorization header', () => {
-      const req = buildHaApiServiceRequest('homeassistant.local:8123', 'my-llat-token-xyz');
-      expect(req.url).toBe('http://homeassistant.local:8123/api/services/adguard/refresh');
-      expect(req.method).toBe('POST');
-      expect(req.headers.Authorization).toBe('Bearer my-llat-token-xyz');
-      expect(req.headers['Content-Type']).toBe('application/json');
+      const reqLocal = buildHaApiServiceRequest('homeassistant.local:8123', 'my-llat-token-xyz');
+      expect(reqLocal.url).toBe('http://homeassistant.local:8123/api/services/adguard/refresh');
+      expect(reqLocal.method).toBe('POST');
+      expect(reqLocal.headers.Authorization).toBe('Bearer my-llat-token-xyz');
+      expect(reqLocal.headers['Content-Type']).toBe('application/json');
+
+      const reqNabu = buildHaApiServiceRequest('myinstance.ui.nabu.casa', 'my-llat-token-xyz');
+      expect(reqNabu.url).toBe('https://myinstance.ui.nabu.casa/api/services/adguard/refresh');
+      expect(reqNabu.headers.Authorization).toBe('Bearer my-llat-token-xyz');
     });
 
     test('formats custom homelab webhook payload with event metadata', () => {
@@ -465,9 +507,10 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       expect(payload.timestamp).toBe('2026-09-20T20:00:00.000Z');
     });
 
-    test('validates presets for Home Assistant, Docker, and Router environments', () => {
+    test('validates presets for Home Assistant, Nabu Casa Cloud, Docker, and Router environments', () => {
       const presets = [
         { env: 'homeassistant', directUrl: 'http://homeassistant.local:3000', haApiUrl: 'http://homeassistant.local:8123' },
+        { env: 'nabu_casa_ha', haApiUrl: 'https://your-instance.ui.nabu.casa', webhookUrl: 'https://hooks.nabu.casa/test-hook' },
         { env: 'docker', directUrl: 'http://localhost:3000' },
         { env: 'router', directUrl: 'http://192.168.8.1:3000' },
         { env: 'pihole_ha', url: 'http://homeassistant.local:8080/admin/api.php' },
@@ -481,6 +524,10 @@ describe('Electron App Core Utilities & IPC Logic', () => {
         if ('haApiUrl' in p) {
           expect(normalizeUrl(p.haApiUrl!)).toBe(p.haApiUrl);
           expect(() => new URL(p.haApiUrl!)).not.toThrow();
+        }
+        if ('webhookUrl' in p) {
+          expect(normalizeUrl(p.webhookUrl!)).toBe(p.webhookUrl);
+          expect(() => new URL(p.webhookUrl!)).not.toThrow();
         }
         if ('url' in p) {
           expect(normalizeUrl(p.url!)).toBe(p.url);
