@@ -1,5 +1,8 @@
+import type { DomainDecomposition, DomainLabelEntropy } from './types.js';
+
 /**
  * Shannon entropy and lexical analysis for DGA and randomized ad tracker detection.
+ * @beta
  */
 
 export function calculateShannonEntropy(str: string): number {
@@ -83,3 +86,40 @@ export function detectDgaPatterns(domain: string): DgaDetectionResult {
     reasons,
   };
 }
+
+/**
+ * Decomposes domain into SLD, TLD, subdomains and calculates Shannon entropy for each label.
+ * @beta
+ */
+export function decomposeDomain(domain: string): DomainDecomposition {
+  const clean = domain.toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0].split(':')[0];
+  const parts = clean.split('.').filter(Boolean);
+
+  if (parts.length <= 1) {
+    const ent = calculateShannonEntropy(clean);
+    return {
+      sld: clean,
+      tld: '',
+      subdomains: [],
+      labelEntropies: [{ label: clean, entropy: ent, isSuspicious: ent >= 3.8 }],
+    };
+  }
+
+  const tld = parts[parts.length - 1];
+  const sld = parts[parts.length - 2];
+  const subdomains = parts.slice(0, parts.length - 2);
+
+  const labelEntropies: DomainLabelEntropy[] = parts.map((label) => {
+    const entropy = calculateShannonEntropy(label);
+    const isSuspicious = label.length >= 7 && entropy >= 3.6;
+    return { label, entropy, isSuspicious };
+  });
+
+  return {
+    sld,
+    tld,
+    subdomains,
+    labelEntropies,
+  };
+}
+

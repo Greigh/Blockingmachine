@@ -51,7 +51,7 @@ contextBridge.exposeInMainWorld('electron', {
   setTheme: (theme: ThemeType) => ipcRenderer.invoke('set-theme', theme),
   getModuleContent: (moduleName: string) => ipcRenderer.invoke('get-module-content', moduleName) as Promise<string | null>,
 
-  // AI Radar Methods
+  // AI Radar Methods [Beta]
   aiScanDomain: (domain: string, config?: any) => ipcRenderer.invoke('ai-scan-domain', domain, config),
   aiScanQueryLog: (options: { service: 'adguard' | 'pihole'; limit?: number }, config?: any) =>
     ipcRenderer.invoke('ai-scan-querylog', options, config),
@@ -60,6 +60,13 @@ contextBridge.exposeInMainWorld('electron', {
   setAiConfig: (config: any) => ipcRenderer.invoke('set-ai-config', config),
   testAiConnection: (config: any) => ipcRenderer.invoke('test-ai-connection', config),
   addCustomRules: (rules: string[]) => ipcRenderer.invoke('add-custom-rules', rules),
+  getThreatQuarantine: () => ipcRenderer.invoke('get-threat-quarantine'),
+  addThreatQuarantine: (items: any[]) => ipcRenderer.invoke('add-threat-quarantine', items),
+  removeThreatQuarantineItem: (id: string) => ipcRenderer.invoke('remove-threat-quarantine-item', id),
+  clearThreatQuarantine: () => ipcRenderer.invoke('clear-threat-quarantine'),
+  getAiWatchdogConfig: () => ipcRenderer.invoke('get-ai-watchdog-config'),
+  setAiWatchdogConfig: (config: any) => ipcRenderer.invoke('set-ai-watchdog-config', config),
+  addCustomAllowlist: (domain: string) => ipcRenderer.invoke('add-custom-allowlist', domain),
 
   onUpdateAvailable: (callback: (info: UpdateInfo) => void) => {
     const handler = (_event: IpcRendererEvent, info: UpdateInfo) => callback(info);

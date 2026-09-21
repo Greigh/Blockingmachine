@@ -1,8 +1,10 @@
 import {
   calculateShannonEntropy,
   detectDgaPatterns,
+  decomposeDomain,
   resolveCnameChain,
   synthesizeRules,
+  synthesizeAllowlistRule,
   AiDetectorService,
   KNOWN_CLOAKED_TARGETS,
 } from '../index.js';
@@ -127,5 +129,44 @@ describe('AI Ad & Tracker Discovery Engine', () => {
       expect(res.flaggedCount).toBeGreaterThanOrEqual(2);
       expect(res.cleanCount).toBeGreaterThanOrEqual(1);
     });
+
+    it('protects known safe infrastructure via false positive guard', async () => {
+      const res = await service.scanDomain('cdnjs.cloudflare.com');
+      expect(res.verdict).toBe('clean');
+      expect(res.confidence).toBe(99);
+      expect(res.reasons[0]).toContain('False Positive Guard');
+    });
+
+    it('honors user custom allowlist', async () => {
+      const customAllow = ['custom-internal-portal.local'];
+      const res = await service.scanDomain('ad.custom-internal-portal.local', { allowlist: customAllow });
+      expect(res.verdict).toBe('clean');
+      expect(res.confidence).toBe(99);
+    });
+
+    it('returns label decomposition and individual entropies', async () => {
+      const res = await service.scanDomain('bidder-eu.rtb-ad-network.bid');
+      expect(res.decomposition).toBeDefined();
+      expect(res.decomposition?.sld).toBe('rtb-ad-network');
+      expect(res.decomposition?.tld).toBe('bid');
+      expect(res.decomposition?.subdomains).toContain('bidder-eu');
+      expect(res.decomposition?.labelEntropies.length).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  describe('Allowlist Rule Synthesizer', () => {
+    it('synthesizes standard ABP exception rule for false positive whitelisting', () => {
+      const rule = synthesizeAllowlistRule('essential-service.com');
+      expect(rule).toBe('@@||essential-service.com^');
+    });
+  });
+
+  describe('Domain Decomposition', () => {
+    it('correctly separates subdomains, SLD, and TLD with entropy measurements', () => {
+      const decomp = decomposeDomain('eu-west-1.telemetry.example.co.uk');
+      expect(decomp.subdomains.length).toBeGreaterThan(0);
+      expect(decomp.labelEntropies.length).toBe(5);
+    });
   });
 });
+

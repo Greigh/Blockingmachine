@@ -50,8 +50,8 @@ export const Header: React.FC<HeaderProps> = ({
         };
       case 'ai-radar':
         return {
-          title: 'AI Defense Radar',
-          desc: 'Real-time AI scanner for shifting ad servers, ephemeral bidding hostnames, and CNAME cloaking',
+          title: 'AI Defense Radar [Beta]',
+          desc: 'Real-time AI scanner for shifting ad servers, ephemeral bidding hostnames, and CNAME cloaking (Beta)',
         };
       case 'settings':
         return {
