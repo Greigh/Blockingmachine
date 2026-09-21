@@ -61,20 +61,30 @@ const HIGH_PROFILE_BRANDS = [
 function computeLevenshtein(a: string, b: string): number {
   const m = a.length;
   const n = b.length;
-  const dp = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  if (Math.abs(m - n) > 2) return Math.abs(m - n);
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  let prevRow = new Array<number>(n + 1);
+  let currRow = new Array<number>(n + 1);
+
+  for (let j = 0; j <= n; j++) prevRow[j] = j;
+
   for (let i = 1; i <= m; i++) {
+    currRow[0] = i;
     for (let j = 1; j <= n; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,
-        dp[i][j - 1] + 1,
-        dp[i - 1][j - 1] + cost,
+      currRow[j] = Math.min(
+        prevRow[j] + 1,
+        currRow[j - 1] + 1,
+        prevRow[j - 1] + cost,
       );
     }
+    const temp = prevRow;
+    prevRow = currRow;
+    currRow = temp;
   }
-  return dp[m][n];
+  return prevRow[n];
 }
 
 export interface DomainFeatureVector {
@@ -258,10 +268,12 @@ export function extractDomainFeatures(
         brandSpoofScore = 1.0;
         break;
       }
-      const directDist = computeLevenshtein(sldLower, brand);
-      if (directDist === 1 || (brand.length >= 6 && directDist === 2)) {
-        brandSpoofScore = 1.0;
-        break;
+      if (Math.abs(sldLower.length - brand.length) <= 2) {
+        const directDist = computeLevenshtein(sldLower, brand);
+        if (directDist === 1 || (brand.length >= 6 && directDist === 2)) {
+          brandSpoofScore = 1.0;
+          break;
+        }
       }
       if (sldLower.includes(brand) && sldLower.length > brand.length) {
         if (/login|verify|security|auth|update|account|support|wallet|token|claim/i.test(sldLower)) {
@@ -277,10 +289,12 @@ export function extractDomainFeatures(
             break;
           }
         }
-        const tokDist = computeLevenshtein(tok, brand);
-        if (tokDist === 1 || (brand.length >= 6 && tokDist === 2)) {
-          brandSpoofScore = 1.0;
-          break;
+        if (Math.abs(tok.length - brand.length) <= 2) {
+          const tokDist = computeLevenshtein(tok, brand);
+          if (tokDist === 1 || (brand.length >= 6 && tokDist === 2)) {
+            brandSpoofScore = 1.0;
+            break;
+          }
         }
       }
       if (brandSpoofScore > 0) break;
