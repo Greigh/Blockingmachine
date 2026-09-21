@@ -204,9 +204,7 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
               style={{ padding: '2px 8px', fontSize: '0.75rem', borderRadius: '4px', cursor: 'pointer' }}
               onClick={() => {
                 const text = rules.map((r) => r.raw).join('\n');
-                navigator.clipboard.writeText(text);
-                setCopiedIndex(-1);
-                setTimeout(() => setCopiedIndex(null), 1800);
+                handleCopy(text, -1);
               }}
               title="Copy all rules currently visible on this page"
             >

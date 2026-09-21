@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { FilterFormat, FeedServerStatus, SinkholeTestResult, SinkholeConfig } from '../types/';
 
 interface DeployHubViewProps {
@@ -14,6 +14,19 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   onNavigateSettings,
   onTriggerCompile,
 }) => {
+  const isMountedRef = useRef(true);
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const safeSetTimeout = useCallback((fn: () => void, delayMs: number) => {
+    const id = setTimeout(() => {
+      if (isMountedRef.current) {
+        fn();
+      }
+    }, delayMs);
+    timersRef.current.push(id);
+    return id;
+  }, []);
+
   const [activeTab, setActiveTab] = useState<PlatformTab>('adguard-home');
   const [exportFormat, setExportFormat] = useState<FilterFormat>('adguard');
   const [serverStatus, setServerStatus] = useState<FeedServerStatus | null>(null);
@@ -58,35 +71,35 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
 
   // Load configuration & server status on mount
   useEffect(() => {
-    let isMounted = true;
+    isMountedRef.current = true;
 
     if (window.electron?.getExportFormat) {
       window.electron.getExportFormat().then((fmt) => {
-        if (isMounted && fmt) setExportFormat(fmt);
+        if (isMountedRef.current && fmt) setExportFormat(fmt);
       });
     }
 
     if (window.electron?.getFeedServerStatus) {
       window.electron.getFeedServerStatus().then((status) => {
-        if (isMounted) setServerStatus(status);
+        if (isMountedRef.current) setServerStatus(status);
       });
     }
 
     if (window.electron?.getLastProcessTime) {
       window.electron.getLastProcessTime().then((time) => {
-        if (isMounted) setLastProcessTime(time);
+        if (isMountedRef.current) setLastProcessTime(time);
       });
     }
 
     if (window.electron?.getCompiledRules) {
       window.electron.getCompiledRules({ limit: 1 }).then((res) => {
-        if (isMounted && res?.total) setUniqueRulesCount(res.total);
+        if (isMountedRef.current && res?.total) setUniqueRulesCount(res.total);
       });
     }
 
     if (window.electron?.getSinkholeConfig) {
       window.electron.getSinkholeConfig().then((cfg) => {
-        if (isMounted && cfg) {
+        if (isMountedRef.current && cfg) {
           setSinkholeConfig({
             ...cfg,
             adguardMode: cfg.adguardMode || 'direct',
@@ -105,17 +118,23 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     }
 
     return () => {
-      isMounted = false;
+      isMountedRef.current = false;
+      for (const t of timersRef.current) {
+        clearTimeout(t);
+      }
+      timersRef.current = [];
     };
   }, []);
 
   const handleCopy = useCallback((text: string, key: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(text);
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 2400);
+      if (isMountedRef.current) {
+        setCopiedKey(key);
+        safeSetTimeout(() => setCopiedKey(null), 2400);
+      }
     }
-  }, []);
+  }, [safeSetTimeout]);
 
   const handleToggleFeedServer = async () => {
     if (!window.electron) return;
@@ -165,8 +184,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     if (window.electron?.setSinkholeConfig) {
       try {
         await window.electron.setSinkholeConfig(updated);
-        setSinkholeMessage(enabled ? '✓ Auto-push on compile enabled' : 'Auto-push disabled');
-        setTimeout(() => setSinkholeMessage(null), 3000);
+        if (isMountedRef.current) {
+          setSinkholeMessage(enabled ? '✓ Auto-push on compile enabled' : 'Auto-push disabled');
+          safeSetTimeout(() => setSinkholeMessage(null), 3000);
+        }
       } catch (err: any) {
         console.error('Failed to update sync on compile:', err);
       }
@@ -179,16 +200,22 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     setSinkholeMessage(null);
     try {
       await window.electron.setSinkholeConfig(sinkholeConfig);
-      setSinkholeMessage('✓ Connection settings saved successfully!');
-      setTimeout(() => setSinkholeMessage(null), 3500);
+      if (isMountedRef.current) {
+        setSinkholeMessage('✓ Connection settings saved successfully!');
+        safeSetTimeout(() => setSinkholeMessage(null), 3500);
+      }
 
       // Trigger instant connection test to confirm credentials work
       handleTestConnection(service);
     } catch (err: any) {
-      setSinkholeMessage(`Failed to save: ${err?.message || err}`);
-      setTimeout(() => setSinkholeMessage(null), 4000);
+      if (isMountedRef.current) {
+        setSinkholeMessage(`Failed to save: ${err?.message || err}`);
+        safeSetTimeout(() => setSinkholeMessage(null), 4000);
+      }
     } finally {
-      setIsSavingSinkhole(false);
+      if (isMountedRef.current) {
+        setIsSavingSinkhole(false);
+      }
     }
   };
 
@@ -1619,8 +1646,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                                 ...sinkholeConfig,
                                 customWebhookUrl,
                               });
-                              setSinkholeMessage('✓ Custom webhook URL saved!');
-                              setTimeout(() => setSinkholeMessage(null), 3000);
+                              if (isMountedRef.current) {
+                                setSinkholeMessage('✓ Custom webhook URL saved!');
+                                safeSetTimeout(() => setSinkholeMessage(null), 3000);
+                              }
                             }
                           }}
                         >

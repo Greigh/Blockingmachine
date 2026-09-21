@@ -162,13 +162,14 @@ async function generateAdditionalFormats(adguardFilePath) {
     const content = await fs.readFile(adguardFilePath, 'utf-8');
     const lines = content.split('\n');
     
-    // Collect rules skipped due to modifiers (single pass audit)
-    const skippedModifierRules = [];
+    // Collect rules skipped due to modifiers (single pass audit using Set for O(N) deduplication)
+    const skippedModifierRulesSet = new Set();
     lines.forEach((line) => {
       if (line && line.includes('$') && !line.trim().startsWith('!')) {
-        if (!skippedModifierRules.includes(line)) skippedModifierRules.push(line);
+        skippedModifierRulesSet.add(line);
       }
     });
+    const skippedModifierRules = Array.from(skippedModifierRulesSet);
 
     // Generate hosts format
     const hostsRules = [];
