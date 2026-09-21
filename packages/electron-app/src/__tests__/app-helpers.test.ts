@@ -1,5 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import { resolve, join } from 'path';
+import { existsSync, readFileSync } from 'fs';
 import { cleanDomainPattern } from '@blockingmachine/core';
 
 describe('Electron App Core Utilities & IPC Logic', () => {
@@ -265,16 +266,19 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       }
     });
 
-    test('registers all 6 first-party Blockingmachine [Beta] modules and Defense Suite bundle', async () => {
+    test('registers all 8 first-party Blockingmachine [Beta] modules and Defense Suite bundle', async () => {
       const { PRESET_BUNDLES, PRESET_CATALOG } = await import('../views/PresetsModal.js');
       const { CURATED_SOURCE_PROFILES } = await import('@blockingmachine/core');
+      const { NATIVE_DEFENSE_MODULES } = await import('../views/ModulesView.js');
 
       const expectedBetaNames = [
+        'Blockingmachine Base Ad Shield [Beta]',
         'Blockingmachine Privacy Engine [Beta]',
         'Blockingmachine Smart TV & IoT Shield [Beta]',
         'Blockingmachine Web Annoyances & Cookie Banners [Beta]',
         'Blockingmachine Social Tracker Neutralizer [Beta]',
         'Blockingmachine Threat & Malicious Domain Defense [Beta]',
+        'Blockingmachine URL Tracking Stripper [Beta]',
         'Blockingmachine Unbreak & Safe Exceptions [Beta]',
       ];
 
@@ -287,14 +291,51 @@ describe('Electron App Core Utilities & IPC Logic', () => {
         expect(coreEntry).toBeDefined();
         expect(coreEntry?.trusted).toBe(true);
         expect(coreEntry?.priority).toBe(0);
+
+        const nativeModule = NATIVE_DEFENSE_MODULES.find((m) => m.name === betaName);
+        expect(nativeModule).toBeDefined();
+        expect(nativeModule?.filename).toMatch(/^blockingmachine-.*\.txt$/);
       }
 
       const suiteBundle = PRESET_BUNDLES.find((b) => b.id === 'blockingmachine-suite');
       expect(suiteBundle).toBeDefined();
       expect(suiteBundle?.name).toBe('Blockingmachine Defense Suite [Beta]');
       expect(suiteBundle?.badge).toContain('Beta');
-      expect(suiteBundle?.items).toHaveLength(6);
-      expect(suiteBundle?.items.map((i) => i.name)).toEqual(expectedBetaNames);
+      expect(suiteBundle?.items).toHaveLength(8);
+      expect(suiteBundle?.items.map((i) => i.name).sort()).toEqual([...expectedBetaNames].sort());
+      expect(NATIVE_DEFENSE_MODULES).toHaveLength(8);
+    });
+
+    test('all 8 native module files exist on disk and have valid adblock header structures', () => {
+      const candidateDirs = [
+        join(process.cwd(), 'filters/modules'),
+        join(process.cwd(), 'packages/electron-app/filters/modules'),
+      ];
+      const modulesDir = candidateDirs.find((d) => existsSync(d)) || '';
+      expect(modulesDir).toBeTruthy();
+
+      const expectedFilenames = [
+        'blockingmachine-base.txt',
+        'blockingmachine-privacy.txt',
+        'blockingmachine-smarttv.txt',
+        'blockingmachine-annoyances.txt',
+        'blockingmachine-social.txt',
+        'blockingmachine-security.txt',
+        'blockingmachine-url-tracking.txt',
+        'blockingmachine-unbreak.txt',
+      ];
+
+      for (const filename of expectedFilenames) {
+        const filePath = join(modulesDir, filename);
+        expect(existsSync(filePath)).toBe(true);
+
+        const content = readFileSync(filePath, 'utf-8');
+        expect(content).toContain('! Title: Blockingmachine ');
+        expect(content).toContain('[Beta]');
+        expect(content).toContain('! Homepage: https://github.com/greigh/blockingmachine');
+        expect(content).toContain('! License: BSD-3-Clause');
+        expect(content.length).toBeGreaterThan(500);
+      }
     });
   });
 

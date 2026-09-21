@@ -116,6 +116,15 @@ export const PRESET_CATALOG: PresetItem[] = [
     recommendedFor: 'Browser extensions (removes embedded social widgets from web layouts)',
   },
   {
+    name: 'Blockingmachine Base Ad Shield [Beta]',
+    url: './filters/modules/blockingmachine-base.txt',
+    scope: 'hybrid',
+    category: 'Advertising',
+    description: 'Native primary advertising network, video ad injection, banner exchange, and sponsored recommendation blocker.',
+    features: ['Cross-web ad blocking', 'Video ad suppression', 'Programmatic bidding filter'],
+    recommendedFor: 'Essential ad-blocking foundation for browsers and network-level sinkholes',
+  },
+  {
     name: 'Blockingmachine Privacy Engine [Beta]',
     url: './filters/modules/blockingmachine-privacy.txt',
     scope: 'hybrid',
@@ -162,6 +171,15 @@ export const PRESET_CATALOG: PresetItem[] = [
     recommendedFor: 'Network firewalls, routers, Pi-hole, and AdGuard Home',
   },
   {
+    name: 'Blockingmachine URL Tracking Stripper [Beta]',
+    url: './filters/modules/blockingmachine-url-tracking.txt',
+    scope: 'browser',
+    category: 'Privacy',
+    description: 'Native query parameter stripper eliminating tracking tokens, click identifiers, and referral parameters across the web.',
+    features: ['Click ID removal (fbclid/gclid)', 'UTM parameter stripping', 'Referral token sanitization'],
+    recommendedFor: 'Browser extensions and content blockers supporting $removeparam rules',
+  },
+  {
     name: 'Blockingmachine Unbreak & Safe Exceptions [Beta]',
     url: './filters/modules/blockingmachine-unbreak.txt',
     scope: 'hybrid',
@@ -185,17 +203,10 @@ export const PRESET_BUNDLES: PresetBundle[] = [
   {
     id: 'blockingmachine-suite',
     name: 'Blockingmachine Defense Suite [Beta]',
-    description: 'Our complete native modular defense suite: Privacy Engine, Smart TV & IoT Shield, Web Annoyances, Social Neutralizer, Threat Defense, and Safe Exceptions.',
+    description: 'Our complete 8-part native modular defense suite: Base Ads, Privacy Engine, Smart TV & IoT Shield, Web Annoyances, Social Neutralizer, Threat Defense, URL Tracking Stripper, and Safe Exceptions.',
     badge: '★ First-Party Beta',
     category: 'Full Defense [Beta]',
-    items: [
-      PRESET_CATALOG[11], // Privacy Engine [Beta]
-      PRESET_CATALOG[12], // Smart TV & IoT Shield [Beta]
-      PRESET_CATALOG[13], // Web Annoyances [Beta]
-      PRESET_CATALOG[14], // Social Tracker Neutralizer [Beta]
-      PRESET_CATALOG[15], // Threat Defense [Beta]
-      PRESET_CATALOG[16], // Unbreak & Exceptions [Beta]
-    ],
+    items: PRESET_CATALOG.filter((p) => p.name.startsWith('Blockingmachine ')),
   },
   {
     id: 'essential',

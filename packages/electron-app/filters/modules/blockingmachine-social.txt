@@ -1,6 +1,6 @@
 ! Title: Blockingmachine Social Tracker Neutralizer [Beta]
 ! Description: Neutralizes cross-site tracking beacons, embedded share widgets, and social pixels without breaking direct visits to social media sites.
-! Version: 1.0.0-beta.1
+! Version: 1.0.0-beta.2
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
@@ -10,16 +10,18 @@
 ||connect.facebook.net/en_US/fbevents.js$third-party
 ||pixel.facebook.com^
 ||facebook.com/tr$third-party
-||graph.facebook.com^$domain=~facebook.com|~instagram.com|~messenger.com|~whatsapp.com
+||graph.facebook.com^$domain=~facebook.com|~instagram.com|~messenger.com|~whatsapp.com|~threads.net
 
-! --- Twitter / X Embedded Widgets ---
+! --- Twitter / X Embedded Widgets & Pixels ---
 ||platform.twitter.com/widgets.js$third-party
 ||syndication.twitter.com^$third-party
 ||static.ads-twitter.com^
+||analytics.twitter.com^$third-party
 
 ! --- LinkedIn & Professional Trackers ---
 ||platform.linkedin.com/in.js$third-party
 ||snap.licdn.com/li.lms-analytics/insight.min.js$third-party
+||px.ads.linkedin.com^
 
 ! --- TikTok, Snapchat & Pinterest Pixels ---
 ||analytics.tiktok.com^$third-party
@@ -27,3 +29,19 @@
 ||sc-static.net/scevent.min.js$third-party
 ||widgets.pinterest.com^$third-party
 ||ct.pinterest.com^$third-party
+||log.pinterest.com^$third-party
+
+! --- Reddit, Threads & Other Social Trackers ---
+||alb.reddit.com^$third-party
+||events.redditmedia.com^$third-party
+||embed.reddit.com/widgets.js$third-party
+||telegram.org/js/telegram-widget.js$third-party
+||platform.tumblr.com/v1/share.js$third-party
+
+! --- Cosmetic Social Widget Suppressions ---
+##.fb-like
+##.fb-share-button
+##.twitter-share-button
+##.linkedin-share-button
+##.social-share-bar
+##.social-floating-share

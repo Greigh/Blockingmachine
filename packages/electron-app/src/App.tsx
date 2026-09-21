@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { DashboardView } from './views/DashboardView';
 import { SourcesView } from './views/SourcesView';
+import { ModulesView } from './views/ModulesView';
 import { BulkImportView } from './views/BulkImportView';
 import { CustomRulesView } from './views/CustomRulesView';
 import { RuleInspectorView } from './views/RuleInspectorView';
@@ -261,6 +262,9 @@ function App() {
         } else if (e.key === '7') {
           e.preventDefault();
           setCurrentView('deploy');
+        } else if (e.key === '8') {
+          e.preventDefault();
+          setCurrentView('modules');
         } else if (e.key === ',') {
           e.preventDefault();
           setCurrentView('settings');
@@ -389,6 +393,19 @@ function App() {
               <SourcesView
                 sources={sources}
                 saveSources={saveSources}
+                setError={setGlobalError}
+                setSuccessMessage={setGlobalSuccessMessage}
+              />
+            )}
+            {currentView === 'modules' && (
+              <ModulesView
+                sources={sources}
+                saveSources={saveSources}
+                onTriggerCompile={() => {
+                  setAutoTriggerCompile(true);
+                  setCurrentView('process');
+                }}
+                onNavigateDeploy={() => setCurrentView('deploy')}
                 setError={setGlobalError}
                 setSuccessMessage={setGlobalSuccessMessage}
               />

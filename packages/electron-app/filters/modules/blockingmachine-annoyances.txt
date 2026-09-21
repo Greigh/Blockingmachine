@@ -1,6 +1,6 @@
 ! Title: Blockingmachine Web Annoyances & Cookie Banners [Beta]
 ! Description: Blocks GDPR cookie overlays, newsletter popups, floating prompts, and anti-adblock nags.
-! Version: 1.0.0-beta.1
+! Version: 1.0.0-beta.2
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
@@ -24,18 +24,42 @@
 ||global.ketchcdn.com^
 ||didomi.io^
 ||privacy-center.org^
+||complianz.io^
+||cdn.iubenda.com/cookie_solution^
+||iubenda.com/cs^
+||axeptio.eu^
+||static.axept.io^
+
+! --- Push Notification & Survey Nags ---
+||onesignal.com^
+||api.onesignal.com^
+||pushwoosh.com^
+||webpush.pushwoosh.com^
+||wonderpush.com^
+||cdn.wonderpush.com^
+||survicate.com^
+||qualtrics.com^
+||siteintercept.qualtrics.com^
 
 ! --- Generic Cosmetic Annoyance Suppressions ---
 ##.cookie-banner
 ##.cookie-modal
 ##.cookie-notice
 ##.cookie-consent
+##.cookie-popup
 ##.gdpr-banner
 ##.gdpr-modal
 ##.consent-modal
 ##.consent-banner
+##.consent-prompt
 ##.newsletter-popup
 ##.newsletter-modal
 ##.email-signup-modal
+##.email-capture-popup
 ##.app-download-banner
 ##.smart-app-banner
+##.floating-cta-prompt
+##.push-notification-prompt
+##[id*="cookie-notice"]
+##[id*="cookie-banner"]
+##[id*="consent-popup"]

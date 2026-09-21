@@ -1,0 +1,72 @@
+! Title: Blockingmachine Base Ad Shield [Beta]
+! Description: Primary network-level and browser shield blocking banner ad exchanges, video ad injection, programmatic bidding, and sponsored recommendation networks.
+! Version: 1.0.0-beta.1
+! Expires: 2 days
+! Homepage: https://github.com/greigh/blockingmachine
+! License: BSD-3-Clause
+
+! --- Major Ad Exchanges, SSPs & Programmatic Bidding ---
+||doubleclick.net^
+||googlesyndication.com^
+||googleadservices.com^
+||adnxs.com^
+||ib.adnxs.com^
+||pubmatic.com^
+||ads.pubmatic.com^
+||openx.net^
+||rubiconproject.com^
+||criteo.com^
+||static.criteo.net^
+||criteo.net^
+||media.net^
+||contextual.media.net^
+||sovrn.com^
+||lijit.com^
+||ap.lijit.com^
+||sharethrough.com^
+||triplelift.com^
+||ib.3lift.com^
+||casalemedia.com^
+||indexexchange.com^
+||smartadserver.com^
+||diff.smartadserver.com^
+||inmobi.com^
+||smaato.net^
+||adform.net^
+||yieldmo.com^
+||adroll.com^
+||d.adroll.com^
+||bidswitch.net^
+||taboola.com^
+||cdn.taboola.com^
+||trc.taboola.com^
+||outbrain.com^
+||widgets.outbrain.com^
+||log.outbrain.com^
+||revcontent.com^
+||trends.revcontent.com^
+||mgid.com^
+||nativo.com^
+||content.ad^
+
+! --- Video Ad Injection & Dynamic Insertion ---
+||freewheel.tv^
+||fwmrm.net^
+||spotxchange.com^
+||spotx.tv^
+||innovid.com^
+||tremorhub.com^
+||springserve.com^
+
+! --- Generic Cosmetic Ad & Banner Suppressions ---
+##.ad-container
+##.ad-banner
+##.ad-wrapper
+##.ad-unit
+##.ad-slot
+##.advertisement
+##.sponsor-banner
+##.sponsored-content-module
+##.dfp-ad
+##[id^="google_ads_iframe"]
+##[id^="div-gpt-ad"]

@@ -1,11 +1,11 @@
 ! Title: Blockingmachine Threat & Malicious Domain Defense [Beta]
 ! Description: Proactive network-level and DNS blocking of phishing gateways, rogue redirects, drive-by malware, and in-browser cryptominers.
-! Version: 1.0.0-beta.1
+! Version: 1.0.0-beta.2
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
 
-! --- In-Browser Cryptomining Scripts & Pools ---
+! --- In-Browser Cryptomining Scripts & Mining Pools ---
 ||coinhive.com^
 ||coin-hive.com^
 ||jsecoin.com^
@@ -15,6 +15,9 @@
 ||monerominer.rocks^
 ||authedmine.com^
 ||coinhive.min.js^
+||minr.pw^
+||crypto-loot.com^
+||cloudcoins.co^
 
 ! --- Aggressive Scam & Rogue Ad Redirect Networks ---
 ||trafficjunky.com^
@@ -28,3 +31,16 @@
 ||juicyads.com^
 ||hilltopads.com^
 ||yllix.com^
+||clicksor.com^
+||traffic-media.co^
+||ad-maven.com^
+||richpush.co^
+
+! --- Rogue Notification Spammers & Fake Captcha Gateways ---
+||robot-check.site^
+||verify-robot.online^
+||allow-notifications.top^
+||press-allow.com^
+||fast-redirect-net.com^
+||captcha-verification.online^
+||check-robot.website^

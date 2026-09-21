@@ -1,11 +1,11 @@
 ! Title: Blockingmachine Unbreak & Safe Exceptions [Beta]
-! Description: Hand-crafted exception allowlist rules for banking portals, SSO authentication, delivery tracking, and essential smart home integrations to prevent site breakage.
-! Version: 1.0.0-beta.1
+! Description: Hand-crafted exception allowlist rules for banking portals, SSO authentication, delivery tracking, streaming playback, and essential smart home integrations to prevent site breakage.
+! Version: 1.0.0-beta.2
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
 
-! --- Banking & Financial Services Fixes ---
+! --- Banking, Checkout & Payment Gateways ---
 @@||brave.com^$important
 @@||tracking.sp.sofi.com^$important
 @@||usbank.com.ssl.d2.sc.omtrdc.net^$important
@@ -15,8 +15,13 @@
 @@||smetrics.usbank.com^$important
 @@||usbank.demdex.net^$important
 @@||usbank-sync.quantummetric.com^$important
+@@||paypal.com^$important
+@@||paypalobjects.com^$important
+@@||stripe.com^$important
+@@||js.stripe.com^$important
+@@||apple-pay-gateway.apple.com^$important
 
-! --- Authentication & SSO Exception Fixes ---
+! --- Authentication, SSO & Identity Services ---
 @@||appleid.apple.com^$important
 @@||idmsa.apple.com^$important
 @@||login.microsoftonline.com^$important
@@ -24,8 +29,19 @@
 @@||calendar.google.com^$important
 @@||reminders-pa.clients6.google.com^$important
 @@||ssl.gstatic.com^$important
+@@||okta.com^$important
+@@||auth0.com^$important
+@@||duosecurity.com^$important
 
-! --- Mobile Redirects, Commerce & Logistics ---
+! --- Streaming Media, DRM & Playback Licenses ---
+@@||widevine.com^$important
+@@||license.uat.widevine.com^$important
+@@||fps.apple.com^$important
+@@||playready.microsoft.com^$important
+@@||nflxvideo.net^$important
+@@||audio-ak-spotify-com.akamaized.net^$important
+
+! --- Mobile Redirects, Commerce & Logistics Tracking ---
 @@||onelink.me^$important
 @@||smart.link^$important
 @@||mobile.logs.roku.com^$important
@@ -33,6 +49,9 @@
 @@||click.linksynergy.com^$important
 @@||fedex.sc.omtrdc.net^$important
 @@||fedex.tt.omtrdc.net^$important
+@@||tools.usps.com^$important
+@@||ups.com^$important
+@@||dhl.com^$important
 @@||cvshealth.tt.omtrdc.net^$important
 @@||homedepot.tt.omtrdc.net^$important
 @@||homedepot.com.ssl.d2.sc.omtrdc.net^$important

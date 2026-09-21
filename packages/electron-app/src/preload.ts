@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('electron', {
   testSinkholeConnection: (service: 'pihole' | 'adguard' | 'webhook') => ipcRenderer.invoke('test-sinkhole-connection', service),
   getTheme: () => ipcRenderer.invoke('get-theme'),
   setTheme: (theme: ThemeType) => ipcRenderer.invoke('set-theme', theme),
+  getModuleContent: (moduleName: string) => ipcRenderer.invoke('get-module-content', moduleName) as Promise<string | null>,
 
   onUpdateAvailable: (callback: (info: UpdateInfo) => void) => {
     const handler = (_event: IpcRendererEvent, info: UpdateInfo) => callback(info);

@@ -79,6 +79,19 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     recommendedFor: "Default baseline and repository-level rule overrides",
   },
   {
+    name: "Blockingmachine Base Ad Shield [Beta]",
+    url: "./filters/modules/blockingmachine-base.txt",
+    scope: "hybrid",
+    category: "ads",
+    description:
+      "Native primary advertising network, video ad injection, banner exchange, and sponsored recommendation blocker.",
+    features: ["Cross-web ad blocking", "Video ad suppression", "Programmatic bidding filter"],
+    targets: ["dns", "browser"],
+    trusted: true,
+    priority: 0,
+    recommendedFor: "Essential ad-blocking foundation for browsers and network-level sinkholes",
+  },
+  {
     name: "Blockingmachine Privacy Engine [Beta]",
     url: "./filters/modules/blockingmachine-privacy.txt",
     scope: "hybrid",
@@ -143,6 +156,19 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     trusted: true,
     priority: 0,
     recommendedFor: "Network firewalls, routers, Pi-hole, and AdGuard Home",
+  },
+  {
+    name: "Blockingmachine URL Tracking Stripper [Beta]",
+    url: "./filters/modules/blockingmachine-url-tracking.txt",
+    scope: "browser",
+    category: "privacy",
+    description:
+      "Native query parameter stripper eliminating tracking tokens, click identifiers, and referral parameters across the web.",
+    features: ["Click ID removal (fbclid/gclid)", "UTM parameter stripping", "Referral token sanitization"],
+    targets: ["browser"],
+    trusted: true,
+    priority: 0,
+    recommendedFor: "Browser extensions and content blockers supporting $removeparam rules",
   },
   {
     name: "Blockingmachine Unbreak & Safe Exceptions [Beta]",

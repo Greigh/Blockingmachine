@@ -1,0 +1,47 @@
+! Title: Blockingmachine URL Tracking Stripper [Beta]
+! Description: Advanced filter stripping tracking tokens, click identifiers, and marketing referral parameters from URLs across the web.
+! Version: 1.0.0-beta.1
+! Expires: 2 days
+! Homepage: https://github.com/greigh/blockingmachine
+! License: BSD-3-Clause
+
+! --- Meta / Facebook Click Identifiers ---
+*$removeparam=fbclid
+*$removeparam=igshid
+
+! --- Google Ads, Campaign & Analytics Tokens ---
+*$removeparam=gclid
+*$removeparam=gclsrc
+*$removeparam=dclid
+*$removeparam=gbraid
+*$removeparam=wbraid
+*$removeparam=srsltid
+
+! --- Standard UTM Marketing Parameters ---
+*$removeparam=utm_source
+*$removeparam=utm_medium
+*$removeparam=utm_campaign
+*$removeparam=utm_term
+*$removeparam=utm_content
+*$removeparam=utm_name
+*$removeparam=utm_cid
+*$removeparam=utm_reader
+*$removeparam=utm_referrer
+
+! --- Microsoft / Bing Click Identifiers ---
+*$removeparam=msclkid
+
+! --- Mailchimp, Marketo, HubSpot & Email ESP Beacons ---
+*$removeparam=mc_eid
+*$removeparam=mc_cid
+*$removeparam=mkt_tok
+*$removeparam=hsCtaTracking
+*$removeparam=_hsenc
+*$removeparam=_hsmi
+*$removeparam=vero_id
+*$removeparam=_openstat
+
+! --- Twitter / X & Yandex Click Tokens ---
+*$removeparam=twclid
+*$removeparam=yclid
+*$removeparam=wickedid
