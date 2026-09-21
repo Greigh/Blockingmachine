@@ -1,0 +1,38 @@
+! Title: Blockingmachine Unbreak & Safe Exceptions [Beta]
+! Description: Hand-crafted exception allowlist rules for banking portals, SSO authentication, delivery tracking, and essential smart home integrations to prevent site breakage.
+! Version: 1.0.0-beta.1
+! Expires: 2 days
+! Homepage: https://github.com/greigh/blockingmachine
+! License: BSD-3-Clause
+
+! --- Banking & Financial Services Fixes ---
+@@||brave.com^$important
+@@||tracking.sp.sofi.com^$important
+@@||usbank.com.ssl.d2.sc.omtrdc.net^$important
+@@||ally.tt.omtrdc.net^$important
+@@||ally.com.ssl.d1.sc.omtrdc.net^$important
+@@||analytics.chase.com^$important
+@@||smetrics.usbank.com^$important
+@@||usbank.demdex.net^$important
+@@||usbank-sync.quantummetric.com^$important
+
+! --- Authentication & SSO Exception Fixes ---
+@@||appleid.apple.com^$important
+@@||idmsa.apple.com^$important
+@@||login.microsoftonline.com^$important
+@@||accounts.google.com^$important
+@@||calendar.google.com^$important
+@@||reminders-pa.clients6.google.com^$important
+@@||ssl.gstatic.com^$important
+
+! --- Mobile Redirects, Commerce & Logistics ---
+@@||onelink.me^$important
+@@||smart.link^$important
+@@||mobile.logs.roku.com^$important
+@@||bestbuy.7tiv.net^$important
+@@||click.linksynergy.com^$important
+@@||fedex.sc.omtrdc.net^$important
+@@||fedex.tt.omtrdc.net^$important
+@@||cvshealth.tt.omtrdc.net^$important
+@@||homedepot.tt.omtrdc.net^$important
+@@||homedepot.com.ssl.d2.sc.omtrdc.net^$important

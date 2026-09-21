@@ -1,4 +1,5 @@
 import { describe, test, expect } from '@jest/globals';
+import { resolve, join } from 'path';
 import { cleanDomainPattern } from '@blockingmachine/core';
 
 describe('Electron App Core Utilities & IPC Logic', () => {
@@ -239,7 +240,7 @@ describe('Electron App Core Utilities & IPC Logic', () => {
 
       for (const preset of PRESET_CATALOG) {
         expect(preset.name).toBeTruthy();
-        expect(preset.url).toMatch(/^https?:\/\//);
+        expect(preset.url).toMatch(/^(https?:\/\/|\.\/filters\/modules\/)/);
         expect(['dns', 'browser', 'hybrid']).toContain(preset.scope);
         expect(preset.category).toBeTruthy();
         expect(preset.description).toBeTruthy();
@@ -257,11 +258,43 @@ describe('Electron App Core Utilities & IPC Logic', () => {
 
         for (const item of bundle.items) {
           expect(item.name).toBeTruthy();
-          expect(item.url).toMatch(/^https?:\/\//);
+          expect(item.url).toMatch(/^(https?:\/\/|\.\/filters\/modules\/)/);
           expect(['dns', 'browser', 'hybrid']).toContain(item.scope);
           expect(item.category).toBeTruthy();
         }
       }
+    });
+
+    test('registers all 6 first-party Blockingmachine [Beta] modules and Defense Suite bundle', async () => {
+      const { PRESET_BUNDLES, PRESET_CATALOG } = await import('../views/PresetsModal.js');
+      const { CURATED_SOURCE_PROFILES } = await import('@blockingmachine/core');
+
+      const expectedBetaNames = [
+        'Blockingmachine Privacy Engine [Beta]',
+        'Blockingmachine Smart TV & IoT Shield [Beta]',
+        'Blockingmachine Web Annoyances & Cookie Banners [Beta]',
+        'Blockingmachine Social Tracker Neutralizer [Beta]',
+        'Blockingmachine Threat & Malicious Domain Defense [Beta]',
+        'Blockingmachine Unbreak & Safe Exceptions [Beta]',
+      ];
+
+      for (const betaName of expectedBetaNames) {
+        const catalogEntry = PRESET_CATALOG.find((p) => p.name === betaName);
+        expect(catalogEntry).toBeDefined();
+        expect(catalogEntry?.url).toContain('/filters/modules/blockingmachine-');
+
+        const coreEntry = CURATED_SOURCE_PROFILES.find((p) => p.name === betaName);
+        expect(coreEntry).toBeDefined();
+        expect(coreEntry?.trusted).toBe(true);
+        expect(coreEntry?.priority).toBe(0);
+      }
+
+      const suiteBundle = PRESET_BUNDLES.find((b) => b.id === 'blockingmachine-suite');
+      expect(suiteBundle).toBeDefined();
+      expect(suiteBundle?.name).toBe('Blockingmachine Defense Suite [Beta]');
+      expect(suiteBundle?.badge).toContain('Beta');
+      expect(suiteBundle?.items).toHaveLength(6);
+      expect(suiteBundle?.items.map((i) => i.name)).toEqual(expectedBetaNames);
     });
   });
 
@@ -534,6 +567,35 @@ describe('Electron App Core Utilities & IPC Logic', () => {
           expect(() => new URL(p.url!)).not.toThrow();
         }
       }
+    });
+  });
+
+  describe('Feed Server Security & Path Traversal Validation', () => {
+    function isPathWithinAllowedScope(targetFilePath: string, outputDir: string, savePath: string): boolean {
+      const resolvedTarget = resolve(targetFilePath);
+      const resolvedOutputDir = resolve(outputDir);
+      const resolvedSavePath = resolve(savePath);
+      return resolvedTarget.startsWith(resolvedOutputDir) || resolvedTarget === resolvedSavePath;
+    }
+
+    test('permits legitimate files within export directory or exact savePath', () => {
+      const outputDir = '/var/app/output';
+      const savePath = '/var/app/output/blockingmachine.txt';
+
+      expect(isPathWithinAllowedScope(join(outputDir, 'blockingmachine.txt'), outputDir, savePath)).toBe(true);
+      expect(isPathWithinAllowedScope(join(outputDir, 'pihole.txt'), outputDir, savePath)).toBe(true);
+      expect(isPathWithinAllowedScope(join(outputDir, 'adguard.txt'), outputDir, savePath)).toBe(true);
+      expect(isPathWithinAllowedScope(savePath, outputDir, savePath)).toBe(true);
+    });
+
+    test('strictly blocks directory traversal attempts escaping output directory', () => {
+      const outputDir = '/var/app/output';
+      const savePath = '/var/app/output/blockingmachine.txt';
+
+      expect(isPathWithinAllowedScope(join(outputDir, '../secret.key'), outputDir, savePath)).toBe(false);
+      expect(isPathWithinAllowedScope(join(outputDir, '../../etc/passwd'), outputDir, savePath)).toBe(false);
+      expect(isPathWithinAllowedScope('/etc/passwd', outputDir, savePath)).toBe(false);
+      expect(isPathWithinAllowedScope('/var/app/secret.env', outputDir, savePath)).toBe(false);
     });
   });
 });
