@@ -1,6 +1,6 @@
 import { calculateShannonEntropy, detectDgaPatterns, decomposeDomain } from './entropy.js';
 import { resolveCnameChain } from './cnameResolver.js';
-import { synthesizeRules } from './ruleSynthesizer.js';
+import { sanitizeDomain, synthesizeRules } from './ruleSynthesizer.js';
 import type {
   AiProviderConfig,
   AiScanResult,
@@ -11,6 +11,127 @@ import type {
   RiskLevel,
   ThreatCategory,
 } from './types.js';
+
+export interface SafeUrlCheckResult {
+  isSafe: boolean;
+  reason?: string;
+}
+
+/**
+ * Validates whether a target URL is safe for web crawling and canary analysis.
+ * Strictly blocks private RFC 1918 subnets, loopback, link-local metadata (169.254.169.254),
+ * local network hostnames (.local, .lan, localhost), and non-HTTP(S) protocols against SSRF attacks.
+ * @beta
+ */
+export function isSafePublicWebUrl(urlStr: string): SafeUrlCheckResult {
+  if (!urlStr || typeof urlStr !== 'string') {
+    return { isSafe: false, reason: 'URL must be a non-empty string' };
+  }
+
+  let toParse = urlStr.trim();
+  if (/^[a-z][a-z0-9+.-]*:/i.test(toParse)) {
+    if (!/^https?:\/\//i.test(toParse)) {
+      const scheme = toParse.split(':')[0].toLowerCase();
+      return { isSafe: false, reason: `Forbidden protocol "${scheme}:": only http and https are permitted` };
+    }
+  } else {
+    toParse = `https://${toParse}`;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(toParse);
+  } catch {
+    return { isSafe: false, reason: 'Malformed or invalid URL' };
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { isSafe: false, reason: `Forbidden protocol "${parsed.protocol}": only http and https are permitted` };
+  }
+
+  let host = parsed.hostname.toLowerCase().trim();
+  if (host.startsWith('[') && host.endsWith(']')) {
+    host = host.slice(1, -1);
+  }
+
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host.endsWith('.lan') ||
+    host.endsWith('.home.arpa')
+  ) {
+    return { isSafe: false, reason: 'Target resolved to localhost or internal network domain' };
+  }
+
+  if (
+    host === '::1' ||
+    host === '::' ||
+    host.startsWith('fe80:') ||
+    host.startsWith('fc00:') ||
+    host.startsWith('fd00:')
+  ) {
+    return { isSafe: false, reason: 'Target resolved to IPv6 loopback, link-local, or private address' };
+  }
+
+  const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const [o0, o1, o2, o3] = [
+      Number(ipv4Match[1]),
+      Number(ipv4Match[2]),
+      Number(ipv4Match[3]),
+      Number(ipv4Match[4]),
+    ];
+    if (o0 > 255 || o1 > 255 || o2 > 255 || o3 > 255) {
+      return { isSafe: false, reason: 'Invalid IPv4 address' };
+    }
+
+    // Loopback 127.0.0.0/8
+    if (o0 === 127) {
+      return { isSafe: false, reason: 'Target is IPv4 loopback address (127.0.0.0/8)' };
+    }
+    // Unspecified 0.0.0.0/8
+    if (o0 === 0) {
+      return { isSafe: false, reason: 'Target is IPv4 unspecified address (0.0.0.0/8)' };
+    }
+    // Link-local / Cloud metadata 169.254.0.0/16
+    if (o0 === 169 && o1 === 254) {
+      return { isSafe: false, reason: 'Target is link-local or cloud metadata address (169.254.0.0/16)' };
+    }
+    // RFC 1918 Private Subnets
+    if (o0 === 10) {
+      return { isSafe: false, reason: 'Target is RFC 1918 private subnet (10.0.0.0/8)' };
+    }
+    if (o0 === 172 && o1 >= 16 && o1 <= 31) {
+      return { isSafe: false, reason: 'Target is RFC 1918 private subnet (172.16.0.0/12)' };
+    }
+    if (o0 === 192 && o1 === 168) {
+      return { isSafe: false, reason: 'Target is RFC 1918 private subnet (192.168.0.0/16)' };
+    }
+    // Broadcast 255.255.255.255
+    if (o0 === 255 && o1 === 255 && o2 === 255 && o3 === 255) {
+      return { isSafe: false, reason: 'Target is broadcast address' };
+    }
+    // Documentation / Test networks RFC 5737
+    if (o0 === 192 && o1 === 0 && o2 === 2) {
+      return { isSafe: false, reason: 'Target is documentation/test address (192.0.2.0/24)' };
+    }
+    if (o0 === 198 && o1 === 51 && o2 === 100) {
+      return { isSafe: false, reason: 'Target is documentation/test address (198.51.100.0/24)' };
+    }
+    if (o0 === 203 && o1 === 0 && o2 === 113) {
+      return { isSafe: false, reason: 'Target is documentation/test address (203.0.113.0/24)' };
+    }
+  }
+
+  return { isSafe: true };
+}
+
+interface ScanCacheEntry {
+  result: AiScanResult;
+  expiresAt: number;
+}
 
 // Suspicious ad and tracking keyword tokens commonly found in ephemeral ad servers
 const SUSPICIOUS_AD_TOKENS = new Set([
@@ -63,6 +184,11 @@ const KNOWN_SAFE_INFRASTRUCTURE = new Set([
  */
 export class AiDetectorService {
   private defaultConfig: AiProviderConfig;
+  private scanCache = new Map<string, ScanCacheEntry>();
+  private readonly maxCacheEntries = 500;
+  private readonly cacheTtlMs = 15 * 60 * 1000; // 15 minutes
+  private cacheHits = 0;
+  private cacheMisses = 0;
 
   constructor(config?: Partial<AiProviderConfig>) {
     this.defaultConfig = {
@@ -73,7 +199,23 @@ export class AiDetectorService {
       apiEndpoint: config?.apiEndpoint,
       modelName: config?.modelName,
       allowlist: config?.allowlist || [],
+      bypassCache: config?.bypassCache || false,
     };
+  }
+
+  public getCacheStats(): { size: number; maxEntries: number; hits: number; misses: number } {
+    return {
+      size: this.scanCache.size,
+      maxEntries: this.maxCacheEntries,
+      hits: this.cacheHits,
+      misses: this.cacheMisses,
+    };
+  }
+
+  public clearCache(): void {
+    this.scanCache.clear();
+    this.cacheHits = 0;
+    this.cacheMisses = 0;
   }
 
   public updateConfig(config: Partial<AiProviderConfig>) {
@@ -115,10 +257,30 @@ export class AiDetectorService {
     const config = { ...this.defaultConfig, ...overrideConfig };
     const cleanDomain = this.normalizeDomain(domainOrUrl);
 
+    // 0. Check in-memory LRU/TTL cache
+    if (!config.bypassCache) {
+      const cached = this.scanCache.get(cleanDomain);
+      if (cached) {
+        if (Date.now() < cached.expiresAt) {
+          this.cacheHits++;
+          // Refresh LRU position
+          this.scanCache.delete(cleanDomain);
+          this.scanCache.set(cleanDomain, cached);
+          return {
+            ...cached.result,
+            timestamp: new Date().toISOString(),
+          };
+        } else {
+          this.scanCache.delete(cleanDomain);
+        }
+      }
+    }
+    this.cacheMisses++;
+
     // False positive protection guard
     if (this.isSafeInfrastructure(cleanDomain, config.allowlist)) {
       const decomposition = decomposeDomain(cleanDomain);
-      return {
+      const cleanResult: AiScanResult = {
         target: domainOrUrl,
         domain: cleanDomain,
         verdict: 'clean',
@@ -135,6 +297,12 @@ export class AiDetectorService {
         provider: config.provider,
         timestamp: new Date().toISOString(),
       };
+
+      if (!config.bypassCache) {
+        this.setCache(cleanDomain, cleanResult);
+      }
+
+      return cleanResult;
     }
 
     // 1. Run local lexical and entropy analysis
@@ -188,7 +356,7 @@ export class AiDetectorService {
       cnames: cnameInfo.cnames,
     });
 
-    return {
+    const scanResult: AiScanResult = {
       target: domainOrUrl,
       domain: cleanDomain,
       verdict: finalVerdict,
@@ -206,6 +374,23 @@ export class AiDetectorService {
       modelUsed,
       timestamp: new Date().toISOString(),
     };
+
+    if (!config.bypassCache) {
+      this.setCache(cleanDomain, scanResult);
+    }
+
+    return scanResult;
+  }
+
+  private setCache(key: string, result: AiScanResult): void {
+    if (this.scanCache.size >= this.maxCacheEntries) {
+      const oldestKey = this.scanCache.keys().next().value;
+      if (oldestKey) this.scanCache.delete(oldestKey);
+    }
+    this.scanCache.set(key, {
+      result,
+      expiresAt: Date.now() + this.cacheTtlMs,
+    });
   }
 
   /**
@@ -258,6 +443,12 @@ export class AiDetectorService {
       fullUrl = `https://${fullUrl}`;
     }
 
+    // SSRF Guard Check
+    const safety = isSafePublicWebUrl(fullUrl);
+    if (!safety.isSafe) {
+      throw new Error(`SSRF Guard blocked crawl request to "${fullUrl}": ${safety.reason}`);
+    }
+
     const extractedHosts = await this.extractWebpageOrigins(fullUrl);
     const flaggedHosts: AiScanResult[] = [];
     const synthesizedRules: string[] = [];
@@ -284,6 +475,8 @@ export class AiDetectorService {
   // --- Internal Helper Methods ---
 
   private normalizeDomain(input: string): string {
+    const sanitized = sanitizeDomain(input);
+    if (sanitized) return sanitized;
     let clean = input.trim().toLowerCase();
     clean = clean.replace(/^[a-z]+:\/\//i, '');
     clean = clean.split('/')[0];
@@ -513,14 +706,20 @@ Respond ONLY with a valid JSON object matching this schema:
 
   private async extractWebpageOrigins(pageUrl: string): Promise<string[]> {
     const origins = new Set<string>();
+
+    const safeCheck = isSafePublicWebUrl(pageUrl);
+    if (!safeCheck.isSafe) {
+      return [];
+    }
+
     const parsedPageUrl = new URL(pageUrl);
     const mainHost = parsedPageUrl.hostname.toLowerCase();
 
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-      timeout?.unref?.();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    timeout?.unref?.();
 
+    try {
       const res = await fetch(pageUrl, {
         headers: {
           'User-Agent':
@@ -528,12 +727,37 @@ Respond ONLY with a valid JSON object matching this schema:
           Accept: 'text/html,application/xhtml+xml',
         },
         signal: controller.signal,
+        redirect: 'follow',
       });
 
-      clearTimeout(timeout);
       if (!res.ok) return [];
 
-      const html = await res.text();
+      // Open redirect guard: check final destination URL
+      if (res.url && !isSafePublicWebUrl(res.url).isSafe) {
+        return [];
+      }
+
+      // Memory-safe stream reading capped at 2MB to prevent DoS / OOM crashes
+      let html = '';
+      if (res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let totalBytes = 0;
+        const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2 MB limit
+
+        try {
+          while (totalBytes < MAX_HTML_BYTES) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              totalBytes += value.length;
+              html += decoder.decode(value, { stream: true });
+            }
+          }
+        } finally {
+          reader.cancel().catch(() => {});
+        }
+      }
 
       // Extract script src, iframe src, and img src attributes
       const srcMatches = html.matchAll(/(?:src|href)=["'](https?:\/\/[^"'\s>]+)["']/gi);
@@ -559,6 +783,8 @@ Respond ONLY with a valid JSON object matching this schema:
       }
     } catch {
       // Return any collected origins
+    } finally {
+      clearTimeout(timeout);
     }
 
     return Array.from(origins);

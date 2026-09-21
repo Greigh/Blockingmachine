@@ -32,6 +32,9 @@ import {
   filterLists,
   AiDetectorService,
   synthesizeAllowlistRule,
+  sanitizeDomain,
+  isSafePublicWebUrl,
+  isDomainCoveredByRules,
   type AiProviderConfig,
   type RawDnsQuery,
 } from '@blockingmachine/core';
@@ -2161,6 +2164,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('ai-crawl-url', async (_event, url: string, overrideConfig?: Partial<AiProviderConfig>) => {
+      const safety = isSafePublicWebUrl(url);
+      if (!safety.isSafe) {
+        throw new Error(`SSRF Guard blocked crawl request to "${url}": ${safety.reason}`);
+      }
       const savedConfig = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
       const activeConfig = { ...savedConfig, ...overrideConfig };
       const service = new AiDetectorService(activeConfig);
@@ -2177,7 +2184,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         const added: string[] = [];
         for (const rule of newRules) {
           const trimmed = rule.trim();
-          if (trimmed && !existingLines.has(trimmed)) {
+          // Reject multi-line or control character injection
+          if (!trimmed || /[\r\n\0]/.test(trimmed)) continue;
+          if (!existingLines.has(trimmed)) {
             existingLines.add(trimmed);
             added.push(trimmed);
           }
@@ -2251,7 +2260,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     // Smart False Positive Whitelisting [Beta]
     ipcMain.handle('add-custom-allowlist', async (_event, domain: string) => {
       try {
-        const cleanDomain = domain.toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0];
+        const cleanDomain = sanitizeDomain(domain);
+        if (!cleanDomain) {
+          return { success: false, rule: '', error: 'Invalid domain name or syntax' };
+        }
         const allowRule = synthesizeAllowlistRule(cleanDomain);
         const currentCustomRules = (store.get('customRules') as string) || '';
         const existingLines = new Set(
@@ -2269,6 +2281,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       } catch (err: any) {
         return { success: false, rule: '', error: err?.message || String(err) };
       }
+    });
+
+    // Check Rule Coverage [Beta]
+    ipcMain.handle('is-domain-covered-by-rules', async (_event, domain: string) => {
+      const currentCustomRules = (store.get('customRules') as string) || '';
+      const rulesArray = currentCustomRules.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      return isDomainCoveredByRules(domain, rulesArray);
     });
 
     console.log('[Main Process] All IPC handlers registered successfully');

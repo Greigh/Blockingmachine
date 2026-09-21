@@ -319,6 +319,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     try {
       const res = await window.electron.aiScanDomain(target);
       if (isMountedRef.current) {
+        if (window.electron?.isDomainCoveredByRules) {
+          const coverage = await window.electron.isDomainCoveredByRules(res.domain);
+          if (coverage.isCovered) {
+            res.coveredByRule = coverage.coveringRule;
+          }
+        }
         setInspectorResult(res);
 
         if (res.verdict !== 'clean' && window.electron?.addThreatQuarantine) {
@@ -858,7 +864,24 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 {/* Generated Rules */}
                 <div className="generated-rules-section">
                   <div className="rules-section-header">
-                    <h5>Recommended Actions</h5>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-color)' }}>Synthesized Filter Rules</span>
+                      {inspectorResult.coveredByRule && (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            padding: '3px 8px',
+                            borderRadius: 6,
+                            background: 'rgba(16, 185, 129, 0.15)',
+                            color: '#10b981',
+                            border: '1px solid rgba(16, 185, 129, 0.3)',
+                            fontWeight: 600,
+                          }}
+                        >
+                          ✓ Already Covered ({inspectorResult.coveredByRule})
+                        </span>
+                      )}
+                    </div>
                     <div className="rules-actions">
                       <button
                         type="button"
@@ -879,9 +902,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                           <button
                             type="button"
                             className="primary-button"
+                            disabled={blockedItemsMap.has(inspectorResult.domain) || Boolean(inspectorResult.coveredByRule)}
                             onClick={() => handleAddRulesToCustom(inspectorResult.generatedRules, inspectorResult.domain)}
                           >
-                            ＋ Add to Custom Rules
+                            {inspectorResult.coveredByRule ? '✓ Covered in Rules' : blockedItemsMap.has(inspectorResult.domain) ? '✓ In Custom Rules' : '＋ Add to Custom Rules'}
                           </button>
                         </>
                       )}

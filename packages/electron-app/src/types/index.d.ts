@@ -327,6 +327,7 @@ export interface ElectronAPI {
   getAiWatchdogConfig?: () => Promise<AiWatchdogConfig>;
   setAiWatchdogConfig?: (config: Partial<AiWatchdogConfig>) => Promise<{ success: boolean }>;
   addCustomAllowlist?: (domain: string) => Promise<{ success: boolean; rule: string; error?: string }>;
+  isDomainCoveredByRules?: (domain: string) => Promise<{ isCovered: boolean; coveringRule?: string }>;
 
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;

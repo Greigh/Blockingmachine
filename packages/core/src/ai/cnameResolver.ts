@@ -32,12 +32,25 @@ export const KNOWN_CLOAKED_TARGETS: Record<string, string> = {
 };
 
 /**
- * Resolves CNAME chain for a domain with safety timeout.
+ * Resolves CNAME chain for a domain with safety timeout and leak-free cancellation.
+ * @beta
  */
 export async function resolveCnameChain(domain: string, timeoutMs = 2500): Promise<CnameResolutionResult> {
-  const cleanDomain = domain.toLowerCase().trim();
+  const cleanDomain = domain.toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0].split(':')[0];
   const cnames: string[] = [];
   const ips: string[] = [];
+
+  // Reject malformed or local/empty inputs before touching network sockets
+  if (!cleanDomain || cleanDomain === 'localhost' || /[\s\r\n\0]/.test(cleanDomain)) {
+    return {
+      domain: cleanDomain,
+      cnames,
+      ips,
+      hasCnameCloaking: false,
+    };
+  }
+
+  const resolver = new dns.Resolver({ timeout: Math.min(timeoutMs, 2000), tries: 1 });
 
   const resolvePromise = (async () => {
     let current = cleanDomain;
@@ -49,7 +62,7 @@ export async function resolveCnameChain(domain: string, timeoutMs = 2500): Promi
       visited.add(current);
 
       try {
-        const records = await dns.resolveCname(current);
+        const records = await resolver.resolveCname(current);
         if (records && records.length > 0) {
           const nextTarget = records[0].toLowerCase().replace(/\.$/, '');
           cnames.push(nextTarget);
@@ -58,25 +71,32 @@ export async function resolveCnameChain(domain: string, timeoutMs = 2500): Promi
           break;
         }
       } catch {
-        // No further CNAME records
+        // No further CNAME records or cancelled
         break;
       }
     }
 
     // Resolve A records for the final destination
     try {
-      const aRecords = await dns.resolve4(current);
+      const aRecords = await resolver.resolve4(current);
       if (Array.isArray(aRecords)) {
         ips.push(...aRecords.slice(0, 4));
       }
     } catch {
-      // Ignore A record resolution errors
+      // Ignore A record resolution errors or cancelled
     }
   })();
 
   let timer: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, timeoutMs);
+    timer = setTimeout(() => {
+      try {
+        resolver.cancel();
+      } catch {
+        // ignore
+      }
+      resolve();
+    }, timeoutMs);
     timer?.unref?.();
   });
 
@@ -84,6 +104,11 @@ export async function resolveCnameChain(domain: string, timeoutMs = 2500): Promi
     await Promise.race([resolvePromise, timeoutPromise]);
   } finally {
     if (timer) clearTimeout(timer);
+    try {
+      resolver.cancel();
+    } catch {
+      // ignore
+    }
   }
 
   let hasCnameCloaking = false;
