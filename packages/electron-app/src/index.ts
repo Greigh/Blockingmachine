@@ -435,7 +435,10 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
         if (user || pass) {
           headers.Authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
         }
-        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/control/querylog?limit=${limit}`, { headers });
+        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/control/querylog?limit=${limit}`, {
+          headers,
+          signal: AbortSignal.timeout(6000),
+        });
         if (res.ok) {
           const json: any = await res.json();
           const data = Array.isArray(json?.data) ? json.data : [];
@@ -450,7 +453,9 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
       } else if (config.service === 'pihole') {
         const baseUrl = storeRef.get('piholeUrl') || 'http://127.0.0.1';
         const token = storeRef.get('piholeApiKey') || '';
-        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`);
+        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
+          signal: AbortSignal.timeout(6000),
+        });
         if (res.ok) {
           const json: any = await res.json();
           const data = Array.isArray(json?.data) ? json.data : [];
@@ -2039,7 +2044,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       if (provider === 'ollama') {
         const url = config?.ollamaUrl || 'http://127.0.0.1:11434';
         try {
-          const res = await fetch(`${url}/api/tags`);
+          const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
           const latencyMs = Date.now() - start;
           if (res.ok) {
             const data: any = await res.json();
@@ -2056,7 +2061,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         const key = config?.apiKey;
         if (!key) return { success: false, message: 'Missing Gemini API key' };
         try {
-          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`, {
+            signal: AbortSignal.timeout(5000),
+          });
           const latencyMs = Date.now() - start;
           if (res.ok) {
             return { success: true, latencyMs, message: 'Successfully authenticated with Google Gemini API' };
@@ -2074,6 +2081,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         try {
           const res = await fetch(`${endpoint}/models`, {
             headers: { Authorization: `Bearer ${key}` },
+            signal: AbortSignal.timeout(5000),
           });
           const latencyMs = Date.now() - start;
           if (res.ok) {
@@ -2114,7 +2122,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             const auth = Buffer.from(`${user}:${pass}`).toString('base64');
             headers.Authorization = `Basic ${auth}`;
           }
-          const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/control/querylog?limit=${limit}`, { headers });
+          const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/control/querylog?limit=${limit}`, {
+            headers,
+            signal: AbortSignal.timeout(6000),
+          });
           if (res.ok) {
             const json: any = await res.json();
             const data = Array.isArray(json?.data) ? json.data : [];
@@ -2139,7 +2150,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         const token = store.get('piholeApiKey') || '';
 
         try {
-          const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`);
+          const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
+            signal: AbortSignal.timeout(6000),
+          });
           if (res.ok) {
             const json: any = await res.json();
             const data = Array.isArray(json?.data) ? json.data : [];

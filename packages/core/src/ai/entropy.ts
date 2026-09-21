@@ -87,8 +87,25 @@ export function detectDgaPatterns(domain: string): DgaDetectionResult {
   };
 }
 
+// Common two-part public suffixes / ccTLDs
+const COMPOUND_CCTLDS = new Set([
+  'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'me.uk',
+  'com.au', 'net.au', 'org.au', 'edu.au',
+  'co.nz', 'net.nz', 'org.nz',
+  'co.jp', 'ne.jp', 'or.jp',
+  'co.kr', 'ne.kr',
+  'com.br', 'net.br', 'org.br',
+  'com.mx', 'org.mx',
+  'com.sg', 'org.sg',
+  'co.za', 'org.za',
+  'com.tr', 'org.tr',
+  'com.tw', 'org.tw',
+  'com.hk', 'org.hk',
+]);
+
 /**
  * Decomposes domain into SLD, TLD, subdomains and calculates Shannon entropy for each label.
+ * Correctly accounts for compound ccTLDs (e.g. .co.uk, .com.au).
  * @beta
  */
 export function decomposeDomain(domain: string): DomainDecomposition {
@@ -105,9 +122,26 @@ export function decomposeDomain(domain: string): DomainDecomposition {
     };
   }
 
-  const tld = parts[parts.length - 1];
-  const sld = parts[parts.length - 2];
-  const subdomains = parts.slice(0, parts.length - 2);
+  let tld: string;
+  let sld: string;
+  let subdomains: string[];
+
+  if (parts.length >= 3) {
+    const lastTwo = `${parts[parts.length - 2]}.${parts[parts.length - 1]}`;
+    if (COMPOUND_CCTLDS.has(lastTwo)) {
+      tld = lastTwo;
+      sld = parts[parts.length - 3];
+      subdomains = parts.slice(0, parts.length - 3);
+    } else {
+      tld = parts[parts.length - 1];
+      sld = parts[parts.length - 2];
+      subdomains = parts.slice(0, parts.length - 2);
+    }
+  } else {
+    tld = parts[parts.length - 1];
+    sld = parts[parts.length - 2];
+    subdomains = [];
+  }
 
   const labelEntropies: DomainLabelEntropy[] = parts.map((label) => {
     const entropy = calculateShannonEntropy(label);

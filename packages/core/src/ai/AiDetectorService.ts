@@ -598,6 +598,14 @@ Respond ONLY with a valid JSON object matching this schema:
   "reasons": ["string explaining specific technical findings"]
 }`;
 
+    const parseLlmJson = (raw: string): any => {
+      let cleaned = raw.trim();
+      if (cleaned.startsWith('```')) {
+        cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      }
+      return JSON.parse(cleaned);
+    };
+
     // 1. Local Ollama Provider
     if (config.provider === 'ollama') {
       const ollamaUrl = config.ollamaUrl || 'http://127.0.0.1:11434';
@@ -612,6 +620,7 @@ Respond ONLY with a valid JSON object matching this schema:
           format: 'json',
           stream: false,
         }),
+        signal: AbortSignal.timeout(12000),
       });
 
       if (!res.ok) {
@@ -619,7 +628,7 @@ Respond ONLY with a valid JSON object matching this schema:
       }
 
       const json: any = await res.json();
-      const parsed = JSON.parse(json.response);
+      const parsed = parseLlmJson(json.response);
       return {
         verdict: parsed.verdict,
         confidence: Number(parsed.confidence) || 80,
@@ -644,6 +653,7 @@ Respond ONLY with a valid JSON object matching this schema:
             responseMimeType: 'application/json',
           },
         }),
+        signal: AbortSignal.timeout(12000),
       });
 
       if (!res.ok) {
@@ -654,7 +664,7 @@ Respond ONLY with a valid JSON object matching this schema:
       const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) throw new Error('Empty response from Gemini');
 
-      const parsed = JSON.parse(text);
+      const parsed = parseLlmJson(text);
       return {
         verdict: parsed.verdict,
         confidence: Number(parsed.confidence) || 85,
@@ -681,6 +691,7 @@ Respond ONLY with a valid JSON object matching this schema:
           messages: [{ role: 'user', content: prompt }],
           response_format: { type: 'json_object' },
         }),
+        signal: AbortSignal.timeout(12000),
       });
 
       if (!res.ok) {
@@ -691,7 +702,7 @@ Respond ONLY with a valid JSON object matching this schema:
       const content = json?.choices?.[0]?.message?.content;
       if (!content) throw new Error('Empty response from OpenAI');
 
-      const parsed = JSON.parse(content);
+      const parsed = parseLlmJson(content);
       return {
         verdict: parsed.verdict,
         confidence: Number(parsed.confidence) || 85,
