@@ -627,7 +627,13 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
     if (rawUrl && haToken?.trim()) {
       try {
         let baseUrl = rawUrl;
-        if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+        if (baseUrl.includes('nabu.casa')) {
+          if (baseUrl.startsWith('http://')) {
+            baseUrl = baseUrl.replace(/^http:\/\//, 'https://');
+          } else if (!baseUrl.startsWith('https://')) {
+            baseUrl = `https://${baseUrl}`;
+          }
+        } else if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
           baseUrl = `http://${baseUrl}`;
         }
         baseUrl = baseUrl.replace(/\/$/, '');
@@ -644,7 +650,10 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
             signal: controller.signal,
           });
           if (res.ok) {
-            results.push({ service: 'AdGuard Home (Home Assistant)', status: 'success', message: 'Filters refreshed via Home Assistant API' });
+            const providerMsg = baseUrl.includes('nabu.casa')
+              ? 'Filters refreshed via Home Assistant API (Nabu Casa Cloud)'
+              : 'Filters refreshed via Home Assistant API';
+            results.push({ service: 'AdGuard Home (Home Assistant)', status: 'success', message: providerMsg });
           } else {
             results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: `Home Assistant API returned HTTP ${res.status}: ${res.statusText}` });
           }
@@ -662,7 +671,13 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
     if (targetWebhook) {
       try {
         let urlStr = targetWebhook;
-        if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+        if (urlStr.includes('nabu.casa')) {
+          if (urlStr.startsWith('http://')) {
+            urlStr = urlStr.replace(/^http:\/\//, 'https://');
+          } else if (!urlStr.startsWith('https://')) {
+            urlStr = `https://${urlStr}`;
+          }
+        } else if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
           urlStr = `http://${urlStr}`;
         }
         const controller = new AbortController();
@@ -690,37 +705,46 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
     }
   } else if (rawAdguard && rawAdguard.trim()) {
     // Direct AdGuard Home API
-    try {
-      let adguardUrl = rawAdguard.trim();
-      if (!adguardUrl.startsWith('http://') && !adguardUrl.startsWith('https://')) {
-        adguardUrl = `http://${adguardUrl}`;
-      }
-      const base = adguardUrl.replace(/\/$/, '');
-      const refreshUrl = `${base}/control/filtering/refresh`;
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (adguardHomeUser && adguardHomePassword) {
-        const credentials = Buffer.from(`${adguardHomeUser}:${adguardHomePassword}`).toString('base64');
-        headers['Authorization'] = `Basic ${credentials}`;
-      }
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const trimmedAdguard = rawAdguard.trim();
+    if (trimmedAdguard.includes('nabu.casa')) {
+      results.push({
+        service: 'AdGuard Home',
+        status: 'error',
+        message: 'Nabu Casa remote URLs only proxy Home Assistant (port 8123), not AdGuard direct port 3000. Switch to Home Assistant REST API or Webhook mode.',
+      });
+    } else {
       try {
-        const res = await fetch(refreshUrl, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ whitelist: false }),
-          signal: controller.signal,
-        });
-        if (res.ok) {
-          results.push({ service: 'AdGuard Home', status: 'success', message: 'Filters refreshed successfully' });
-        } else {
-          results.push({ service: 'AdGuard Home', status: 'error', message: `HTTP status ${res.status}` });
+        let adguardUrl = trimmedAdguard;
+        if (!adguardUrl.startsWith('http://') && !adguardUrl.startsWith('https://')) {
+          adguardUrl = `http://${adguardUrl}`;
         }
-      } finally {
-        clearTimeout(timeoutId);
+        const base = adguardUrl.replace(/\/$/, '');
+        const refreshUrl = `${base}/control/filtering/refresh`;
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (adguardHomeUser && adguardHomePassword) {
+          const credentials = Buffer.from(`${adguardHomeUser}:${adguardHomePassword}`).toString('base64');
+          headers['Authorization'] = `Basic ${credentials}`;
+        }
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        try {
+          const res = await fetch(refreshUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ whitelist: false }),
+            signal: controller.signal,
+          });
+          if (res.ok) {
+            results.push({ service: 'AdGuard Home', status: 'success', message: 'Filters refreshed successfully' });
+          } else {
+            results.push({ service: 'AdGuard Home', status: 'error', message: `HTTP status ${res.status}` });
+          }
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      } catch (err: any) {
+        results.push({ service: 'AdGuard Home', status: 'error', message: err.message || String(err) });
       }
-    } catch (err: any) {
-      results.push({ service: 'AdGuard Home', status: 'error', message: err.message || String(err) });
     }
   } else {
     results.push({ service: 'AdGuard Home', status: 'skipped', message: 'Not configured' });
@@ -1534,7 +1558,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               return { service: 'adguard', success: false, message: 'Home Assistant Long-Lived Access Token is required.' };
             }
             let urlStr = rawUrl.trim();
-            if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+            if (urlStr.includes('nabu.casa')) {
+              if (urlStr.startsWith('http://')) {
+                urlStr = urlStr.replace(/^http:\/\//, 'https://');
+              } else if (!urlStr.startsWith('https://')) {
+                urlStr = `https://${urlStr}`;
+              }
+            } else if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
               urlStr = `http://${urlStr}`;
             }
             const base = urlStr.replace(/\/$/, '');
@@ -1549,7 +1579,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               clearTimeout(timeout);
               const latencyMs = Date.now() - startTime;
               if (res.ok) {
-                return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: `Connected to Home Assistant API (${latencyMs}ms, ready for adguard.refresh)` };
+                const cloudMsg = urlStr.includes('nabu.casa')
+                  ? `Connected to Home Assistant API via Nabu Casa Cloud (${latencyMs}ms, ready for adguard.refresh)`
+                  : `Connected to Home Assistant API (${latencyMs}ms, ready for adguard.refresh)`;
+                return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: cloudMsg };
               } else if (res.status === 401) {
                 return { service: 'adguard', success: false, statusCode: 401, latencyMs, message: 'Home Assistant token rejected (HTTP 401 Unauthorized). Verify your Long-Lived Access Token.' };
               } else {
@@ -1565,12 +1598,22 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               return { service: 'adguard', success: false, message: 'Home Assistant Webhook URL is not configured.' };
             }
             let urlStr = target;
-            if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+            if (urlStr.includes('nabu.casa')) {
+              if (urlStr.startsWith('http://')) {
+                urlStr = urlStr.replace(/^http:\/\//, 'https://');
+              } else if (!urlStr.startsWith('https://')) {
+                urlStr = `https://${urlStr}`;
+              }
+            } else if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
               urlStr = `http://${urlStr}`;
             }
             try {
               new URL(urlStr);
-              return { service: 'adguard', success: true, message: 'Home Assistant Webhook URL is configured and ready.' };
+              const isCloudWebhook = urlStr.includes('nabu.casa');
+              const readyMsg = isCloudWebhook
+                ? 'Home Assistant Cloud Webhook URL (Nabu Casa) is valid and ready.'
+                : 'Home Assistant Webhook URL is configured and ready.';
+              return { service: 'adguard', success: true, message: readyMsg };
             } catch {
               return { service: 'adguard', success: false, message: 'Invalid Webhook URL format.' };
             }
@@ -1580,6 +1623,18 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               return { service: 'adguard', success: false, message: 'AdGuard Home URL is not configured.' };
             }
             let urlStr = rawUrl.trim();
+
+            // Detect Nabu Casa in direct mode: Nabu Casa only proxies HA port 8123, not AdGuard port 3000
+            if (urlStr.includes('nabu.casa')) {
+              return {
+                service: 'adguard',
+                success: false,
+                statusCode: 400,
+                message: 'Nabu Casa Cloud remote URLs only proxy Home Assistant itself (port 8123), not AdGuard Home direct port 3000. Switch Mode to "Home Assistant REST API" or "Home Assistant Webhook" to reload AdGuard over Nabu Casa.',
+                details: 'nabu_casa_direct_mode',
+              };
+            }
+
             if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
               urlStr = `http://${urlStr}`;
             }

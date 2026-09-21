@@ -788,6 +788,20 @@ const Settings: React.FC<SettingsProps> = ({
                 >
                   GL.iNet 3000
                 </button>
+                <button
+                  type="button"
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'https://your-instance.ui.nabu.casa', adguardMode: 'ha-api' })}
+                >
+                  ☁️ Nabu Casa Cloud
+                </button>
+                <button
+                  type="button"
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: 'https://hooks.nabu.casa/...', adguardMode: 'webhook' })}
+                >
+                  ☁️ Nabu Casa Webhook
+                </button>
               </div>
 
               {/* Direct Mode Fields */}
@@ -806,6 +820,11 @@ const Settings: React.FC<SettingsProps> = ({
                     {sinkholeConfig.adguardHomeUrl?.includes(':8123') && (
                       <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '6px', fontSize: '0.72rem', color: '#f59e0b' }}>
                         ⚠️ Port 8123 is Home Assistant&rsquo;s frontend. For direct AdGuard API, expose and use port 3000 in Add-on Network settings, or switch to &quot;HA API&quot; mode above.
+                      </div>
+                    )}
+                    {sinkholeConfig.adguardHomeUrl?.includes('nabu.casa') && (
+                      <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '6px', fontSize: '0.72rem', color: '#f59e0b' }}>
+                        ⚠️ Nabu Casa does not proxy AdGuard direct port 3000. Switch mode to &quot;HA API&quot; or &quot;HA Webhook&quot; above to reload AdGuard over Nabu Casa remotely.
                       </div>
                     )}
                   </div>
@@ -849,12 +868,12 @@ const Settings: React.FC<SettingsProps> = ({
               {sinkholeConfig.adguardMode === 'ha-api' && (
                 <>
                   <div style={{ marginBottom: '10px' }}>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Home Assistant URL (Port 8123)</label>
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Home Assistant URL (Port 8123 / Nabu Casa)</label>
                     <input
                       type="text"
                       className="path-input"
                       style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
-                      placeholder="http://homeassistant.local:8123"
+                      placeholder="http://homeassistant.local:8123 or https://your-instance.ui.nabu.casa"
                       value={sinkholeConfig.adguardHomeUrl}
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
                     />
@@ -879,7 +898,7 @@ const Settings: React.FC<SettingsProps> = ({
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haToken: e.target.value })}
                     />
                     <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
-                      Generate in HA: Profile → Security → Long-Lived Access Tokens. Calls service <code>adguard.refresh</code>.
+                      Generate in HA: Profile → Security → Long-Lived Access Tokens. Calls service <code>adguard.refresh</code>. (Works with local port 8123 or Nabu Casa Cloud).
                     </p>
                   </div>
                 </>
@@ -888,17 +907,17 @@ const Settings: React.FC<SettingsProps> = ({
               {/* Home Assistant Automation Webhook Mode Fields */}
               {sinkholeConfig.adguardMode === 'webhook' && (
                 <div>
-                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Home Assistant Automation Webhook URL</label>
+                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Home Assistant Webhook URL (Local / Nabu Casa)</label>
                   <input
                     type="text"
                     className="path-input"
                     style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
-                    placeholder="http://homeassistant.local:8123/api/webhook/agh_bm_reload"
+                    placeholder="http://homeassistant.local:8123/api/webhook/... or https://hooks.nabu.casa/..."
                     value={sinkholeConfig.haWebhookUrl || ''}
                     onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: e.target.value })}
                   />
                   <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
-                    Triggered without credentials. Set an Automation in HA with a Webhook Trigger calling the action <code>adguard.refresh</code>.
+                    Triggered without credentials. Set an Automation in HA with a Webhook Trigger (local or Nabu Casa Cloud Webhook) calling the action <code>adguard.refresh</code>.
                   </p>
                 </div>
               )}

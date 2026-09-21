@@ -548,6 +548,18 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                       </p>
                     </div>
                   </div>
+
+                  <div className="ha-callout-item">
+                    <span className="ha-callout-num">4</span>
+                    <div>
+                      <strong>Using Nabu Casa or Remote Access?</strong>
+                      <p>
+                        <strong>Feed Subscription:</strong> AdGuard Home runs on your home appliance (Pi/NAS/VM) and downloads your blocklist locally via your Mac&rsquo;s <strong>LAN Feed URL</strong> over local Wi-Fi. (Nabu Casa does not proxy LAN file downloads).
+                        <br />
+                        <strong>Remote Reloads:</strong> If managing Home Assistant remotely via Nabu Casa (<code>*.ui.nabu.casa</code>), choose <strong>Home Assistant REST API</strong> or <strong>Webhook</strong> below. Nabu Casa securely routes the <code>adguard.refresh</code> service from anywhere in the world, but does <em>not</em> proxy AdGuard direct port 3000.
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -621,6 +633,15 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                       </div>
                       <code>{fileUrl}</code>
                     </div>
+
+                    {adguardEnv === 'homeassistant' && (
+                      <div className="remote-access-note">
+                        <span>ℹ️</span>
+                        <div>
+                          <strong>Nabu Casa &amp; Remote Access:</strong> Even if you view Home Assistant remotely using Nabu Casa (<code>*.ui.nabu.casa</code>), AdGuard Home itself runs locally on your home network. Use this <strong>LAN URL</strong> inside AdGuard&rsquo;s blocklist settings so it downloads over your local Wi-Fi.
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Inline Feed Server status check */}
@@ -822,7 +843,62 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                       >
                         🐳 Docker (localhost:3000)
                       </button>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            adguardHomeUrl: 'https://your-instance.ui.nabu.casa',
+                            adguardMode: 'ha-api',
+                          })
+                        }
+                      >
+                        ☁️ Nabu Casa Cloud
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-fill-pill"
+                        onClick={() =>
+                          setSinkholeConfig({
+                            ...sinkholeConfig,
+                            haWebhookUrl: 'https://hooks.nabu.casa/...',
+                            adguardMode: 'webhook',
+                          })
+                        }
+                      >
+                        ☁️ Nabu Casa Webhook
+                      </button>
                     </div>
+
+                    {/* Nabu Casa Direct Mode Warning Banner */}
+                    {sinkholeConfig.adguardMode === 'direct' &&
+                      sinkholeConfig.adguardHomeUrl?.includes('nabu.casa') && (
+                        <div className="nabu-warning-banner">
+                          <span>⚠️</span>
+                          <div>
+                            <strong>Nabu Casa does not proxy AdGuard direct port 3000!</strong>
+                            <div>
+                              Nabu Casa (<code>*.ui.nabu.casa</code>) only exposes Home Assistant itself. To reload AdGuard remotely through Nabu Casa, switch mode to <strong>Home Assistant REST API</strong> (port 8123 + token) or <strong>Webhook</strong>.
+                            </div>
+                            <div style={{ marginTop: '6px' }}>
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                style={{ fontSize: '11px', padding: '3px 8px' }}
+                                onClick={() =>
+                                  setSinkholeConfig({
+                                    ...sinkholeConfig,
+                                    adguardMode: 'ha-api',
+                                  })
+                                }
+                              >
+                                ⚡ Switch to Home Assistant REST API
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                     {/* Quick In-Place Credentials & Endpoint Editor */}
                     <div className="inline-config-editor">
@@ -833,7 +909,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             <label>Home Assistant Instance URL</label>
                             <input
                               type="text"
-                              placeholder="http://homeassistant.local:8123 or https://your-ha.duckdns.org"
+                              placeholder="http://homeassistant.local:8123 or https://your-instance.ui.nabu.casa"
                               value={sinkholeConfig.adguardHomeUrl || ''}
                               onChange={(e) =>
                                 setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })
@@ -864,7 +940,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           </div>
 
                           <div className="method-note">
-                            💡 In Home Assistant, click your user profile (bottom left) → Security tab → scroll down to <strong>Long-Lived Access Tokens</strong> → Create Token. Blockingmachine calls the native <code>adguard.refresh</code> service automatically.
+                            💡 In Home Assistant, click your user profile (bottom left) → Security tab → scroll down to <strong>Long-Lived Access Tokens</strong> → Create Token. Blockingmachine calls the native <code>adguard.refresh</code> service automatically. (Works seamlessly with local <code>http://homeassistant.local:8123</code> or Nabu Casa <code>https://*.ui.nabu.casa</code>).
                           </div>
                         </div>
                       ) : sinkholeConfig.adguardMode === 'webhook' ? (
@@ -874,7 +950,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             <label>Home Assistant Webhook URL</label>
                             <input
                               type="text"
-                              placeholder="http://homeassistant.local:8123/api/webhook/blockingmachine_reload"
+                              placeholder="http://homeassistant.local:8123/api/webhook/... or https://hooks.nabu.casa/..."
                               value={sinkholeConfig.haWebhookUrl || ''}
                               onChange={(e) =>
                                 setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: e.target.value })
@@ -882,7 +958,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             />
                           </div>
                           <div className="method-note">
-                            💡 In Home Assistant: create an Automation with a <strong>Webhook Trigger</strong> (e.g. <code>blockingmachine_reload</code>) and an action that calls <code>adguard.refresh</code>. No passwords required!
+                            💡 In Home Assistant: create an Automation with a <strong>Webhook Trigger</strong> (local or Nabu Casa Cloud Webhook) and an action that calls <code>adguard.refresh</code>. No passwords required!
                           </div>
                         </div>
                       ) : (
