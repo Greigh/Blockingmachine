@@ -222,6 +222,7 @@ export interface AiScanResult {
   cnames: string[];
   resolvedIps: string[];
   generatedRules: string[];
+  coveredByRule?: string;
   provider: AiProviderType;
   modelUsed?: string;
   timestamp: string;
