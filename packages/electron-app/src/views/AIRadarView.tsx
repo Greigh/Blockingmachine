@@ -541,7 +541,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             <span className="ai-beta-tag">BETA</span>
           </div>
           <h2 className="ai-radar-title">
-            AI Ad & Tracker Discovery Engine <span className="title-beta-pill">Beta</span>
+            AI Ad & Tracker Discovery Engine <span className="title-beta-badge">Beta</span>
           </h2>
           <p className="ai-radar-subtitle">
             Detect rapidly shifting ad servers, ephemeral bidding hostnames, CNAME cloaking, and zero-day trackers before they evade static filter lists.
@@ -554,7 +554,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             <div className="provider-info-col">
               <span className="provider-label-small">Active Engine</span>
               <span className="provider-name">
-                {aiConfig.provider === 'mini-ai' && '🧠 Mini-AI Classifier (<0.05ms)'}
+                {aiConfig.provider === 'mini-ai' && 'Mini-AI Classifier (<0.05ms)'}
                 {aiConfig.provider === 'local-heuristics' && 'Offline Heuristics & Entropy (0ms)'}
                 {aiConfig.provider === 'ollama' && `Ollama (${aiConfig.ollamaModel || 'llama3.2'})`}
                 {aiConfig.provider === 'gemini' && 'Google Gemini 2.0 Flash'}
@@ -562,7 +562,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
               </span>
             </div>
             <button type="button" className="provider-settings-btn" title="Configure AI Provider">
-              ⚙️
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
             </button>
           </div>
         </div>
@@ -575,7 +578,13 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           className={`radar-tab-btn ${activeTab === 'sinkhole-scout' ? 'active' : ''}`}
           onClick={() => setActiveTab('sinkhole-scout')}
         >
-          <span className="tab-icon">📡</span>
+          <span className="tab-icon">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 11a9 9 0 0 1 9 9" />
+              <path d="M4 4a16 16 0 0 1 16 16" />
+              <circle cx="5" cy="19" r="1" />
+            </svg>
+          </span>
           <span>Sinkhole Query Scout</span>
           {sinkholeConfig && (sinkholeConfig.adguardHomeUrl || sinkholeConfig.piholeUrl) && (
             <span className="tab-connected-pill">Homelab Linked</span>
@@ -587,7 +596,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           className={`radar-tab-btn ${activeTab === 'domain-inspector' ? 'active' : ''}`}
           onClick={() => setActiveTab('domain-inspector')}
         >
-          <span className="tab-icon">🔍</span>
+          <span className="tab-icon">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </span>
           <span>Domain & Payload Inspector</span>
         </button>
 
@@ -596,7 +610,13 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           className={`radar-tab-btn ${activeTab === 'canary-crawler' ? 'active' : ''}`}
           onClick={() => setActiveTab('canary-crawler')}
         >
-          <span className="tab-icon">🕷️</span>
+          <span className="tab-icon">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+          </span>
           <span>Web Canary Crawler</span>
         </button>
 
@@ -605,7 +625,11 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           className={`radar-tab-btn ${activeTab === 'quarantine-history' ? 'active' : ''}`}
           onClick={() => setActiveTab('quarantine-history')}
         >
-          <span className="tab-icon">🛡️</span>
+          <span className="tab-icon">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+          </span>
           <span>Threat Quarantine Ledger</span>
           {quarantineList.length > 0 && (
             <span className="tab-count-badge">{quarantineList.length}</span>
@@ -622,7 +646,17 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           <div className="watchdog-banner-card">
             <div className="watchdog-info">
               <div className="watchdog-title-row">
-                <span>🤖 AI Sentinel Watchdog [Beta]</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="10" rx="2" />
+                    <circle cx="12" cy="5" r="2" />
+                    <path d="M12 7v4" />
+                    <line x1="8" y1="16" x2="8" y2="16" />
+                    <line x1="16" y1="16" x2="16" y2="16" />
+                  </svg>
+                  <span>AI Sentinel Watchdog</span>
+                  <span className="title-beta-badge">Beta</span>
+                </span>
                 <span className={`provider-status-dot ${watchdogConfig.enabled ? 'active' : ''}`} />
               </div>
               <p className="watchdog-desc">
@@ -689,7 +723,11 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   onClick={handleRunScout}
                   disabled={isScouting}
                 >
-                  {isScouting ? 'Scanning Queries...' : '🚀 Scout Live Queries'}
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
+                  </svg>
+                  <span>{isScouting ? 'Scanning Queries...' : 'Scout Live Queries'}</span>
                 </button>
 
                 {onTriggerCompile && (
@@ -699,7 +737,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                     onClick={onTriggerCompile}
                     title="Trigger filter compilation (Cmd+R)"
                   >
-                    ⚡ Compile
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                    </svg>
+                    <span>Compile</span>
                   </button>
                 )}
               </div>
@@ -708,11 +749,21 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             {/* If no sinkhole configured */}
             {sinkholeConfig && !sinkholeConfig.adguardHomeUrl && !sinkholeConfig.piholeUrl && (
               <div className="radar-hint-box">
-                <span className="hint-icon">💡</span>
+                <span className="hint-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 18h6" />
+                    <path d="M10 22h4" />
+                    <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" />
+                  </svg>
+                </span>
                 <div>
                   <strong>No sinkhole configured yet:</strong> Enter your AdGuard Home or Pi-hole details in the Deploy Hub to automatically scout your homelab DNS queries.
-                  <button type="button" className="text-button-link" onClick={onNavigateDeploy}>
-                    Open Deploy Hub ➔
+                  <button type="button" className="text-button-link" onClick={onNavigateDeploy} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 6 }}>
+                    <span>Open Deploy Hub</span>
+                    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                      <polyline points="12 5 19 12 12 19" />
+                    </svg>
                   </button>
                 </div>
               </div>
@@ -739,7 +790,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                     className="primary-button block-all-flagged-btn"
                     onClick={handleBlockAllFlagged}
                   >
-                    ★ Block All Flagged ({scoutResult.flaggedCount})
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                    </svg>
+                    <span>Block All Flagged ({scoutResult.flaggedCount})</span>
                   </button>
                 )}
               </div>
@@ -760,7 +814,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 gap: 12,
               }}>
                 <div style={{ fontSize: 13, color: 'var(--text-color)' }}>
-                  <span style={{ fontWeight: 600, color: '#6366f1' }}>⚡ Subdomain Wildcard Compaction:</span> Collapsed {compactionSummary.originalCount} subdomains into {compactionSummary.compactedCount} parent zone rules ({compactionSummary.savingsPercent}% list bloat reduction).
+                  <span style={{ fontWeight: 600, color: '#6366f1', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                    </svg>
+                    Subdomain Wildcard Compaction:
+                  </span> Collapsed {compactionSummary.originalCount} subdomains into {compactionSummary.compactedCount} parent zone rules ({compactionSummary.savingsPercent}% list bloat reduction).
                   <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
                     Zones: {compactionSummary.collapsedGroups.map((g: any) => g.parentDomain).join(', ')}
                   </div>
@@ -790,7 +849,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                             <div className="threat-domain-row">
                               <span className="threat-domain">{item.domain}</span>
                               <span className={`verdict-chip ${item.verdict}`}>
-                                {item.verdict === 'ad_server' ? '🚨 AD SERVER' : '👁️ TRACKER'}
+                                {item.verdict === 'ad_server' ? 'AD SERVER' : 'TRACKER'}
                               </span>
                               <span className="category-chip">{item.category}</span>
                             </div>
@@ -798,7 +857,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                               <span>Entropy: <strong>{item.entropy}</strong></span>
                               {item.cnames.length > 0 && (
                                 <span className="cname-chain-pill">
-                                  CNAME ➔ {item.cnames[item.cnames.length - 1]}
+                                  CNAME → {item.cnames[item.cnames.length - 1]}
                                 </span>
                               )}
                             </div>
@@ -822,14 +881,21 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                               onClick={() => handleWhitelistDomain(item.domain)}
                               title="Report as false positive and add whitelist rule (@@||...)"
                             >
-                              ⚪ Whitelist
+                              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                              <span>Whitelist</span>
                             </button>
                             <button
                               type="button"
                               className="secondary-button"
                               onClick={() => handleCopy(item.generatedRules[0] || `||${item.domain}^`, `scout-${idx}`)}
                             >
-                              {copiedKey === `scout-${idx}` ? '✓ Copied' : '📋 Copy'}
+                              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                              </svg>
+                              <span>{copiedKey === `scout-${idx}` ? 'Copied' : 'Copy'}</span>
                             </button>
                           </div>
                         </div>
@@ -854,7 +920,9 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       {activeTab === 'domain-inspector' && (
         <div className="radar-tab-content">
           <div className="radar-card">
-            <h3 className="radar-card-title">Real-Time Domain & Payload Inspector [Beta]</h3>
+            <h3 className="radar-card-title">
+              Real-Time Domain & Payload Inspector <span className="title-beta-badge">Beta</span>
+            </h3>
             <p className="radar-card-desc">
               Execute deep heuristic scoring, CNAME uncloaking, Shannon entropy measurements, and LLM reasoning against any suspect domain.
             </p>
@@ -876,7 +944,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 onClick={() => handleInspectDomain()}
                 disabled={isInspecting || !inspectorInput.trim()}
               >
-                {isInspecting ? 'Analyzing...' : '⚡ Inspect with AI'}
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                </svg>
+                <span>{isInspecting ? 'Analyzing...' : 'Inspect with AI'}</span>
               </button>
             </div>
 
@@ -906,7 +977,17 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 <div className={`verdict-banner ${inspectorResult.verdict}`}>
                   <div className="verdict-banner-left">
                     <span className="verdict-icon">
-                      {inspectorResult.verdict === 'clean' ? '✅' : '🚨'}
+                      {inspectorResult.verdict === 'clean' ? (
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      ) : (
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                      )}
                     </span>
                     <div>
                       <h4 className="verdict-title">
@@ -962,7 +1043,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   <div className="evidence-section" style={{ marginTop: 12 }}>
                     <h5>CNAME Uncloaking Chain Trace</h5>
                     <p style={{ fontFamily: 'ui-monospace, monospace', color: 'var(--primary-color)', fontSize: 13 }}>
-                      {inspectorResult.domain} ➔ {inspectorResult.cnames.join(' ➔ ')}
+                      {inspectorResult.domain} → {inspectorResult.cnames.join(' → ')}
                     </p>
                   </div>
                 )}
@@ -990,16 +1071,23 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   fontSize: 12,
                   flexWrap: 'wrap'
                 }}>
-                  <span style={{ fontWeight: 600, color: 'var(--primary-color)' }}>
-                    ⚡ Inference Latency: {inspectorResult.inferenceTimeMs !== undefined ? `${inspectorResult.inferenceTimeMs}ms` : '< 0.05ms'}
+                  <span style={{ fontWeight: 600, color: 'var(--primary-color)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                    </svg>
+                    Inference Latency: {inspectorResult.inferenceTimeMs !== undefined ? `${inspectorResult.inferenceTimeMs}ms` : '< 0.05ms'}
                   </span>
                   <span style={{ color: 'var(--text-secondary)' }}>•</span>
                   <span>Engine: {inspectorResult.modelUsed || 'Mini-AI Embedded Classifier'}</span>
                   <span style={{ color: 'var(--text-secondary)' }}>•</span>
                   <span>Entropy Index: {inspectorResult.entropy.toFixed(2)}</span>
                   <span style={{ color: 'var(--text-secondary)' }}>•</span>
-                  <span style={{ color: '#3b82f6', fontWeight: 600 }}>
-                    🧠 Learned Domains: {learnedFeedbackCount} saved to disk
+                  <span style={{ color: '#3b82f6', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="4" y="4" width="16" height="16" rx="2" />
+                      <rect x="9" y="9" width="6" height="6" />
+                    </svg>
+                    Learned Domains: {learnedFeedbackCount} saved to disk
                   </span>
                   <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10b981', fontWeight: 600 }}>
                     100% In-Memory Air-Gapped
@@ -1021,7 +1109,14 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                     gap: 8,
                   }}>
                     <div style={{ fontSize: 12, color: 'var(--text-color)' }}>
-                      <span style={{ fontWeight: 600, color: '#eab308' }}>⚠️ Allowlist Conflict Detected:</span> {ruleConflict.reason}
+                      <span style={{ fontWeight: 600, color: '#eab308', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        Allowlist Conflict Detected:
+                      </span> {ruleConflict.reason}
                       {ruleConflict.suggestedOverrideRule && (
                         <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
                           Suggested Override: <code style={{ color: 'var(--primary-color)' }}>{ruleConflict.suggestedOverrideRule}</code>
@@ -1032,14 +1127,17 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                       <button
                         type="button"
                         className="secondary-button"
-                        style={{ fontSize: 11, padding: '4px 10px', fontWeight: 600 }}
+                        style={{ fontSize: 11, padding: '4px 10px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
                         onClick={() => {
                           if (ruleConflict.suggestedOverrideRule) {
                             setCustomSynthesizedRules([ruleConflict.suggestedOverrideRule]);
                           }
                         }}
                       >
-                        ⚡ Use $important Override
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                        </svg>
+                        <span>Use $important Override</span>
                       </button>
                     )}
                   </div>
@@ -1093,7 +1191,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                         className="secondary-button whitelist-threat-btn"
                         onClick={() => handleWhitelistDomain(inspectorResult.domain)}
                       >
-                        ⚪ Whitelist (False Positive)
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                        <span>Whitelist (False Positive)</span>
                       </button>
                       {(customSynthesizedRules !== null ? customSynthesizedRules : inspectorResult.generatedRules).length > 0 && (
                         <>
@@ -1140,7 +1241,9 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       {activeTab === 'canary-crawler' && (
         <div className="radar-tab-content">
           <div className="radar-card">
-            <h3 className="radar-card-title">Web Canary Page Crawler [Beta]</h3>
+            <h3 className="radar-card-title">
+              Web Canary Page Crawler <span className="title-beta-badge">Beta</span>
+            </h3>
             <p className="radar-card-desc">
               Scan any web page to discover hidden third-party script beacons, ad iframe origins, and real-time programmatic bidding partners.
             </p>
@@ -1162,7 +1265,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 onClick={handleRunCrawler}
                 disabled={isCrawling || !crawlerUrl.trim()}
               >
-                {isCrawling ? 'Crawling Page...' : '🕷️ Crawl & Discover'}
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
+                </svg>
+                <span>{isCrawling ? 'Crawling Page...' : 'Crawl & Discover'}</span>
               </button>
             </div>
 
@@ -1184,7 +1292,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                       className="primary-button"
                       onClick={() => handleAddRulesToCustom(crawlerResult.synthesizedRules, 'crawler-all')}
                     >
-                      ★ Block All Discovered ({crawlerResult.synthesizedRules.length})
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                      </svg>
+                      <span>Block All Discovered ({crawlerResult.synthesizedRules.length})</span>
                     </button>
                   )}
                 </div>
@@ -1197,7 +1308,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                           <div className="threat-domain-row">
                             <span className="threat-domain">{host.domain}</span>
                             <span className={`verdict-chip ${host.verdict}`}>
-                              {host.verdict === 'ad_server' ? '🚨 AD SERVER' : '👁️ TRACKER'}
+                              {host.verdict === 'ad_server' ? 'AD SERVER' : 'TRACKER'}
                             </span>
                             <span className="category-chip">{host.category}</span>
                           </div>
@@ -1216,7 +1327,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                             className="secondary-button whitelist-threat-btn"
                             onClick={() => handleWhitelistDomain(host.domain)}
                           >
-                            ⚪ Whitelist
+                            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                            <span>Whitelist</span>
                           </button>
                         </div>
                       </div>
@@ -1242,7 +1356,9 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           <div className="radar-card">
             <div className="radar-card-header">
               <div>
-                <h3 className="radar-card-title">Discovered Threat Quarantine Ledger [Beta]</h3>
+                <h3 className="radar-card-title">
+                  Discovered Threat Quarantine Ledger <span className="title-beta-badge">Beta</span>
+                </h3>
                 <p className="radar-card-desc">
                   Persistent record of all anomalous ad networks, programmatic bidders, and stealth trackers intercepted across Sinkhole Scout, Watchdog, Inspector, and Crawler.
                 </p>
@@ -1255,7 +1371,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   onClick={() => handleExportQuarantine('abp')}
                   disabled={quarantineList.length === 0}
                 >
-                  📥 Export ABP List
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  <span>Export ABP List</span>
                 </button>
                 <button
                   type="button"
@@ -1263,7 +1384,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   onClick={() => handleExportQuarantine('hosts')}
                   disabled={quarantineList.length === 0}
                 >
-                  📥 Export Hosts
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  <span>Export Hosts</span>
                 </button>
                 <button
                   type="button"
@@ -1271,7 +1397,11 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   onClick={handleClearQuarantineLedger}
                   disabled={quarantineList.length === 0}
                 >
-                  🗑️ Clear Ledger
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  </svg>
+                  <span>Clear Ledger</span>
                 </button>
               </div>
             </div>
@@ -1302,7 +1432,11 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
 
             {filteredQuarantine.length === 0 ? (
               <div className="radar-hint-box" style={{ marginTop: 20 }}>
-                <span className="hint-icon">🛡️</span>
+                <span className="hint-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  </svg>
+                </span>
                 <div>
                   <strong>Quarantine Ledger is clean:</strong>
                   {' '}No threats matching your current filter. Run a Sinkhole Query Scout or enable the background Sentinel Watchdog to populate discovered ad domains automatically.
@@ -1355,16 +1489,23 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                               className="secondary-button whitelist-threat-btn"
                               onClick={() => handleWhitelistDomain(item.domain)}
                             >
-                              ⚪ Whitelist
+                              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                              <span>Whitelist</span>
                             </button>
                             <button
                               type="button"
                               className="secondary-button"
-                              style={{ padding: '4px 8px', fontSize: 11 }}
+                              style={{ padding: '4px 8px', fontSize: 11, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                               onClick={() => handleRemoveQuarantineItem(item.id)}
                               title="Remove from quarantine"
+                              aria-label="Remove from quarantine"
                             >
-                              ✕
+                              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18" />
+                                <line x1="6" y1="6" x2="18" y2="18" />
+                              </svg>
                             </button>
                           </div>
                         </td>
@@ -1386,7 +1527,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           <div className="ai-modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="ai-modal-header">
               <div className="ai-modal-title-col">
-                <h4 className="ai-modal-title">AI Radar Provider Configuration [Beta]</h4>
+                <h4 className="ai-modal-title">
+                  AI Radar Provider Configuration
+                  <span className="title-beta-badge">Beta</span>
+                </h4>
                 <p className="ai-modal-desc">
                   Select your discovery engine. Local Heuristics runs with 0 network calls; Ollama provides high-intelligence private local LLM analysis.
                 </p>
@@ -1395,8 +1539,13 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 type="button"
                 className="ai-modal-close-btn"
                 onClick={() => setIsConfigOpen(false)}
+                aria-label="Close configuration"
+                title="Close"
               >
-                ✕
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
               </button>
             </div>
 
@@ -1409,7 +1558,21 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   style={{ position: 'relative' }}
                 >
                   <span style={{ position: 'absolute', top: 8, right: 8, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#10b981', color: '#fff', fontWeight: 700 }}>RECOMMENDED</span>
-                  <span className="opt-title">🧠 Mini-AI Classifier (Built-in)</span>
+                  <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="4" y="4" width="16" height="16" rx="2" />
+                      <rect x="9" y="9" width="6" height="6" />
+                      <line x1="9" y1="1" x2="9" y2="4" />
+                      <line x1="15" y1="1" x2="15" y2="4" />
+                      <line x1="9" y1="20" x2="9" y2="23" />
+                      <line x1="15" y1="20" x2="15" y2="23" />
+                      <line x1="20" y1="9" x2="23" y2="9" />
+                      <line x1="20" y1="14" x2="23" y2="14" />
+                      <line x1="1" y1="9" x2="4" y2="9" />
+                      <line x1="1" y1="14" x2="4" y2="14" />
+                    </svg>
+                    <span>Mini-AI Classifier (Built-in)</span>
+                  </span>
                   <span className="opt-desc">Embedded 25-feature mathematical neural classifier. &lt;0.05ms speed, zero external dependencies, zero daemons.</span>
                 </button>
 
@@ -1418,7 +1581,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   className={`provider-option-btn ${aiConfig.provider === 'local-heuristics' ? 'active' : ''}`}
                   onClick={() => setAiConfig({ ...aiConfig, provider: 'local-heuristics' })}
                 >
-                  <span className="opt-title">⚡ Local Heuristics</span>
+                  <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                    </svg>
+                    <span>Local Heuristics</span>
+                  </span>
                   <span className="opt-desc">Shannon entropy, lexical token boundaries, and CNAME uncloaking. 0ms, zero external data sharing.</span>
                 </button>
 
@@ -1427,7 +1595,15 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   className={`provider-option-btn ${aiConfig.provider === 'ollama' ? 'active' : ''}`}
                   onClick={() => setAiConfig({ ...aiConfig, provider: 'ollama' })}
                 >
-                  <span className="opt-title">🦙 Ollama Local LLM</span>
+                  <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+                      <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+                      <line x1="6" y1="6" x2="6.01" y2="6" />
+                      <line x1="6" y1="18" x2="6.01" y2="18" />
+                    </svg>
+                    <span>Ollama Local LLM</span>
+                  </span>
                   <span className="opt-desc">Air-gapped on-device neural network (e.g. llama3.2). Private and highly accurate.</span>
                 </button>
 
@@ -1436,7 +1612,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   className={`provider-option-btn ${aiConfig.provider === 'gemini' ? 'active' : ''}`}
                   onClick={() => setAiConfig({ ...aiConfig, provider: 'gemini' })}
                 >
-                  <span className="opt-title">✨ Google Gemini Flash</span>
+                  <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                    </svg>
+                    <span>Google Gemini Flash</span>
+                  </span>
                   <span className="opt-desc">Gemini 2.0 Flash reasoning for deep pattern extraction and evasion detection.</span>
                 </button>
 
@@ -1445,7 +1626,14 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   className={`provider-option-btn ${aiConfig.provider === 'openai' ? 'active' : ''}`}
                   onClick={() => setAiConfig({ ...aiConfig, provider: 'openai' })}
                 >
-                  <span className="opt-title">🌐 OpenAI / Compatible</span>
+                  <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="2" y1="12" x2="22" y2="12" />
+                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                    </svg>
+                    <span>OpenAI / Compatible</span>
+                  </span>
                   <span className="opt-desc">OpenAI, Groq, or local OpenAI-compatible server.</span>
                 </button>
               </div>
@@ -1521,7 +1709,17 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
               {/* Test Result Box */}
               {aiTestResult && (
                 <div className={`ai-test-badge ${aiTestResult.success ? 'success' : 'error'}`}>
-                  <span>{aiTestResult.success ? '✓' : '⚠️'}</span>
+                  <span>
+                    {aiTestResult.success ? (
+                      '✓'
+                    ) : (
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', marginRight: 4 }}>
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                        <line x1="12" y1="9" x2="12" y2="13" />
+                        <line x1="12" y1="17" x2="12.01" y2="17" />
+                      </svg>
+                    )}
+                  </span>
                   <span>{aiTestResult.message} {aiTestResult.latencyMs ? `(${aiTestResult.latencyMs}ms)` : ''}</span>
                 </div>
               )}
@@ -1534,7 +1732,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 onClick={handleTestAiConnection}
                 disabled={isTestingAi}
               >
-                {isTestingAi ? 'Testing...' : '⚡ Test Connection'}
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                </svg>
+                <span>{isTestingAi ? 'Testing...' : 'Test Connection'}</span>
               </button>
               <button
                 type="button"

@@ -630,16 +630,31 @@ const Settings: React.FC<SettingsProps> = ({
             <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span>🥧</span> Pi-hole Integration
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="4" y="4" width="16" height="16" rx="2" />
+                    <rect x="9" y="9" width="6" height="6" />
+                    <line x1="9" y1="1" x2="9" y2="4" />
+                    <line x1="15" y1="1" x2="15" y2="4" />
+                    <line x1="9" y1="20" x2="9" y2="23" />
+                    <line x1="15" y1="20" x2="15" y2="23" />
+                    <line x1="20" y1="9" x2="23" y2="9" />
+                    <line x1="20" y1="14" x2="23" y2="14" />
+                    <line x1="1" y1="9" x2="4" y2="9" />
+                    <line x1="1" y1="14" x2="4" y2="14" />
+                  </svg>
+                  <span>Pi-hole Integration</span>
                 </div>
                 <button
                   type="button"
                   className="browse-button secondary"
-                  style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px' }}
+                  style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
                   onClick={() => handleTestService('pihole')}
                   disabled={testingService === 'pihole'}
                 >
-                  {testingService === 'pihole' ? 'Testing…' : '⚡ Test Connection'}
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                  </svg>
+                  <span>{testingService === 'pihole' ? 'Testing…' : 'Test Connection'}</span>
                 </button>
               </div>
 
@@ -713,16 +728,22 @@ const Settings: React.FC<SettingsProps> = ({
             <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span>🛡️</span> AdGuard Home Integration
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  </svg>
+                  <span>AdGuard Home Integration</span>
                 </div>
                 <button
                   type="button"
                   className="browse-button secondary"
-                  style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px' }}
+                  style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
                   onClick={() => handleTestService('adguard')}
                   disabled={testingService === 'adguard'}
                 >
-                  {testingService === 'adguard' ? 'Testing…' : '⚡ Test Connection'}
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                  </svg>
+                  <span>{testingService === 'adguard' ? 'Testing…' : 'Test Connection'}</span>
                 </button>
               </div>
 
@@ -790,17 +811,23 @@ const Settings: React.FC<SettingsProps> = ({
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                   onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'https://your-instance.ui.nabu.casa', adguardMode: 'ha-api' })}
                 >
-                  ☁️ Nabu Casa Cloud
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+                  </svg>
+                  <span>Nabu Casa Cloud</span>
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                   onClick={() => setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: 'https://hooks.nabu.casa/...', adguardMode: 'webhook' })}
                 >
-                  ☁️ Nabu Casa Webhook
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+                  </svg>
+                  <span>Nabu Casa Webhook</span>
                 </button>
               </div>
 
@@ -818,13 +845,23 @@ const Settings: React.FC<SettingsProps> = ({
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
                     />
                     {sinkholeConfig.adguardHomeUrl?.includes(':8123') && (
-                      <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '6px', fontSize: '0.72rem', color: '#f59e0b' }}>
-                        ⚠️ Port 8123 is Home Assistant&rsquo;s frontend. For direct AdGuard API, expose and use port 3000 in Add-on Network settings, or switch to &quot;HA API&quot; mode above.
+                      <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '6px', fontSize: '0.72rem', color: '#f59e0b', display: 'flex', alignItems: 'flex-start', gap: '5px' }}>
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: '2px' }}>
+                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        <span>Port 8123 is Home Assistant&rsquo;s frontend. For direct AdGuard API, expose and use port 3000 in Add-on Network settings, or switch to &quot;HA API&quot; mode above.</span>
                       </div>
                     )}
                     {sinkholeConfig.adguardHomeUrl?.includes('nabu.casa') && (
-                      <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '6px', fontSize: '0.72rem', color: '#f59e0b' }}>
-                        ⚠️ Nabu Casa does not proxy AdGuard direct port 3000. Switch mode to &quot;HA API&quot; or &quot;HA Webhook&quot; above to reload AdGuard over Nabu Casa remotely.
+                      <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '6px', fontSize: '0.72rem', color: '#f59e0b', display: 'flex', alignItems: 'flex-start', gap: '5px' }}>
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: '2px' }}>
+                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        <span>Nabu Casa does not proxy AdGuard direct port 3000. Switch mode to &quot;HA API&quot; or &quot;HA Webhook&quot; above to reload AdGuard over Nabu Casa remotely.</span>
                       </div>
                     )}
                   </div>
@@ -935,16 +972,24 @@ const Settings: React.FC<SettingsProps> = ({
           <div style={{ marginTop: '14px', background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span>🌐</span> Homelab &amp; Custom Automation Webhook (&quot;Or Any Other Thing&quot;)
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                </svg>
+                <span>Homelab &amp; Custom Automation Webhook (&quot;Or Any Other Thing&quot;)</span>
               </div>
               <button
                 type="button"
                 className="browse-button secondary"
-                style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px' }}
+                style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
                 onClick={() => handleTestService('webhook')}
                 disabled={testingService === 'webhook'}
               >
-                {testingService === 'webhook' ? 'Testing…' : '⚡ Test Webhook'}
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                </svg>
+                <span>{testingService === 'webhook' ? 'Testing…' : 'Test Webhook'}</span>
               </button>
             </div>
             <p style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: '8px' }}>
@@ -1025,7 +1070,7 @@ const Settings: React.FC<SettingsProps> = ({
               </span>
               About & Community
             </h3>
-            <span className="setting-badge secondary">v1.0.0-beta.9</span>
+            <span className="setting-badge secondary">v1.0.0-rc.1</span>
           </div>
 
           <div className="about-app-banner">

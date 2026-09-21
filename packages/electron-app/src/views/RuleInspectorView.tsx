@@ -110,7 +110,10 @@ export const RuleInspectorView: React.FC = () => {
                 aria-label="Clear input"
                 title="Clear input"
               >
-                ✕
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
               </button>
             )}
           </div>
@@ -154,19 +157,32 @@ export const RuleInspectorView: React.FC = () => {
             <div className="verdict-badge-wrap">
               {result.verdict === 'blocked' && (
                 <div className="verdict-pill pill-blocked">
-                  <span className="verdict-icon">🚫</span>
+                  <span className="verdict-icon">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                    </svg>
+                  </span>
                   <span>DOMAIN BLOCKED</span>
                 </div>
               )}
               {result.verdict === 'exception' && (
                 <div className="verdict-pill pill-exception">
-                  <span className="verdict-icon">🟢</span>
+                  <span className="verdict-icon">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </span>
                   <span>ALLOWLISTED EXCEPTION</span>
                 </div>
               )}
               {result.verdict === 'not_blocked' && (
                 <div className="verdict-pill pill-neutral">
-                  <span className="verdict-icon">⚪</span>
+                  <span className="verdict-icon">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="9" />
+                    </svg>
+                  </span>
                   <span>NOT BLOCKED</span>
                 </div>
               )}
@@ -224,7 +240,11 @@ export const RuleInspectorView: React.FC = () => {
 
           <div className="inspector-stages-grid">
             <div className="desktop-card stage-card">
-              <div className="stage-icon-wrap icon-match">🛑</div>
+              <div className="stage-icon-wrap icon-match">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+              </div>
               <div className="stage-number-badge">Stage 1</div>
               <h4 className="stage-title">Network & Wildcard Match</h4>
               <p className="stage-desc">
@@ -233,7 +253,11 @@ export const RuleInspectorView: React.FC = () => {
             </div>
 
             <div className="desktop-card stage-card">
-              <div className="stage-icon-wrap icon-exception">🟢</div>
+              <div className="stage-icon-wrap icon-exception">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </div>
               <div className="stage-number-badge">Stage 2</div>
               <h4 className="stage-title">Exception Override Layer</h4>
               <p className="stage-desc">
@@ -242,7 +266,12 @@ export const RuleInspectorView: React.FC = () => {
             </div>
 
             <div className="desktop-card stage-card">
-              <div className="stage-icon-wrap icon-trace">📍</div>
+              <div className="stage-icon-wrap icon-trace">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                  <circle cx="12" cy="10" r="3" />
+                </svg>
+              </div>
               <div className="stage-number-badge">Stage 3</div>
               <h4 className="stage-title">Origin Feed Attribution</h4>
               <p className="stage-desc">

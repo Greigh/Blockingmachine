@@ -2434,10 +2434,15 @@ const createWindow = async () => {
   }
 
   mainWindow = new BrowserWindow({
-    width: 1060,
-    height: 750,
-    minWidth: 920,
-    minHeight: 600,
+    width: 1200,
+    height: 860,
+    minWidth: 1200,
+    maxWidth: 1200,
+    minHeight: 860,
+    maxHeight: 860,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
     icon: appIcon,
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
     trafficLightPosition: isMac ? { x: 18, y: 18 } : undefined,

@@ -204,7 +204,7 @@ export const PRESET_BUNDLES: PresetBundle[] = [
     id: 'blockingmachine-suite',
     name: 'Blockingmachine Defense Suite [Beta]',
     description: 'Our complete 8-part native modular defense suite: Base Ads, Privacy Engine, Smart TV & IoT Shield, Web Annoyances, Social Neutralizer, Threat Defense, URL Tracking Stripper, and Safe Exceptions.',
-    badge: '★ First-Party Beta',
+    badge: 'First-Party Beta',
     category: 'Full Defense [Beta]',
     items: PRESET_CATALOG.filter((p) => p.name.startsWith('Blockingmachine ')),
   },
@@ -310,12 +310,37 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
   const renderScopePill = (scope: SourceScope) => {
     switch (scope) {
       case 'dns':
-        return <span className="source-scope-badge scope-dns">🌐 DNS Safe</span>;
+        return (
+          <span className="source-scope-badge scope-dns">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+              <circle cx="12" cy="12" r="10" />
+              <line x1="2" y1="12" x2="22" y2="12" />
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+            </svg>
+            DNS Safe
+          </span>
+        );
       case 'browser':
-        return <span className="source-scope-badge scope-browser">🖥️ Browser Only</span>;
+        return (
+          <span className="source-scope-badge scope-browser">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+            Browser Only
+          </span>
+        );
       case 'hybrid':
       default:
-        return <span className="source-scope-badge scope-hybrid">⚡ Hybrid</span>;
+        return (
+          <span className="source-scope-badge scope-hybrid">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+            Hybrid
+          </span>
+        );
     }
   };
 
@@ -330,7 +355,10 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
             </p>
           </div>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close modal">
-            ✕
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
           </button>
         </div>
 
@@ -423,21 +451,34 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
                   onClick={() => setSelectedScope('dns')}
                   title="Filter pure DNS-level sinkhole feeds"
                 >
-                  🌐 DNS Safe
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="2" y1="12" x2="22" y2="12" />
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z" />
+                  </svg>
+                  DNS Safe
                 </button>
                 <button
                   className={`scope-filter-pill scope-browser-btn ${selectedScope === 'browser' ? 'active' : ''}`}
                   onClick={() => setSelectedScope('browser')}
                   title="Filter browser cosmetic & element-hiding feeds"
                 >
-                  🖥️ Browser Only
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                    <line x1="8" y1="21" x2="16" y2="21" />
+                    <line x1="12" y1="17" x2="12" y2="21" />
+                  </svg>
+                  Browser Only
                 </button>
                 <button
                   className={`scope-filter-pill scope-hybrid-btn ${selectedScope === 'hybrid' ? 'active' : ''}`}
                   onClick={() => setSelectedScope('hybrid')}
                   title="Filter hybrid network + cosmetic feeds"
                 >
-                  ⚡ Hybrid
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                  </svg>
+                  Hybrid
                 </button>
               </div>
 
@@ -497,12 +538,24 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
                         <span className="preset-url" title={preset.url}>
                           {preset.url}
                         </span>
-                        <span className="preset-target-hint">🎯 {preset.recommendedFor}</span>
+                        <span className="preset-target-hint">
+                          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                            <circle cx="12" cy="12" r="10" />
+                            <circle cx="12" cy="12" r="6" />
+                            <circle cx="12" cy="12" r="2" />
+                          </svg>
+                          {preset.recommendedFor}
+                        </span>
                       </div>
 
                       {preset.warning && (
                         <div className="preset-warning-notice">
-                          <span>⚠️ {preset.warning}</span>
+                          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                            <line x1="12" y1="9" x2="12" y2="13" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                          </svg>
+                          <span>{preset.warning}</span>
                         </div>
                       )}
                     </div>

@@ -16,63 +16,76 @@ export const Header: React.FC<HeaderProps> = ({
       case 'sources':
         return {
           title: 'Filter Sources',
+          isBeta: false,
           desc: 'Manage remote blocklist subscriptions and feed health',
         };
       case 'modules':
         return {
-          title: 'Defense Modules [Beta]',
+          title: 'Defense Modules',
+          isBeta: true,
           desc: 'First-party modular filter list engine modeled after modern ad-blocking architecture',
         };
       case 'bulkImport':
         return {
           title: 'Bulk Import',
+          isBeta: false,
           desc: 'Add multiple feed URLs or drop text files',
         };
       case 'custom':
         return {
           title: 'Custom Rules',
+          isBeta: false,
           desc: 'Author domain blocks, allowlists, and custom rules',
         };
       case 'inspector':
         return {
           title: 'Rule Inspector',
+          isBeta: false,
           desc: 'Verify if any domain is blocked and trace its origin rule',
         };
       case 'browser':
         return {
           title: 'Rule Browser',
+          isBeta: false,
           desc: 'Search, filter, and inspect the active set of compiled rules',
         };
       case 'deploy':
         return {
           title: 'Deploy & Sync',
+          isBeta: false,
           desc: 'Connect your compiled blocklists to AdGuard Home, Pi-hole, desktop apps, and LAN devices',
         };
       case 'ai-radar':
         return {
-          title: 'AI Defense Radar [Beta]',
-          desc: 'Real-time AI scanner for shifting ad servers, ephemeral bidding hostnames, and CNAME cloaking (Beta)',
+          title: 'AI Defense Radar',
+          isBeta: true,
+          desc: 'Real-time AI scanner for shifting ad servers, ephemeral bidding hostnames, and CNAME cloaking',
         };
       case 'settings':
         return {
           title: 'Preferences',
+          isBeta: false,
           desc: 'Configure export formats, auto-schedule, and file locations',
         };
       case 'process':
       default:
         return {
           title: 'Filter Processor',
+          isBeta: false,
           desc: 'Generate, deduplicate, and compile your blocklists',
         };
     }
   };
 
-  const { title, desc } = getHeaderMeta();
+  const { title, isBeta, desc } = getHeaderMeta();
 
   return (
     <header className="main-header">
       <div className="header-left">
-        <h1 className="view-title">{title}</h1>
+        <h1 className="view-title">
+          {title}
+          {isBeta && <span className="header-title-beta-badge">Beta</span>}
+        </h1>
         <span className="view-subtitle">{desc}</span>
       </div>
       <div className="header-right">
