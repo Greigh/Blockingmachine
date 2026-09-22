@@ -9,6 +9,7 @@ import type {
   AiWatchdogConfig,
   RuleConflictResult,
 } from '../types/';
+import { formatConfidencePercent, verdictBadgeLabel } from '../aiDisplay';
 
 interface AIRadarViewProps {
   onTriggerCompile?: () => void;
@@ -907,7 +908,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                             <div className="threat-domain-row">
                               <span className="threat-domain">{item.domain}</span>
                               <span className={`verdict-chip ${item.verdict}`}>
-                                {item.verdict === 'ad_server' ? 'AD SERVER' : 'TRACKER'}
+                                {verdictBadgeLabel(item.verdict)}
                               </span>
                               <span className="category-chip">{item.category}</span>
                             </div>
@@ -1102,7 +1103,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                         {inspectorResult.verdict.toUpperCase().replace('_', ' ')}
                       </h4>
                       <span className="verdict-subtitle">
-                        Confidence: <strong>{inspectorResult.confidence}%</strong> | Risk Level: <strong>{inspectorResult.riskLevel.toUpperCase()}</strong>
+                        Confidence: <strong>{formatConfidencePercent(inspectorResult.confidence)}</strong> | Risk Level: <strong>{inspectorResult.riskLevel.toUpperCase()}</strong>
                       </span>
                     </div>
                   </div>
@@ -1416,7 +1417,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                           <div className="threat-domain-row">
                             <span className="threat-domain">{host.domain}</span>
                             <span className={`verdict-chip ${host.verdict}`}>
-                              {host.verdict === 'ad_server' ? 'AD SERVER' : 'TRACKER'}
+                              {verdictBadgeLabel(host.verdict)}
                             </span>
                             <span className="category-chip">{host.category}</span>
                           </div>
@@ -1531,7 +1532,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             {/* Toolbar */}
             <div className="quarantine-toolbar">
               <div className="quarantine-filters">
-                {['all', 'advertising', 'telemetry/analytics', 'cname cloaking'].map((cat) => (
+                {['all', 'advertising', 'telemetry/analytics', 'cname cloaking', 'malware/phishing'].map((cat) => (
                   <button
                     key={cat}
                     type="button"
