@@ -1,4 +1,4 @@
-! Title: Blockingmachine Smart TV & IoT Shield [Beta]
+! Title: Smart TV & IoT Shield [Beta]
 ! Description: Targets telemetry, automated content recognition (ACR), diagnostics, and in-app ads on smart TVs and IoT hardware.
 ! Version: 1.0.0-beta.2
 ! Expires: 2 days

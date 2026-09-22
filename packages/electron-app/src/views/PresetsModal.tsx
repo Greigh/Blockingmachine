@@ -116,7 +116,7 @@ export const PRESET_CATALOG: PresetItem[] = [
     recommendedFor: 'Browser extensions (removes embedded social widgets from web layouts)',
   },
   {
-    name: 'Blockingmachine Base Ad Shield [Beta]',
+    name: 'Base Ad Shield [Beta]',
     url: './filters/modules/blockingmachine-base.txt',
     scope: 'hybrid',
     category: 'Advertising',
@@ -125,7 +125,7 @@ export const PRESET_CATALOG: PresetItem[] = [
     recommendedFor: 'Essential ad-blocking foundation for browsers and network-level sinkholes',
   },
   {
-    name: 'Blockingmachine Privacy Engine [Beta]',
+    name: 'Privacy Engine [Beta]',
     url: './filters/modules/blockingmachine-privacy.txt',
     scope: 'hybrid',
     category: 'Privacy',
@@ -134,7 +134,7 @@ export const PRESET_CATALOG: PresetItem[] = [
     recommendedFor: 'All devices and browsers seeking maximum privacy without site breakage',
   },
   {
-    name: 'Blockingmachine Smart TV & IoT Shield [Beta]',
+    name: 'Smart TV & IoT Shield [Beta]',
     url: './filters/modules/blockingmachine-smarttv.txt',
     scope: 'dns',
     category: 'Privacy',
@@ -143,7 +143,7 @@ export const PRESET_CATALOG: PresetItem[] = [
     recommendedFor: 'Home network DNS sinkholes, AdGuard Home, and Pi-hole',
   },
   {
-    name: 'Blockingmachine Web Annoyances & Cookie Banners [Beta]',
+    name: 'Web Annoyances & Cookie Banners [Beta]',
     url: './filters/modules/blockingmachine-annoyances.txt',
     scope: 'browser',
     category: 'Annoyances',
@@ -153,7 +153,7 @@ export const PRESET_CATALOG: PresetItem[] = [
     warning: 'Contains cosmetic rules (##) that require DOM inspection; ineffective on pure DNS sinkholes',
   },
   {
-    name: 'Blockingmachine Social Tracker Neutralizer [Beta]',
+    name: 'Social Tracker Neutralizer [Beta]',
     url: './filters/modules/blockingmachine-social.txt',
     scope: 'hybrid',
     category: 'Social',
@@ -162,7 +162,7 @@ export const PRESET_CATALOG: PresetItem[] = [
     recommendedFor: 'Browser extensions, DNS sinkholes, and desktop ad-blockers',
   },
   {
-    name: 'Blockingmachine Threat & Malicious Domain Defense [Beta]',
+    name: 'Threat & Malicious Domain Defense [Beta]',
     url: './filters/modules/blockingmachine-security.txt',
     scope: 'dns',
     category: 'Security',
@@ -171,7 +171,7 @@ export const PRESET_CATALOG: PresetItem[] = [
     recommendedFor: 'Network firewalls, routers, Pi-hole, and AdGuard Home',
   },
   {
-    name: 'Blockingmachine URL Tracking Stripper [Beta]',
+    name: 'URL Tracking Stripper [Beta]',
     url: './filters/modules/blockingmachine-url-tracking.txt',
     scope: 'browser',
     category: 'Privacy',
@@ -180,7 +180,7 @@ export const PRESET_CATALOG: PresetItem[] = [
     recommendedFor: 'Browser extensions and content blockers supporting $removeparam rules',
   },
   {
-    name: 'Blockingmachine Unbreak & Safe Exceptions [Beta]',
+    name: 'Unbreak & Safe Exceptions [Beta]',
     url: './filters/modules/blockingmachine-unbreak.txt',
     scope: 'hybrid',
     category: 'Privacy',
@@ -202,11 +202,11 @@ export interface PresetBundle {
 export const PRESET_BUNDLES: PresetBundle[] = [
   {
     id: 'blockingmachine-suite',
-    name: 'Blockingmachine Defense Suite [Beta]',
+    name: 'Defense Suite [Beta]',
     description: 'Our complete 8-part native modular defense suite: Base Ads, Privacy Engine, Smart TV & IoT Shield, Web Annoyances, Social Neutralizer, Threat Defense, URL Tracking Stripper, and Safe Exceptions.',
     badge: 'First-Party Beta',
     category: 'Full Defense [Beta]',
-    items: PRESET_CATALOG.filter((p) => p.name.startsWith('Blockingmachine ')),
+    items: PRESET_CATALOG.filter((p) => p.url.startsWith('./filters/modules/blockingmachine-')),
   },
   {
     id: 'essential',

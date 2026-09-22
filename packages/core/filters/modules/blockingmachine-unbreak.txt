@@ -1,4 +1,4 @@
-! Title: Blockingmachine Unbreak & Safe Exceptions [Beta]
+! Title: Unbreak & Safe Exceptions [Beta]
 ! Description: Hand-crafted exception allowlist rules for banking portals, SSO authentication, delivery tracking, streaming playback, and essential smart home integrations to prevent site breakage.
 ! Version: 1.0.0-beta.2
 ! Expires: 2 days
