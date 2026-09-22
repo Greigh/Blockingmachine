@@ -250,6 +250,11 @@ export function synthesizeRules(input: RuleSynthesisInput): string[] {
     return [];
   }
 
+  // Ambiguous lexical noise is not a block recommendation.
+  if (verdict === 'suspicious' && category === 'Unknown') {
+    return [];
+  }
+
   const rules: string[] = [];
 
   // Target-specific formatting

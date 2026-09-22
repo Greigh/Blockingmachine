@@ -2,6 +2,18 @@ import { calculateShannonEntropy, detectDgaPatterns, decomposeDomain } from './e
 import { resolveCnameChain } from './cnameResolver.js';
 import { sanitizeDomain, synthesizeRules } from './ruleSynthesizer.js';
 import { classifyDomainWithMiniAi } from './MiniAiClassifier.js';
+import {
+  SUSPICIOUS_AD_TOKENS,
+  SUSPICIOUS_TRACKER_TOKENS,
+  SPECIFIC_NETWORK_TOKENS,
+  classifyInfrastructure,
+  clampConfidencePercent,
+  hasStrongAdIntent,
+  hostnameHasToken,
+  isBenignServiceEndpoint,
+  isTelemetryToken,
+  scoreBrandSpoof,
+} from './reputation.js';
 import type {
   AiProviderConfig,
   AiScanResult,
@@ -134,50 +146,6 @@ interface ScanCacheEntry {
   expiresAt: number;
 }
 
-// Suspicious ad and tracking keyword tokens commonly found in ephemeral ad servers
-const SUSPICIOUS_AD_TOKENS = new Set([
-  'ad', 'ads', 'adserver', 'adservice', 'adnxs', 'adform', 'adtech',
-  'doubleclick', 'googleadservices', 'googlesyndication', 'moatads', 'amazon-adsystem',
-  'bid', 'bidder', 'bidding', 'rtb', 'dsp', 'ssp', 'exchange',
-  'pixel', 'beacon', 'collect', 'telemetry', 'analytics', 'tracker', 'tracking',
-  'click', 'conversion', 'attribution', 'affiliate', 'stat', 'stats', 'counter',
-  'popunder', 'popcash', 'propeller', 'outbrain', 'taboola', 'mgid',
-  'revcontent', 'criteo', 'scorecardresearch', 'quantserve', 'branch',
-  'pubmatic', 'rubiconproject', 'openx', 'casalemedia', 'smartadserver',
-]);
-
-// Curated high-reputation infrastructure, CDNs, and identity providers to protect against false positives
-const KNOWN_SAFE_INFRASTRUCTURE = new Set([
-  'github.com',
-  'githubassets.com',
-  'githubusercontent.com',
-  'cloudflare.com',
-  'cloudflare.net',
-  'cdnjs.cloudflare.com',
-  'jsdelivr.net',
-  'unpkg.com',
-  'googleapis.com',
-  'gstatic.com',
-  'google.com',
-  'accounts.google.com',
-  'apple.com',
-  'appleid.apple.com',
-  'icloud.com',
-  'microsoft.com',
-  'microsoftonline.com',
-  'live.com',
-  'windowsupdate.com',
-  'amazon.com',
-  'amazonaws.com',
-  'aws.amazon.com',
-  'wikipedia.org',
-  'wikimedia.org',
-  'mozilla.org',
-  'mozilla.net',
-  'one.one.one.one',
-  'dns.google',
-]);
-
 /**
  * Intelligent AI Ad & Tracker Discovery Service [Beta]
  * Combines Shannon entropy, DGA detection, CNAME uncloaking, and multi-provider LLMs.
@@ -231,21 +199,17 @@ export class AiDetectorService {
    * Checks whether domain matches verified essential infrastructure or user allowlist.
    */
   public isSafeInfrastructure(domain: string, allowlist?: string[]): boolean {
-    const clean = domain.toLowerCase().trim();
+    const clean = this.normalizeDomain(domain);
     if (allowlist && allowlist.length > 0) {
       if (allowlist.some((al) => clean === al.toLowerCase() || clean.endsWith(`.${al.toLowerCase()}`))) {
         return true;
       }
     }
-    if (KNOWN_SAFE_INFRASTRUCTURE.has(clean)) {
-      return true;
-    }
-    for (const safe of KNOWN_SAFE_INFRASTRUCTURE) {
-      if (clean.endsWith(`.${safe}`)) {
-        return true;
-      }
-    }
-    return false;
+    if (scoreBrandSpoof(clean) > 0 || hasStrongAdIntent(clean)) return false;
+    const infra = classifyInfrastructure(clean);
+    if (infra.adNetwork || infra.kind === 'tracker-network') return false;
+    if (infra.safe) return true;
+    return isBenignServiceEndpoint(clean);
   }
 
   /**
@@ -281,6 +245,16 @@ export class AiDetectorService {
     // False positive protection guard
     if (this.isSafeInfrastructure(cleanDomain, config.allowlist)) {
       const decomposition = decomposeDomain(cleanDomain);
+      const infra = classifyInfrastructure(cleanDomain);
+      const allowlisted = !!config.allowlist?.some((entry) => {
+        const item = entry.toLowerCase();
+        return cleanDomain === item || cleanDomain.endsWith(`.${item}`);
+      });
+      const guardDetail = infra.safe
+        ? infra.reason
+        : allowlisted
+          ? 'Verified Essential Infrastructure / Whitelisted'
+          : 'Product status, API, CDN, or update endpoint';
       const cleanResult: AiScanResult = {
         target: domainOrUrl,
         domain: cleanDomain,
@@ -288,7 +262,7 @@ export class AiDetectorService {
         confidence: 99,
         riskLevel: 'none',
         category: 'Clean',
-        reasons: ['Verified Essential Infrastructure / Whitelisted (Protected by False Positive Guard)'],
+        reasons: [`${guardDetail} (Protected by False Positive Guard)`],
         entropy: calculateShannonEntropy(cleanDomain),
         isLikelyDga: false,
         decomposition,
@@ -388,7 +362,7 @@ export class AiDetectorService {
       target: domainOrUrl,
       domain: cleanDomain,
       verdict: finalVerdict,
-      confidence: Math.round(finalConfidence),
+      confidence: clampConfidencePercent(finalConfidence),
       riskLevel: finalRisk,
       category: finalCategory,
       reasons: Array.from(new Set(allReasons)),
@@ -539,40 +513,34 @@ export class AiDetectorService {
       reasons.push(`Domain aliases external third-party CNAME target: ${cnameInfo.cloakedTarget}`);
     }
 
-    // 2. Keyword token analysis
+    // 2. Keyword token analysis (boundaries, so "status" is not "stat")
     const matchedTokens: string[] = [];
-    for (const token of SUSPICIOUS_AD_TOKENS) {
-      if (token.length >= 4) {
-        if (domain.includes(token)) {
-          matchedTokens.push(token);
-        }
-      } else {
-        const regex = new RegExp(`(?:^|[.-])${token}(?:[.-]|$)`, 'i');
-        if (regex.test(domain)) {
-          matchedTokens.push(token);
-        }
-      }
+    const keywordTokens = [...SUSPICIOUS_AD_TOKENS, ...SUSPICIOUS_TRACKER_TOKENS];
+    for (const token of keywordTokens) {
+      if (hostnameHasToken(domain, token)) matchedTokens.push(token);
     }
 
     if (matchedTokens.length > 0) {
-      const hasSpecificAdNetwork = matchedTokens.some((t) =>
-        ['taboola', 'criteo', 'doubleclick', 'googleadservices', 'googlesyndication', 'outbrain', 'moatads', 'adnxs', 'rubiconproject', 'pubmatic'].includes(t),
-      );
+      const hasSpecificAdNetwork = matchedTokens.some((t) => SPECIFIC_NETWORK_TOKENS.has(t));
       score += hasSpecificAdNetwork ? 75 : Math.min(85, matchedTokens.length * 45);
       reasons.push(`Contains ad/telemetry keyword token(s): ${matchedTokens.join(', ')}`);
       if (category === 'Clean') {
-        category = matchedTokens.some((t) => ['pixel', 'telemetry', 'analytics', 'beacon'].includes(t))
+        category = matchedTokens.some((t) => isTelemetryToken(t))
           ? 'Telemetry/Analytics'
           : 'Advertising';
       }
     }
 
-    // 3. DGA / Entropy score
-    if (dgaResult.isLikelyDga) {
+    // 3. DGA / entropy. Lexical shape alone is not an ad or malware verdict.
+    if (dgaResult.isLikelyDga && matchedTokens.length === 0 && !cnameInfo.knownTrackerTarget) {
+      score += Math.min(20, dgaResult.score * 0.2);
+      reasons.push(...dgaResult.reasons);
+      reasons.push('Lexical pattern is unusual, but there is no ad, tracker, or phishing evidence');
+    } else if (dgaResult.isLikelyDga) {
       score += dgaResult.score * 0.6;
       reasons.push(...dgaResult.reasons);
       if (category === 'Clean') category = 'Advertising';
-    } else if (entropy >= 3.6) {
+    } else if (entropy >= 3.6 && matchedTokens.length > 0) {
       score += 20;
       reasons.push(`High lexical entropy (${entropy}) indicates dynamically generated hostname`);
     }

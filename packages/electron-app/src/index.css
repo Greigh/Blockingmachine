@@ -7713,6 +7713,24 @@ button.format-tile .format-target {
   border: 1px solid rgba(168, 85, 247, 0.3);
 }
 
+.verdict-chip.malicious {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.verdict-chip.suspicious {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.verdict-chip.clean {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
 .category-chip {
   font-size: 11px;
   color: var(--secondary-color);
