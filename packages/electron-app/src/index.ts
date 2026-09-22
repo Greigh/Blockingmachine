@@ -24,7 +24,6 @@ if (isDev) {
 import Store from 'electron-store';
 import type { ElectronStore, StoreSchema } from './types';
 import {
-  adguardControlBaseUrl,
   describeUrlEndpoint,
   formatSinkholeError,
   normalizeAdguardDirectPort,
@@ -34,6 +33,14 @@ import {
   type SinkholeEndpoint,
 } from './sinkholeNet';
 import { sinkholeFetch } from './sinkholeFetch';
+import {
+  classifyDirectStatus,
+  classifyHaApiResponse,
+  haApiConnectionResult,
+  haApiSyncBlockReason,
+  type ProbeResponse,
+} from './sinkholeIdentity';
+import { emptyUnblockedNotice, fetchAdguardQueryLog, separateAdguardUrls, type SinkholeUrlFields } from './queryLogScout';
 import {
   downloadAndParseSource,
   parseFilterList,
@@ -469,28 +476,13 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
       const limit = 50;
 
       if (config.service === 'adguard') {
-        const baseUrl = adguardControlBaseUrl(storeRef.get('adguardHomeUrl'), storeRef.get('adguardDirectPort'));
-        const user = storeRef.get('adguardHomeUser') || '';
-        const pass = storeRef.get('adguardHomePassword') || '';
-        const headers: Record<string, string> = {};
-        if (user || pass) {
-          headers.Authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
-        }
-        const res = await sinkholeFetch(`${baseUrl}/control/querylog?limit=${limit}`, {
-          headers,
-          timeoutMs: 6000,
-          allowInsecureLocalTls: Boolean(storeRef.get('allowInsecureLocalTls')),
-        });
-        if (res.ok) {
-          const json: any = await res.json();
-          const data = Array.isArray(json?.data) ? json.data : [];
-          for (const item of data) {
-            const name = item?.question?.name;
-            const isBlocked = Boolean(item?.filter_id && item.filter_id > 0);
-            if (name && !isBlocked) {
-              queries.push({ domain: name, client: item?.client, blocked: false });
-            }
-          }
+        const loaded = await loadStoredAdguardQueries(storeRef, limit);
+        if (!loaded.ok) {
+          console.error(`[AI Watchdog] Query log scout failed: ${loaded.message}`);
+        } else if (loaded.unblockedCount === 0) {
+          console.log(`[AI Watchdog] ${emptyUnblockedNotice(limit)}`);
+        } else {
+          queries.push(...loaded.queries);
         }
       } else if (config.service === 'pihole') {
         const baseUrl = storeRef.get('piholeUrl') || 'http://127.0.0.1';
@@ -498,7 +490,9 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
         const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
           signal: AbortSignal.timeout(6000),
         });
-        if (res.ok) {
+        if (!res.ok) {
+          console.error(`[AI Watchdog] Pi-hole query log returned HTTP ${res.status}. This was not treated as an empty log.`);
+        } else {
           const json: any = await res.json();
           const data = Array.isArray(json?.data) ? json.data : [];
           for (const item of data) {
@@ -507,6 +501,9 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
             if (name && (status === '2' || status === '3')) {
               queries.push({ domain: name, client: item?.[3], blocked: false });
             }
+          }
+          if (queries.length === 0) {
+            console.log(`[AI Watchdog] ${emptyUnblockedNotice(limit)}`);
           }
         }
       }
@@ -746,6 +743,42 @@ function sinkholeTlsAllowed(storeRef: ElectronStore<StoreSchema>): boolean {
   return Boolean(storeRef.get('allowInsecureLocalTls'));
 }
 
+function sinkholeUrlFields(storeRef: ElectronStore<StoreSchema>): SinkholeUrlFields {
+  return {
+    adguardMode: (storeRef.get('adguardMode') as SinkholeUrlFields['adguardMode']) || 'direct',
+    adguardHomeUrl: (storeRef.get('adguardHomeUrl') as string) || '',
+    adguardDirectUrl: (storeRef.get('adguardDirectUrl') as string) || '',
+    adguardDirectPort: storeRef.get('adguardDirectPort') as number | undefined,
+  };
+}
+
+async function readSinkholeProbe(
+  storeRef: ElectronStore<StoreSchema>,
+  url: string,
+  headers?: Record<string, string>,
+): Promise<ProbeResponse> {
+  const res = await sinkholeFetch(url, {
+    headers,
+    timeoutMs: 6000,
+    allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
+  });
+  return { ok: res.ok, status: res.status, statusText: res.statusText, body: await res.text() };
+}
+
+async function loadStoredAdguardQueries(storeRef: ElectronStore<StoreSchema>, limit: number) {
+  const user = (storeRef.get('adguardHomeUser') as string) || '';
+  const pass = (storeRef.get('adguardHomePassword') as string) || '';
+  const headers: Record<string, string> = {};
+  if (user || pass) {
+    headers.Authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+  }
+  return fetchAdguardQueryLog({
+    config: sinkholeUrlFields(storeRef),
+    limit,
+    request: async (url) => readSinkholeProbe(storeRef, url, url.includes('/control/') ? headers : undefined),
+  });
+}
+
 function explainSinkholeFailure(
   storeRef: ElectronStore<StoreSchema>,
   err: unknown,
@@ -776,7 +809,7 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
   const haWebhookUrl = storeRef.get('haWebhookUrl') as string | undefined;
   const customWebhookUrl = storeRef.get('customWebhookUrl') as string | undefined;
 
-  const results: { service: string; status: 'success' | 'error' | 'skipped'; message: string }[] = [];
+  const results: { service: string; status: 'success' | 'error' | 'skipped'; message: string; details?: string }[] = [];
 
   if (rawPihole && rawPihole.trim()) {
     try {
@@ -813,22 +846,36 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
     const haTarget = rawUrl ? resolveHaApiUrl(rawUrl) : null;
     if (haTarget?.ok && haToken?.trim()) {
       try {
-        const res = await sinkholeFetch(haTarget.target.refreshUrl, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${haToken.trim()}`,
-            'Content-Type': 'application/json',
-          },
-          timeoutMs: 7000,
-          allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
+        const api = await readSinkholeProbe(storeRef, haTarget.target.pingUrl, {
+          Authorization: `Bearer ${haToken.trim()}`,
         });
-        if (res.ok) {
-          const providerMsg = haTarget.target.baseUrl.includes('nabu.casa')
-            ? 'Filters refreshed via Home Assistant API (Nabu Casa Cloud)'
-            : 'Filters refreshed via Home Assistant API';
-          results.push({ service: 'AdGuard Home (Home Assistant)', status: 'success', message: providerMsg });
+        const identity = await classifyHaApiResponse(api, haTarget.target.pingUrl, (url) => readSinkholeProbe(storeRef, url));
+        const blocked = haApiSyncBlockReason(identity);
+        if (blocked) {
+          results.push({
+            service: 'AdGuard Home (Home Assistant)',
+            status: 'error',
+            message: blocked.message,
+            details: blocked.details,
+          });
         } else {
-          results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: `Home Assistant API returned HTTP ${res.status}: ${res.statusText}` });
+          const res = await sinkholeFetch(haTarget.target.refreshUrl, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${haToken.trim()}`,
+              'Content-Type': 'application/json',
+            },
+            timeoutMs: 7000,
+            allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
+          });
+          if (res.ok) {
+            const providerMsg = haTarget.target.baseUrl.includes('nabu.casa')
+              ? 'Filters refreshed via Home Assistant API (Nabu Casa Cloud)'
+              : 'Filters refreshed via Home Assistant API';
+            results.push({ service: 'AdGuard Home (Home Assistant)', status: 'success', message: providerMsg });
+          } else {
+            results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: `Home Assistant API returned HTTP ${res.status}: ${res.statusText}` });
+          }
         }
       } catch (err: any) {
         results.push({
@@ -1691,11 +1738,19 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         haWebhookUrl: store.get('haWebhookUrl') || '',
         customWebhookUrl: store.get('customWebhookUrl') || '',
         adguardDirectPort: normalizeAdguardDirectPort(store.get('adguardDirectPort')),
+        adguardDirectUrl: (store.get('adguardDirectUrl') as string) || '',
         allowInsecureLocalTls: Boolean(store.get('allowInsecureLocalTls')),
       };
     });
 
     ipcMain.handle('set-sinkhole-config', async (_event, config: any) => {
+      const previous = sinkholeUrlFields(store);
+      const separated = separateAdguardUrls(previous, {
+        adguardMode: config.adguardMode,
+        adguardHomeUrl: config.adguardHomeUrl,
+        adguardDirectUrl: config.adguardDirectUrl,
+        adguardDirectPort: config.adguardDirectPort,
+      });
       if (config.piholeUrl !== undefined) store.set('piholeUrl', config.piholeUrl);
       if (config.piholeApiKey !== undefined) store.set('piholeApiKey', config.piholeApiKey);
       if (config.adguardHomeUrl !== undefined) store.set('adguardHomeUrl', config.adguardHomeUrl);
@@ -1708,6 +1763,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       if (config.customWebhookUrl !== undefined) store.set('customWebhookUrl', config.customWebhookUrl);
       if (config.adguardDirectPort !== undefined) store.set('adguardDirectPort', normalizeAdguardDirectPort(config.adguardDirectPort));
       if (config.allowInsecureLocalTls !== undefined) store.set('allowInsecureLocalTls', Boolean(config.allowInsecureLocalTls));
+      if (separated.adguardDirectUrl !== undefined) {
+        store.set('adguardDirectUrl', separated.adguardDirectUrl);
+      }
       return { success: true };
     });
 
@@ -1800,22 +1858,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               return { service: 'adguard', success: false, message: 'Home Assistant Long-Lived Access Token is required.' };
             }
             try {
-              const res = await sinkholeFetch(haTarget.target.pingUrl, {
-                headers: { Authorization: `Bearer ${haToken.trim()}` },
-                timeoutMs: 6000,
-                allowInsecureLocalTls: sinkholeTlsAllowed(store),
+              const api = await readSinkholeProbe(store, haTarget.target.pingUrl, {
+                Authorization: `Bearer ${haToken.trim()}`,
               });
+              const identity = await classifyHaApiResponse(api, haTarget.target.pingUrl, (url) => readSinkholeProbe(store, url));
               const latencyMs = Date.now() - startTime;
-              if (res.ok) {
-                const cloudMsg = haTarget.target.baseUrl.includes('nabu.casa')
-                  ? `Connected to Home Assistant API via Nabu Casa Cloud (${latencyMs}ms, ready for adguard.refresh)`
-                  : `Connected to Home Assistant API (${latencyMs}ms, ready for adguard.refresh)`;
-                return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: cloudMsg };
-              } else if (res.status === 401) {
-                return { service: 'adguard', success: false, statusCode: 401, latencyMs, message: 'Home Assistant token rejected (HTTP 401 Unauthorized). Verify your Long-Lived Access Token.' };
-              } else {
-                return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `Home Assistant returned HTTP ${res.status}: ${res.statusText}` };
-              }
+              const decision = haApiConnectionResult(identity, latencyMs, haTarget.target.baseUrl, api.status);
+              return { service: 'adguard', latencyMs, ...decision };
             } catch (err: any) {
               return {
                 service: 'adguard',
@@ -1857,14 +1906,23 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
                 timeoutMs: 6000,
                 allowInsecureLocalTls: sinkholeTlsAllowed(store),
               });
+              const body = await res.text();
               const latencyMs = Date.now() - startTime;
               if (res.ok) {
                 return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: `Connected to AdGuard Home at ${resolved.target.display} (${latencyMs}ms, HTTP ${res.status})` };
-              } else if (res.status === 401) {
-                return { service: 'adguard', success: false, statusCode: 401, latencyMs, message: 'Authentication required. Check your AdGuard Home username and password.' };
-              } else {
-                return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `AdGuard Home at ${resolved.target.display} returned HTTP ${res.status}: ${res.statusText}` };
               }
+              if (res.status === 401) {
+                return { service: 'adguard', success: false, statusCode: 401, latencyMs, message: 'Authentication required. Check your AdGuard Home username and password.' };
+              }
+              const identity = await classifyDirectStatus(
+                { ok: res.ok, status: res.status, statusText: res.statusText, body },
+                resolved.target.statusUrl,
+                (url) => readSinkholeProbe(store, url),
+              );
+              if (identity.kind === 'home-assistant') {
+                return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: identity.message, details: identity.details };
+              }
+              return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `AdGuard Home at ${resolved.target.display} returned HTTP ${res.status}: ${res.statusText}` };
             } catch (err: any) {
               return {
                 service: 'adguard',
@@ -2134,66 +2192,46 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       const limit = options.limit || 50;
 
       if (options.service === 'adguard') {
-        const baseUrl = adguardControlBaseUrl(store.get('adguardHomeUrl'), store.get('adguardDirectPort'));
-        const user = store.get('adguardHomeUser') || '';
-        const pass = store.get('adguardHomePassword') || '';
-
-        try {
-          const headers: Record<string, string> = {};
-          if (user || pass) {
-            const auth = Buffer.from(`${user}:${pass}`).toString('base64');
-            headers.Authorization = `Basic ${auth}`;
-          }
-          const res = await sinkholeFetch(`${baseUrl}/control/querylog?limit=${limit}`, {
-            headers,
-            timeoutMs: 6000,
-            allowInsecureLocalTls: sinkholeTlsAllowed(store),
-          });
-          if (res.ok) {
-            const json: any = await res.json();
-            const data = Array.isArray(json?.data) ? json.data : [];
-            for (const item of data) {
-              const name = item?.question?.name;
-              const isBlocked = Boolean(item?.filter_id && item.filter_id > 0);
-              if (name && !isBlocked) {
-                queries.push({
-                  domain: name,
-                  client: item?.client,
-                  elapsedMs: item?.elapsed_ms,
-                  blocked: false,
-                });
-              }
-            }
-          }
-        } catch (err) {
-          console.error('[AI Radar] Failed to fetch AdGuard query log:', err);
+        const loaded = await loadStoredAdguardQueries(store, limit);
+        if (!loaded.ok) {
+          console.error(`[AI Radar] Failed to fetch AdGuard query log: ${loaded.message}`);
+          throw new Error(loaded.message);
         }
-      } else if (options.service === 'pihole') {
+        queries.push(...loaded.queries);
+        const scan = await service.scanQueryLog(queries, activeConfig);
+        return {
+          ...scan,
+          notice: loaded.unblockedCount === 0 ? emptyUnblockedNotice(limit) : undefined,
+        };
+      }
+
+      if (options.service === 'pihole') {
         const baseUrl = store.get('piholeUrl') || 'http://127.0.0.1';
         const token = store.get('piholeApiKey') || '';
-
-        try {
-          const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
-            signal: AbortSignal.timeout(6000),
-          });
-          if (res.ok) {
-            const json: any = await res.json();
-            const data = Array.isArray(json?.data) ? json.data : [];
-            for (const item of data) {
-              const name = item?.[2];
-              const status = item?.[4];
-              if (name && (status === '2' || status === '3')) {
-                queries.push({
-                  domain: name,
-                  client: item?.[3],
-                  blocked: false,
-                });
-              }
-            }
-          }
-        } catch (err) {
-          console.error('[AI Radar] Failed to fetch Pi-hole query log:', err);
+        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
+          signal: AbortSignal.timeout(6000),
+        });
+        if (!res.ok) {
+          throw new Error(`Could not fetch the Pi-hole query log (HTTP ${res.status}). This was not treated as an empty log.`);
         }
+        const json: any = await res.json();
+        const data = Array.isArray(json?.data) ? json.data : [];
+        for (const item of data) {
+          const name = item?.[2];
+          const status = item?.[4];
+          if (name && (status === '2' || status === '3')) {
+            queries.push({
+              domain: name,
+              client: item?.[3],
+              blocked: false,
+            });
+          }
+        }
+        const scan = await service.scanQueryLog(queries, activeConfig);
+        return {
+          ...scan,
+          notice: queries.length === 0 ? emptyUnblockedNotice(limit) : undefined,
+        };
       }
 
       return await service.scanQueryLog(queries, activeConfig);

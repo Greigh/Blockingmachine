@@ -2,10 +2,11 @@
 export const DEFAULT_ADGUARD_DIRECT_PORT = 3000;
 
 /**
- * Home Assistant frontend ports. These are the HA UI, not AdGuard's API.
- * 8123 is the default. 8124 and 8125 are common remaps when 8123 is taken.
+ * Home Assistant's default web port. Other ports are not assumed to be
+ * Home Assistant — AdGuard Home is often published on a nearby port such as 8124.
+ * Connection tests probe the response when the port alone is not decisive.
  */
-export const HA_FRONTEND_PORTS: ReadonlySet<number> = new Set([8123, 8124, 8125]);
+export const HA_FRONTEND_PORTS: ReadonlySet<number> = new Set([8123]);
 
 const HA_UI_PATH_PREFIXES = [
   '/lovelace',

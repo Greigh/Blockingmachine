@@ -135,6 +135,8 @@ export interface SinkholeConfig {
   adguardMode?: 'direct' | 'ha-api' | 'webhook';
   /** AdGuard Home direct API port used when the URL has no explicit port. Default 3000. */
   adguardDirectPort?: number;
+  /** AdGuard Home API origin used for Direct mode, query logs, and Radar. Kept separate from the Home Assistant URL. */
+  adguardDirectUrl?: string;
   /** Opt in to accepting untrusted TLS certificates for local/private sinkhole hosts only. */
   allowInsecureLocalTls?: boolean;
   haToken?: string;
@@ -146,6 +148,7 @@ export interface SinkholeSyncResult {
   service: string;
   status: 'success' | 'error' | 'skipped';
   message: string;
+  details?: string;
 }
 
 export interface FeedServerStatus {
@@ -247,6 +250,7 @@ export interface QueryLogScanResult {
   cleanCount: number;
   results: AiScanResult[];
   timestamp: string;
+  notice?: string;
 }
 
 export interface CrawlScanResult {
@@ -277,6 +281,7 @@ export interface StoreSchema {
   syncOnCompile?: boolean;
   adguardMode?: 'direct' | 'ha-api' | 'webhook';
   adguardDirectPort?: number;
+  adguardDirectUrl?: string;
   allowInsecureLocalTls?: boolean;
   haToken?: string;
   haWebhookUrl?: string;
