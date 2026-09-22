@@ -4,6 +4,7 @@ import type {
   AiScanResult,
   RuleConflictResult,
 } from '../types';
+import { formatConfidencePercent, verdictBadgeLabel } from '../aiDisplay';
 
 interface RuleInspectorViewProps {
   initialDomain?: string;
@@ -370,6 +371,26 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                       AI: HIGH THREAT ({aiResult.category.toUpperCase()})
                     </span>
                   )}
+                  {(aiResult.verdict === 'ad_server' || aiResult.verdict === 'tracker') && (
+                    <span
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        padding: '4px 10px',
+                        borderRadius: 6,
+                        background: aiResult.verdict === 'ad_server' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(168, 85, 247, 0.2)',
+                        color: aiResult.verdict === 'ad_server' ? '#f87171' : '#c084fc',
+                        border: aiResult.verdict === 'ad_server'
+                          ? '1px solid rgba(239, 68, 68, 0.4)'
+                          : '1px solid rgba(168, 85, 247, 0.4)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                      }}
+                    >
+                      {verdictBadgeLabel(aiResult.verdict)} ({aiResult.category.toUpperCase()})
+                    </span>
+                  )}
                   {aiResult.verdict === 'suspicious' && (
                     <span
                       style={{
@@ -388,7 +409,9 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                       </svg>
-                      AI: SUSPICIOUS BEACON ({aiResult.category.toUpperCase()})
+                      {aiResult.category === 'Unknown'
+                        ? 'SUSPICIOUS (LOW CONFIDENCE)'
+                        : `SUSPICIOUS (${aiResult.category.toUpperCase()})`}
                     </span>
                   )}
                   {aiResult.verdict === 'clean' && (
@@ -413,7 +436,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                     </span>
                   )}
                   <span style={{ fontSize: 12, color: 'var(--text-secondary, #94a3b8)', marginLeft: 4 }}>
-                    Confidence: <strong>{Math.round((aiResult.confidence || 0) * 100)}%</strong>
+                    Confidence: <strong>{formatConfidencePercent(aiResult.confidence)}</strong>
                   </span>
                 </div>
               )}
@@ -507,7 +530,13 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                   <span className="card-value" style={{ fontSize: 16 }}>
                     {aiResult?.cnames && aiResult.cnames.length > 0 ? `${aiResult.cnames.length} Hops` : 'Direct'}
                   </span>
-                  <span className="card-sub">{aiResult?.cnames && aiResult.cnames.length > 0 ? 'External Tracker Alias' : 'Standard A-Record'}</span>
+                  <span className="card-sub">
+                    {aiResult?.category === 'CNAME Cloaking'
+                      ? 'External Tracker Alias'
+                      : aiResult?.cnames && aiResult.cnames.length > 0
+                        ? 'External alias'
+                        : 'Standard A-Record'}
+                  </span>
                 </div>
               </div>
 

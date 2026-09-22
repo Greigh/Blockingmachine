@@ -1,4 +1,15 @@
 import { calculateShannonEntropy, decomposeDomain } from './entropy.js';
+import {
+  HIGH_ABUSE_TLDS,
+  SUSPICIOUS_AD_TOKENS,
+  SUSPICIOUS_TRACKER_TOKENS,
+  adjustThreatCategory,
+  classifyInfrastructure,
+  hasStrongAdIntent,
+  hostnameHasToken,
+  normalizeHostname,
+  scoreBrandSpoof,
+} from './reputation.js';
 import type {
   AiVerdict,
   MiniAiFeatureContribution,
@@ -18,74 +29,6 @@ const COMMON_TRIGRAMS = new Set([
   'api', 'hub', 'box', 'doc', 'art', 'dat', 'dig', 'map', 'log', 'dns',
   'pay', 'sec', 'cdn', 'med', 'off', 'lan', 'car', 'cit', 'inf', 'vid',
 ]);
-
-const SUSPICIOUS_AD_TOKENS = new Set([
-  'ad', 'ads', 'adserver', 'adservice', 'adnxs', 'adform', 'adtech',
-  'doubleclick', 'googleadservices', 'googlesyndication', 'moatads', 'amazon-adsystem',
-  'bid', 'bidder', 'bidding', 'rtb', 'dsp', 'ssp', 'exchange',
-  'popunder', 'popcash', 'propeller', 'outbrain', 'taboola', 'mgid',
-  'revcontent', 'criteo', 'pubmatic', 'rubiconproject', 'openx', 'casalemedia', 'smartadserver',
-  'adsystem', 'adtrack', 'advert', 'advertising', 'adzerk', 'adblade',
-]);
-
-const SUSPICIOUS_TRACKER_TOKENS = new Set([
-  'pixel', 'beacon', 'collect', 'telemetry', 'analytics', 'tracker', 'tracking',
-  'click', 'conversion', 'attribution', 'affiliate', 'stat', 'stats', 'counter',
-  'scorecardresearch', 'quantserve', 'branch', 'appsflyer', 'adjust', 'mixpanel',
-  'segment', 'amplitude', 'sentry', 'datadoghq', 'hotjar', 'fullstory',
-  'clarity', 'mouseflow', 'optimizely', 'newrelic', 'heapanalytics',
-]);
-
-const HIGH_ABUSE_TLDS = new Set([
-  'top', 'xyz', 'buzz', 'click', 'fit', 'rest', 'tk', 'cf', 'gq', 'ml', 'ga',
-  'work', 'cam', 'surf', 'loan', 'racing', 'icu', 'gdn', 'vip', 'monster',
-]);
-
-const KNOWN_SAFE_INFRASTRUCTURE = new Set([
-  'github.com', 'githubassets.com', 'githubusercontent.com',
-  'cloudflare.com', 'cloudflare.net', 'cdnjs.cloudflare.com',
-  'jsdelivr.net', 'unpkg.com', 'googleapis.com', 'gstatic.com',
-  'google.com', 'accounts.google.com', 'apple.com', 'appleid.apple.com',
-  'icloud.com', 'microsoft.com', 'microsoftonline.com', 'live.com',
-  'windowsupdate.com', 'amazon.com', 'amazonaws.com', 'aws.amazon.com',
-  'wikipedia.org', 'wikimedia.org', 'mozilla.org', 'mozilla.net',
-  'one.one.one.one', 'dns.google',
-]);
-
-const HIGH_PROFILE_BRANDS = [
-  'paypal', 'google', 'apple', 'microsoft', 'amazon', 'netflix', 'github',
-  'chase', 'bankofamerica', 'wellsfargo', 'facebook', 'instagram', 'dropbox',
-  'coinbase', 'binance', 'steam', 'twitter', 'discord', 'roblox',
-];
-
-function computeLevenshtein(a: string, b: string): number {
-  const m = a.length;
-  const n = b.length;
-  if (Math.abs(m - n) > 2) return Math.abs(m - n);
-  if (m === 0) return n;
-  if (n === 0) return m;
-
-  let prevRow = new Array<number>(n + 1);
-  let currRow = new Array<number>(n + 1);
-
-  for (let j = 0; j <= n; j++) prevRow[j] = j;
-
-  for (let i = 1; i <= m; i++) {
-    currRow[0] = i;
-    for (let j = 1; j <= n; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      currRow[j] = Math.min(
-        prevRow[j] + 1,
-        currRow[j - 1] + 1,
-        prevRow[j - 1] + cost,
-      );
-    }
-    const temp = prevRow;
-    prevRow = currRow;
-    currRow = temp;
-  }
-  return prevRow[n];
-}
 
 export interface DomainFeatureVector {
   entropyFull: number;
@@ -199,26 +142,18 @@ export function extractDomainFeatures(
   const trigramFamiliarity = totalTrigrams > 0 ? familiarTrigrams / totalTrigrams : 0.5;
   const trigramPerplexity = sld.length >= 8 ? 1.0 - trigramFamiliarity : 0.2;
 
-  // 7. Keyword Matching
+  // 7. Keyword Matching (label boundaries; `status` must not match `stat`)
   let adKeywordWeight = 0;
   for (const token of SUSPICIOUS_AD_TOKENS) {
-    if (token.length >= 4) {
-      if (clean.includes(token)) adKeywordWeight += 0.5;
-    } else {
-      const regex = new RegExp(`(?:^|[.-])${token}(?:[.-]|$)`, 'i');
-      if (regex.test(clean)) adKeywordWeight += 0.4;
-    }
+    if (!hostnameHasToken(clean, token)) continue;
+    adKeywordWeight += token.length >= 4 ? 0.5 : 0.4;
   }
   adKeywordWeight = Math.min(1.5, adKeywordWeight);
 
   let trackerKeywordWeight = 0;
   for (const token of SUSPICIOUS_TRACKER_TOKENS) {
-    if (token.length >= 4) {
-      if (clean.includes(token)) trackerKeywordWeight += 0.5;
-    } else {
-      const regex = new RegExp(`(?:^|[.-])${token}(?:[.-]|$)`, 'i');
-      if (regex.test(clean)) trackerKeywordWeight += 0.4;
-    }
+    if (!hostnameHasToken(clean, token)) continue;
+    trackerKeywordWeight += token.length >= 4 ? 0.5 : 0.4;
   }
   trackerKeywordWeight = Math.min(1.5, trackerKeywordWeight);
 
@@ -227,15 +162,20 @@ export function extractDomainFeatures(
   const cnameExternal = context?.hasCnameCloaking ? 1.0 : 0.0;
   const cnameDepth = Math.min(1.0, (context?.cnames?.length || 0) / 4);
 
-  // 9. Safe Infrastructure Check
-  let isSafe = false;
-  if (context?.allowlist && context.allowlist.length > 0) {
-    isSafe = context.allowlist.some((al) => clean === al.toLowerCase() || clean.endsWith(`.${al.toLowerCase()}`));
-  }
-  if (!isSafe && (KNOWN_SAFE_INFRASTRUCTURE.has(clean) || Array.from(KNOWN_SAFE_INFRASTRUCTURE).some((s) => clean.endsWith(`.${s}`)))) {
-    isSafe = true;
-  }
-  const knownSafeInfra = isSafe ? 1.0 : 0.0;
+  // 9. Safe infrastructure. Advertising intent and brand spoofs are not protected.
+  const allowlisted = !!context?.allowlist?.some((al) => {
+    const entry = al.toLowerCase();
+    return clean === entry || clean.endsWith(`.${entry}`);
+  });
+  const infra = classifyInfrastructure(clean);
+  const brandSpoofScore = allowlisted ? 0 : scoreBrandSpoof(clean);
+  const adIntent = hasStrongAdIntent(clean);
+  const reputationSafe = infra.safe
+    && !infra.adNetwork
+    && infra.kind !== 'tracker-network'
+    && !adIntent
+    && brandSpoofScore <= 0;
+  const knownSafeInfra = allowlisted || reputationSafe ? 1.0 : 0.0;
 
   // 10. High-Risk TLD & Punycode
   const highRiskTld = HIGH_ABUSE_TLDS.has(tld) ? 1.0 : 0.0;
@@ -256,50 +196,6 @@ export function extractDomainFeatures(
   const syllableCadence = totalLetters > 1 ? transitions / (totalLetters - 1) : 0.5;
 
   const userTuneBias = Math.max(-1.0, Math.min(1.0, context?.userFeedbackBias || 0));
-
-  // 13. Brand Typo-Squatting / Impersonation Detection
-  let brandSpoofScore = 0;
-  if (knownSafeInfra === 0) {
-    const sldLower = sld.toLowerCase();
-    const tokens = sldLower.split(/[-_.]/).filter(Boolean);
-
-    for (const brand of HIGH_PROFILE_BRANDS) {
-      if (sldLower === brand) {
-        brandSpoofScore = 1.0;
-        break;
-      }
-      if (Math.abs(sldLower.length - brand.length) <= 2) {
-        const directDist = computeLevenshtein(sldLower, brand);
-        if (directDist === 1 || (brand.length >= 6 && directDist === 2)) {
-          brandSpoofScore = 1.0;
-          break;
-        }
-      }
-      if (sldLower.includes(brand) && sldLower.length > brand.length) {
-        if (/login|verify|security|auth|update|account|support|wallet|token|claim/i.test(sldLower)) {
-          brandSpoofScore = 1.0;
-          break;
-        }
-      }
-      // Check tokens within hyphenated SLDs (e.g. paypa1-security, apple-id-verify)
-      for (const tok of tokens) {
-        if (tok === brand) {
-          if (/login|verify|security|auth|update|account|support|wallet|token|claim/i.test(sldLower)) {
-            brandSpoofScore = 1.0;
-            break;
-          }
-        }
-        if (Math.abs(tok.length - brand.length) <= 2) {
-          const tokDist = computeLevenshtein(tok, brand);
-          if (tokDist === 1 || (brand.length >= 6 && tokDist === 2)) {
-            brandSpoofScore = 1.0;
-            break;
-          }
-        }
-      }
-      if (brandSpoofScore > 0) break;
-    }
-  }
 
   return {
     entropyFull,
@@ -624,11 +520,19 @@ export class MiniAiClassifier {
       }
     }
 
-    // False positive guard
-    if (features.knownSafeInfra > 0) {
-      bestCategory = 'Clean';
-      highestProb = 0.99;
-      classProbabilities.Clean = 0.99;
+    const host = normalizeHostname(domain);
+    const allowlisted = !!context?.allowlist?.some((entry) => {
+      const item = entry.toLowerCase();
+      return host === item || host.endsWith(`.${item}`);
+    });
+    const adjustment = adjustThreatCategory(domain, features, bestCategory, highestProb, {
+      knownTrackerCname: features.cnameKnownTracker > 0,
+      allowlisted,
+    });
+    bestCategory = adjustment.category;
+    highestProb = adjustment.probability;
+    if (features.knownSafeInfra > 0 && bestCategory === 'Clean') {
+      classProbabilities.Clean = Math.max(classProbabilities.Clean, highestProb);
     }
 
     // Map category to verdict
@@ -641,13 +545,17 @@ export class MiniAiClassifier {
       verdict = highestProb >= 0.65 ? 'tracker' : 'suspicious';
     } else if (bestCategory === 'Malware/Phishing') {
       verdict = highestProb >= 0.7 ? 'malicious' : 'suspicious';
+    } else if (bestCategory === 'Unknown') {
+      verdict = 'suspicious';
     }
 
-    // Risk level
+    // Risk level. Uncorroborated lexical noise stays low, never critical.
     let riskLevel: RiskLevel = 'none';
     if (verdict === 'malicious') riskLevel = 'critical';
     else if (verdict === 'ad_server' || verdict === 'tracker') {
       riskLevel = highestProb >= 0.8 ? 'high' : 'medium';
+    } else if (bestCategory === 'Unknown') {
+      riskLevel = 'low';
     } else if (verdict === 'suspicious') {
       riskLevel = 'medium';
     }
@@ -655,15 +563,14 @@ export class MiniAiClassifier {
     // Compile human-readable explanations & top feature attributions
     const reasons: string[] = [];
 
-    if (features.knownSafeInfra > 0) {
+    if (features.knownSafeInfra > 0 || (adjustment.policyReason && bestCategory === 'Clean')) {
       contributions.push({
         name: 'Safe Infrastructure',
         value: 1.0,
         weight: 15.0,
         impact: 'clean',
-        description: 'Verified public CDN / cloud identity infrastructure',
+        description: 'Verified public CDN, cloud, vendor, or device infrastructure',
       });
-      reasons.push('Verified essential infrastructure or user whitelist (Protected by False Positive Guard)');
     }
 
     if (features.adKeywordWeight > 0.3) {
@@ -732,17 +639,6 @@ export class MiniAiClassifier {
       reasons.push(`High trigram perplexity (${features.trigramPerplexity.toFixed(2)}): random character sequencing`);
     }
 
-    if (features.entropyFull >= 3.7) {
-      contributions.push({
-        name: 'Shannon Entropy',
-        value: features.entropyFull,
-        weight: 2.5,
-        impact: 'threat',
-        description: 'High information entropy in hostname',
-      });
-      reasons.push(`High Shannon entropy (${features.entropyFull.toFixed(2)}) indicates pseudo-random hostname`);
-    }
-
     if (features.brandSpoofScore > 0) {
       contributions.push({
         name: 'Brand Typo-Squatting',
@@ -765,6 +661,11 @@ export class MiniAiClassifier {
       reasons.push('Registered on high-abuse top-level domain frequently used for ad evasion');
     }
 
+    if ((bestCategory === 'Clean' || bestCategory === 'Unknown') && adjustment.policyReason) {
+      reasons.length = 0;
+      reasons.push(adjustment.policyReason);
+    }
+
     if (reasons.length === 0) {
       reasons.push('Standard lexical structure: no ad tokens, tracking beacons, or DGA patterns detected');
     }
@@ -775,7 +676,7 @@ export class MiniAiClassifier {
     return {
       verdict,
       category: bestCategory,
-      confidence: Math.max(10, Math.min(99, confidence)),
+      confidence: Math.max(0, Math.min(100, confidence)),
       riskLevel,
       classProbabilities,
       topContributions: contributions.sort((a, b) => b.weight * b.value - a.weight * a.value).slice(0, 5),
