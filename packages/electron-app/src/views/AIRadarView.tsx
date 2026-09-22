@@ -57,6 +57,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
   const [scoutService, setScoutService] = useState<'adguard' | 'pihole'>('adguard');
   const [isScouting, setIsScouting] = useState(false);
   const [scoutResult, setScoutResult] = useState<QueryLogScanResult | null>(null);
+  const [scoutError, setScoutError] = useState<string | null>(null);
   const [sinkholeConfig, setSinkholeConfig] = useState<SinkholeConfig | null>(null);
   const [blockedItemsMap, setBlockedItemsMap] = useState<Set<string>>(new Set());
 
@@ -224,6 +225,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     if (!window.electron?.aiScanQueryLog) return;
     setIsScouting(true);
     setError?.(null);
+    setScoutError(null);
     try {
       const res = await window.electron.aiScanQueryLog({ service: scoutService, limit: 60 });
       if (isMountedRef.current) {
@@ -251,14 +253,21 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           });
         }
 
-        if (res.flaggedCount === 0) {
+        if (res.notice && res.totalQueriesAnalyzed === 0) {
+          setSuccessMessage?.(res.notice);
+        } else if (res.flaggedCount === 0) {
           setSuccessMessage?.(`Analyzed ${res.totalQueriesAnalyzed} unblocked queries. All benign.`);
         } else {
           setSuccessMessage?.(`Flagged ${res.flaggedCount} suspicious ad/tracker domains out of ${res.totalQueriesAnalyzed} queries.`);
         }
       }
     } catch (err: any) {
-      setError?.(`Query log scout failed: ${err?.message || err}`);
+      const message = `Query log scout failed: ${err?.message || err}`;
+      if (isMountedRef.current) {
+        setScoutResult(null);
+        setScoutError(message);
+      }
+      setError?.(message);
     } finally {
       if (isMountedRef.current) setIsScouting(false);
     }
@@ -773,7 +782,26 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             </div>
 
             {/* If no sinkhole configured */}
-            {sinkholeConfig && !sinkholeConfig.adguardHomeUrl && !sinkholeConfig.piholeUrl && (
+            {sinkholeConfig && (sinkholeConfig.adguardMode === 'ha-api' || sinkholeConfig.adguardMode === 'webhook') && !sinkholeConfig.adguardDirectUrl && (
+              <div className="radar-hint-box">
+                <div>
+                  <strong>AdGuard Direct URL needed for the query log.</strong> {sinkholeConfig.adguardMode === 'webhook' ? 'Webhook mode reloads Home Assistant and does not read the AdGuard query log.' : `Home Assistant REST API mode is using ${sinkholeConfig.adguardHomeUrl || 'the Home Assistant URL'} for reloads.`} Set the AdGuard Direct URL, for example https://homeassistant.local:8124, in Deploy Hub so this scout does not read Home Assistant.
+                  <button type="button" className="text-button-link" onClick={onNavigateDeploy} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 6 }}>
+                    <span>Open Deploy Hub</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {scoutError && (
+              <div className="radar-hint-box scout-error-box" role="alert">
+                <div>
+                  <strong>Query log was not loaded.</strong> {scoutError}
+                </div>
+              </div>
+            )}
+
+            {sinkholeConfig && !sinkholeConfig.adguardHomeUrl && !sinkholeConfig.adguardDirectUrl && !sinkholeConfig.piholeUrl && (
               <div className="radar-hint-box">
                 <span className="hint-icon">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -796,6 +824,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             )}
 
             {/* Metrics summary bar */}
+            {scoutResult && scoutResult.notice && scoutResult.totalQueriesAnalyzed === 0 && (
+              <p className="scout-empty-note">{scoutResult.notice}</p>
+            )}
+
             {scoutResult && (
               <div className="scout-metrics-row">
                 <div className="metric-box">
