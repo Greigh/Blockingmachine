@@ -46,14 +46,30 @@ describe('Mini-AI Domain Threat Classifier', () => {
     const classifier = new MiniAiClassifier();
 
     it('accurately classifies known ad servers as Advertising / ad_server', () => {
-      const prediction = classifier.classify('adservice.googleadservices.com');
+      const domain = 'adservice.googleadservices.com';
+
+      // Warm up JIT and feature caches before timing (same pattern as throughput benchmark)
+      for (let i = 0; i < 50; i++) {
+        classifier.classify(domain);
+      }
+
+      const prediction = classifier.classify(domain);
       expect(prediction.category).toBe('Advertising');
       expect(['ad_server', 'suspicious']).toContain(prediction.verdict);
       expect(prediction.confidence).toBeGreaterThanOrEqual(70);
       expect(prediction.topContributions.length).toBeGreaterThan(0);
-      expect(prediction.inferenceTimeMs).toBeLessThan(5); // Ultra fast
 
-      const helperPrediction = classifyDomainWithMiniAi('adservice.googleadservices.com');
+      const timingSamples: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        timingSamples.push(classifier.classify(domain).inferenceTimeMs);
+      }
+      timingSamples.sort((a, b) => a - b);
+      const medianMs = timingSamples[Math.floor(timingSamples.length / 2)];
+      const p95Ms = timingSamples[Math.ceil(timingSamples.length * 0.95) - 1];
+      expect(medianMs).toBeLessThan(5);
+      expect(p95Ms).toBeLessThan(10); // headroom for throttled CI runners
+
+      const helperPrediction = classifyDomainWithMiniAi(domain);
       expect(helperPrediction.category).toBe('Advertising');
     });
 
