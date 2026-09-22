@@ -56,23 +56,35 @@ import type {
 } from './types';
 
 async function installExtensions() {
-  if (isDev) {
-    try {
-      const { default: installExtension, REACT_DEVELOPER_TOOLS } = await import(
-        'electron-devtools-installer'
-      );
-      const extensionPath = await installExtension(REACT_DEVELOPER_TOOLS);
-      const extensionRef =
-        await session.defaultSession.extensions.loadExtension(typeof extensionPath === 'string' ? extensionPath : extensionPath.path);
+  if (!isDev) return;
 
-      if (!extensionRef) {
-        throw new Error('Failed to load React DevTools extension');
-      }
+  try {
+    // electron-devtools-installer 4.0.0 still calls session.getAllExtensions and
+    // session.loadExtension. Those Session methods are deprecated in this Electron
+    // version. Download the extension, then load it only through session.extensions.
+    const { REACT_DEVELOPER_TOOLS } = await import('electron-devtools-installer');
+    const downloader = await import(
+      'electron-devtools-installer/dist/downloadChromeExtension.js'
+    );
+    const downloadChromeExtension = downloader.downloadChromeExtension;
+    const extensionId = REACT_DEVELOPER_TOOLS.id;
+    const extensions = session.defaultSession.extensions;
 
-      console.log('React DevTools installed:', extensionRef.name);
-    } catch (err) {
-      console.error('Failed to install extension:', err);
+    const existing = extensions.getAllExtensions().find((ext) => ext.id === extensionId);
+    if (existing) {
+      console.log('React DevTools installed:', existing.name);
+      return;
     }
+
+    const extensionFolder = await downloadChromeExtension(extensionId);
+    const extensionRef = await extensions.loadExtension(extensionFolder);
+    if (!extensionRef) {
+      throw new Error('Failed to load React DevTools extension');
+    }
+
+    console.log('React DevTools installed:', extensionRef.name);
+  } catch (err) {
+    console.error('Failed to install extension:', err);
   }
 }
 

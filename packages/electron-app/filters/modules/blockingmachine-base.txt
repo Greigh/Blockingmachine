@@ -1,4 +1,4 @@
-! Title: Blockingmachine Base Ad Shield [Beta]
+! Title: Base Ad Shield [Beta]
 ! Description: Primary network-level and browser shield blocking banner ad exchanges, video ad injection, programmatic bidding, and sponsored recommendation networks.
 ! Version: 1.0.0-beta.1
 ! Expires: 2 days

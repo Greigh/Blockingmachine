@@ -17,7 +17,7 @@ export interface NativeModuleItem {
 export const NATIVE_DEFENSE_MODULES: NativeModuleItem[] = [
   {
     id: 'base-ads',
-    name: 'Blockingmachine Base Ad Shield [Beta]',
+    name: 'Base Ad Shield [Beta]',
     filename: 'blockingmachine-base.txt',
     url: './filters/modules/blockingmachine-base.txt',
     scope: 'hybrid',
@@ -28,7 +28,7 @@ export const NATIVE_DEFENSE_MODULES: NativeModuleItem[] = [
   },
   {
     id: 'privacy-engine',
-    name: 'Blockingmachine Privacy Engine [Beta]',
+    name: 'Privacy Engine [Beta]',
     filename: 'blockingmachine-privacy.txt',
     url: './filters/modules/blockingmachine-privacy.txt',
     scope: 'hybrid',
@@ -39,7 +39,7 @@ export const NATIVE_DEFENSE_MODULES: NativeModuleItem[] = [
   },
   {
     id: 'smart-tv',
-    name: 'Blockingmachine Smart TV & IoT Shield [Beta]',
+    name: 'Smart TV & IoT Shield [Beta]',
     filename: 'blockingmachine-smarttv.txt',
     url: './filters/modules/blockingmachine-smarttv.txt',
     scope: 'dns',
@@ -50,7 +50,7 @@ export const NATIVE_DEFENSE_MODULES: NativeModuleItem[] = [
   },
   {
     id: 'annoyances',
-    name: 'Blockingmachine Web Annoyances & Cookie Banners [Beta]',
+    name: 'Web Annoyances & Cookie Banners [Beta]',
     filename: 'blockingmachine-annoyances.txt',
     url: './filters/modules/blockingmachine-annoyances.txt',
     scope: 'browser',
@@ -62,7 +62,7 @@ export const NATIVE_DEFENSE_MODULES: NativeModuleItem[] = [
   },
   {
     id: 'social',
-    name: 'Blockingmachine Social Tracker Neutralizer [Beta]',
+    name: 'Social Tracker Neutralizer [Beta]',
     filename: 'blockingmachine-social.txt',
     url: './filters/modules/blockingmachine-social.txt',
     scope: 'hybrid',
@@ -73,7 +73,7 @@ export const NATIVE_DEFENSE_MODULES: NativeModuleItem[] = [
   },
   {
     id: 'threats',
-    name: 'Blockingmachine Threat & Malicious Domain Defense [Beta]',
+    name: 'Threat & Malicious Domain Defense [Beta]',
     filename: 'blockingmachine-security.txt',
     url: './filters/modules/blockingmachine-security.txt',
     scope: 'dns',
@@ -84,7 +84,7 @@ export const NATIVE_DEFENSE_MODULES: NativeModuleItem[] = [
   },
   {
     id: 'url-tracking',
-    name: 'Blockingmachine URL Tracking Stripper [Beta]',
+    name: 'URL Tracking Stripper [Beta]',
     filename: 'blockingmachine-url-tracking.txt',
     url: './filters/modules/blockingmachine-url-tracking.txt',
     scope: 'browser',
@@ -95,7 +95,7 @@ export const NATIVE_DEFENSE_MODULES: NativeModuleItem[] = [
   },
   {
     id: 'unbreak',
-    name: 'Blockingmachine Unbreak & Safe Exceptions [Beta]',
+    name: 'Unbreak & Safe Exceptions [Beta]',
     filename: 'blockingmachine-unbreak.txt',
     url: './filters/modules/blockingmachine-unbreak.txt',
     scope: 'hybrid',
@@ -323,8 +323,8 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
             <span className="title-beta-badge">Beta</span>
           </h2>
           <p className="modules-hero-subtitle">
-            Modular, high-performance filter lists crafted natively for Blockingmachine.
-            Mix and match granular shields for DNS sinkholes, Home Assistant, routers, and desktop browsers.
+            First-party Defense Suite lists for DNS sinkholes, Home Assistant, routers, and desktop browsers.
+            Mix and match granular shields, then compile and deploy them together.
           </p>
         </div>
 

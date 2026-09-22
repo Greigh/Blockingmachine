@@ -1,4 +1,4 @@
-! Title: Blockingmachine Web Annoyances & Cookie Banners [Beta]
+! Title: Web Annoyances & Cookie Banners [Beta]
 ! Description: Blocks GDPR cookie overlays, newsletter popups, floating prompts, and anti-adblock nags.
 ! Version: 1.0.0-beta.2
 ! Expires: 2 days

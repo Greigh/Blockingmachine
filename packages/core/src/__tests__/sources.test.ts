@@ -3,6 +3,7 @@ import {
   sourceCategories,
   getSourceProfile,
   detectSourceClassification,
+  displayFilterLabel,
   CURATED_SOURCE_PROFILES,
 } from "../index.js";
 
@@ -58,6 +59,24 @@ describe("Source Classification Taxonomy & Intelligence", () => {
   });
 
   describe("getSourceProfile", () => {
+    test("keeps legacy defense module names resolvable and strips them for display", () => {
+      expect(displayFilterLabel("Blockingmachine Base Ad Shield [Beta]")).toBe(
+        "Base Ad Shield [Beta]",
+      );
+      expect(displayFilterLabel("Blockingmachine Defense Suite [Beta]")).toBe(
+        "Defense Suite [Beta]",
+      );
+      expect(displayFilterLabel("Blockingmachine Rules")).toBe("Blockingmachine Rules");
+      expect(displayFilterLabel("AdGuard DNS Filter")).toBe("AdGuard DNS Filter");
+
+      const legacy = getSourceProfile("Blockingmachine Privacy Engine [Beta]");
+      expect(legacy.name).toBe("Privacy Engine [Beta]");
+      expect(legacy.url).toContain("blockingmachine-privacy.txt");
+      expect(sourceCategories["Blockingmachine Privacy Engine [Beta]"]).toEqual(
+        sourceCategories["Privacy Engine [Beta]"],
+      );
+    });
+
     test("resolves known sources by exact name", () => {
       const profile = getSourceProfile("AdGuard DNS Filter");
       expect(profile.name).toBe("AdGuard DNS Filter");

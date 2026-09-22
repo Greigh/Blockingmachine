@@ -266,20 +266,20 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       }
     });
 
-    test('registers all 8 first-party Blockingmachine [Beta] modules and Defense Suite bundle', async () => {
+    test('registers all 8 first-party [Beta] modules and Defense Suite bundle', async () => {
       const { PRESET_BUNDLES, PRESET_CATALOG } = await import('../views/PresetsModal.js');
-      const { CURATED_SOURCE_PROFILES } = await import('@blockingmachine/core');
+      const { CURATED_SOURCE_PROFILES, displayFilterLabel, getSourceProfile } = await import('@blockingmachine/core');
       const { NATIVE_DEFENSE_MODULES } = await import('../views/ModulesView.js');
 
       const expectedBetaNames = [
-        'Blockingmachine Base Ad Shield [Beta]',
-        'Blockingmachine Privacy Engine [Beta]',
-        'Blockingmachine Smart TV & IoT Shield [Beta]',
-        'Blockingmachine Web Annoyances & Cookie Banners [Beta]',
-        'Blockingmachine Social Tracker Neutralizer [Beta]',
-        'Blockingmachine Threat & Malicious Domain Defense [Beta]',
-        'Blockingmachine URL Tracking Stripper [Beta]',
-        'Blockingmachine Unbreak & Safe Exceptions [Beta]',
+        'Base Ad Shield [Beta]',
+        'Privacy Engine [Beta]',
+        'Smart TV & IoT Shield [Beta]',
+        'Web Annoyances & Cookie Banners [Beta]',
+        'Social Tracker Neutralizer [Beta]',
+        'Threat & Malicious Domain Defense [Beta]',
+        'URL Tracking Stripper [Beta]',
+        'Unbreak & Safe Exceptions [Beta]',
       ];
 
       for (const betaName of expectedBetaNames) {
@@ -291,6 +291,11 @@ describe('Electron App Core Utilities & IPC Logic', () => {
         expect(coreEntry).toBeDefined();
         expect(coreEntry?.trusted).toBe(true);
         expect(coreEntry?.priority).toBe(0);
+        expect(betaName.startsWith('Blockingmachine ')).toBe(false);
+
+        const legacyName = `Blockingmachine ${betaName}`;
+        expect(displayFilterLabel(legacyName)).toBe(betaName);
+        expect(getSourceProfile(legacyName).name).toBe(betaName);
 
         const nativeModule = NATIVE_DEFENSE_MODULES.find((m) => m.name === betaName);
         expect(nativeModule).toBeDefined();
@@ -299,8 +304,9 @@ describe('Electron App Core Utilities & IPC Logic', () => {
 
       const suiteBundle = PRESET_BUNDLES.find((b) => b.id === 'blockingmachine-suite');
       expect(suiteBundle).toBeDefined();
-      expect(suiteBundle?.name).toBe('Blockingmachine Defense Suite [Beta]');
+      expect(suiteBundle?.name).toBe('Defense Suite [Beta]');
       expect(suiteBundle?.badge).toContain('Beta');
+      expect(displayFilterLabel('Blockingmachine Defense Suite [Beta]')).toBe('Defense Suite [Beta]');
       expect(suiteBundle?.items).toHaveLength(8);
       expect(suiteBundle?.items.map((i) => i.name).sort()).toEqual([...expectedBetaNames].sort());
       expect(NATIVE_DEFENSE_MODULES).toHaveLength(8);
@@ -330,7 +336,8 @@ describe('Electron App Core Utilities & IPC Logic', () => {
         expect(existsSync(filePath)).toBe(true);
 
         const content = readFileSync(filePath, 'utf-8');
-        expect(content).toContain('! Title: Blockingmachine ');
+        expect(content).toMatch(/^! Title: /);
+        expect(content).not.toContain('! Title: Blockingmachine ');
         expect(content).toContain('[Beta]');
         expect(content).toContain('! Homepage: https://github.com/greigh/blockingmachine');
         expect(content).toContain('! License: BSD-3-Clause');
@@ -360,6 +367,63 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       expect(bundleIds).toContain('essential');
       expect(bundleIds).toContain('privacy-fortress');
       expect(bundleIds).toContain('distraction-free');
+      expect(bundleIds).toContain('blockingmachine-suite');
+    });
+
+    test('first-run tour covers defense setup, deploy, and on-device AI', async () => {
+      const {
+        ONBOARDING_STEPS,
+        ONBOARDING_HIGHLIGHTS,
+        DEPLOY_SETUP_OPTIONS,
+        AI_SETUP_OPTIONS,
+      } = await import('../views/onboardingContent.js');
+
+      expect(ONBOARDING_STEPS.map((step) => step.label)).toEqual([
+        'Welcome',
+        'Protection',
+        'Setup',
+        'Personalize',
+        'Launch',
+      ]);
+
+      const titles = ONBOARDING_HIGHLIGHTS.map((item) => item.title);
+      expect(titles).toEqual([
+        'Defense Suite',
+        'Unified Inspector',
+        'AI Radar',
+        'Threat Quarantine',
+        'Deploy & Sync',
+        'One compile, many formats',
+      ]);
+      for (const item of ONBOARDING_HIGHLIGHTS) {
+        expect(item.title.startsWith('Blockingmachine')).toBe(false);
+        expect(item.body.length).toBeGreaterThan(20);
+      }
+
+      expect(DEPLOY_SETUP_OPTIONS.map((option) => option.id)).toEqual([
+        'adguard',
+        'pihole',
+        'lan',
+        'later',
+      ]);
+      expect(DEPLOY_SETUP_OPTIONS.find((option) => option.id === 'adguard')?.format).toBe('adguard');
+      expect(DEPLOY_SETUP_OPTIONS.find((option) => option.id === 'pihole')?.format).toBe('hosts');
+      expect(AI_SETUP_OPTIONS.map((option) => option.id)).toEqual(['mini-ai', 'later']);
+    });
+
+    test('devtools install uses session.extensions instead of deprecated session methods', () => {
+      const candidates = [
+        join(process.cwd(), 'src/index.ts'),
+        join(process.cwd(), 'packages/electron-app/src/index.ts'),
+      ];
+      const sourcePath = candidates.find((candidate) => existsSync(candidate));
+      expect(sourcePath).toBeTruthy();
+      const source = readFileSync(sourcePath as string, 'utf8');
+      expect(source).toContain('extensions.getAllExtensions');
+      expect(source).toContain('extensions.loadExtension');
+      expect(source).not.toMatch(/(?<!extensions\.)getAllExtensions\s*\(/);
+      expect(source).not.toMatch(/(?<!extensions\.)loadExtension\s*\(/);
+      expect(source).not.toContain('installExtension(');
     });
 
     test('Onboarding completion key matches expected convention', () => {

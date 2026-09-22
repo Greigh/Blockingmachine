@@ -79,7 +79,7 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     recommendedFor: "Default baseline and repository-level rule overrides",
   },
   {
-    name: "Blockingmachine Base Ad Shield [Beta]",
+    name: "Base Ad Shield [Beta]",
     url: "./filters/modules/blockingmachine-base.txt",
     scope: "hybrid",
     category: "ads",
@@ -92,7 +92,7 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     recommendedFor: "Essential ad-blocking foundation for browsers and network-level sinkholes",
   },
   {
-    name: "Blockingmachine Privacy Engine [Beta]",
+    name: "Privacy Engine [Beta]",
     url: "./filters/modules/blockingmachine-privacy.txt",
     scope: "hybrid",
     category: "privacy",
@@ -105,7 +105,7 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     recommendedFor: "All devices seeking maximum data privacy without breakage",
   },
   {
-    name: "Blockingmachine Smart TV & IoT Shield [Beta]",
+    name: "Smart TV & IoT Shield [Beta]",
     url: "./filters/modules/blockingmachine-smarttv.txt",
     scope: "dns",
     category: "privacy",
@@ -118,7 +118,7 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     recommendedFor: "Home network DNS sinkholes, AdGuard Home, and Pi-hole",
   },
   {
-    name: "Blockingmachine Web Annoyances & Cookie Banners [Beta]",
+    name: "Web Annoyances & Cookie Banners [Beta]",
     url: "./filters/modules/blockingmachine-annoyances.txt",
     scope: "browser",
     category: "annoyances",
@@ -132,7 +132,7 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     warning: "Contains cosmetic rules (##) that require DOM inspection; ineffective on pure DNS sinkholes",
   },
   {
-    name: "Blockingmachine Social Tracker Neutralizer [Beta]",
+    name: "Social Tracker Neutralizer [Beta]",
     url: "./filters/modules/blockingmachine-social.txt",
     scope: "hybrid",
     category: "social",
@@ -145,7 +145,7 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     recommendedFor: "Browser extensions, DNS sinkholes, and desktop ad-blockers",
   },
   {
-    name: "Blockingmachine Threat & Malicious Domain Defense [Beta]",
+    name: "Threat & Malicious Domain Defense [Beta]",
     url: "./filters/modules/blockingmachine-security.txt",
     scope: "dns",
     category: "security",
@@ -158,7 +158,7 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     recommendedFor: "Network firewalls, routers, Pi-hole, and AdGuard Home",
   },
   {
-    name: "Blockingmachine URL Tracking Stripper [Beta]",
+    name: "URL Tracking Stripper [Beta]",
     url: "./filters/modules/blockingmachine-url-tracking.txt",
     scope: "browser",
     category: "privacy",
@@ -171,7 +171,7 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     recommendedFor: "Browser extensions and content blockers supporting $removeparam rules",
   },
   {
-    name: "Blockingmachine Unbreak & Safe Exceptions [Beta]",
+    name: "Unbreak & Safe Exceptions [Beta]",
     url: "./filters/modules/blockingmachine-unbreak.txt",
     scope: "hybrid",
     category: "unbreak",
@@ -495,11 +495,40 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
   },
 ];
 
+const LEGACY_DEFENSE_MODULE_NAMES = [
+  "Blockingmachine Base Ad Shield [Beta]",
+  "Blockingmachine Privacy Engine [Beta]",
+  "Blockingmachine Smart TV & IoT Shield [Beta]",
+  "Blockingmachine Web Annoyances & Cookie Banners [Beta]",
+  "Blockingmachine Social Tracker Neutralizer [Beta]",
+  "Blockingmachine Threat & Malicious Domain Defense [Beta]",
+  "Blockingmachine URL Tracking Stripper [Beta]",
+  "Blockingmachine Unbreak & Safe Exceptions [Beta]",
+  "Blockingmachine Defense Suite [Beta]",
+];
+
+export function displayFilterLabel(name: string): string {
+  const trimmed = (name || "").trim();
+  const legacy = LEGACY_DEFENSE_MODULE_NAMES.find(
+    (entry) => entry.toLowerCase() === trimmed.toLowerCase(),
+  );
+  if (!legacy) return trimmed;
+  return legacy.replace(/^Blockingmachine\s+/i, "");
+}
+
 // Profile map keyed by normalized name and normalized URL
 const profileLookup = new Map<string, SourceProfile>();
 for (const profile of CURATED_SOURCE_PROFILES) {
   profileLookup.set(profile.name.toLowerCase().trim(), profile);
   profileLookup.set(profile.url.toLowerCase().trim(), profile);
+}
+
+for (const legacyName of LEGACY_DEFENSE_MODULE_NAMES) {
+  const currentName = legacyName.replace(/^Blockingmachine\s+/i, "");
+  const profile = profileLookup.get(currentName.toLowerCase());
+  if (profile) {
+    profileLookup.set(legacyName.toLowerCase(), profile);
+  }
 }
 
 // Aliases
@@ -765,6 +794,13 @@ sourceCategories["uBlock Filters"] = {
   trusted: true,
   priority: 1,
 };
+
+for (const legacyName of LEGACY_DEFENSE_MODULE_NAMES) {
+  const currentName = legacyName.replace(/^Blockingmachine\s+/i, "");
+  if (sourceCategories[currentName]) {
+    sourceCategories[legacyName] = sourceCategories[currentName];
+  }
+}
 
 export const sourceValidation: SourceValidationMap = {
   updateFrequency: {

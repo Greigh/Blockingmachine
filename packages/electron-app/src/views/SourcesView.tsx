@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import type { FilterSource, FeedDiagnostic, SourceScope } from '../types';
-import { getSourceProfile, detectSourceClassification } from '@blockingmachine/core/sources';
+import { getSourceProfile, detectSourceClassification, displayFilterLabel } from '@blockingmachine/core/sources';
 import { PresetsModal } from './PresetsModal';
 
 interface SourcesViewProps {
@@ -370,6 +370,7 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
     const query = searchQuery.toLowerCase();
     const matchesSearch =
       s.name.toLowerCase().includes(query) ||
+      displayFilterLabel(s.name).toLowerCase().includes(query) ||
       s.url.toLowerCase().includes(query) ||
       profile.category.toLowerCase().includes(query) ||
       profile.description.toLowerCase().includes(query);
@@ -639,7 +640,7 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
 
               <div className="source-info-col">
                 <div className="source-title-row">
-                  <span className="source-name">{source.name}</span>
+                  <span className="source-name">{displayFilterLabel(source.name)}</span>
                   <div className="source-badges-group">
                     {renderScopeBadge(profile.scope)}
                     {renderCategoryBadge(profile.category)}
