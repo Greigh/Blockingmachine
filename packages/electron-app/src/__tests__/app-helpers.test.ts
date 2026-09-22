@@ -2,6 +2,15 @@ import { describe, test, expect } from '@jest/globals';
 import { resolve, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { cleanDomainPattern } from '@blockingmachine/core';
+import {
+  formatSinkholeError,
+  isPrivateOrLocalHost,
+  normalizeServiceUrl,
+  replaceMatchingExplicitPort,
+  resolveAdguardDirectUrl,
+  resolveHaApiUrl,
+  shouldBypassUntrustedTls,
+} from '../sinkholeNet';
 
 describe('Electron App Core Utilities & IPC Logic', () => {
   describe('Sinkhole URL and Credential Helpers', () => {
@@ -529,57 +538,6 @@ describe('Electron App Core Utilities & IPC Logic', () => {
   });
 
   describe('Home Assistant & AdGuard Multi-Mode Integration Helpers', () => {
-    function normalizeUrl(raw: string): string {
-      let url = raw.trim();
-      if (url.includes('nabu.casa')) {
-        if (url.startsWith('http://')) {
-          url = url.replace(/^http:\/\//, 'https://');
-        } else if (!url.startsWith('https://')) {
-          url = `https://${url}`;
-        }
-      } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        url = `http://${url}`;
-      }
-      return url.replace(/\/$/, '');
-    }
-
-    function checkAdguardPortDiagnostic(urlStr: string, mode: 'direct' | 'ha-api' | 'webhook'): {
-      isPort8123Warning: boolean;
-      isNabuCasaDirectWarning: boolean;
-      diagnosticMessage?: string;
-    } {
-      const normalized = normalizeUrl(urlStr);
-      if (mode === 'direct' && normalized.includes('nabu.casa')) {
-        return {
-          isPort8123Warning: false,
-          isNabuCasaDirectWarning: true,
-          diagnosticMessage:
-            'Nabu Casa Cloud remote URLs only proxy Home Assistant itself (port 8123), not AdGuard Home direct port 3000. Switch Mode to "Home Assistant REST API" or "Home Assistant Webhook" to reload AdGuard over Nabu Casa.',
-        };
-      }
-      if (mode === 'direct' && normalized.includes(':8123')) {
-        return {
-          isPort8123Warning: true,
-          isNabuCasaDirectWarning: false,
-          diagnosticMessage:
-            'Port 8123 detected (Home Assistant web interface). For AdGuard Home direct API, use port 3000 (e.g. http://homeassistant.local:3000) after mapping it in Add-ons > AdGuard Home > Configuration > Network, or select "Home Assistant API" mode.',
-        };
-      }
-      return { isPort8123Warning: false, isNabuCasaDirectWarning: false };
-    }
-
-    function buildHaApiServiceRequest(rawUrl: string, token: string) {
-      const base = normalizeUrl(rawUrl);
-      return {
-        url: `${base}/api/services/adguard/refresh`,
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token.trim()}`,
-          'Content-Type': 'application/json',
-        },
-      };
-    }
-
     function buildCustomWebhookPayload(event = 'blockingmachine_compiled') {
       return {
         event,
@@ -587,56 +545,179 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       };
     }
 
-    test('detects port 8123 in direct AdGuard Home mode and returns helpful diagnostic guidance', () => {
-      const diag1 = checkAdguardPortDiagnostic('http://homeassistant.local:8123', 'direct');
-      expect(diag1.isPort8123Warning).toBe(true);
-      expect(diag1.diagnosticMessage).toContain('Port 8123 detected');
-      expect(diag1.diagnosticMessage).toContain('port 3000');
+    test('detects Home Assistant frontend ports in direct AdGuard mode', () => {
+      const diag1 = resolveAdguardDirectUrl('http://homeassistant.local:8123', 3000);
+      expect(diag1.ok).toBe(false);
+      if (!diag1.ok) {
+        expect(diag1.code).toBe('ha_frontend');
+        expect(diag1.message).toContain('Port 8123 is the Home Assistant web interface');
+        expect(diag1.message).toContain('not AdGuard Direct');
+        expect(diag1.message).toContain('port (3000)');
+        expect(diag1.message).not.toContain('Cannot connect to port 3000');
+      }
 
-      const diag2 = checkAdguardPortDiagnostic('192.168.1.100:8123/', 'direct');
-      expect(diag2.isPort8123Warning).toBe(true);
+      const diag8124 = resolveAdguardDirectUrl('https://homeassistant.local:8124', 3000);
+      expect(diag8124.ok).toBe(false);
+      if (!diag8124.ok) {
+        expect(diag8124.code).toBe('ha_frontend');
+        expect(diag8124.message).toContain('Port 8124');
+        expect(diag8124.message).not.toContain('Cannot connect to port 3000');
+      }
 
-      // In HA API mode, port 8123 is expected and valid, so no warning
-      const diag3 = checkAdguardPortDiagnostic('http://homeassistant.local:8123', 'ha-api');
-      expect(diag3.isPort8123Warning).toBe(false);
+      const diag2 = resolveAdguardDirectUrl('192.168.1.100:8123/', 3000);
+      expect(diag2.ok).toBe(false);
 
-      // Port 3000 in direct mode has no warning
-      const diag4 = checkAdguardPortDiagnostic('http://homeassistant.local:3000', 'direct');
-      expect(diag4.isPort8123Warning).toBe(false);
+      const lovelace = resolveAdguardDirectUrl('http://homeassistant.local/lovelace/default', 3000);
+      expect(lovelace.ok).toBe(false);
+      if (!lovelace.ok) expect(lovelace.code).toBe('ha_frontend');
+
+      const haApiPath = resolveAdguardDirectUrl('http://homeassistant.local:8124/api/', 3001);
+      expect(haApiPath.ok).toBe(false);
+      if (!haApiPath.ok) {
+        expect(haApiPath.message).toContain('port (3001)');
+        expect(haApiPath.message).not.toContain('port (3000)');
+      }
+
+      const directOk = resolveAdguardDirectUrl('http://homeassistant.local:3000', 3000);
+      expect(directOk.ok).toBe(true);
+    });
+
+    test('keeps a custom Home Assistant port in REST API mode', () => {
+      const ha = resolveHaApiUrl('https://homeassistant.local:8124');
+      expect(ha.ok).toBe(true);
+      if (ha.ok) {
+        expect(ha.target.pingUrl).toBe('https://homeassistant.local:8124/api/');
+        expect(ha.target.refreshUrl).toBe('https://homeassistant.local:8124/api/services/adguard/refresh');
+        expect(ha.target.port).toBe(8124);
+      }
+    });
+
+    test('applies the configured direct port unless the URL already has one', () => {
+      const implied = resolveAdguardDirectUrl('http://homeassistant.local', 3001);
+      expect(implied.ok).toBe(true);
+      if (implied.ok) {
+        expect(implied.target.statusUrl).toBe('http://homeassistant.local:3001/control/status');
+        expect(implied.target.refreshUrl).toBe('http://homeassistant.local:3001/control/filtering/refresh');
+      }
+
+      const explicit = resolveAdguardDirectUrl('https://adguard.lan:8080', 3000);
+      expect(explicit.ok).toBe(true);
+      if (explicit.ok) {
+        expect(explicit.target.statusUrl).toBe('https://adguard.lan:8080/control/status');
+        expect(explicit.target.port).toBe(8080);
+      }
+
+      const controlOnHaPort = resolveAdguardDirectUrl('http://adguard.local:8124/control/status', 3000);
+      expect(controlOnHaPort.ok).toBe(true);
+      if (controlOnHaPort.ok) expect(controlOnHaPort.target.port).toBe(8124);
+    });
+
+    test('connection failures name the host and port that were actually tried', () => {
+      const refused = Object.assign(new Error('connect ECONNREFUSED 192.168.1.20:3001'), { code: 'ECONNREFUSED' });
+      const message = formatSinkholeError(refused, {
+        display: 'http://homeassistant.local:3001',
+        host: 'homeassistant.local',
+        port: 3001,
+        scheme: 'http',
+      }, { haAddonPortHint: true, hintPort: 3001 });
+      expect(message).toContain('http://homeassistant.local:3001');
+      expect(message).toContain('ECONNREFUSED');
+      expect(message).toContain('port 3001 is mapped');
+      expect(message).not.toContain('port 3000');
+
+      const wrapped = new TypeError('fetch failed');
+      (wrapped as { cause?: unknown }).cause = Object.assign(new Error('self-signed certificate'), { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+      const certOff = formatSinkholeError(wrapped, {
+        display: 'https://homeassistant.local:8124',
+        host: 'homeassistant.local',
+        port: 8124,
+        scheme: 'https',
+      }, { allowInsecureLocalTls: false });
+      expect(certOff).toContain('TLS certificate rejected');
+      expect(certOff).toContain('https://homeassistant.local:8124');
+      expect(certOff).toContain('Allow untrusted TLS certificates (local only)');
+      expect(certOff).not.toContain('Cannot connect to port 3000');
+
+      const certPublic = formatSinkholeError(wrapped, {
+        display: 'https://example.com',
+        host: 'example.com',
+        port: 443,
+        scheme: 'https',
+      }, { allowInsecureLocalTls: true });
+      expect(certPublic).toContain('Certificate verification stays on');
+
+      const dns = Object.assign(new Error('getaddrinfo ENOTFOUND homeassistant.local'), { code: 'ENOTFOUND' });
+      const dnsMessage = formatSinkholeError(dns, {
+        display: 'https://homeassistant.local:8124',
+        host: 'homeassistant.local',
+        port: 8124,
+        scheme: 'https',
+      });
+      expect(dnsMessage).toContain('Could not resolve homeassistant.local');
+      expect(dnsMessage).toContain('mDNS');
+    });
+
+    test('limits untrusted TLS bypass to local and private hosts', () => {
+      expect(isPrivateOrLocalHost('homeassistant.local')).toBe(true);
+      expect(isPrivateOrLocalHost('localhost')).toBe(true);
+      expect(isPrivateOrLocalHost('127.0.0.1')).toBe(true);
+      expect(isPrivateOrLocalHost('192.168.8.1')).toBe(true);
+      expect(isPrivateOrLocalHost('10.1.2.3')).toBe(true);
+      expect(isPrivateOrLocalHost('172.16.0.4')).toBe(true);
+      expect(isPrivateOrLocalHost('169.254.1.1')).toBe(true);
+      expect(isPrivateOrLocalHost('example.com')).toBe(false);
+      expect(isPrivateOrLocalHost('1.1.1.1')).toBe(false);
+      expect(shouldBypassUntrustedTls('https://homeassistant.local:8124', true)).toBe(true);
+      expect(shouldBypassUntrustedTls('https://homeassistant.local:8124', false)).toBe(false);
+      expect(shouldBypassUntrustedTls('https://example.com', true)).toBe(false);
+      expect(shouldBypassUntrustedTls('http://homeassistant.local:8124', true)).toBe(false);
+      expect(replaceMatchingExplicitPort('http://homeassistant.local:3000', 3000, 3001)).toBe('http://homeassistant.local:3001');
+      expect(replaceMatchingExplicitPort('http://adguard.lan:8080', 3000, 3001)).toBe('http://adguard.lan:8080');
     });
 
     test('normalizes Nabu Casa remote access URLs to https protocol automatically', () => {
-      expect(normalizeUrl('myinstance.ui.nabu.casa')).toBe('https://myinstance.ui.nabu.casa');
-      expect(normalizeUrl('http://myinstance.ui.nabu.casa/')).toBe('https://myinstance.ui.nabu.casa');
-      expect(normalizeUrl('https://myinstance.ui.nabu.casa/api/services/adguard/refresh')).toBe('https://myinstance.ui.nabu.casa/api/services/adguard/refresh');
-      expect(normalizeUrl('http://hooks.nabu.casa/webhook-token-123')).toBe('https://hooks.nabu.casa/webhook-token-123');
+      expect(normalizeServiceUrl('myinstance.ui.nabu.casa')).toBe('https://myinstance.ui.nabu.casa');
+      expect(normalizeServiceUrl('http://myinstance.ui.nabu.casa/')).toBe('https://myinstance.ui.nabu.casa');
+      expect(normalizeServiceUrl('https://myinstance.ui.nabu.casa/api/services/adguard/refresh')).toBe('https://myinstance.ui.nabu.casa/api/services/adguard/refresh');
+      expect(normalizeServiceUrl('http://hooks.nabu.casa/webhook-token-123')).toBe('https://hooks.nabu.casa/webhook-token-123');
     });
 
     test('flags Nabu Casa remote URLs when attempted in direct AdGuard port 3000 mode', () => {
-      const directNabu = checkAdguardPortDiagnostic('https://abc123xyz.ui.nabu.casa', 'direct');
-      expect(directNabu.isNabuCasaDirectWarning).toBe(true);
-      expect(directNabu.diagnosticMessage).toContain('Nabu Casa Cloud remote URLs only proxy Home Assistant itself');
-      expect(directNabu.diagnosticMessage).toContain('Switch Mode to "Home Assistant REST API"');
+      const directNabu = resolveAdguardDirectUrl('https://abc123xyz.ui.nabu.casa', 3000);
+      expect(directNabu.ok).toBe(false);
+      if (!directNabu.ok) {
+        expect(directNabu.code).toBe('nabu_casa');
+        expect(directNabu.message).toContain('Nabu Casa Cloud remote URLs only proxy Home Assistant itself');
+        expect(directNabu.message).toContain('Switch Mode to "Home Assistant REST API"');
+        expect(directNabu.message).toContain('direct port 3000');
+      }
 
-      // Valid in HA API mode
-      const haApiNabu = checkAdguardPortDiagnostic('https://abc123xyz.ui.nabu.casa', 'ha-api');
-      expect(haApiNabu.isNabuCasaDirectWarning).toBe(false);
+      const customPortNabu = resolveAdguardDirectUrl('https://abc123xyz.ui.nabu.casa', 3001);
+      expect(customPortNabu.ok).toBe(false);
+      if (!customPortNabu.ok) {
+        expect(customPortNabu.message).toContain('direct port 3001');
+        expect(customPortNabu.message).not.toContain('direct port 3000');
+      }
 
-      // Valid in Webhook mode
-      const webhookNabu = checkAdguardPortDiagnostic('https://hooks.nabu.casa/abc123xyz', 'webhook');
-      expect(webhookNabu.isNabuCasaDirectWarning).toBe(false);
+      const haApiNabu = resolveHaApiUrl('https://abc123xyz.ui.nabu.casa');
+      expect(haApiNabu.ok).toBe(true);
+      if (haApiNabu.ok) {
+        expect(haApiNabu.target.refreshUrl).toBe('https://abc123xyz.ui.nabu.casa/api/services/adguard/refresh');
+      }
     });
 
-    test('constructs valid Home Assistant adguard.refresh service endpoint and Bearer authorization header', () => {
-      const reqLocal = buildHaApiServiceRequest('homeassistant.local:8123', 'my-llat-token-xyz');
-      expect(reqLocal.url).toBe('http://homeassistant.local:8123/api/services/adguard/refresh');
-      expect(reqLocal.method).toBe('POST');
-      expect(reqLocal.headers.Authorization).toBe('Bearer my-llat-token-xyz');
-      expect(reqLocal.headers['Content-Type']).toBe('application/json');
+    test('constructs valid Home Assistant adguard.refresh service endpoint', () => {
+      const reqLocal = resolveHaApiUrl('homeassistant.local:8123');
+      expect(reqLocal.ok).toBe(true);
+      if (reqLocal.ok) {
+        expect(reqLocal.target.refreshUrl).toBe('http://homeassistant.local:8123/api/services/adguard/refresh');
+      }
 
-      const reqNabu = buildHaApiServiceRequest('myinstance.ui.nabu.casa', 'my-llat-token-xyz');
-      expect(reqNabu.url).toBe('https://myinstance.ui.nabu.casa/api/services/adguard/refresh');
-      expect(reqNabu.headers.Authorization).toBe('Bearer my-llat-token-xyz');
+      const reqNabu = resolveHaApiUrl('myinstance.ui.nabu.casa');
+      expect(reqNabu.ok).toBe(true);
+      if (reqNabu.ok) {
+        expect(reqNabu.target.refreshUrl).toBe('https://myinstance.ui.nabu.casa/api/services/adguard/refresh');
+      }
     });
 
     test('formats custom homelab webhook payload with event metadata', () => {
@@ -656,19 +737,19 @@ describe('Electron App Core Utilities & IPC Logic', () => {
 
       for (const p of presets) {
         if ('directUrl' in p) {
-          expect(normalizeUrl(p.directUrl!)).toBe(p.directUrl);
+          expect(normalizeServiceUrl(p.directUrl!)).toBe(p.directUrl);
           expect(() => new URL(p.directUrl!)).not.toThrow();
         }
         if ('haApiUrl' in p) {
-          expect(normalizeUrl(p.haApiUrl!)).toBe(p.haApiUrl);
+          expect(normalizeServiceUrl(p.haApiUrl!)).toBe(p.haApiUrl);
           expect(() => new URL(p.haApiUrl!)).not.toThrow();
         }
         if ('webhookUrl' in p) {
-          expect(normalizeUrl(p.webhookUrl!)).toBe(p.webhookUrl);
+          expect(normalizeServiceUrl(p.webhookUrl!)).toBe(p.webhookUrl);
           expect(() => new URL(p.webhookUrl!)).not.toThrow();
         }
         if ('url' in p) {
-          expect(normalizeUrl(p.url!)).toBe(p.url);
+          expect(normalizeServiceUrl(p.url!)).toBe(p.url);
           expect(() => new URL(p.url!)).not.toThrow();
         }
       }
