@@ -24,6 +24,17 @@ if (isDev) {
 import Store from 'electron-store';
 import type { ElectronStore, StoreSchema } from './types';
 import {
+  adguardControlBaseUrl,
+  describeUrlEndpoint,
+  formatSinkholeError,
+  normalizeAdguardDirectPort,
+  normalizeWebhookUrl,
+  resolveAdguardDirectUrl,
+  resolveHaApiUrl,
+  type SinkholeEndpoint,
+} from './sinkholeNet';
+import { sinkholeFetch } from './sinkholeFetch';
+import {
   downloadAndParseSource,
   parseFilterList,
   cleanDomainPattern,
@@ -458,16 +469,17 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
       const limit = 50;
 
       if (config.service === 'adguard') {
-        const baseUrl = storeRef.get('adguardHomeUrl') || 'http://127.0.0.1:3000';
+        const baseUrl = adguardControlBaseUrl(storeRef.get('adguardHomeUrl'), storeRef.get('adguardDirectPort'));
         const user = storeRef.get('adguardHomeUser') || '';
         const pass = storeRef.get('adguardHomePassword') || '';
         const headers: Record<string, string> = {};
         if (user || pass) {
           headers.Authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
         }
-        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/control/querylog?limit=${limit}`, {
+        const res = await sinkholeFetch(`${baseUrl}/control/querylog?limit=${limit}`, {
           headers,
-          signal: AbortSignal.timeout(6000),
+          timeoutMs: 6000,
+          allowInsecureLocalTls: Boolean(storeRef.get('allowInsecureLocalTls')),
         });
         if (res.ok) {
           const json: any = await res.json();
@@ -730,6 +742,29 @@ async function getOrLoadCompiledRules(storeRef: ElectronStore<StoreSchema>): Pro
   return latestCompiledRules;
 }
 
+function sinkholeTlsAllowed(storeRef: ElectronStore<StoreSchema>): boolean {
+  return Boolean(storeRef.get('allowInsecureLocalTls'));
+}
+
+function explainSinkholeFailure(
+  storeRef: ElectronStore<StoreSchema>,
+  err: unknown,
+  url: string,
+  opts?: { haAddonPortHint?: boolean; hintPort?: number | null },
+): string {
+  let endpoint: SinkholeEndpoint;
+  try {
+    endpoint = describeUrlEndpoint(url);
+  } catch {
+    endpoint = { display: url, host: url, port: opts?.hintPort ?? null, scheme: 'http' };
+  }
+  return formatSinkholeError(err, endpoint, {
+    allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
+    haAddonPortHint: opts?.haAddonPortHint,
+    hintPort: opts?.hintPort,
+  });
+}
+
 async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
   const rawPihole = storeRef.get('piholeUrl') as string | undefined;
   const piholeApiKey = storeRef.get('piholeApiKey') as string | undefined;
@@ -754,20 +789,19 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
         url.searchParams.set('auth', piholeApiKey.trim());
       }
       url.searchParams.set('action', 'updategravity');
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
-      try {
-        const res = await fetch(url.toString(), { signal: controller.signal });
-        if (res.ok) {
-          results.push({ service: 'Pi-hole', status: 'success', message: 'Gravity update triggered successfully' });
-        } else {
-          results.push({ service: 'Pi-hole', status: 'error', message: `HTTP status ${res.status}` });
-        }
-      } finally {
-        clearTimeout(timeoutId);
+      const target = url.toString();
+      const res = await sinkholeFetch(target, {
+        timeoutMs: 6000,
+        allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
+      });
+      if (res.ok) {
+        results.push({ service: 'Pi-hole', status: 'success', message: 'Gravity update triggered successfully' });
+      } else {
+        results.push({ service: 'Pi-hole', status: 'error', message: `HTTP status ${res.status}` });
       }
     } catch (err: any) {
-      results.push({ service: 'Pi-hole', status: 'error', message: err.message || String(err) });
+      const attempted = rawPihole.trim().startsWith('http') ? rawPihole.trim() : `http://${rawPihole.trim()}`;
+      results.push({ service: 'Pi-hole', status: 'error', message: explainSinkholeFailure(storeRef, err, attempted) });
     }
   } else {
     results.push({ service: 'Pi-hole', status: 'skipped', message: 'Not configured' });
@@ -776,126 +810,99 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
   // AdGuard Home Sync: supports Direct API, Home Assistant REST Service API, or Home Assistant Webhook
   if (adguardMode === 'ha-api') {
     const rawUrl = rawAdguard?.trim() || '';
-    if (rawUrl && haToken?.trim()) {
+    const haTarget = rawUrl ? resolveHaApiUrl(rawUrl) : null;
+    if (haTarget?.ok && haToken?.trim()) {
       try {
-        let baseUrl = rawUrl;
-        if (baseUrl.includes('nabu.casa')) {
-          if (baseUrl.startsWith('http://')) {
-            baseUrl = baseUrl.replace(/^http:\/\//, 'https://');
-          } else if (!baseUrl.startsWith('https://')) {
-            baseUrl = `https://${baseUrl}`;
-          }
-        } else if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
-          baseUrl = `http://${baseUrl}`;
-        }
-        baseUrl = baseUrl.replace(/\/$/, '');
-        const serviceUrl = `${baseUrl}/api/services/adguard/refresh`;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 7000);
-        try {
-          const res = await fetch(serviceUrl, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${haToken.trim()}`,
-              'Content-Type': 'application/json',
-            },
-            signal: controller.signal,
-          });
-          if (res.ok) {
-            const providerMsg = baseUrl.includes('nabu.casa')
-              ? 'Filters refreshed via Home Assistant API (Nabu Casa Cloud)'
-              : 'Filters refreshed via Home Assistant API';
-            results.push({ service: 'AdGuard Home (Home Assistant)', status: 'success', message: providerMsg });
-          } else {
-            results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: `Home Assistant API returned HTTP ${res.status}: ${res.statusText}` });
-          }
-        } finally {
-          clearTimeout(timeoutId);
+        const res = await sinkholeFetch(haTarget.target.refreshUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${haToken.trim()}`,
+            'Content-Type': 'application/json',
+          },
+          timeoutMs: 7000,
+          allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
+        });
+        if (res.ok) {
+          const providerMsg = haTarget.target.baseUrl.includes('nabu.casa')
+            ? 'Filters refreshed via Home Assistant API (Nabu Casa Cloud)'
+            : 'Filters refreshed via Home Assistant API';
+          results.push({ service: 'AdGuard Home (Home Assistant)', status: 'success', message: providerMsg });
+        } else {
+          results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: `Home Assistant API returned HTTP ${res.status}: ${res.statusText}` });
         }
       } catch (err: any) {
-        results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: err.message || String(err) });
+        results.push({
+          service: 'AdGuard Home (Home Assistant)',
+          status: 'error',
+          message: explainSinkholeFailure(storeRef, err, haTarget.target.refreshUrl),
+        });
       }
+    } else if (haTarget && !haTarget.ok) {
+      results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: haTarget.message });
     } else {
       results.push({ service: 'AdGuard Home (Home Assistant)', status: 'skipped', message: 'Home Assistant URL or Bearer token missing' });
     }
   } else if (adguardMode === 'webhook') {
     const targetWebhook = haWebhookUrl?.trim() || rawAdguard?.trim() || '';
-    if (targetWebhook) {
+    const webhook = targetWebhook ? normalizeWebhookUrl(targetWebhook) : null;
+    if (webhook?.ok) {
       try {
-        let urlStr = targetWebhook;
-        if (urlStr.includes('nabu.casa')) {
-          if (urlStr.startsWith('http://')) {
-            urlStr = urlStr.replace(/^http:\/\//, 'https://');
-          } else if (!urlStr.startsWith('https://')) {
-            urlStr = `https://${urlStr}`;
-          }
-        } else if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
-          urlStr = `http://${urlStr}`;
-        }
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 6000);
-        try {
-          const res = await fetch(urlStr, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ event: 'adguard_refresh', timestamp: new Date().toISOString() }),
-            signal: controller.signal,
-          });
-          if (res.ok) {
-            results.push({ service: 'AdGuard Home (Webhook)', status: 'success', message: 'Automation webhook triggered successfully' });
-          } else {
-            results.push({ service: 'AdGuard Home (Webhook)', status: 'error', message: `Webhook returned HTTP ${res.status}` });
-          }
-        } finally {
-          clearTimeout(timeoutId);
+        const res = await sinkholeFetch(webhook.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'adguard_refresh', timestamp: new Date().toISOString() }),
+          timeoutMs: 6000,
+          allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
+        });
+        if (res.ok) {
+          results.push({ service: 'AdGuard Home (Webhook)', status: 'success', message: 'Automation webhook triggered successfully' });
+        } else {
+          results.push({ service: 'AdGuard Home (Webhook)', status: 'error', message: `Webhook returned HTTP ${res.status}` });
         }
       } catch (err: any) {
-        results.push({ service: 'AdGuard Home (Webhook)', status: 'error', message: err.message || String(err) });
+        results.push({
+          service: 'AdGuard Home (Webhook)',
+          status: 'error',
+          message: explainSinkholeFailure(storeRef, err, webhook.url),
+        });
       }
+    } else if (webhook && !webhook.ok) {
+      results.push({ service: 'AdGuard Home (Webhook)', status: 'error', message: webhook.message });
     } else {
       results.push({ service: 'AdGuard Home (Webhook)', status: 'skipped', message: 'Webhook URL not configured' });
     }
   } else if (rawAdguard && rawAdguard.trim()) {
-    // Direct AdGuard Home API
-    const trimmedAdguard = rawAdguard.trim();
-    if (trimmedAdguard.includes('nabu.casa')) {
-      results.push({
-        service: 'AdGuard Home',
-        status: 'error',
-        message: 'Nabu Casa remote URLs only proxy Home Assistant (port 8123), not AdGuard direct port 3000. Switch to Home Assistant REST API or Webhook mode.',
-      });
+    const resolved = resolveAdguardDirectUrl(rawAdguard, storeRef.get('adguardDirectPort'));
+    if (!resolved.ok) {
+      results.push({ service: 'AdGuard Home', status: 'error', message: resolved.message });
     } else {
       try {
-        let adguardUrl = trimmedAdguard;
-        if (!adguardUrl.startsWith('http://') && !adguardUrl.startsWith('https://')) {
-          adguardUrl = `http://${adguardUrl}`;
-        }
-        const base = adguardUrl.replace(/\/$/, '');
-        const refreshUrl = `${base}/control/filtering/refresh`;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (adguardHomeUser && adguardHomePassword) {
           const credentials = Buffer.from(`${adguardHomeUser}:${adguardHomePassword}`).toString('base64');
           headers['Authorization'] = `Basic ${credentials}`;
         }
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 6000);
-        try {
-          const res = await fetch(refreshUrl, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({ whitelist: false }),
-            signal: controller.signal,
-          });
-          if (res.ok) {
-            results.push({ service: 'AdGuard Home', status: 'success', message: 'Filters refreshed successfully' });
-          } else {
-            results.push({ service: 'AdGuard Home', status: 'error', message: `HTTP status ${res.status}` });
-          }
-        } finally {
-          clearTimeout(timeoutId);
+        const res = await sinkholeFetch(resolved.target.refreshUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ whitelist: false }),
+          timeoutMs: 6000,
+          allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
+        });
+        if (res.ok) {
+          results.push({ service: 'AdGuard Home', status: 'success', message: 'Filters refreshed successfully' });
+        } else {
+          results.push({ service: 'AdGuard Home', status: 'error', message: `HTTP status ${res.status}` });
         }
       } catch (err: any) {
-        results.push({ service: 'AdGuard Home', status: 'error', message: err.message || String(err) });
+        results.push({
+          service: 'AdGuard Home',
+          status: 'error',
+          message: explainSinkholeFailure(storeRef, err, resolved.target.refreshUrl, {
+            haAddonPortHint: resolved.target.homeAssistantHost,
+            hintPort: resolved.target.port,
+          }),
+        });
       }
     }
   } else {
@@ -904,30 +911,30 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
 
   // Custom Homelab Webhook / Automation Endpoint ("or any other thing like it")
   if (customWebhookUrl && customWebhookUrl.trim()) {
-    try {
-      let urlStr = customWebhookUrl.trim();
-      if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
-        urlStr = `http://${urlStr}`;
-      }
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const webhook = normalizeWebhookUrl(customWebhookUrl);
+    if (!webhook.ok) {
+      results.push({ service: 'Custom Homelab Webhook', status: 'error', message: webhook.message });
+    } else {
       try {
-        const res = await fetch(urlStr, {
+        const res = await sinkholeFetch(webhook.url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ event: 'blockingmachine_compiled', timestamp: new Date().toISOString() }),
-          signal: controller.signal,
+          timeoutMs: 6000,
+          allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
         });
         if (res.ok) {
           results.push({ service: 'Custom Homelab Webhook', status: 'success', message: 'Homelab automation webhook triggered successfully' });
         } else {
           results.push({ service: 'Custom Homelab Webhook', status: 'error', message: `Webhook returned HTTP ${res.status}` });
         }
-      } finally {
-        clearTimeout(timeoutId);
+      } catch (err: any) {
+        results.push({
+          service: 'Custom Homelab Webhook',
+          status: 'error',
+          message: explainSinkholeFailure(storeRef, err, webhook.url),
+        });
       }
-    } catch (err: any) {
-      results.push({ service: 'Custom Homelab Webhook', status: 'error', message: err.message || String(err) });
     }
   }
 
@@ -1411,12 +1418,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // Trigger optional post-compilation webhook
         const webhookUrl = store.get('webhookUrl');
         if (typeof webhookUrl === 'string' && webhookUrl.trim().startsWith('http')) {
-          const webhookController = new AbortController();
-          const webhookTimeout = setTimeout(() => webhookController.abort(), 10000);
-          fetch(webhookUrl.trim(), {
+          sinkholeFetch(webhookUrl.trim(), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            signal: webhookController.signal,
+            timeoutMs: 10000,
+            allowInsecureLocalTls: sinkholeTlsAllowed(store),
             body: JSON.stringify({
               event: 'compilation_complete',
               timestamp: new Date().toISOString(),
@@ -1425,9 +1431,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               format,
               savePath,
             }),
-          })
-            .catch((err) => console.error('[IPC Main] Webhook ping failed:', err))
-            .finally(() => clearTimeout(webhookTimeout));
+          }).catch((err) => console.error('[IPC Main] Webhook ping failed:', err));
         }
 
         // Trigger Sinkhole Sync if configured
@@ -1686,6 +1690,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         haToken: store.get('haToken') || '',
         haWebhookUrl: store.get('haWebhookUrl') || '',
         customWebhookUrl: store.get('customWebhookUrl') || '',
+        adguardDirectPort: normalizeAdguardDirectPort(store.get('adguardDirectPort')),
+        allowInsecureLocalTls: Boolean(store.get('allowInsecureLocalTls')),
       };
     });
 
@@ -1700,6 +1706,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       if (config.haToken !== undefined) store.set('haToken', config.haToken);
       if (config.haWebhookUrl !== undefined) store.set('haWebhookUrl', config.haWebhookUrl);
       if (config.customWebhookUrl !== undefined) store.set('customWebhookUrl', config.customWebhookUrl);
+      if (config.adguardDirectPort !== undefined) store.set('adguardDirectPort', normalizeAdguardDirectPort(config.adguardDirectPort));
+      if (config.allowInsecureLocalTls !== undefined) store.set('allowInsecureLocalTls', Boolean(config.allowInsecureLocalTls));
       return { success: true };
     });
 
@@ -1744,34 +1752,36 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           const u = new URL(urlStr);
           if (apiKey) u.searchParams.set('auth', apiKey.trim());
           u.searchParams.set('type', 'version');
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 6000);
+          const target = u.toString();
           try {
-            const res = await fetch(u.toString(), { signal: controller.signal });
+            const res = await sinkholeFetch(target, {
+              timeoutMs: 6000,
+              allowInsecureLocalTls: sinkholeTlsAllowed(store),
+            });
             const latencyMs = Date.now() - startTime;
             if (res.ok) {
               return { service: 'pihole', success: true, statusCode: res.status, latencyMs, message: `Connected to Pi-hole (${latencyMs}ms, HTTP ${res.status})` };
             } else {
               return { service: 'pihole', success: false, statusCode: res.status, latencyMs, message: `Pi-hole returned HTTP ${res.status}: ${res.statusText}` };
             }
-          } finally {
-            clearTimeout(timeout);
+          } catch (err: any) {
+            return {
+              service: 'pihole',
+              success: false,
+              latencyMs: Date.now() - startTime,
+              message: explainSinkholeFailure(store, err, target),
+            };
           }
         } else if (service === 'webhook') {
           const customWebhookUrl = store.get('customWebhookUrl') as string | undefined;
           if (!customWebhookUrl || !customWebhookUrl.trim()) {
             return { service: 'webhook', success: false, message: 'Custom webhook URL is not configured.' };
           }
-          let urlStr = customWebhookUrl.trim();
-          if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
-            urlStr = `http://${urlStr}`;
+          const webhook = normalizeWebhookUrl(customWebhookUrl);
+          if (!webhook.ok) {
+            return { service: 'webhook', success: false, message: webhook.message };
           }
-          try {
-            new URL(urlStr);
-            return { service: 'webhook', success: true, message: 'Custom webhook URL syntax is valid and ready.' };
-          } catch {
-            return { service: 'webhook', success: false, message: 'Invalid webhook URL syntax.' };
-          }
+          return { service: 'webhook', success: true, message: 'Custom webhook URL syntax is valid and ready.' };
         } else {
           // AdGuard Home connection testing
           const adguardMode = (store.get('adguardMode') as 'direct' | 'ha-api' | 'webhook' | undefined) || 'direct';
@@ -1782,34 +1792,22 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           const haWebhookUrl = store.get('haWebhookUrl') as string | undefined;
 
           if (adguardMode === 'ha-api') {
-            if (!rawUrl || !rawUrl.trim()) {
-              return { service: 'adguard', success: false, message: 'Home Assistant instance URL is not configured.' };
+            const haTarget = resolveHaApiUrl(rawUrl || '');
+            if (!haTarget.ok) {
+              return { service: 'adguard', success: false, message: haTarget.message };
             }
             if (!haToken || !haToken.trim()) {
               return { service: 'adguard', success: false, message: 'Home Assistant Long-Lived Access Token is required.' };
             }
-            let urlStr = rawUrl.trim();
-            if (urlStr.includes('nabu.casa')) {
-              if (urlStr.startsWith('http://')) {
-                urlStr = urlStr.replace(/^http:\/\//, 'https://');
-              } else if (!urlStr.startsWith('https://')) {
-                urlStr = `https://${urlStr}`;
-              }
-            } else if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
-              urlStr = `http://${urlStr}`;
-            }
-            const base = urlStr.replace(/\/$/, '');
-            const pingUrl = `${base}/api/`;
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 6000);
             try {
-              const res = await fetch(pingUrl, {
+              const res = await sinkholeFetch(haTarget.target.pingUrl, {
                 headers: { Authorization: `Bearer ${haToken.trim()}` },
-                signal: controller.signal,
+                timeoutMs: 6000,
+                allowInsecureLocalTls: sinkholeTlsAllowed(store),
               });
               const latencyMs = Date.now() - startTime;
               if (res.ok) {
-                const cloudMsg = urlStr.includes('nabu.casa')
+                const cloudMsg = haTarget.target.baseUrl.includes('nabu.casa')
                   ? `Connected to Home Assistant API via Nabu Casa Cloud (${latencyMs}ms, ready for adguard.refresh)`
                   : `Connected to Home Assistant API (${latencyMs}ms, ready for adguard.refresh)`;
                 return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: cloudMsg };
@@ -1818,100 +1816,66 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               } else {
                 return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `Home Assistant returned HTTP ${res.status}: ${res.statusText}` };
               }
-            } finally {
-              clearTimeout(timeout);
+            } catch (err: any) {
+              return {
+                service: 'adguard',
+                success: false,
+                latencyMs: Date.now() - startTime,
+                message: explainSinkholeFailure(store, err, haTarget.target.pingUrl),
+              };
             }
           } else if (adguardMode === 'webhook') {
-            const target = haWebhookUrl?.trim() || rawUrl?.trim();
-            if (!target) {
-              return { service: 'adguard', success: false, message: 'Home Assistant Webhook URL is not configured.' };
+            const target = haWebhookUrl?.trim() || rawUrl?.trim() || '';
+            const webhook = normalizeWebhookUrl(target);
+            if (!webhook.ok) {
+              return { service: 'adguard', success: false, message: target ? webhook.message : 'Home Assistant Webhook URL is not configured.' };
             }
-            let urlStr = target;
-            if (urlStr.includes('nabu.casa')) {
-              if (urlStr.startsWith('http://')) {
-                urlStr = urlStr.replace(/^http:\/\//, 'https://');
-              } else if (!urlStr.startsWith('https://')) {
-                urlStr = `https://${urlStr}`;
-              }
-            } else if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
-              urlStr = `http://${urlStr}`;
-            }
-            try {
-              new URL(urlStr);
-              const isCloudWebhook = urlStr.includes('nabu.casa');
-              const readyMsg = isCloudWebhook
-                ? 'Home Assistant Cloud Webhook URL (Nabu Casa) is valid and ready.'
-                : 'Home Assistant Webhook URL is configured and ready.';
-              return { service: 'adguard', success: true, message: readyMsg };
-            } catch {
-              return { service: 'adguard', success: false, message: 'Invalid Webhook URL format.' };
-            }
+            const isCloudWebhook = webhook.url.includes('nabu.casa');
+            const readyMsg = isCloudWebhook
+              ? 'Home Assistant Cloud Webhook URL (Nabu Casa) is valid and ready.'
+              : 'Home Assistant Webhook URL is configured and ready.';
+            return { service: 'adguard', success: true, message: readyMsg };
           } else {
-            // Direct AdGuard Home API
-            if (!rawUrl || !rawUrl.trim()) {
-              return { service: 'adguard', success: false, message: 'AdGuard Home URL is not configured.' };
-            }
-            let urlStr = rawUrl.trim();
-
-            // Detect Nabu Casa in direct mode: Nabu Casa only proxies HA port 8123, not AdGuard port 3000
-            if (urlStr.includes('nabu.casa')) {
+            const resolved = resolveAdguardDirectUrl(rawUrl || '', store.get('adguardDirectPort'));
+            if (!resolved.ok) {
               return {
                 service: 'adguard',
                 success: false,
-                statusCode: 400,
-                message: 'Nabu Casa Cloud remote URLs only proxy Home Assistant itself (port 8123), not AdGuard Home direct port 3000. Switch Mode to "Home Assistant REST API" or "Home Assistant Webhook" to reload AdGuard over Nabu Casa.',
-                details: 'nabu_casa_direct_mode',
+                statusCode: resolved.statusCode,
+                message: resolved.message,
+                details: resolved.details,
               };
             }
-
-            if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
-              urlStr = `http://${urlStr}`;
-            }
-
-            // Detect Home Assistant port 8123 in direct mode to prevent common mistake
-            if (urlStr.includes(':8123')) {
-              return {
-                service: 'adguard',
-                success: false,
-                statusCode: 8123,
-                message: 'Port 8123 detected (Home Assistant web interface). For AdGuard Home direct API, use port 3000 (e.g. http://homeassistant.local:3000) after mapping it in Add-ons > AdGuard Home > Configuration > Network, or select "Home Assistant API" mode.',
-                details: 'ha_port_warning',
-              };
-            }
-
-            const base = urlStr.replace(/\/$/, '');
-            const u = `${base}/control/status`;
             const headers: Record<string, string> = {};
             if (user && pass) {
               const credentials = Buffer.from(`${user}:${pass}`).toString('base64');
               headers['Authorization'] = `Basic ${credentials}`;
             }
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 6000);
             try {
-              const res = await fetch(u, { headers, signal: controller.signal });
+              const res = await sinkholeFetch(resolved.target.statusUrl, {
+                headers,
+                timeoutMs: 6000,
+                allowInsecureLocalTls: sinkholeTlsAllowed(store),
+              });
               const latencyMs = Date.now() - startTime;
               if (res.ok) {
-                return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: `Connected to AdGuard Home (${latencyMs}ms, HTTP ${res.status})` };
+                return { service: 'adguard', success: true, statusCode: res.status, latencyMs, message: `Connected to AdGuard Home at ${resolved.target.display} (${latencyMs}ms, HTTP ${res.status})` };
               } else if (res.status === 401) {
                 return { service: 'adguard', success: false, statusCode: 401, latencyMs, message: 'Authentication required. Check your AdGuard Home username and password.' };
               } else {
-                return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `AdGuard Home returned HTTP ${res.status}: ${res.statusText}` };
+                return { service: 'adguard', success: false, statusCode: res.status, latencyMs, message: `AdGuard Home at ${resolved.target.display} returned HTTP ${res.status}: ${res.statusText}` };
               }
             } catch (err: any) {
-              const latencyMs = Date.now() - startTime;
-              if (urlStr.includes('homeassistant') || urlStr.includes(':3000')) {
-                return {
-                  service: 'adguard',
-                  success: false,
-                  latencyMs,
-                  message: `Cannot connect to port 3000 on Home Assistant. In Home Assistant, go to Settings > Add-ons > AdGuard Home > Configuration, ensure port 3000 is mapped under Network, and restart the add-on.`,
-                  details: 'ha_connection_failed',
-                };
-              }
-              throw err;
-            } finally {
-              clearTimeout(timeout);
+              return {
+                service: 'adguard',
+                success: false,
+                latencyMs: Date.now() - startTime,
+                message: explainSinkholeFailure(store, err, resolved.target.statusUrl, {
+                  haAddonPortHint: resolved.target.homeAssistantHost,
+                  hintPort: resolved.target.port,
+                }),
+                details: resolved.target.homeAssistantHost ? 'ha_connection_failed' : undefined,
+              };
             }
           }
         }
@@ -2170,7 +2134,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       const limit = options.limit || 50;
 
       if (options.service === 'adguard') {
-        const baseUrl = store.get('adguardHomeUrl') || 'http://127.0.0.1:3000';
+        const baseUrl = adguardControlBaseUrl(store.get('adguardHomeUrl'), store.get('adguardDirectPort'));
         const user = store.get('adguardHomeUser') || '';
         const pass = store.get('adguardHomePassword') || '';
 
@@ -2180,9 +2144,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             const auth = Buffer.from(`${user}:${pass}`).toString('base64');
             headers.Authorization = `Basic ${auth}`;
           }
-          const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/control/querylog?limit=${limit}`, {
+          const res = await sinkholeFetch(`${baseUrl}/control/querylog?limit=${limit}`, {
             headers,
-            signal: AbortSignal.timeout(6000),
+            timeoutMs: 6000,
+            allowInsecureLocalTls: sinkholeTlsAllowed(store),
           });
           if (res.ok) {
             const json: any = await res.json();

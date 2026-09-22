@@ -133,6 +133,10 @@ export interface SinkholeConfig {
   adguardHomePassword: string;
   syncOnCompile: boolean;
   adguardMode?: 'direct' | 'ha-api' | 'webhook';
+  /** AdGuard Home direct API port used when the URL has no explicit port. Default 3000. */
+  adguardDirectPort?: number;
+  /** Opt in to accepting untrusted TLS certificates for local/private sinkhole hosts only. */
+  allowInsecureLocalTls?: boolean;
   haToken?: string;
   haWebhookUrl?: string;
   customWebhookUrl?: string;
@@ -272,6 +276,8 @@ export interface StoreSchema {
   adguardHomePassword?: string;
   syncOnCompile?: boolean;
   adguardMode?: 'direct' | 'ha-api' | 'webhook';
+  adguardDirectPort?: number;
+  allowInsecureLocalTls?: boolean;
   haToken?: string;
   haWebhookUrl?: string;
   customWebhookUrl?: string;

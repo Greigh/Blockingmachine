@@ -1,5 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { FilterFormat, FeedServerStatus, SinkholeTestResult, SinkholeConfig } from '../types/';
+import {
+  DEFAULT_ADGUARD_DIRECT_PORT,
+  directModeWarning,
+  localTlsBypassNote,
+  normalizeAdguardDirectPort,
+  replaceMatchingExplicitPort,
+  resolveAdguardDirectUrl,
+} from '../sinkholeNet';
 
 interface DeployHubViewProps {
   savePath: string;
@@ -16,6 +24,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
 }) => {
   const isMountedRef = useRef(true);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const directPortFocusRef = useRef(DEFAULT_ADGUARD_DIRECT_PORT);
 
   const safeSetTimeout = useCallback((fn: () => void, delayMs: number) => {
     const id = setTimeout(() => {
@@ -53,6 +62,8 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     adguardHomePassword: '',
     syncOnCompile: false,
     adguardMode: 'direct',
+    adguardDirectPort: DEFAULT_ADGUARD_DIRECT_PORT,
+    allowInsecureLocalTls: false,
     haToken: '',
     haWebhookUrl: '',
     customWebhookUrl: '',
@@ -103,6 +114,8 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
           setSinkholeConfig({
             ...cfg,
             adguardMode: cfg.adguardMode || 'direct',
+            adguardDirectPort: normalizeAdguardDirectPort(cfg.adguardDirectPort),
+            allowInsecureLocalTls: Boolean(cfg.allowInsecureLocalTls),
             haToken: cfg.haToken || '',
             haWebhookUrl: cfg.haWebhookUrl || '',
             customWebhookUrl: cfg.customWebhookUrl || '',
@@ -256,6 +269,18 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
       setIsSyncingSinkhole(false);
     }
   };
+
+  const directPort = normalizeAdguardDirectPort(sinkholeConfig.adguardDirectPort);
+  const directWarning = directModeWarning(sinkholeConfig.adguardHomeUrl || '', directPort);
+  const activeTlsUrl = sinkholeConfig.adguardMode === 'webhook'
+    ? (sinkholeConfig.haWebhookUrl || '')
+    : (sinkholeConfig.adguardHomeUrl || '');
+  const tlsScopeNote = localTlsBypassNote(activeTlsUrl, Boolean(sinkholeConfig.allowInsecureLocalTls));
+  const directEndpointLabel = (() => {
+    if (!sinkholeConfig.adguardHomeUrl) return 'Not Configured';
+    const resolved = resolveAdguardDirectUrl(sinkholeConfig.adguardHomeUrl, directPort);
+    return resolved.ok ? resolved.target.display : sinkholeConfig.adguardHomeUrl;
+  })();
 
   const fileUrl = savePath ? `file://${savePath}` : '';
   const fileName = savePath ? savePath.split(/[/\\]/).pop() || 'rules.txt' : 'rules.txt';
@@ -561,7 +586,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   onClick={() => {
                     setAdguardEnv('homeassistant');
                     if (!sinkholeConfig.adguardHomeUrl || sinkholeConfig.adguardHomeUrl.includes('192.168.1.100')) {
-                      setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://homeassistant.local:3000' });
+                      setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: `http://homeassistant.local:${directPort}` });
                     }
                   }}
                 >
@@ -595,7 +620,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   onClick={() => {
                     setAdguardEnv('router');
                     if (!sinkholeConfig.adguardHomeUrl) {
-                      setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://192.168.8.1:3000' });
+                      setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: `http://192.168.8.1:${directPort}` });
                     }
                   }}
                 >
@@ -637,10 +662,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   <div className="ha-callout-item">
                     <span className="ha-callout-num">1</span>
                     <div>
-                      <strong>Expose Port 3000 in Add-on Network</strong>
+                      <strong>Expose Port {directPort} in Add-on Network</strong>
                       <p>
                         In Home Assistant: go to <strong>Settings → Add-ons → AdGuard Home → Configuration</strong>.
-                        Scroll down to <strong>Network</strong>, set the Web Interface port to <code>3000</code>, and click <strong>Save &amp; Restart Add-on</strong>.
+                        Scroll down to <strong>Network</strong>, set the Web Interface port to <code>{directPort}</code>, and click <strong>Save &amp; Restart Add-on</strong>.
                       </p>
                     </div>
                   </div>
@@ -661,7 +686,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                     <div>
                       <strong>Direct API vs Home Assistant Token</strong>
                       <p>
-                        You can connect directly to <code>http://homeassistant.local:3000</code> with your AdGuard credentials, or call Home Assistant&rsquo;s <code>adguard.refresh</code> service via port 8123 with a Long-Lived Access Token.
+                        You can connect directly to <code>http://homeassistant.local:{directPort}</code> with your AdGuard credentials, or call Home Assistant&rsquo;s <code>adguard.refresh</code> service on the Home Assistant port (8123, or your custom port such as 8124) with a Long-Lived Access Token.
                       </p>
                     </div>
                   </div>
@@ -673,7 +698,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                       <p>
                         <strong>Feed Subscription:</strong> AdGuard Home runs on your home appliance (Pi/NAS/VM) and downloads your blocklist locally via your Mac&rsquo;s <strong>LAN Feed URL</strong> over local Wi-Fi. (Nabu Casa does not proxy LAN file downloads).
                         <br />
-                        <strong>Remote Reloads:</strong> If managing Home Assistant remotely via Nabu Casa (<code>*.ui.nabu.casa</code>), choose <strong>Home Assistant REST API</strong> or <strong>Webhook</strong> below. Nabu Casa securely routes the <code>adguard.refresh</code> service from anywhere in the world, but does <em>not</em> proxy AdGuard direct port 3000.
+                        <strong>Remote Reloads:</strong> If managing Home Assistant remotely via Nabu Casa (<code>*.ui.nabu.casa</code>), choose <strong>Home Assistant REST API</strong> or <strong>Webhook</strong> below. Nabu Casa securely routes the <code>adguard.refresh</code> service from anywhere in the world, but does <em>not</em> proxy AdGuard direct port {directPort}.
                       </p>
                     </div>
                   </div>
@@ -688,15 +713,15 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   <h4>Open AdGuard Home Web Interface</h4>
                   {adguardEnv === 'homeassistant' ? (
                     <p>
-                      In Home Assistant, click <strong>AdGuard Home</strong> in the left sidebar, or open your browser directly to <code>http://homeassistant.local:3000</code> (once port 3000 is enabled).
+                      In Home Assistant, click <strong>AdGuard Home</strong> in the left sidebar, or open your browser directly to <code>http://homeassistant.local:{directPort}</code> (once port {directPort} is enabled).
                     </p>
                   ) : adguardEnv === 'router' ? (
                     <p>
-                      Open your router web portal (e.g. <code>http://192.168.8.1:3000</code> on GL.iNet routers or <code>http://192.168.1.1:3000</code> on OpenWrt).
+                      Open your router web portal (e.g. <code>http://192.168.8.1:{directPort}</code> on GL.iNet routers or <code>http://192.168.1.1:{directPort}</code> on OpenWrt).
                     </p>
                   ) : (
                     <p>
-                      Open your browser and navigate to your AdGuard Home dashboard (default: <code>http://&lt;ip&gt;:3000</code>).
+                      Open your browser and navigate to your AdGuard Home dashboard (default: <code>http://&lt;ip&gt;:{directPort}</code>).
                     </p>
                   )}
                 </div>
@@ -842,7 +867,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             ? `Home Assistant API: ${sinkholeConfig.adguardHomeUrl || 'Not Configured'}`
                             : sinkholeConfig.adguardMode === 'webhook'
                             ? `Webhook: ${sinkholeConfig.haWebhookUrl || 'Not Configured'}`
-                            : `AdGuard Direct: ${sinkholeConfig.adguardHomeUrl || 'Not Configured'}`}
+                            : `AdGuard Direct: ${directEndpointLabel}`}
                         </span>
                       </div>
 
@@ -871,7 +896,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             checked={!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct'}
                             onChange={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'direct' })}
                           />
-                          <span>Direct AdGuard Port 3000 (Recommended)</span>
+                          <span>Direct AdGuard Port {directPort} (Recommended)</span>
                         </label>
 
                         <label className={`mode-option-btn ${sinkholeConfig.adguardMode === 'ha-api' ? 'active' : ''}`}>
@@ -881,7 +906,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             checked={sinkholeConfig.adguardMode === 'ha-api'}
                             onChange={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'ha-api' })}
                           />
-                          <span>Home Assistant REST API (Port 8123 + Token)</span>
+                          <span>Home Assistant REST API (HA port + token)</span>
                         </label>
 
                         <label className={`mode-option-btn ${sinkholeConfig.adguardMode === 'webhook' ? 'active' : ''}`}>
@@ -905,7 +930,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                         onClick={() =>
                           setSinkholeConfig({
                             ...sinkholeConfig,
-                            adguardHomeUrl: 'http://homeassistant.local:3000',
+                            adguardHomeUrl: `http://homeassistant.local:${directPort}`,
                             adguardMode: 'direct',
                           })
                         }
@@ -914,7 +939,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
                           <polyline points="9 22 9 12 15 12 15 22" />
                         </svg>
-                        homeassistant.local:3000
+                        homeassistant.local:{directPort}
                       </button>
                       <button
                         type="button"
@@ -922,7 +947,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                         onClick={() =>
                           setSinkholeConfig({
                             ...sinkholeConfig,
-                            adguardHomeUrl: 'http://homeassistant:3000',
+                            adguardHomeUrl: `http://homeassistant:${directPort}`,
                             adguardMode: 'direct',
                           })
                         }
@@ -931,7 +956,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
                           <polyline points="9 22 9 12 15 12 15 22" />
                         </svg>
-                        homeassistant:3000
+                        homeassistant:{directPort}
                       </button>
                       <button
                         type="button"
@@ -956,7 +981,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                         onClick={() =>
                           setSinkholeConfig({
                             ...sinkholeConfig,
-                            adguardHomeUrl: 'http://192.168.8.1:3000',
+                            adguardHomeUrl: `http://192.168.8.1:${directPort}`,
                             adguardMode: 'direct',
                           })
                         }
@@ -974,7 +999,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                         onClick={() =>
                           setSinkholeConfig({
                             ...sinkholeConfig,
-                            adguardHomeUrl: 'http://localhost:3000',
+                            adguardHomeUrl: `http://localhost:${directPort}`,
                             adguardMode: 'direct',
                           })
                         }
@@ -984,7 +1009,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
                           <line x1="12" y1="22.08" x2="12" y2="12" />
                         </svg>
-                        Docker (localhost:3000)
+                        Docker (localhost:{directPort})
                       </button>
                       <button
                         type="button"
@@ -1030,7 +1055,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             <line x1="12" y1="17" x2="12.01" y2="17" />
                           </svg>
                           <div>
-                            <strong>Nabu Casa does not proxy AdGuard direct port 3000!</strong>
+                            <strong>Nabu Casa does not proxy AdGuard direct port {directPort}!</strong>
                             <div>
                               Nabu Casa (<code>*.ui.nabu.casa</code>) only exposes Home Assistant itself. To reload AdGuard remotely through Nabu Casa, switch mode to <strong>Home Assistant REST API</strong> (port 8123 + token) or <strong>Webhook</strong>.
                             </div>
@@ -1053,6 +1078,18 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                               </button>
                             </div>
                           </div>
+                        </div>
+                      )}
+
+                    {(!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct') &&
+                      directWarning?.code === 'ha_frontend' && (
+                        <div className="nabu-warning-banner">
+                          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                            <line x1="12" y1="9" x2="12" y2="13" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                          </svg>
+                          <div>{directWarning.message}</div>
                         </div>
                       )}
 
@@ -1144,11 +1181,44 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                             <label>AdGuard Home URL</label>
                             <input
                               type="text"
-                              placeholder="http://homeassistant.local:3000 or http://192.168.1.100:3000"
+                              placeholder={`http://homeassistant.local:${directPort} or http://192.168.1.100:${directPort}`}
                               value={sinkholeConfig.adguardHomeUrl || ''}
                               onChange={(e) =>
                                 setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })
                               }
+                            />
+                          </div>
+
+                          <div className="inline-field-group port-field">
+                            <label>API port</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={65535}
+                              value={sinkholeConfig.adguardDirectPort ?? ''}
+                              onFocus={() => {
+                                directPortFocusRef.current = directPort;
+                              }}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw === '') {
+                                  setSinkholeConfig({ ...sinkholeConfig, adguardDirectPort: undefined });
+                                  return;
+                                }
+                                const next = Number.parseInt(raw, 10);
+                                if (Number.isInteger(next)) {
+                                  setSinkholeConfig({ ...sinkholeConfig, adguardDirectPort: next });
+                                }
+                              }}
+                              onBlur={(e) => {
+                                const previous = directPortFocusRef.current;
+                                const next = normalizeAdguardDirectPort(e.target.value);
+                                setSinkholeConfig({
+                                  ...sinkholeConfig,
+                                  adguardDirectPort: next,
+                                  adguardHomeUrl: replaceMatchingExplicitPort(sinkholeConfig.adguardHomeUrl || '', previous, next),
+                                });
+                              }}
                             />
                           </div>
 
@@ -1197,6 +1267,22 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                           </div>
                         </div>
                       )}
+
+                      <div className="tls-opt-in">
+                        <label className="tls-opt-in-label">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(sinkholeConfig.allowInsecureLocalTls)}
+                            onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, allowInsecureLocalTls: e.target.checked })}
+                          />
+                          <span>Allow untrusted TLS certificates (local only)</span>
+                        </label>
+                        <p>
+                          For Home Assistant or AdGuard on your LAN with a self-signed certificate, for example https://homeassistant.local:8124.
+                          Applies to localhost, .local names, and private LAN addresses when you test or push. Public hosts still require a trusted certificate.
+                        </p>
+                        {tlsScopeNote && <p>{tlsScopeNote}</p>}
+                      </div>
 
                       <div className="inline-actions-row">
                         <div className="inline-actions-left">

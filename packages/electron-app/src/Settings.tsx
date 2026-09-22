@@ -13,6 +13,13 @@ import {
   applyAccentColor,
   type AccentColorOption,
 } from './theme';
+import {
+  DEFAULT_ADGUARD_DIRECT_PORT,
+  directModeWarning,
+  localTlsBypassNote,
+  normalizeAdguardDirectPort,
+  replaceMatchingExplicitPort,
+} from './sinkholeNet';
 
 export { ACCENT_PALETTE, applyAccentColor, type AccentColorOption };
 
@@ -67,6 +74,8 @@ const Settings: React.FC<SettingsProps> = ({
     adguardHomePassword: '',
     syncOnCompile: false,
     adguardMode: 'direct',
+    adguardDirectPort: DEFAULT_ADGUARD_DIRECT_PORT,
+    allowInsecureLocalTls: false,
     haToken: '',
     haWebhookUrl: '',
     customWebhookUrl: '',
@@ -166,7 +175,13 @@ const Settings: React.FC<SettingsProps> = ({
     }).catch(console.error);
 
     window.electron.getSinkholeConfig().then((cfg) => {
-      if (isMounted && cfg) setSinkholeConfig(cfg);
+      if (isMounted && cfg) {
+        setSinkholeConfig({
+          ...cfg,
+          adguardDirectPort: normalizeAdguardDirectPort(cfg.adguardDirectPort),
+          allowInsecureLocalTls: Boolean(cfg.allowInsecureLocalTls),
+        });
+      }
     }).catch(console.error);
 
     if (window.electron?.getAiConfig) {
@@ -413,6 +428,16 @@ const Settings: React.FC<SettingsProps> = ({
       setAiMessage({ text: err?.message || 'Failed to reset feedback.', type: 'error' });
     }
   };
+
+  const directPortFocusRef = useRef(DEFAULT_ADGUARD_DIRECT_PORT);
+  const directPort = normalizeAdguardDirectPort(sinkholeConfig.adguardDirectPort);
+  const directWarning = (!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct')
+    ? directModeWarning(sinkholeConfig.adguardHomeUrl || '', directPort)
+    : null;
+  const settingsTlsUrl = sinkholeConfig.adguardMode === 'webhook'
+    ? (sinkholeConfig.haWebhookUrl || sinkholeConfig.customWebhookUrl || '')
+    : (sinkholeConfig.adguardHomeUrl || sinkholeConfig.customWebhookUrl || '');
+  const tlsScopeNote = localTlsBypassNote(settingsTlsUrl, Boolean(sinkholeConfig.allowInsecureLocalTls));
 
   return (
     <div className="settings-container">
@@ -852,7 +877,7 @@ const Settings: React.FC<SettingsProps> = ({
                     style={{ fontSize: '0.75rem', padding: '4px 10px' }}
                     onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'direct' })}
                   >
-                    Direct (Port 3000)
+                    Direct (Port {directPort})
                   </button>
                   <button
                     type="button"
@@ -860,7 +885,7 @@ const Settings: React.FC<SettingsProps> = ({
                     style={{ fontSize: '0.75rem', padding: '4px 10px' }}
                     onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'ha-api' })}
                   >
-                    HA API (Port 8123)
+                    HA API (token)
                   </button>
                   <button
                     type="button"
@@ -879,9 +904,9 @@ const Settings: React.FC<SettingsProps> = ({
                 <button
                   type="button"
                   style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
-                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://homeassistant.local:3000', adguardMode: 'direct' })}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: `http://homeassistant.local:${directPort}`, adguardMode: 'direct' })}
                 >
-                  HA Port 3000
+                  HA Port {directPort}
                 </button>
                 <button
                   type="button"
@@ -893,16 +918,16 @@ const Settings: React.FC<SettingsProps> = ({
                 <button
                   type="button"
                   style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
-                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://localhost:3000', adguardMode: 'direct' })}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: `http://localhost:${directPort}`, adguardMode: 'direct' })}
                 >
-                  Docker 3000
+                  Docker {directPort}
                 </button>
                 <button
                   type="button"
                   style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
-                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: 'http://192.168.8.1:3000', adguardMode: 'direct' })}
+                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: `http://192.168.8.1:${directPort}`, adguardMode: 'direct' })}
                 >
-                  GL.iNet 3000
+                  GL.iNet {directPort}
                 </button>
                 <button
                   type="button"
@@ -930,33 +955,58 @@ const Settings: React.FC<SettingsProps> = ({
               {(!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct') && (
                 <>
                   <div style={{ marginBottom: '10px' }}>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Instance URL (AdGuard Port 3000)</label>
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Instance URL (AdGuard port {directPort})</label>
                     <input
                       type="text"
                       className="path-input"
                       style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
-                      placeholder="http://homeassistant.local:3000 or http://192.168.1.1:3000"
+                      placeholder={`http://homeassistant.local:${directPort} or http://192.168.1.1:${directPort}`}
                       value={sinkholeConfig.adguardHomeUrl}
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
                     />
-                    {sinkholeConfig.adguardHomeUrl?.includes(':8123') && (
+                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', margin: '8px 0 4px' }}>AdGuard API port</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={65535}
+                      className="path-input"
+                      style={{ width: '120px', height: '34px', fontSize: '0.8rem' }}
+                      value={sinkholeConfig.adguardDirectPort ?? ''}
+                      onFocus={() => {
+                        directPortFocusRef.current = directPort;
+                      }}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === '') {
+                          setSinkholeConfig({ ...sinkholeConfig, adguardDirectPort: undefined });
+                          return;
+                        }
+                        const next = Number.parseInt(raw, 10);
+                        if (Number.isInteger(next)) {
+                          setSinkholeConfig({ ...sinkholeConfig, adguardDirectPort: next });
+                        }
+                      }}
+                      onBlur={(e) => {
+                        const previous = directPortFocusRef.current;
+                        const next = normalizeAdguardDirectPort(e.target.value);
+                        setSinkholeConfig({
+                          ...sinkholeConfig,
+                          adguardDirectPort: next,
+                          adguardHomeUrl: replaceMatchingExplicitPort(sinkholeConfig.adguardHomeUrl || '', previous, next),
+                        });
+                      }}
+                    />
+                    <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
+                      Used when the URL has no port. A port written in the URL is kept.
+                    </p>
+                    {directWarning && (
                       <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '6px', fontSize: '0.72rem', color: '#f59e0b', display: 'flex', alignItems: 'flex-start', gap: '5px' }}>
                         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: '2px' }}>
                           <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
                           <line x1="12" y1="9" x2="12" y2="13" />
                           <line x1="12" y1="17" x2="12.01" y2="17" />
                         </svg>
-                        <span>Port 8123 is Home Assistant&rsquo;s frontend. For direct AdGuard API, expose and use port 3000 in Add-on Network settings, or switch to &quot;HA API&quot; mode above.</span>
-                      </div>
-                    )}
-                    {sinkholeConfig.adguardHomeUrl?.includes('nabu.casa') && (
-                      <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '6px', fontSize: '0.72rem', color: '#f59e0b', display: 'flex', alignItems: 'flex-start', gap: '5px' }}>
-                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: '2px' }}>
-                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                          <line x1="12" y1="9" x2="12" y2="13" />
-                          <line x1="12" y1="17" x2="12.01" y2="17" />
-                        </svg>
-                        <span>Nabu Casa does not proxy AdGuard direct port 3000. Switch mode to &quot;HA API&quot; or &quot;HA Webhook&quot; above to reload AdGuard over Nabu Casa remotely.</span>
+                        <span>{directWarning.message}</span>
                       </div>
                     )}
                   </div>
@@ -1107,14 +1157,31 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
 
           <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
-              <input
-                type="checkbox"
-                checked={sinkholeConfig.syncOnCompile}
-                onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, syncOnCompile: e.target.checked })}
-              />
-              <span>Trigger sinkhole reload automatically on every compilation</span>
-            </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                <input
+                  type="checkbox"
+                  checked={sinkholeConfig.syncOnCompile}
+                  onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, syncOnCompile: e.target.checked })}
+                />
+                <span>Trigger sinkhole reload automatically on every compilation</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(sinkholeConfig.allowInsecureLocalTls)}
+                  onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, allowInsecureLocalTls: e.target.checked })}
+                />
+                <span>Allow untrusted TLS certificates (local only)</span>
+              </label>
+              <p style={{ fontSize: '0.7rem', opacity: 0.65, margin: 0, maxWidth: '520px' }}>
+                For Home Assistant or AdGuard on your LAN with a self-signed certificate, for example https://homeassistant.local:8124.
+                Applies to localhost, .local names, and private LAN addresses when you test or push. Public hosts still require a trusted certificate.
+              </p>
+              {tlsScopeNote && (
+                <p style={{ fontSize: '0.7rem', margin: 0, maxWidth: '520px', color: '#f59e0b' }}>{tlsScopeNote}</p>
+              )}
+            </div>
 
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
