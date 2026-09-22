@@ -3,12 +3,25 @@ import type { FilterFormat, FilterSource } from '../types/';
 import { PRESET_BUNDLES, type PresetBundle } from './PresetsModal';
 import { ACCENT_PALETTE, applyAccentColor } from '../theme';
 import { BrandLogo } from '../components/BrandLogo';
+import {
+  AI_SETUP_OPTIONS,
+  DEPLOY_SETUP_OPTIONS,
+  ONBOARDING_HIGHLIGHTS,
+  ONBOARDING_STEPS,
+  aiSetupLabel,
+  deployTargetLabel,
+  type AiSetupChoice,
+  type DeployTargetId,
+  type OnboardingIcon,
+} from './onboardingContent';
 
 export interface OnboardingConfig {
   selectedBundleId?: string;
   exportFormat: FilterFormat;
   accentColor: string;
   shouldCompileImmediately: boolean;
+  deployTarget?: DeployTargetId;
+  aiSetup?: AiSetupChoice;
 }
 
 interface OnboardingModalProps {
@@ -50,6 +63,64 @@ const FORMAT_OPTIONS: Array<{
   },
 ];
 
+const OnboardingHighlightIcon: React.FC<{ name: OnboardingIcon }> = ({ name }) => {
+  const common = {
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+  };
+
+  if (name === 'suite') {
+    return (
+      <svg {...common}>
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      </svg>
+    );
+  }
+  if (name === 'inspector') {
+    return (
+      <svg {...common}>
+        <circle cx="11" cy="11" r="7" />
+        <path d="M21 21l-4.3-4.3" />
+      </svg>
+    );
+  }
+  if (name === 'radar') {
+    return (
+      <svg {...common}>
+        <path d="M4 11a9 9 0 0 1 9 9" />
+        <path d="M4 4a16 16 0 0 1 16 16" />
+        <circle cx="5" cy="19" r="1" />
+      </svg>
+    );
+  }
+  if (name === 'quarantine') {
+    return (
+      <svg {...common}>
+        <path d="M12 3l7 3v5c0 4.5-2.8 7.6-7 9-4.2-1.4-7-4.5-7-9V6l7-3z" />
+        <path d="M9 12l2 2 4-4" />
+      </svg>
+    );
+  }
+  if (name === 'deploy') {
+    return (
+      <svg {...common}>
+        <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" />
+        <path d="M12 3v12" />
+        <path d="M8 11l4 4 4-4" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
+  );
+};
+
 export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   isOpen,
   onClose,
@@ -67,12 +138,18 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     }
   });
   const [shouldCompileImmediately, setShouldCompileImmediately] = useState<boolean>(true);
+  const [deployTarget, setDeployTarget] = useState<DeployTargetId>('adguard');
+  const [aiSetup, setAiSetup] = useState<AiSetupChoice>('mini-ai');
 
-  // Sync format from store on mount
+  // Sync format from store on mount and align the deploy choice with it.
   useEffect(() => {
     if (typeof window !== 'undefined' && window.electron?.getExportFormat) {
       window.electron.getExportFormat().then((fmt) => {
-        if (fmt) setExportFormat(fmt);
+        if (!fmt) return;
+        setExportFormat(fmt);
+        if (fmt === 'hosts') setDeployTarget('pihole');
+        else if (fmt === 'adguard') setDeployTarget('adguard');
+        else setDeployTarget('lan');
       });
     }
   }, []);
@@ -138,7 +215,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         return;
       }
 
-      if (e.key === 'Enter' && currentStep < 4) {
+      if (e.key === 'Enter' && currentStep < ONBOARDING_STEPS.length) {
         const target = e.target as HTMLElement | null;
         // Do not intercept enter on buttons/inputs that have their own action
         if (target && (target.tagName === 'BUTTON' || target.tagName === 'INPUT')) {
@@ -162,12 +239,20 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     applyAccentColor(id);
   };
 
+  const handleDeployPick = (id: DeployTargetId) => {
+    setDeployTarget(id);
+    const suggested = DEPLOY_SETUP_OPTIONS.find((option) => option.id === id)?.format;
+    if (suggested) setExportFormat(suggested);
+  };
+
   const handleFinish = () => {
     onComplete({
       selectedBundleId: selectedBundleId === 'current' ? undefined : selectedBundleId,
       exportFormat,
       accentColor,
       shouldCompileImmediately,
+      deployTarget,
+      aiSetup,
     });
     onClose();
   };
@@ -181,7 +266,11 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     onClose();
   };
 
-  const totalSteps = 4;
+  const totalSteps = ONBOARDING_STEPS.length;
+  const selectedBundleName =
+    selectedBundleId === 'current'
+      ? 'Custom / Default Feeds'
+      : PRESET_BUNDLES.find((b) => b.id === selectedBundleId)?.name || 'Standard';
 
   return (
     <div className="modal-overlay onboarding-overlay" onClick={handleSkip}>
@@ -195,25 +284,20 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         {/* Top Header & Step Progress Bar */}
         <div className="onboarding-header">
           <div className="onboarding-stepper">
-            {[1, 2, 3, 4].map((step) => (
+            {ONBOARDING_STEPS.map((step) => (
               <div
-                key={step}
+                key={step.id}
                 className={`onboarding-step-pill ${
-                  currentStep === step
+                  currentStep === step.id
                     ? 'active'
-                    : currentStep > step
+                    : currentStep > step.id
                       ? 'completed'
                       : ''
                 }`}
-                onClick={() => setCurrentStep(step)}
+                onClick={() => setCurrentStep(step.id)}
               >
-                <span className="step-number">{currentStep > step ? '✓' : step}</span>
-                <span className="step-label">
-                  {step === 1 && 'Welcome'}
-                  {step === 2 && 'Protection'}
-                  {step === 3 && 'Personalize'}
-                  {step === 4 && 'Launch'}
-                </span>
+                <span className="step-number">{currentStep > step.id ? '✓' : step.id}</span>
+                <span className="step-label">{step.label}</span>
               </div>
             ))}
           </div>
@@ -237,71 +321,21 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 </div>
                 <h2 className="onboarding-title">Welcome to Blockingmachine</h2>
                 <p className="onboarding-desc">
-                  Your native, high-performance compiler and management workspace for
-                  network-wide adblock, privacy, and malware filter lists.
+                  Compile blocklists, turn on Defense Suite modules, and use on-device AI
+                  to inspect threats before you deploy them to your network.
                 </p>
               </div>
 
               <div className="onboarding-highlights-grid">
-                <div className="onboarding-highlight-card">
-                  <div className="highlight-icon-box" aria-hidden="true">
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                    </svg>
+                {ONBOARDING_HIGHLIGHTS.map((highlight) => (
+                  <div className="onboarding-highlight-card" key={highlight.title}>
+                    <div className="highlight-icon-box" aria-hidden="true">
+                      <OnboardingHighlightIcon name={highlight.icon} />
+                    </div>
+                    <h4>{highlight.title}</h4>
+                    <p>{highlight.body}</p>
                   </div>
-                  <h4>Universal Multi-Format Export</h4>
-                  <p>
-                    Compile once, deploy everywhere. Generates optimized lists for
-                    AdGuard Home, Pi-hole, hosts files, dnsmasq, and plain domains.
-                  </p>
-                </div>
-                <div className="onboarding-highlight-card">
-                  <div className="highlight-icon-box" aria-hidden="true">
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                    </svg>
-                  </div>
-                  <h4>Intelligent Deduplication</h4>
-                  <p>
-                    Consolidates overlapping loopback rules, prunes redundant subdomains,
-                    and preserves important exception bypasses.
-                  </p>
-                </div>
-                <div className="onboarding-highlight-card">
-                  <div className="highlight-icon-box" aria-hidden="true">
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="23 4 23 10 17 10" />
-                      <polyline points="1 20 1 14 7 14" />
-                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                    </svg>
-                  </div>
-                  <h4>Direct Sinkhole Sync</h4>
-                  <p>
-                    Automatically push fresh rule bundles straight into your local Pi-hole
-                    or AdGuard Home instance with live API reload.
-                  </p>
-                </div>
+                ))}
               </div>
             </div>
           )}
@@ -385,8 +419,91 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             </div>
           )}
 
-          {/* STEP 3: Output Format & Visual Accent Customizer */}
+          {/* STEP 3: Defense profile, deploy, and optional AI */}
           {currentStep === 3 && (
+            <div className="onboarding-step-panel step-setup">
+              <div className="onboarding-step-intro">
+                <h3 className="step-title">Set Up Defense, Deploy, and AI</h3>
+                <p className="step-subtitle">
+                  A working setup is three moves: keep the defense profile, point the compiled
+                  list at a sinkhole, then decide whether AI runs on this machine.
+                </p>
+              </div>
+
+              <div className="onboarding-setup-list">
+                <div className="onboarding-setup-block">
+                  <span className="onboarding-setup-index">1</span>
+                  <div className="onboarding-setup-copy">
+                    <h4>Defense profile</h4>
+                    <p>
+                      <strong>{selectedBundleName}</strong> is selected. Change it on the Protection
+                      step. Its feeds are subscribed when you finish this tour.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="onboarding-setup-block">
+                  <span className="onboarding-setup-index">2</span>
+                  <div className="onboarding-setup-copy">
+                    <h4>Deploy and sync</h4>
+                    <p>
+                      Choose where the compiled list should go. Addresses, tokens, and reload-on-compile
+                      are entered in Deploy & Sync after the tour.
+                    </p>
+                    <div className="onboarding-choice-grid">
+                      {DEPLOY_SETUP_OPTIONS.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          className={`format-tile onboarding-choice ${
+                            deployTarget === option.id ? 'selected' : ''
+                          }`}
+                          onClick={() => handleDeployPick(option.id)}
+                        >
+                          <div className="format-tile-header">
+                            <span className="format-name">{option.name}</span>
+                          </div>
+                          <span className="format-target">{option.detail}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="onboarding-setup-block">
+                  <span className="onboarding-setup-index">3</span>
+                  <div className="onboarding-setup-copy">
+                    <h4>Optional AI</h4>
+                    <p>
+                      Mini-AI stays on-device. AI Radar scans domains and query logs, AI Sentinel
+                      Watchdog scouts on a timer, and Threat Quarantine holds verdicts until you
+                      block or allow them. The Unified Inspector checks coverage before you compile.
+                    </p>
+                    <div className="onboarding-choice-grid">
+                      {AI_SETUP_OPTIONS.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          className={`format-tile onboarding-choice ${
+                            aiSetup === option.id ? 'selected' : ''
+                          }`}
+                          onClick={() => setAiSetup(option.id)}
+                        >
+                          <div className="format-tile-header">
+                            <span className="format-name">{option.name}</span>
+                          </div>
+                          <span className="format-target">{option.detail}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 4: Output Format & Visual Accent Customizer */}
+          {currentStep === 4 && (
             <div className="onboarding-step-panel step-personalize">
               <div className="onboarding-step-intro">
                 <h3 className="step-title">Configure Output & Personal Style</h3>
@@ -439,8 +556,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             </div>
           )}
 
-          {/* STEP 4: Ready to Compile Launchpad */}
-          {currentStep === 4 && (
+          {/* STEP 5: Ready to Compile Launchpad */}
+          {currentStep === 5 && (
             <div className="onboarding-step-panel step-launch">
               <div className="onboarding-hero">
                 <div className="onboarding-badge-icon ready-pulse">
@@ -457,7 +574,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 </div>
                 <h2 className="onboarding-title">You're All Set!</h2>
                 <p className="onboarding-desc">
-                  Your customized Blockingmachine workspace is configured and ready.
+                  Your workspace is ready. Compile a list, then open Deploy & Sync to connect
+                  the sinkhole. AI Radar, Threat Quarantine, and the Unified Inspector stay in the sidebar.
                 </p>
               </div>
 
@@ -465,11 +583,15 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               <div className="onboarding-summary-card">
                 <div className="summary-item">
                   <span className="summary-label">Protection Profile:</span>
-                  <span className="summary-value">
-                    {selectedBundleId === 'current'
-                      ? 'Custom / Default Feeds'
-                      : PRESET_BUNDLES.find((b) => b.id === selectedBundleId)?.name || 'Standard'}
-                  </span>
+                  <span className="summary-value">{selectedBundleName}</span>
+                </div>
+                <div className="summary-item">
+                  <span className="summary-label">Deploy Target:</span>
+                  <span className="summary-value">{deployTargetLabel(deployTarget)}</span>
+                </div>
+                <div className="summary-item">
+                  <span className="summary-label">AI Preference:</span>
+                  <span className="summary-value">{aiSetupLabel(aiSetup)}</span>
                 </div>
                 <div className="summary-item">
                   <span className="summary-label">Primary Format:</span>

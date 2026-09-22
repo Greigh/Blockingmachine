@@ -1,4 +1,4 @@
-! Title: Blockingmachine URL Tracking Stripper [Beta]
+! Title: URL Tracking Stripper [Beta]
 ! Description: Advanced filter stripping tracking tokens, click identifiers, and marketing referral parameters from URLs across the web.
 ! Version: 1.0.0-beta.1
 ! Expires: 2 days

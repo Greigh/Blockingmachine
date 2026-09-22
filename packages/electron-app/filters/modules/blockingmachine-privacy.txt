@@ -1,4 +1,4 @@
-! Title: Blockingmachine Privacy Engine [Beta]
+! Title: Privacy Engine [Beta]
 ! Description: High-precision network-level and browser telemetry, tracking, fingerprinting, and analytics blocker.
 ! Version: 1.0.0-beta.2
 ! Expires: 2 days

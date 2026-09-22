@@ -32,6 +32,7 @@ export {
   CURATED_SOURCE_PROFILES,
   getSourceProfile,
   detectSourceClassification,
+  displayFilterLabel,
   type SourceInfo,
   type FilterListInfo,
   type SourceScope,

@@ -204,7 +204,16 @@ function App() {
       applyAccentColor(config.accentColor);
     }
 
-    // 4. Trigger initial compilation if requested
+    // 4. Persist on-device Mini-AI when the tour explicitly chose it
+    if (config.aiSetup === 'mini-ai' && window.electron?.setAiConfig) {
+      try {
+        await window.electron.setAiConfig({ provider: 'mini-ai' });
+      } catch (err) {
+        console.error('Failed to save AI preference:', err);
+      }
+    }
+
+    // 5. Trigger initial compilation if requested
     if (config.shouldCompileImmediately) {
       setCurrentView('process');
       setAutoTriggerCompile(true);

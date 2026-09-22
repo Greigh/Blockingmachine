@@ -4637,8 +4637,8 @@ input:checked + .mac-slider:before {
 }
 
 .onboarding-dialog {
-  max-width: 680px;
-  width: 92%;
+  max-width: 760px;
+  width: 94%;
   background: var(--card-bg);
   border: 1px solid var(--border-color);
   border-radius: 16px;
@@ -4660,16 +4660,17 @@ input:checked + .mac-slider:before {
 .onboarding-stepper {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .onboarding-step-pill {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 4px;
+  padding: 3px 8px;
   border-radius: 20px;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
   color: var(--secondary-color);
   background: var(--sidebar-hover-bg);
@@ -4716,9 +4717,9 @@ input:checked + .mac-slider:before {
 }
 
 .onboarding-body {
-  padding: 24px 28px;
+  padding: 22px 26px;
   min-height: 400px;
-  max-height: 520px;
+  max-height: 560px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -4794,10 +4795,10 @@ input:checked + .mac-slider:before {
   background: var(--control-bg-color);
   border: 1px solid var(--border-color);
   border-radius: 12px;
-  padding: 16px 14px;
+  padding: 12px 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   transition: all 0.18s ease;
 }
 
@@ -5159,6 +5160,76 @@ input:checked + .mac-slider:before {
 .onboarding-next-btn,
 .onboarding-finish-btn {
   padding: 8px 18px;
+}
+
+.onboarding-setup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.onboarding-setup-block {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.onboarding-setup-index {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0, 122, 255, 0.15);
+  color: var(--primary-color);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.onboarding-setup-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.onboarding-setup-copy h4 {
+  margin: 0 0 4px 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--heading-color);
+}
+
+.onboarding-setup-copy p {
+  margin: 0 0 8px 0;
+  font-size: 12.5px;
+  color: var(--secondary-color);
+  line-height: 1.45;
+}
+
+.onboarding-setup-copy p strong {
+  color: var(--heading-color);
+  font-weight: 600;
+}
+
+.onboarding-choice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+button.format-tile.onboarding-choice {
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  width: 100%;
+}
+
+button.format-tile .format-target {
+  display: block;
+  white-space: normal;
+  line-height: 1.4;
 }
 
 /* ==========================================================================

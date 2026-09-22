@@ -1,4 +1,4 @@
-! Title: Blockingmachine Threat & Malicious Domain Defense [Beta]
+! Title: Threat & Malicious Domain Defense [Beta]
 ! Description: Proactive network-level and DNS blocking of phishing gateways, rogue redirects, drive-by malware, and in-browser cryptominers.
 ! Version: 1.0.0-beta.2
 ! Expires: 2 days
