@@ -308,10 +308,7 @@ body {
 }
 
 .sidebar-shortcut {
-  font-size: 10.5px;
-  color: var(--secondary-color);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  opacity: 0.7;
+  display: none;
 }
 
 /* Sidebar Footer */
@@ -6186,13 +6183,13 @@ button.format-tile .format-target {
 
 .guide-env-selector {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   background: var(--control-bg-color);
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  padding: 8px 14px;
-  flex-wrap: wrap;
+  padding: 12px 14px;
 }
 
 .env-selector-title {
@@ -6205,26 +6202,32 @@ button.format-tile .format-target {
 }
 
 .env-pill-group {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
 }
 
 .env-pill-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: flex-start;
+  gap: 8px;
   background: var(--bg-color);
   border: 1px solid var(--border-color);
-  border-radius: 7px;
-  padding: 5px 11px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-height: 44px;
   font-size: 12px;
   font-weight: 500;
+  line-height: 1.3;
   color: var(--text-color);
   cursor: pointer;
-  transition: all 0.16s ease;
-  white-space: nowrap;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
+  white-space: normal;
+  text-align: left;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .env-pill-btn:hover {
@@ -6282,8 +6285,9 @@ button.format-tile .format-target {
 
 .ha-callout-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: stretch;
 }
 
 .ha-callout-item {
@@ -6292,7 +6296,72 @@ button.format-tile .format-target {
   background: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 14px 16px;
+  min-height: 112px;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.guide-procedure-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.guide-procedure-head h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--heading-color);
+}
+
+.guide-procedure-head p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--secondary-color);
+}
+
+.service-mismatch-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  background: rgba(255, 159, 10, 0.12);
+  border: 1px solid rgba(255, 159, 10, 0.4);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.service-mismatch-copy strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--heading-color);
+  margin-bottom: 4px;
+}
+
+.service-mismatch-copy p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-color);
+}
+
+.service-mismatch-action {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.scout-empty-note,
+.scout-error-box {
+  margin: 0;
+}
+
+.scout-error-box {
+  border-color: rgba(255, 69, 58, 0.45);
+  background: rgba(255, 69, 58, 0.1);
 }
 
 .ha-callout-num {
@@ -6312,16 +6381,27 @@ button.format-tile .format-target {
 
 .ha-callout-item strong {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--heading-color);
-  margin-bottom: 3px;
+  margin-bottom: 6px;
 }
 
 .ha-callout-item p {
   margin: 0;
-  font-size: 11.5px;
+  font-size: 12.5px;
+  font-weight: 400;
   color: var(--secondary-color);
-  line-height: 1.45;
+  line-height: 1.55;
+}
+
+.ha-callout-item p strong {
+  display: inline;
+  font-size: inherit;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: 0;
 }
 
 /* Fast-Fill Presets & Method Selector */

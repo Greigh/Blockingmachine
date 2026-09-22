@@ -557,11 +557,10 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       }
 
       const diag8124 = resolveAdguardDirectUrl('https://homeassistant.local:8124', 3000);
-      expect(diag8124.ok).toBe(false);
-      if (!diag8124.ok) {
-        expect(diag8124.code).toBe('ha_frontend');
-        expect(diag8124.message).toContain('Port 8124');
-        expect(diag8124.message).not.toContain('Cannot connect to port 3000');
+      expect(diag8124.ok).toBe(true);
+      if (diag8124.ok) {
+        expect(diag8124.target.port).toBe(8124);
+        expect(diag8124.target.statusUrl).toBe('https://homeassistant.local:8124/control/status');
       }
 
       const diag2 = resolveAdguardDirectUrl('192.168.1.100:8123/', 3000);
