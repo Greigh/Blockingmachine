@@ -18,9 +18,9 @@ export interface FilterMetaConfig {
 export const defaultFilterMeta = {
   title: "Blockingmachine AdGuard List",
   description: "Combined filter list optimized for AdGuard",
-  madeby: "Daniel Hipskind",
+  madeby: "Greigh Studios LLC",
   homepage: "https://github.com/greigh/blockingmachine",
-  website: "http://danielhipskind.com/",
+  website: "https://greighstudios.com/",
   license: "BSD-3-Clause",
   version: "3.0.0",
   expires: "1 day",

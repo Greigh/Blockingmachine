@@ -13,6 +13,7 @@ import {
 } from './reputation.js';
 import type {
   AiVerdict,
+  DomainFeatureVector,
   MiniAiFeatureContribution,
   MiniAiPrediction,
   RiskLevel,
@@ -54,34 +55,6 @@ const COMMON_TRIGRAMS = new Set([
   'gui', 'lid', 'cli', 'nic', 'wea', 'eat', 'ath', 'the', 'her', 'new',
 ]);
 
-export interface DomainFeatureVector {
-  entropyFull: number;
-  entropySld: number;
-  entropySubdomain: number;
-  domainLength: number;
-  sldLength: number;
-  subdomainDepth: number;
-  vowelRatio: number;
-  consonantRatio: number;
-  digitRatio: number;
-  consecutiveConsonants: number;
-  consecutiveDigits: number;
-  hexScore: number;
-  trigramPerplexity: number;
-  adKeywordWeight: number;
-  trackerKeywordWeight: number;
-  cnameKnownTracker: number;
-  cnameExternal: number;
-  cnameDepth: number;
-  knownSafeInfra: number;
-  highRiskTld: number;
-  punycode: number;
-  hyphenRatio: number;
-  syllableCadence: number;
-  numericSubdomain: number;
-  userTuneBias: number;
-  brandSpoofScore: number;
-}
 
 /**
  * Extracts 25 numerical features for domain threat classification.
@@ -147,24 +120,31 @@ export function extractDomainFeatures(
   );
   const consecutiveDigits = Math.min(1.0, maxDigits / 8);
 
-  // 5. Hex & Hash Detection
-  const hasHexLabel = parts.some((p) => p.length >= 16 && /^[a-f0-9]+$/i.test(p));
+  // 5. Hex & Hash Detection (supports standard and hyphenated/UUID hex labels)
+  const hasHexLabel = parts.some((p) => {
+    const unhyphenated = p.replace(/-/g, '');
+    return unhyphenated.length >= 16 && /^[a-f0-9]+$/i.test(unhyphenated);
+  });
   const hexScore = hasHexLabel ? 1.0 : 0.0;
 
   // 6. Trigram Perplexity (Natural Language Naturalness)
+  // Evaluates the most complex label in the domain (SLD or high-entropy subdomain)
+  const evalLabel = (subdomains.length > 0 && rawEntropySubdomain > rawEntropySld && subdomains[0].length >= sld.length)
+    ? subdomains[0]
+    : sld;
   let familiarTrigrams = 0;
   let totalTrigrams = 0;
-  if (sld.length >= 3) {
-    for (let i = 0; i <= sld.length - 3; i++) {
+  if (evalLabel.length >= 3) {
+    for (let i = 0; i <= evalLabel.length - 3; i++) {
       totalTrigrams++;
-      if (COMMON_TRIGRAMS.has(sld.slice(i, i + 3))) {
+      if (COMMON_TRIGRAMS.has(evalLabel.slice(i, i + 3))) {
         familiarTrigrams++;
       }
     }
   }
   // Low ratio of familiar trigrams in a long label indicates high perplexity (unnatural/DGA)
   const trigramFamiliarity = totalTrigrams > 0 ? familiarTrigrams / totalTrigrams : 0.5;
-  const trigramPerplexity = sld.length >= 8 ? 1.0 - trigramFamiliarity : 0.2;
+  const trigramPerplexity = evalLabel.length >= 8 ? 1.0 - trigramFamiliarity : 0.2;
 
   // 7. Keyword Matching (label boundaries; `status` must not match `stat`)
   let adKeywordWeight = 0;

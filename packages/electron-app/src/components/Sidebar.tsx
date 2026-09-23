@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrandLogo } from './BrandLogo';
 
 interface SidebarProps {
@@ -12,6 +12,7 @@ interface SidebarProps {
     url: string
   ) => void;
   onLaunchOnboarding?: () => void;
+  isRadarScanning?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -22,7 +23,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
   updateAvailable,
   handleExternalLink,
   onLaunchOnboarding,
+  isRadarScanning,
 }) => {
+  const [version, setVersion] = useState<string>(() => {
+    return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.0';
+  });
+
+  useEffect(() => {
+    if (window.electron?.getAppVersion) {
+      window.electron
+        .getAppVersion()
+        .then((v) => {
+          if (v) setVersion(v);
+        })
+        .catch(() => {});
+    }
+  }, []);
+
   return (
     <aside className="app-sidebar">
       {/* Top window drag region & traffic light spacer */}
@@ -35,14 +52,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         <div className="brand-info">
           <span className="brand-title">Blockingmachine</span>
-          <span className="brand-version">v1.0.0-rc.1</span>
+          <span className="brand-version">v{version}</span>
         </div>
       </div>
 
       {/* Sidebar Navigation Items */}
       <nav className="sidebar-nav">
-        <div className="sidebar-section-label">Features</div>
-
+        {/* OVERVIEW */}
+        <div className="sidebar-section-label">Overview</div>
         <button
           className={`sidebar-nav-item ${currentView === 'process' ? 'active' : ''}`}
           onClick={() => setCurrentView('process')}
@@ -64,10 +81,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
             </svg>
           </span>
-          <span className="sidebar-label">Process & Stats</span>
+          <span className="sidebar-label">Dashboard</span>
           <span className="sidebar-shortcut">⌘1</span>
         </button>
 
+        {/* RULES & FEEDS */}
+        <div className="sidebar-section-label">Rules & Feeds</div>
         <button
           className={`sidebar-nav-item ${currentView === 'sources' ? 'active' : ''}`}
           onClick={() => setCurrentView('sources')}
@@ -89,7 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
             </svg>
           </span>
-          <span className="sidebar-label">Sources</span>
+          <span className="sidebar-label">Filter Sources</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span className="sidebar-badge">
               {enabledSourcesCount}/{totalSourcesCount}
@@ -101,7 +120,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <button
           className={`sidebar-nav-item ${currentView === 'modules' ? 'active' : ''}`}
           onClick={() => setCurrentView('modules')}
-          title="Defense Modules [Beta] (First-Party Curated Shields) (Cmd+3)"
+          title="Defense Modules (First-Party Curated Shields) (Cmd+3)"
         >
           <span className="sidebar-icon">
             <svg
@@ -151,6 +170,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="sidebar-shortcut">⌘4</span>
         </button>
 
+        {/* TOOLS & AI */}
+        <div className="sidebar-section-label">Tools & AI</div>
         <button
           className={`sidebar-nav-item ${currentView === 'inspector' ? 'active' : ''}`}
           onClick={() => setCurrentView('inspector')}
@@ -172,7 +193,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
             </svg>
           </span>
-          <span className="sidebar-label">Rule & AI Inspector</span>
+          <span className="sidebar-label">Rule Inspector</span>
           <span className="sidebar-shortcut">⌘5</span>
         </button>
 
@@ -202,9 +223,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
 
         <button
-          className={`sidebar-nav-item ${currentView === 'bulkImport' ? 'active' : ''}`}
-          onClick={() => setCurrentView('bulkImport')}
-          title="Bulk Import Feeds (Cmd+7)"
+          className={`sidebar-nav-item ${currentView === 'ai-radar' ? 'active' : ''}`}
+          onClick={() => setCurrentView('ai-radar')}
+          title="AI Ad & Tracker Discovery Radar [Beta] (Cmd+7)"
         >
           <span className="sidebar-icon">
             <svg
@@ -215,17 +236,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
               stroke="currentColor"
               strokeWidth="2"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
-              />
+              <circle cx="12" cy="12" r="9" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3a9 9 0 019 9" />
+              <circle cx="12" cy="12" r="3" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 12l4-4" />
             </svg>
           </span>
-          <span className="sidebar-label">Bulk Import</span>
+          <span className="sidebar-label">
+            AI Radar
+            {isRadarScanning ? (
+              <span className="sidebar-radar-live-pill" title="Live background scanning active">
+                <span className="live-radar-ping-dot" />
+                LIVE
+              </span>
+            ) : (
+              <span className="sidebar-badge-inline beta">Beta</span>
+            )}
+          </span>
           <span className="sidebar-shortcut">⌘7</span>
         </button>
 
+        {/* DISTRIBUTION */}
+        <div className="sidebar-section-label">Distribution</div>
         <button
           className={`sidebar-nav-item ${currentView === 'deploy' ? 'active' : ''}`}
           onClick={() => setCurrentView('deploy')}
@@ -249,33 +281,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="sidebar-shortcut">⌘8</span>
         </button>
 
-        <button
-          className={`sidebar-nav-item ${currentView === 'ai-radar' ? 'active' : ''}`}
-          onClick={() => setCurrentView('ai-radar')}
-          title="AI Ad & Tracker Discovery Radar [Beta] (Cmd+9)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <circle cx="12" cy="12" r="9" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3a9 9 0 019 9" />
-              <circle cx="12" cy="12" r="3" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 12l4-4" />
-            </svg>
-          </span>
-          <span className="sidebar-label">
-            AI Radar
-            <span className="sidebar-badge-inline beta">Beta</span>
-          </span>
-          <span className="sidebar-shortcut">⌘9</span>
-        </button>
-
+        {/* PREFERENCES */}
         <div className="sidebar-section-label">Preferences</div>
 
         <button
@@ -354,10 +360,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <a
             href="#"
             onClick={(e) =>
-              handleExternalLink(e, 'https://danielhipskind.com')
+              handleExternalLink(e, 'https://greighstudios.com')
             }
             className="sidebar-meta-btn"
-            title="Developer Website: danielhipskind.com"
+            title="Greigh Studios LLC: greighstudios.com"
           >
             <svg
               viewBox="0 0 24 24"
@@ -370,10 +376,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"
+                d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"
               />
             </svg>
-            <span>Daniel Hipskind</span>
+            <span>Greigh Studios</span>
           </a>
           <a
             href="#"

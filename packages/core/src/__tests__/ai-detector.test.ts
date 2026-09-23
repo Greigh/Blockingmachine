@@ -13,6 +13,8 @@ import {
   isSafePublicWebUrl,
   AiDetectorService,
   KNOWN_CLOAKED_TARGETS,
+  isDomainBlocked,
+  findWinningRule,
 } from '../index.js';
 
 describe('AI Ad & Tracker Discovery Engine', () => {
@@ -49,6 +51,50 @@ describe('AI Ad & Tracker Discovery Engine', () => {
       const result = detectDgaPatterns('a1b2c3d4e5f60718293a4b5c6d7e8f90.tracking.com');
       expect(result.score).toBeGreaterThanOrEqual(50);
       expect(result.isLikelyDga).toBe(true);
+    });
+
+    it('flags DGA domains even when prefixed with www and on compound ccTLD', () => {
+      const result = detectDgaPatterns('www.qxzjkwtrmpfd.co.uk');
+      expect(result.score).toBeGreaterThanOrEqual(50);
+      expect(result.isLikelyDga).toBe(true);
+      expect(result.reasons.some((r) => r.includes('consonant') || r.includes('entropy') || r.includes('vowel'))).toBe(true);
+    });
+
+    it('flags UUID-formatted hex botnet C2 domains', () => {
+      const result = detectDgaPatterns('4f9b2a7e-1c8d-0e5f-b2a7-4f9b2a7e1c8d.com');
+      expect(result.score).toBeGreaterThanOrEqual(50);
+      expect(result.isLikelyDga).toBe(true);
+      expect(result.reasons.some((r) => r.includes('hex hash signature'))).toBe(true);
+    });
+
+    it('flags tracking beacon subdomains with prefixes', () => {
+      const result = detectDgaPatterns('trk-a1b2c3d4e5f60718293a4b5c6d7e8f90.tracking.com');
+      expect(result.score).toBeGreaterThanOrEqual(50);
+      expect(result.isLikelyDga).toBe(true);
+    });
+
+    it('flags Markov alternating letter-digit generator patterns', () => {
+      const result = detectDgaPatterns('x1y2z3a4b5c6.info');
+      expect(result.score).toBeGreaterThanOrEqual(50);
+      expect(result.isLikelyDga).toBe(true);
+      expect(result.reasons.some((r) => r.includes('Alternating letter-digit'))).toBe(true);
+    });
+
+    it('flags cyclic character repetition low-entropy botnet domains', () => {
+      const result = detectDgaPatterns('ababababab.xyz');
+      expect(result.score).toBeGreaterThanOrEqual(35);
+      expect(result.reasons.some((r) => r.includes('Cyclic character repetition'))).toBe(true);
+    });
+
+    it('correctly decomposes dynamic DNS and serverless tenant hostnames', () => {
+      const duck = decomposeDomain('botnet123.duckdns.org');
+      expect(duck.tld).toBe('duckdns.org');
+      expect(duck.sld).toBe('botnet123');
+
+      const noip = decomposeDomain('www.tracker.no-ip.biz');
+      expect(noip.tld).toBe('no-ip.biz');
+      expect(noip.sld).toBe('tracker');
+      expect(noip.subdomains).toEqual(['www']);
     });
   });
 
@@ -552,5 +598,142 @@ describe('AI Ad & Tracker Discovery Engine', () => {
       expect(standardDecomp.subdomains).toEqual(['adserver']);
     });
   });
+
+  describe('Enterprise Multi-Tenant SaaS False Positive Defense', () => {
+    it('correctly classifies enterprise multi-tenant domains and brand ecosystems as clean', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const enterpriseDomains = [
+        'apple.statuspage.io',
+        'apple.zendesk.com',
+        'microsoft.sharepoint.com',
+        'google.okta.com',
+        'apple.github.io',
+        'apple.slack.com',
+        'netflix.statuspage.io',
+        'amazon.custhelp.com',
+      ];
+
+      for (const d of enterpriseDomains) {
+        const res = await service.scanDomain(d);
+        expect(res.verdict).toBe('clean');
+        expect(res.category).toBe('Clean');
+        expect(res.riskLevel).toBe('none');
+      }
+    });
+
+    it('flags brand spoofing with phishing keywords or on untrusted domains', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const threatDomains = [
+        'apple-login.xyz',
+        'apple.evil-domain.com',
+        'apple-login.statuspage.io',
+        'xn--pple-43d.com',
+        'paypa1.com',
+      ];
+
+      for (const d of threatDomains) {
+        const res = await service.scanDomain(d);
+        expect(res.verdict).toBe('malicious');
+        expect(res.category).toBe('Malware/Phishing');
+        expect(res.riskLevel).toBe('critical');
+      }
+    });
+
+    it('corroborates DGA malware on generic TLDs with extreme consonant runs or hex signatures', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const dgaDomains = [
+        'qxzjkwtrmpfd.com',
+        '4f9b2a7e1c8d0e5f.com',
+        'xkqwzrtpmjvl.xyz',
+      ];
+
+      for (const d of dgaDomains) {
+        const res = await service.scanDomain(d);
+        expect(res.verdict).toBe('malicious');
+        expect(res.category).toBe('Malware/Phishing');
+        expect(res.riskLevel).toBe('critical');
+      }
+    });
+
+    it('detects short brand combosquatting and delivery/package lures', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const deliveryThreats = [
+        'uspsdelivery.com',
+        'dhltracking.com',
+        'upsparcel.com',
+        'usps-redelivery.com',
+        'pncalert.com',
+      ];
+
+      for (const d of deliveryThreats) {
+        const res = await service.scanDomain(d);
+        expect(res.verdict).toBe('malicious');
+        expect(res.category).toBe('Malware/Phishing');
+      }
+    });
+
+    it('detects pseudo-TLD lures and Web3/2FA phishing lures', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const modernThreats = [
+        'paypal-com.net',
+        'apple-com.xyz',
+        'paypalcom.org',
+        'netflix-app.net',
+        'metamask-airdrop.xyz',
+        'coinbase-kyc.com',
+        'binance-2fa.com',
+      ];
+
+      for (const d of modernThreats) {
+        const res = await service.scanDomain(d);
+        expect(res.verdict).toBe('malicious');
+        expect(res.category).toBe('Malware/Phishing');
+      }
+    });
+
+    it('accurately identifies brand typosquats while protecting genuine dictionary words', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      // Genuine dictionary words that differ by 1 letter from brand names must remain clean
+      const benignWords = ['apply.com', 'steak.com', 'phase.com', 'stream.com'];
+      for (const d of benignWords) {
+        const res = await service.scanDomain(d);
+        expect(res.verdict).toBe('clean');
+        expect(res.category).toBe('Clean');
+      }
+
+      // Typosquats with leetspeak or repeated characters must be flagged
+      const typosquats = ['gooogle.com', 'appple.com', 'paypa1.com', 'g00gle.com', 'app1e.com'];
+      for (const d of typosquats) {
+        const res = await service.scanDomain(d);
+        expect(res.verdict).toBe('malicious');
+        expect(res.category).toBe('Malware/Phishing');
+      }
+    });
+  });
+
+  describe('Domain Evaluator Helpers (isDomainBlocked & findWinningRule)', () => {
+    const rules = [
+      '||ads.doubleclick.net^',
+      '0.0.0.0 tracking.evil.com',
+      '@@||allowed.doubleclick.net^',
+    ];
+
+    it('correctly determines whether a domain is blocked', () => {
+      expect(isDomainBlocked('ads.doubleclick.net', rules)).toBe(true);
+      expect(isDomainBlocked('sub.ads.doubleclick.net', rules)).toBe(true);
+      expect(isDomainBlocked('tracking.evil.com', rules)).toBe(true);
+      expect(isDomainBlocked('allowed.doubleclick.net', rules)).toBe(false);
+      expect(isDomainBlocked('clean-portal.org', rules)).toBe(false);
+    });
+
+    it('correctly returns winning rule string or undefined', () => {
+      expect(findWinningRule('ads.doubleclick.net', rules)).toBe('||ads.doubleclick.net^');
+      expect(findWinningRule('tracking.evil.com', rules)).toBe('0.0.0.0 tracking.evil.com');
+      expect(findWinningRule('allowed.doubleclick.net', rules)).toBe('@@||allowed.doubleclick.net^');
+      expect(findWinningRule('clean-portal.org', rules)).toBeUndefined();
+    });
+  });
 });
+
+
 

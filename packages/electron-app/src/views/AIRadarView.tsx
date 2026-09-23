@@ -8,12 +8,14 @@ import type {
   ThreatQuarantineItem,
   AiWatchdogConfig,
   RuleConflictResult,
+  LiveRadarSession,
 } from '../types/';
 import { formatConfidencePercent, verdictBadgeLabel } from '../aiDisplay';
 import { BetaBadge } from '../components/BetaBadge';
 import { EntropyGuideModal } from '../components/EntropyGuideModal';
 
 interface AIRadarViewProps {
+  liveRadarSession?: LiveRadarSession | null;
   onTriggerCompile?: () => void;
   onNavigateDeploy?: () => void;
   onNavigateInspector?: (domain?: string) => void;
@@ -25,6 +27,7 @@ interface AIRadarViewProps {
 type RadarTab = 'sinkhole-scout' | 'domain-inspector' | 'canary-crawler' | 'quarantine-history';
 
 export const AIRadarView: React.FC<AIRadarViewProps> = ({
+  liveRadarSession,
   onTriggerCompile,
   onNavigateDeploy,
   onNavigateInspector,
@@ -64,6 +67,26 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
   const [sinkholeConfig, setSinkholeConfig] = useState<SinkholeConfig | null>(null);
   const [blockedItemsMap, setBlockedItemsMap] = useState<Set<string>>(new Set());
   const [isEntropyModalOpen, setIsEntropyModalOpen] = useState(false);
+
+  // Live Radar Continuous Scanning Session State
+  const [durationMinutes, setDurationMinutes] = useState<number>(15);
+  const [isCustomDuration, setIsCustomDuration] = useState<boolean>(false);
+  const [customMinutesInput, setCustomMinutesInput] = useState<string>('10');
+  const [pollIntervalSeconds, setPollIntervalSeconds] = useState<number>(10);
+  const [now, setNow] = useState<number>(Date.now());
+  const [queryListFilter, setQueryListFilter] = useState<'all' | 'flagged' | 'clean'>('all');
+
+  useEffect(() => {
+    if (!liveRadarSession?.active) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [liveRadarSession?.active]);
+
+  useEffect(() => {
+    if (liveRadarSession?.service) {
+      setScoutService(liveRadarSession.service);
+    }
+  }, [liveRadarSession?.service]);
 
   // Watchdog state
   const [watchdogConfig, setWatchdogConfig] = useState<AiWatchdogConfig>({
@@ -224,7 +247,50 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     }
   };
 
-  // Run Sinkhole Query Scout
+  // Live Radar Background Scanning Handlers
+  const handleStartLiveScan = async () => {
+    if (!window.electron?.startLiveRadarSession) return;
+    setError?.(null);
+    setScoutError(null);
+    const chosenDuration = isCustomDuration ? Math.max(1, parseInt(customMinutesInput, 10) || 15) : durationMinutes;
+    try {
+      await window.electron.startLiveRadarSession({
+        service: scoutService,
+        durationMinutes: chosenDuration,
+        pollIntervalSeconds,
+      });
+      setSuccessMessage?.(`Started background Live Radar (${chosenDuration === 0 ? 'Continuous' : `${chosenDuration} minutes`}). Scanning continues in background even if you leave this screen.`);
+    } catch (err: any) {
+      setError?.(`Failed to start Live Radar: ${err?.message || err}`);
+    }
+  };
+
+  const handleStopLiveScan = async () => {
+    if (!window.electron?.stopLiveRadarSession) return;
+    try {
+      await window.electron.stopLiveRadarSession();
+      setSuccessMessage?.('Live Radar session stopped.');
+      loadQuarantine();
+    } catch (err: any) {
+      setError?.(`Failed to stop Live Radar: ${err?.message || err}`);
+    }
+  };
+
+  const formatSessionRemaining = () => {
+    if (!liveRadarSession?.active) return '';
+    if (liveRadarSession.endTime === 0) {
+      const elapsedSec = Math.max(0, Math.floor((now - liveRadarSession.startTime) / 1000));
+      const m = Math.floor(elapsedSec / 60);
+      const s = elapsedSec % 60;
+      return `Elapsed: ${m}:${s.toString().padStart(2, '0')} (Continuous)`;
+    }
+    const remainingSec = Math.max(0, Math.floor((liveRadarSession.endTime - now) / 1000));
+    const m = Math.floor(remainingSec / 60);
+    const s = remainingSec % 60;
+    return `${m}:${s.toString().padStart(2, '0')} remaining`;
+  };
+
+  // Run Sinkhole Query Scout (One-Shot)
   const handleRunScout = async () => {
     if (!window.electron?.aiScanQueryLog) return;
     setIsScouting(true);
@@ -320,10 +386,13 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
 
   // Batch block all flagged queries
   const handleBlockAllFlagged = async () => {
-    if (!scoutResult) return;
+    const resultsPool = (liveRadarSession && liveRadarSession.results.length > 0)
+      ? liveRadarSession.results
+      : (scoutResult?.results || []);
+    if (resultsPool.length === 0) return;
     const allRules: string[] = [];
     const ids: string[] = [];
-    for (const item of scoutResult.results) {
+    for (const item of resultsPool) {
       if (item.verdict !== 'clean' && item.generatedRules.length > 0) {
         allRules.push(item.generatedRules[0]);
         ids.push(item.domain);
@@ -554,23 +623,27 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
 
   return (
     <div className="ai-radar-container">
-      {/* Hero Header Card */}
-      <div className="ai-radar-hero">
-        <div className="ai-radar-hero-left">
-          <div className="ai-radar-badge">
-            <span className="radar-sweep-icon" />
-            <span>AI Radar Active</span>
-            <span className="ai-beta-tag">BETA</span>
+      {/* =========================================================================
+          1. UNIFIED COMPACT TOP CONTROL BAR (Matching Deploy & Sync layout)
+         ========================================================================= */}
+      <div className="radar-top-bar">
+        {/* Left: AI Discovery Engine Info */}
+        <div className="radar-top-info">
+          <div className="radar-info-main-col">
+            <div className="radar-title-row">
+              <span className="radar-live-badge-mini">
+                <span className="live-radar-ping-dot" />
+                AI RADAR ACTIVE
+              </span>
+              <h2 className="radar-top-title">
+                AI Ad & Tracker Discovery Engine <BetaBadge />
+              </h2>
+            </div>
+            <p className="radar-top-desc">
+              Detect rapidly shifting ad servers, ephemeral bidding hostnames, CNAME cloaking, and zero-day trackers before they evade static filter lists.
+            </p>
           </div>
-          <h2 className="ai-radar-title">
-            AI Ad & Tracker Discovery Engine <BetaBadge />
-          </h2>
-          <p className="ai-radar-subtitle">
-            Detect rapidly shifting ad servers, ephemeral bidding hostnames, CNAME cloaking, and zero-day trackers before they evade static filter lists.
-          </p>
-        </div>
 
-        <div className="ai-radar-hero-right">
           <div
             className="ai-provider-pill"
             onClick={() => (onNavigateSettings ? onNavigateSettings() : setIsConfigOpen(true))}
@@ -597,11 +670,61 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 else setIsConfigOpen(true);
               }}
             >
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
             </button>
+          </div>
+        </div>
+
+        {/* Right: Integrated AI Sentinel Watchdog Cardlet */}
+        <div className="radar-top-watchdog">
+          <div className="watchdog-top-header">
+            <div className="watchdog-title-inline">
+              <span className={`provider-status-dot ${watchdogConfig.enabled ? 'active' : ''}`} />
+              <span className="watchdog-label-strong">AI Sentinel Watchdog</span>
+              <BetaBadge />
+            </div>
+            {watchdogConfig.lastRun ? (
+              <span className="watchdog-last-run">
+                Last: {new Date(watchdogConfig.lastRun).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            ) : (
+              <span className="watchdog-last-run">Homelab Guard</span>
+            )}
+          </div>
+
+          <p className="watchdog-desc">
+            Autonomous background threat hunter. Periodically audits your DNS query logs to detect zero-day trackers and auto-stages them into your Quarantine Ledger.
+          </p>
+
+          <div className="watchdog-top-controls">
+            <div className="watchdog-status-tag">
+              <span className={`status-indicator-dot ${watchdogConfig.enabled ? 'active' : 'idle'}`} />
+              <span>{watchdogConfig.enabled ? 'Auto-Quarantining Active' : 'Watchdog Paused'}</span>
+            </div>
+
+            <div className="watchdog-action-group">
+              <select
+                className="watchdog-select-compact"
+                value={watchdogConfig.intervalMinutes || 60}
+                onChange={(e) => handleChangeWatchdogInterval(parseInt(e.target.value, 10))}
+                title="Watchdog background run interval"
+              >
+                <option value={60}>Every 1 Hour</option>
+                <option value={360}>Every 6 Hours</option>
+                <option value={1440}>Every 24 Hours</option>
+              </select>
+
+              <button
+                type="button"
+                className={`watchdog-toggle-btn-compact ${watchdogConfig.enabled ? 'active' : ''}`}
+                onClick={() => handleToggleWatchdog(!watchdogConfig.enabled)}
+              >
+                {watchdogConfig.enabled ? '✓ Active' : 'Enable'}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -656,24 +779,6 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             <span className="tab-count-badge">{quarantineList.length}</span>
           )}
         </button>
-
-        {onNavigateInspector && (
-          <button
-            type="button"
-            className="radar-tab-btn"
-            style={{ marginLeft: 'auto', background: 'rgba(168, 85, 247, 0.1)', borderColor: 'rgba(168, 85, 247, 0.35)', color: '#c084fc' }}
-            onClick={() => onNavigateInspector()}
-            title="Open Unified Rule & AI Inspector (Cmd+5)"
-          >
-            <span className="tab-icon">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-            </span>
-            <span>Rule & AI Inspector (⌘5) ↗</span>
-          </button>
-        )}
       </div>
 
       {/* ========================================================================= */}
@@ -681,54 +786,6 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       {/* ========================================================================= */}
       {activeTab === 'sinkhole-scout' && (
         <div className="radar-tab-content">
-          {/* AI Sentinel Watchdog Card */}
-          <div className="watchdog-banner-card">
-            <div className="watchdog-info">
-              <div className="watchdog-title-row">
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="11" width="18" height="10" rx="2" />
-                    <circle cx="12" cy="5" r="2" />
-                    <path d="M12 7v4" />
-                    <line x1="8" y1="16" x2="8" y2="16" />
-                    <line x1="16" y1="16" x2="16" y2="16" />
-                  </svg>
-                  <span>AI Sentinel Watchdog</span>
-                  <BetaBadge />
-                </span>
-                <span className={`provider-status-dot ${watchdogConfig.enabled ? 'active' : ''}`} />
-              </div>
-              <p className="watchdog-desc">
-                Automatically scouts unblocked queries from your homelab sinkhole in the background and quarantines newly discovered ad exchanges without interrupting your workflow.
-                {watchdogConfig.lastRun && (
-                  <span style={{ marginLeft: 6, color: 'var(--primary-color)' }}>
-                    (Last ran: {new Date(watchdogConfig.lastRun).toLocaleTimeString()})
-                  </span>
-                )}
-              </p>
-            </div>
-
-            <div className="watchdog-controls">
-              <select
-                className="watchdog-select"
-                value={watchdogConfig.intervalMinutes || 60}
-                onChange={(e) => handleChangeWatchdogInterval(parseInt(e.target.value, 10))}
-              >
-                <option value={60}>Every 1 Hour</option>
-                <option value={360}>Every 6 Hours</option>
-                <option value={1440}>Every 24 Hours</option>
-              </select>
-
-              <button
-                type="button"
-                className={`watchdog-toggle-btn ${watchdogConfig.enabled ? 'active' : ''}`}
-                onClick={() => handleToggleWatchdog(!watchdogConfig.enabled)}
-              >
-                {watchdogConfig.enabled ? '✓ Watchdog Active' : 'Enable Watchdog'}
-              </button>
-            </div>
-          </div>
-
           <div className="radar-card">
             <div className="radar-card-header">
               <div>
@@ -740,53 +797,178 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   Inspect unblocked DNS queries passing through your AdGuard Home or Pi-hole to identify stealthy ad exchanges and telemetry endpoints.
                 </p>
               </div>
+            </div>
 
-              <div className="scout-action-group">
-                <div className="service-switch-pills">
-                  <button
-                    type="button"
-                    className={`service-pill ${scoutService === 'adguard' ? 'active' : ''}`}
-                    onClick={() => setScoutService('adguard')}
-                  >
-                    AdGuard Home
-                  </button>
-                  <button
-                    type="button"
-                    className={`service-pill ${scoutService === 'pihole' ? 'active' : ''}`}
-                    onClick={() => setScoutService('pihole')}
-                  >
-                    Pi-hole
-                  </button>
+            {/* SINKHOLE TARGET, DURATION & INTERVAL CONFIGURATION BAR */}
+            <div className="radar-session-config-bar">
+              <div className="config-bar-row config-bar-row-top">
+                <div className="sinkhole-target-section">
+                  <span className="config-section-label">Target Sinkhole:</span>
+                  <div className="service-switch-pills">
+                    <button
+                      type="button"
+                      className={`service-pill ${scoutService === 'adguard' ? 'active' : ''}`}
+                      onClick={() => setScoutService('adguard')}
+                      disabled={Boolean(liveRadarSession?.active)}
+                    >
+                      AdGuard Home
+                    </button>
+                    <button
+                      type="button"
+                      className={`service-pill ${scoutService === 'pihole' ? 'active' : ''}`}
+                      onClick={() => setScoutService('pihole')}
+                      disabled={Boolean(liveRadarSession?.active)}
+                    >
+                      Pi-hole
+                    </button>
+                  </div>
                 </div>
 
-                <button
-                  type="button"
-                  className="primary-button radar-scout-btn"
-                  onClick={handleRunScout}
-                  disabled={isScouting}
-                >
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
-                  </svg>
-                  <span>{isScouting ? 'Scanning Queries...' : 'Scout Live Queries'}</span>
-                </button>
+                <div className="duration-config-section">
+                  <span className="config-section-label">Scan Duration:</span>
+                  <div className="duration-pill-group">
+                    {[
+                      { label: '5m', val: 5 },
+                      { label: '15m', val: 15 },
+                      { label: '30m', val: 30 },
+                      { label: '1h', val: 60 },
+                      { label: 'Continuous', val: 0 },
+                    ].map((preset) => (
+                      <button
+                        key={preset.val}
+                        type="button"
+                        disabled={Boolean(liveRadarSession?.active)}
+                        className={`duration-pill ${!isCustomDuration && durationMinutes === preset.val ? 'active' : ''}`}
+                        onClick={() => {
+                          setIsCustomDuration(false);
+                          setDurationMinutes(preset.val);
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      disabled={Boolean(liveRadarSession?.active)}
+                      className={`duration-pill ${isCustomDuration ? 'active' : ''}`}
+                      onClick={() => setIsCustomDuration(true)}
+                    >
+                      Custom...
+                    </button>
+                  </div>
 
-                {onTriggerCompile && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={onTriggerCompile}
-                    title="Trigger filter compilation (Cmd+R)"
-                  >
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-                    </svg>
-                    <span>Compile</span>
-                  </button>
-                )}
+                  {isCustomDuration && (
+                    <div className="custom-duration-input-wrap">
+                      <input
+                        type="number"
+                        min={1}
+                        max={1440}
+                        disabled={Boolean(liveRadarSession?.active)}
+                        className="custom-duration-input"
+                        value={customMinutesInput}
+                        onChange={(e) => setCustomMinutesInput(e.target.value)}
+                      />
+                      <span className="custom-duration-unit">minutes</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="config-bar-row config-bar-row-bottom">
+                <div className="interval-config-section">
+                  <span className="config-section-label">Poll Every:</span>
+                  <div className="interval-pill-group">
+                    {[
+                      { label: '5s', val: 5 },
+                      { label: '10s (Default)', val: 10 },
+                      { label: '30s', val: 30 },
+                    ].map((intv) => (
+                      <button
+                        key={intv.val}
+                        type="button"
+                        disabled={Boolean(liveRadarSession?.active)}
+                        className={`interval-pill ${pollIntervalSeconds === intv.val ? 'active' : ''}`}
+                        onClick={() => setPollIntervalSeconds(intv.val)}
+                      >
+                        {intv.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="scout-action-group">
+                  {liveRadarSession?.active ? (
+                    <button
+                      type="button"
+                      className="danger-button live-stop-scan-btn"
+                      onClick={handleStopLiveScan}
+                    >
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                        <rect x="5" y="5" width="14" height="14" rx="2" />
+                      </svg>
+                      <span>Stop Live Scan</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="primary-button radar-scout-btn"
+                        onClick={handleStartLiveScan}
+                      >
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10" />
+                          <path d="M12 2a10 10 0 0110 10" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                        <span>Start Live Scan ({isCustomDuration ? `${customMinutesInput}m` : durationMinutes === 0 ? 'Continuous' : `${durationMinutes}m`})</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleRunScout}
+                        disabled={isScouting}
+                        title="Quick single-query log audit"
+                      >
+                        <span>{isScouting ? 'Scanning...' : 'Scout Once'}</span>
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
+
+            {/* LIVE ACTIVE SCANNING BANNER */}
+            {liveRadarSession?.active && (
+              <div className="radar-live-banner">
+                <div className="radar-live-sweep-box">
+                  <div className="radar-sweep-wave wave-1" />
+                  <div className="radar-sweep-wave wave-2" />
+                  <div className="radar-sweep-center-dot" />
+                </div>
+                <div className="radar-live-banner-content">
+                  <div className="radar-live-status-row">
+                    <span className="live-status-pill">
+                      <span className="live-status-dot" />
+                      LIVE RADAR ACTIVE
+                    </span>
+                    <span className="live-time-countdown">
+                      ⏱ {formatSessionRemaining()}
+                    </span>
+                    <span className="live-poll-badge">
+                      Poll #{liveRadarSession?.pollCount || 1}
+                    </span>
+                    {liveRadarSession?.lastPollTime && (
+                      <span className="live-last-poll">
+                        Last poll: {new Date(liveRadarSession.lastPollTime).toLocaleTimeString()}
+                      </span>
+                    )}
+                  </div>
+                  <p className="radar-live-note">
+                    Radar is actively scouting unblocked DNS queries in the background and auto-quarantining newly detected ad exchanges. <strong>You can switch to other screens or minimize the app without interrupting this session.</strong>
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* If no sinkhole configured */}
             {sinkholeConfig && (sinkholeConfig.adguardMode === 'ha-api' || sinkholeConfig.adguardMode === 'webhook') && !sinkholeConfig.adguardDirectUrl && (
@@ -800,10 +982,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
               </div>
             )}
 
-            {scoutError && (
+            {(scoutError || liveRadarSession?.lastError) && (
               <div className="radar-hint-box scout-error-box" role="alert">
                 <div>
-                  <strong>Query log was not loaded.</strong> {scoutError}
+                  <strong>Query log issue:</strong> {scoutError || liveRadarSession?.lastError}
                 </div>
               </div>
             )}
@@ -831,51 +1013,80 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             )}
 
             {/* Metrics summary bar */}
-            {scoutResult && scoutResult.notice && scoutResult.totalQueriesAnalyzed === 0 && (
-              <p className="scout-empty-note">{scoutResult.notice}</p>
-            )}
+            {(() => {
+              const hasLiveResults = Boolean(liveRadarSession && (liveRadarSession.results.length > 0 || liveRadarSession.totalQueriesAnalyzed > 0));
+              const allResults = hasLiveResults ? liveRadarSession!.results : (scoutResult?.results || []);
+              const totalQueries = hasLiveResults ? liveRadarSession!.totalQueriesAnalyzed : (scoutResult?.totalQueriesAnalyzed || 0);
+              const flagged = hasLiveResults ? liveRadarSession!.flaggedCount : (scoutResult?.flaggedCount || 0);
+              const clean = hasLiveResults ? liveRadarSession!.cleanCount : (scoutResult?.cleanCount || 0);
+              const isVisible = hasLiveResults || Boolean(scoutResult) || Boolean(liveRadarSession?.active);
 
-            {scoutResult && (
-              <div className="scout-metrics-row">
-                <div className="metric-box">
-                  <span className="metric-num">{scoutResult.totalQueriesAnalyzed}</span>
-                  <span className="metric-label">Queries Analyzed</span>
+              if (!isVisible) return null;
+
+              return (
+                <div className="scout-metrics-row">
+                  <div className="metric-tabs-group">
+                    <button
+                      type="button"
+                      className={`metric-tab-pill ${queryListFilter === 'all' ? 'active' : ''}`}
+                      onClick={() => setQueryListFilter('all')}
+                      title="Show all analyzed queries"
+                    >
+                      <span className="metric-tab-label">All Queries</span>
+                      <span className="metric-tab-count">{allResults.length || totalQueries}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`metric-tab-pill warning ${queryListFilter === 'flagged' ? 'active' : ''}`}
+                      onClick={() => setQueryListFilter('flagged')}
+                      title="Filter only flagged ad/tracker threats"
+                    >
+                      <span className="metric-tab-dot warning" />
+                      <span className="metric-tab-label">Flagged Threats</span>
+                      <span className="metric-tab-count warning">{flagged}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`metric-tab-pill success ${queryListFilter === 'clean' ? 'active' : ''}`}
+                      onClick={() => setQueryListFilter('clean')}
+                      title="Filter clean benign queries"
+                    >
+                      <span className="metric-tab-dot success" />
+                      <span className="metric-tab-label">Clean Services</span>
+                      <span className="metric-tab-count success">{clean}</span>
+                    </button>
+                  </div>
+
+                  <div className="metric-actions-group">
+                    <button
+                      type="button"
+                      className="entropy-guide-badge-btn"
+                      onClick={() => setIsEntropyModalOpen(true)}
+                      title="Understand Shannon Entropy and the 0.0 – 5.0 randomness scale"
+                    >
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="16" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12.01" y2="8" />
+                      </svg>
+                      <span>Entropy Guide</span>
+                    </button>
+                    {flagged > 0 && (
+                      <button
+                        type="button"
+                        className="primary-button block-all-flagged-btn"
+                        onClick={handleBlockAllFlagged}
+                      >
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                        </svg>
+                        <span>Block All Flagged ({flagged})</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="metric-box warning">
-                  <span className="metric-num">{scoutResult.flaggedCount}</span>
-                  <span className="metric-label">Flagged Ad/Trackers</span>
-                </div>
-                <div className="metric-box success">
-                  <span className="metric-num">{scoutResult.cleanCount}</span>
-                  <span className="metric-label">Clean Services</span>
-                </div>
-                <button
-                  type="button"
-                  className="entropy-guide-badge-btn"
-                  onClick={() => setIsEntropyModalOpen(true)}
-                  title="Understand Shannon Entropy and the 0.0 – 5.0 randomness scale"
-                >
-                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="16" x2="12" y2="12" />
-                    <line x1="12" y1="8" x2="12.01" y2="8" />
-                  </svg>
-                  <span>What is Entropy? (0–5 Scale)</span>
-                </button>
-                {scoutResult.flaggedCount > 0 && (
-                  <button
-                    type="button"
-                    className="primary-button block-all-flagged-btn"
-                    onClick={handleBlockAllFlagged}
-                  >
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
-                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                    </svg>
-                    <span>Block All Flagged ({scoutResult.flaggedCount})</span>
-                  </button>
-                )}
-              </div>
-            )}
+              );
+            })()}
 
             {/* Subdomain Compaction Notice Banner */}
             {compactionSummary && compactionSummary.savingsPercent > 0 && (
@@ -914,14 +1125,41 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             )}
 
             {/* Query Results List */}
-            {scoutResult && (
-              <div className="scout-results-list">
-                {scoutResult.results
-                  .filter((r) => r.verdict !== 'clean')
-                  .map((item, idx) => {
+            {(() => {
+              const hasLiveResults = Boolean(liveRadarSession && (liveRadarSession.results.length > 0 || liveRadarSession.totalQueriesAnalyzed > 0));
+              const allResults = hasLiveResults ? liveRadarSession!.results : (scoutResult?.results || []);
+              const isVisible = hasLiveResults || Boolean(scoutResult) || Boolean(liveRadarSession?.active);
+
+              if (!isVisible) return null;
+
+              const filtered = allResults.filter((item) => {
+                if (queryListFilter === 'flagged') return item.verdict !== 'clean';
+                if (queryListFilter === 'clean') return item.verdict === 'clean';
+                return true;
+              });
+
+              if (filtered.length === 0) {
+                return (
+                  <div className="radar-empty-query-box">
+                    <p>
+                      {queryListFilter === 'flagged'
+                        ? 'No suspicious ad or tracker domains detected in this query batch. All queries are benign.'
+                        : allResults.length === 0
+                        ? 'Waiting for unblocked DNS queries to arrive... Keep browsing or testing on your network.'
+                        : 'No queries match this filter.'}
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="scout-results-list">
+                  {filtered.map((item, idx) => {
                     const isBlocked = blockedItemsMap.has(item.domain);
+                    const isClean = item.verdict === 'clean';
+
                     return (
-                      <div key={idx} className="scout-threat-card">
+                      <div key={`${item.domain}-${idx}`} className={`scout-threat-card ${isClean ? 'clean-query-card' : ''}`}>
                         <div className="threat-header">
                           <div className="threat-title-col">
                             <div className="threat-domain-row">
@@ -929,13 +1167,17 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                               <span className={`verdict-chip ${item.verdict}`}>
                                 {verdictBadgeLabel(item.verdict)}
                               </span>
-                              <span className="category-chip">{item.category}</span>
+                              {item.category &&
+                                item.category.toLowerCase() !== item.verdict.toLowerCase() &&
+                                item.category.toLowerCase() !== 'clean' && (
+                                  <span className="category-chip">{item.category}</span>
+                                )}
                             </div>
                             <div className="threat-entropy-row">
                               <div
                                 className="entropy-score-badge"
                                 onClick={() => setIsEntropyModalOpen(true)}
-                                title="Shannon Entropy: Measures character randomness on a 0.0 to 5.0 scale. Click for detailed guide."
+                                title="Shannon Entropy: Measures character randomness on a 0.0 to 5.0 scale."
                                 role="button"
                                 tabIndex={0}
                               >
@@ -945,24 +1187,8 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                                 <span className={`entropy-badge-tag ${item.entropy >= 3.8 ? 'high' : item.entropy >= 3.4 ? 'elevated' : 'normal'}`}>
                                   {item.entropy >= 3.8 ? 'High Randomness' : item.entropy >= 3.4 ? 'Elevated' : 'Normal'}
                                 </span>
-                                <button
-                                  type="button"
-                                  className="entropy-help-icon-btn"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setIsEntropyModalOpen(true);
-                                  }}
-                                  title="What does Shannon Entropy mean?"
-                                  aria-label="What does Shannon Entropy mean?"
-                                >
-                                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <circle cx="12" cy="12" r="10" />
-                                    <line x1="12" y1="16" x2="12" y2="12" />
-                                    <line x1="12" y1="8" x2="12.01" y2="8" />
-                                  </svg>
-                                </button>
                               </div>
-                              {item.cnames.length > 0 && (
+                              {item.cnames && item.cnames.length > 0 && (
                                 <span className="cname-chain-pill">
                                   CNAME → {item.cnames[item.cnames.length - 1]}
                                 </span>
@@ -977,60 +1203,72 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                               <button
                                 type="button"
                                 className="secondary-button block-threat-btn"
-                                onClick={() => handleAddRulesToCustom([item.generatedRules[0]], item.domain)}
+                                onClick={() => handleAddRulesToCustom([item.generatedRules[0] || `||${item.domain}^`], item.domain)}
                               >
                                 ＋ Add Rule
                               </button>
                             )}
+                            {!isClean && (
+                              <button
+                                type="button"
+                                className="secondary-button whitelist-threat-btn"
+                                onClick={() => handleWhitelistDomain(item.domain)}
+                                title="Report as false positive and add whitelist rule (@@||...)"
+                              >
+                                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                                <span>Whitelist</span>
+                              </button>
+                            )}
                             <button
                               type="button"
-                              className="secondary-button whitelist-threat-btn"
-                              onClick={() => handleWhitelistDomain(item.domain)}
-                              title="Report as false positive and add whitelist rule (@@||...)"
-                            >
-                              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="20 6 9 17 4 12" />
-                              </svg>
-                              <span>Whitelist</span>
-                            </button>
-                            <button
-                              type="button"
-                              className="secondary-button"
+                              className={`threat-icon-action-btn ${copiedKey === `scout-${idx}` ? 'copied' : ''}`}
                               onClick={() => handleCopy(item.generatedRules[0] || `||${item.domain}^`, `scout-${idx}`)}
+                              title={copiedKey === `scout-${idx}` ? 'Rule copied to clipboard!' : 'Copy Rule (||domain^)'}
+                              aria-label="Copy Rule"
                             >
-                              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                              </svg>
-                              <span>{copiedKey === `scout-${idx}` ? 'Copied' : 'Copy'}</span>
+                              {copiedKey === `scout-${idx}` ? (
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                              ) : (
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                </svg>
+                              )}
                             </button>
                             {onNavigateInspector && (
                               <button
                                 type="button"
-                                className="secondary-button"
+                                className="threat-icon-action-btn"
                                 onClick={() => onNavigateInspector(item.domain)}
-                                title="Inspect in Unified Rule & AI Inspector"
+                                title="Inspect domain in Rule & AI Inspector (⌘5)"
+                                aria-label="Inspect domain"
                               >
-                                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                   <circle cx="11" cy="11" r="8" />
                                   <line x1="21" y1="21" x2="16.65" y2="16.65" />
                                 </svg>
-                                <span>Inspect</span>
                               </button>
                             )}
                           </div>
                         </div>
 
-                        <div className="threat-reasons">
-                          {item.reasons.map((r, rIdx) => (
-                            <span key={rIdx} className="reason-pill">• {r}</span>
-                          ))}
-                        </div>
+                        {item.reasons && item.reasons.length > 0 && (
+                          <div className="threat-reasons">
+                            {item.reasons.map((r, rIdx) => (
+                              <span key={rIdx} className="reason-pill">• {r}</span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
-              </div>
-            )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -1483,7 +1721,11 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                             <span className={`verdict-chip ${host.verdict}`}>
                               {verdictBadgeLabel(host.verdict)}
                             </span>
-                            <span className="category-chip">{host.category}</span>
+                            {host.category &&
+                              host.category.toLowerCase() !== host.verdict.toLowerCase() &&
+                              host.category.toLowerCase() !== 'clean' && (
+                                <span className="category-chip">{host.category}</span>
+                              )}
                           </div>
                         </div>
 
@@ -1553,6 +1795,19 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
               </div>
 
               <div className="scout-action-group">
+                {onTriggerCompile && (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={onTriggerCompile}
+                    title="Compile updated filter rules in Process view"
+                  >
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                    <span>Compile Rules</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="secondary-button"

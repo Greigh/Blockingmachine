@@ -1,27 +1,12 @@
 import type {
-  AiVerdict,
+  AntiAdblockProviderId,
   CompactionResult,
   RuleConflictResult,
   RuleCoverageResult,
-  SynthesisTarget,
-  ThreatCategory,
+  RuleSynthesisInput,
 } from './types.js';
 import { COMPOUND_CCTLDS } from './entropy.js';
-import {
-  detectAntiAdblock,
-  type AntiAdblockProviderId,
-} from './reputation.js';
-
-export interface RuleSynthesisInput {
-  domain: string;
-  verdict: AiVerdict;
-  category: ThreatCategory;
-  cnames?: string[];
-  isSubdomain?: boolean;
-  target?: SynthesisTarget;
-  includeComments?: boolean;
-  confidence?: number;
-}
+import { detectAntiAdblock } from './reputation.js';
 
 /**
  * Sanitizes and validates a domain or IPv4 address per RFC 1035 / RFC 1123 standards.
@@ -109,12 +94,12 @@ export class RuleCoverageTrie {
   public insertRule(rawRule: string): void {
     if (!rawRule || typeof rawRule !== 'string') return;
     const rule = rawRule.trim();
-    if (!rule || rule.startsWith('!') || rule.startsWith('#') || rule.startsWith('@@')) {
+    if (!rule || rule.startsWith('!') || rule.startsWith('#') || rule.startsWith('@@') || rule.includes('$badfilter')) {
       return;
     }
 
     // 1. Hosts format: 0.0.0.0 domain or 127.0.0.1 domain
-    const hostsMatch = rule.match(/^(?:0\.0\.0\.0|127\.0\.0\.1)\s+([a-z0-9_.-]+)/i);
+    const hostsMatch = rule.match(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([a-z0-9_.-]+)/i);
     if (hostsMatch) {
       const host = sanitizeDomain(hostsMatch[1]);
       if (host) {
@@ -135,7 +120,51 @@ export class RuleCoverageTrie {
       return;
     }
 
-    // 3. Exact raw domain match
+    // 3. DNSMasq: address=/domain/0.0.0.0
+    const dnsmasqMatch = rule.match(/^address=\/([a-z0-9_.-]+)\//i);
+    if (dnsmasqMatch) {
+      const host = sanitizeDomain(dnsmasqMatch[1]);
+      if (host) {
+        this.addDomain(host, true, rule);
+        this.ruleCount++;
+      }
+      return;
+    }
+
+    // 4. Unbound: local-zone: "domain" ...
+    const unboundMatch = rule.match(/^local-zone:\s*"([a-z0-9_.-]+)"/i);
+    if (unboundMatch) {
+      const host = sanitizeDomain(unboundMatch[1]);
+      if (host) {
+        this.addDomain(host, true, rule);
+        this.ruleCount++;
+      }
+      return;
+    }
+
+    // 5. Pi-hole regex format: (^|\.)domain$
+    const piholeMatch = rule.match(/^\(\^\|\\\.\)([a-z0-9_\\.-]+)\$$/i);
+    if (piholeMatch) {
+      const host = sanitizeDomain(piholeMatch[1].replace(/\\/g, ''));
+      if (host) {
+        this.addDomain(host, true, rule);
+        this.ruleCount++;
+      }
+      return;
+    }
+
+    // 6. Direct wildcard: *.domain.com
+    const wildcardMatch = rule.match(/^\*\.([a-z0-9_.-]+)/i);
+    if (wildcardMatch) {
+      const host = sanitizeDomain(wildcardMatch[1]);
+      if (host) {
+        this.addDomain(host, true, rule);
+        this.ruleCount++;
+      }
+      return;
+    }
+
+    // 7. Exact raw domain match
     const rawClean = sanitizeDomain(rule);
     if (rawClean) {
       this.addDomain(rawClean, false, rule);
@@ -665,21 +694,36 @@ export function checkRuleConflict(rule: string, existingAllowRules: string[]): R
     return { hasConflict: false };
   }
 
-  // Extract domain from block rule (e.g. ||tracker.com^, 0.0.0.0 tracker.com, (^|\.)tracker\.com$)
+  // Extract domain from block rule (e.g. ||tracker.com^, 0.0.0.0 tracker.com, (^|\.)tracker\.com$, address=/tracker.com/, local-zone: "tracker.com")
   let targetDomain = '';
-  const abpMatch = rule.match(/^\|\|([a-z0-9_.-]+)\^/i);
+  const abpMatch = rule.match(/^\|\|([a-z0-9_.*-]+)\^/i);
   if (abpMatch) {
-    targetDomain = abpMatch[1].toLowerCase().trim();
+    targetDomain = abpMatch[1].replace(/^\*\./, '').toLowerCase().trim();
   } else {
-    const hostsMatch = rule.match(/^(?:0\.0\.0\.0|127\.0\.0\.1)\s+([a-z0-9_.-]+)/i);
+    const hostsMatch = rule.match(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([a-z0-9_.-]+)/i);
     if (hostsMatch) {
       targetDomain = hostsMatch[1].toLowerCase().trim();
     } else {
-      const piholeMatch = rule.match(/^\(\^\|\\\.\)([a-z0-9_\\.-]+)\$$/i);
-      if (piholeMatch) {
-        targetDomain = piholeMatch[1].replace(/\\/g, '').toLowerCase().trim();
+      const dnsmasqMatch = rule.match(/^address=\/([a-z0-9_.-]+)\//i);
+      if (dnsmasqMatch) {
+        targetDomain = dnsmasqMatch[1].toLowerCase().trim();
       } else {
-        targetDomain = rule.replace(/[$^|!#]/g, '').trim().toLowerCase();
+        const unboundMatch = rule.match(/^local-zone:\s*"([a-z0-9_.-]+)"/i);
+        if (unboundMatch) {
+          targetDomain = unboundMatch[1].toLowerCase().trim();
+        } else {
+          const piholeMatch = rule.match(/^\(\^\|\\\.\)([a-z0-9_\\.-]+)\$$/i);
+          if (piholeMatch) {
+            targetDomain = piholeMatch[1].replace(/\\/g, '').toLowerCase().trim();
+          } else {
+            const wildcardMatch = rule.match(/^\*\.([a-z0-9_.-]+)/i);
+            if (wildcardMatch) {
+              targetDomain = wildcardMatch[1].toLowerCase().trim();
+            } else {
+              targetDomain = rule.replace(/[$^|!#]/g, '').trim().toLowerCase();
+            }
+          }
+        }
       }
     }
   }

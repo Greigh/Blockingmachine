@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import type { FilterSource, FeedDiagnostic, SourceScope } from '../types';
 import { getSourceProfile, detectSourceClassification, displayFilterLabel } from '@blockingmachine/core/sources';
 import { PresetsModal } from './PresetsModal';
+import { BulkImportView } from './BulkImportView';
 
 interface SourcesViewProps {
   sources: FilterSource[];
@@ -11,6 +12,8 @@ interface SourcesViewProps {
   ) => Promise<void>;
   setError: (error: string | null) => void;
   setSuccessMessage: (message: string | null) => void;
+  onNavigate?: (view: string) => void;
+  initialTab?: 'list' | 'bulk';
 }
 
 export const SourcesView: React.FC<SourcesViewProps> = ({
@@ -18,7 +21,16 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
   saveSources,
   setError,
   setSuccessMessage: _setSuccessMessage,
+  onNavigate: _onNavigate,
+  initialTab = 'list',
 }) => {
+  const [activeTab, setActiveTab] = useState<'list' | 'bulk'>(initialTab);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
   const [newSourceName, setNewSourceName] = useState('');
   const [newSourceUrl, setNewSourceUrl] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -381,8 +393,54 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
 
   return (
     <div className="sources-view-container">
-      {/* Top Toolbar */}
-      <div className="sources-toolbar-row">
+      {/* Top Segmented Navigation Tabs */}
+      <div className="sources-nav-tabs-wrapper">
+        <div className="sources-segmented-tabs">
+          <button
+            type="button"
+            className={`sources-tab-item ${activeTab === 'list' ? 'active' : ''}`}
+            onClick={() => setActiveTab('list')}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+            </svg>
+            <span>Subscribed Feeds ({sources.length})</span>
+          </button>
+          <button
+            type="button"
+            className={`sources-tab-item ${activeTab === 'bulk' ? 'active' : ''}`}
+            onClick={() => setActiveTab('bulk')}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+            </svg>
+            <span>Bulk Import / Drop Files</span>
+          </button>
+          <button
+            type="button"
+            className="sources-tab-item"
+            onClick={() => setIsPresetsOpen(true)}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            <span>Preset Packs</span>
+          </button>
+        </div>
+      </div>
+
+      {activeTab === 'bulk' ? (
+        <BulkImportView
+          currentSources={sources}
+          saveSources={saveSources}
+          setError={setError}
+          setSuccessMessage={_setSuccessMessage}
+          onNavigateList={() => setActiveTab('list')}
+        />
+      ) : (
+        <>
+          {/* Top Toolbar */}
+          <div className="sources-toolbar-row">
         <div className="sources-search-wrap">
           <svg
             className="sources-search-icon"
@@ -759,6 +817,8 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
           );
         })}
       </div>
+      </>
+      )}
 
       {/* Presets Modal */}
       <PresetsModal

@@ -13,7 +13,7 @@ import { DeployHubView } from './views/DeployHubView';
 import { AIRadarView } from './views/AIRadarView';
 import { OnboardingModal, type OnboardingConfig } from './views/OnboardingModal';
 import { PRESET_BUNDLES } from './views/PresetsModal';
-import type { FilterSource, ThemeType } from './types/';
+import type { FilterSource, ThemeType, LiveRadarSession } from './types/';
 import { applyTheme, applyAccentColor } from './theme';
 import './index.css';
 
@@ -49,6 +49,24 @@ function App() {
   });
   const [autoTriggerCompile, setAutoTriggerCompile] = useState<boolean>(false);
   const [inspectorInitialDomain, setInspectorInitialDomain] = useState<string>('');
+  const [liveRadarSession, setLiveRadarSession] = useState<LiveRadarSession | null>(null);
+
+  useEffect(() => {
+    if (window.electron?.getLiveRadarSession) {
+      window.electron.getLiveRadarSession().then((session) => {
+        if (session) setLiveRadarSession(session);
+      });
+    }
+
+    if (window.electron?.onLiveRadarSessionUpdate) {
+      const unsubscribe = window.electron.onLiveRadarSessionUpdate((session) => {
+        setLiveRadarSession(session);
+      });
+      return () => {
+        unsubscribe();
+      };
+    }
+  }, []);
 
   useEffect(() => {
     window.electron.getSavePath().then(setSavePath);
@@ -260,7 +278,7 @@ function App() {
           setCurrentView('sources');
         } else if (e.key === '3') {
           e.preventDefault();
-          setCurrentView('bulkImport');
+          setCurrentView('modules');
         } else if (e.key === '4') {
           e.preventDefault();
           setCurrentView('custom');
@@ -270,15 +288,12 @@ function App() {
         } else if (e.key === '6') {
           e.preventDefault();
           setCurrentView('browser');
-        } else if (e.key === '7') {
-          e.preventDefault();
-          setCurrentView('deploy');
-        } else if (e.key === '8') {
-          e.preventDefault();
-          setCurrentView('modules');
-        } else if (e.key === '9') {
+        } else if (e.key === '7' || e.key === '9') {
           e.preventDefault();
           setCurrentView('ai-radar');
+        } else if (e.key === '8') {
+          e.preventDefault();
+          setCurrentView('deploy');
         } else if (e.key === ',') {
           e.preventDefault();
           setCurrentView('settings');
@@ -368,6 +383,7 @@ function App() {
           updateAvailable={updateAvailable}
           handleExternalLink={handleExternalLink}
           onLaunchOnboarding={() => setIsOnboardingOpen(true)}
+          isRadarScanning={Boolean(liveRadarSession?.active)}
         />
 
         {/* Main Workspace Pane */}
@@ -378,7 +394,7 @@ function App() {
             handleRevealOutputFolder={handleRevealOutputFolder}
           />
 
-          <div className="main-content-scroll">
+          <div className={`main-content-scroll view-${currentView}`}>
             {globalError && (
               <div className="dashboard-alert error-banner">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
@@ -401,6 +417,7 @@ function App() {
               <DashboardView
                 savePath={savePath}
                 autoTriggerCompile={autoTriggerCompile}
+                onNavigate={(view) => setCurrentView(view)}
               />
             )}
             {currentView === 'sources' && (
@@ -409,6 +426,7 @@ function App() {
                 saveSources={saveSources}
                 setError={setGlobalError}
                 setSuccessMessage={setGlobalSuccessMessage}
+                onNavigate={(view) => setCurrentView(view)}
               />
             )}
             {currentView === 'modules' && (
@@ -458,6 +476,7 @@ function App() {
             )}
             {currentView === 'ai-radar' && (
               <AIRadarView
+                liveRadarSession={liveRadarSession}
                 onTriggerCompile={() => setCurrentView('process')}
                 onNavigateDeploy={() => setCurrentView('deploy')}
                 onNavigateInspector={(domain) => {

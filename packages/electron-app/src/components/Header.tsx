@@ -15,54 +15,63 @@ export const Header: React.FC<HeaderProps> = ({
     switch (currentView) {
       case 'sources':
         return {
+          category: 'Rules & Feeds',
           title: 'Filter Sources',
           isBeta: false,
-          desc: 'Manage remote blocklist subscriptions and feed health',
+          desc: 'Manage remote blocklist subscriptions, sync schedules, and feed health',
         };
       case 'modules':
         return {
+          category: 'Rules & Feeds',
           title: 'Defense Modules',
           isBeta: true,
-          desc: 'First-party modular filter list engine modeled after modern ad-blocking architecture',
+          desc: 'Curated first-party shields modeled after modern ad-blocking architecture',
         };
       case 'bulkImport':
         return {
+          category: 'Rules & Feeds',
           title: 'Bulk Import',
           isBeta: false,
-          desc: 'Add multiple feed URLs or drop text files',
+          desc: 'Add multiple feed URLs simultaneously or drop local text files',
         };
       case 'custom':
         return {
+          category: 'Rules & Feeds',
           title: 'Custom Rules',
           isBeta: false,
-          desc: 'Author domain blocks, allowlists, and custom rules',
+          desc: 'Author custom domain blocks, allowlists, and manual rule overrides',
         };
       case 'inspector':
         return {
+          category: 'Tools & AI',
           title: 'Rule & AI Inspector',
           isBeta: false,
-          desc: 'Simultaneously evaluate compiled filter rules and live AI threat intelligence for any domain',
+          desc: 'Evaluate compiled filter rules and query live AI threat intelligence for any domain',
         };
       case 'browser':
         return {
+          category: 'Tools & AI',
           title: 'Rule Browser',
           isBeta: false,
-          desc: 'Search, filter, and inspect the active set of compiled rules',
-        };
-      case 'deploy':
-        return {
-          title: 'Deploy & Sync',
-          isBeta: false,
-          desc: 'Connect your compiled blocklists to AdGuard Home, Pi-hole, desktop apps, and LAN devices',
+          desc: 'Search, filter, and inspect the complete active database of compiled rules',
         };
       case 'ai-radar':
         return {
+          category: 'Tools & AI',
           title: 'AI Defense Radar',
           isBeta: true,
-          desc: 'Threat hunting hub: sinkhole query log scout, live page canary crawler, and quarantine ledger',
+          desc: 'Threat hunting hub: query log scout, live page canary crawler, and quarantine ledger',
+        };
+      case 'deploy':
+        return {
+          category: 'Distribution',
+          title: 'Deploy & Sync',
+          isBeta: false,
+          desc: 'Distribute compiled blocklists to Pi-hole, AdGuard Home, or serve via the LAN Feed Server',
         };
       case 'settings':
         return {
+          category: 'Preferences',
           title: 'Preferences',
           isBeta: false,
           desc: 'Configure export formats, AI intelligence engine, auto-schedule, and file locations',
@@ -70,18 +79,20 @@ export const Header: React.FC<HeaderProps> = ({
       case 'process':
       default:
         return {
-          title: 'Filter Processor',
+          category: 'Overview',
+          title: 'Dashboard',
           isBeta: false,
-          desc: 'Generate, deduplicate, and compile your blocklists',
+          desc: 'Compile, deduplicate, and monitor your unified network blocklists',
         };
     }
   };
 
-  const { title, isBeta, desc } = getHeaderMeta();
+  const { category, title, isBeta, desc } = getHeaderMeta();
 
   return (
     <header className="main-header">
       <div className="header-left">
+        <div className="header-category-breadcrumb">{category}</div>
         <h1 className="view-title">
           {title}
           {isBeta && <span className="header-title-beta-badge">Beta</span>}

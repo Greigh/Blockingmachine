@@ -41,6 +41,7 @@ build/
 *.msi
 *.AppImage
 *.snap
+*.tgz
 
 # Debug logs
 debug.log

@@ -58,6 +58,7 @@ import {
   synthesizeRules,
   evaluateDomainRules,
   type AiProviderConfig,
+  type AiScanResult,
   type RawDnsQuery,
 } from '@blockingmachine/core';
 import type {
@@ -120,6 +121,15 @@ function isValidFormat(format: unknown): format is FilterFormat {
     typeof format === 'string' &&
     validFormats.includes(format as FilterFormat)
   );
+}
+
+function isSafeExternalUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:';
+  } catch {
+    return false;
+  }
 }
 
 // Set official application name for native macOS application menu
@@ -398,6 +408,14 @@ const store = new Store<StoreSchema>({
       type: 'array',
       default: [],
     },
+    autoStartFeedServer: {
+      type: 'boolean',
+      default: false,
+    },
+    launchOnStartup: {
+      type: 'boolean',
+      default: false,
+    },
   },
 }) as unknown as ElectronStore<StoreSchema>;
 
@@ -561,6 +579,229 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
   }, intervalMs);
 
   aiWatchdogTimer?.unref?.();
+}
+
+// ============================================================================
+// Live Radar Background Scanning Session [Beta]
+// ============================================================================
+interface LiveRadarSessionState {
+  active: boolean;
+  service: 'adguard' | 'pihole';
+  durationMinutes: number; // 0 = continuous until stopped
+  pollIntervalSeconds: number;
+  startTime: number;
+  endTime: number; // 0 for continuous
+  pollCount: number;
+  totalQueriesAnalyzed: number;
+  flaggedCount: number;
+  cleanCount: number;
+  results: AiScanResult[];
+  lastPollTime?: number;
+  lastError?: string;
+  notice?: string;
+}
+
+let liveRadarTimer: NodeJS.Timeout | null = null;
+let currentLiveRadarSession: LiveRadarSessionState = {
+  active: false,
+  service: 'adguard',
+  durationMinutes: 15,
+  pollIntervalSeconds: 10,
+  startTime: 0,
+  endTime: 0,
+  pollCount: 0,
+  totalQueriesAnalyzed: 0,
+  flaggedCount: 0,
+  cleanCount: 0,
+  results: [],
+};
+
+function broadcastLiveRadarUpdate(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('live-radar-session-update', currentLiveRadarSession);
+  }
+}
+
+async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promise<void> {
+  if (!currentLiveRadarSession.active) return;
+
+  // Check if session duration expired
+  if (currentLiveRadarSession.endTime > 0 && Date.now() >= currentLiveRadarSession.endTime) {
+    console.log('[Live Radar] Session duration reached.');
+    stopLiveRadarSession(storeRef, 'Session duration completed');
+    try {
+      if (Notification.isSupported()) {
+        new Notification({
+          title: 'AI Radar Session Complete',
+          body: `Scanned ${currentLiveRadarSession.totalQueriesAnalyzed} unblocked queries. Flagged ${currentLiveRadarSession.flaggedCount} ad/tracker threats.`,
+        }).show();
+      }
+    } catch {
+      // Ignore notification error
+    }
+    return;
+  }
+
+  try {
+    const savedConfig = (storeRef.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+    const service = getSharedAiDetectorService(savedConfig);
+    const queries: RawDnsQuery[] = [];
+    const limit = 60;
+
+    if (currentLiveRadarSession.service === 'adguard') {
+      const loaded = await loadStoredAdguardQueries(storeRef, limit);
+      if (!loaded.ok) {
+        currentLiveRadarSession.lastError = loaded.message;
+        broadcastLiveRadarUpdate();
+        return;
+      }
+      queries.push(...loaded.queries);
+    } else if (currentLiveRadarSession.service === 'pihole') {
+      const baseUrl = storeRef.get('piholeUrl') || 'http://127.0.0.1';
+      const token = storeRef.get('piholeApiKey') || '';
+      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) {
+        currentLiveRadarSession.lastError = `Pi-hole query log returned HTTP ${res.status}`;
+        broadcastLiveRadarUpdate();
+        return;
+      }
+      const json: any = await res.json();
+      const data = Array.isArray(json?.data) ? json.data : [];
+      for (const item of data) {
+        const name = item?.[2];
+        const status = item?.[4];
+        if (name && (status === '2' || status === '3')) {
+          queries.push({ domain: name, client: item?.[3], blocked: false });
+        }
+      }
+    }
+
+    currentLiveRadarSession.lastError = undefined;
+
+    if (queries.length === 0) {
+      currentLiveRadarSession.pollCount++;
+      currentLiveRadarSession.lastPollTime = Date.now();
+      currentLiveRadarSession.notice = emptyUnblockedNotice(limit);
+      broadcastLiveRadarUpdate();
+      return;
+    }
+
+    const scan = await service.scanQueryLog(queries, savedConfig);
+    currentLiveRadarSession.notice = undefined;
+    currentLiveRadarSession.pollCount++;
+    currentLiveRadarSession.lastPollTime = Date.now();
+
+    const existingDomainMap = new Map<string, AiScanResult>();
+    for (const r of currentLiveRadarSession.results) {
+      existingDomainMap.set(r.domain, r);
+    }
+
+    const threatsToQuarantine: ThreatQuarantineItem[] = [];
+
+    for (const fresh of scan.results) {
+      if (!existingDomainMap.has(fresh.domain)) {
+        existingDomainMap.set(fresh.domain, fresh);
+        currentLiveRadarSession.totalQueriesAnalyzed++;
+        if (fresh.verdict !== 'clean') {
+          currentLiveRadarSession.flaggedCount++;
+          threatsToQuarantine.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            domain: fresh.domain,
+            category: fresh.category,
+            verdict: fresh.verdict,
+            riskLevel: fresh.riskLevel,
+            confidence: fresh.confidence,
+            reasons: fresh.reasons,
+            generatedRules: fresh.generatedRules,
+            source: 'sinkhole',
+            timestamp: new Date().toISOString(),
+            blocked: false,
+          });
+        } else {
+          currentLiveRadarSession.cleanCount++;
+        }
+      }
+    }
+
+    const combined = Array.from(existingDomainMap.values());
+    combined.sort((a, b) => {
+      if (a.verdict !== 'clean' && b.verdict === 'clean') return -1;
+      if (a.verdict === 'clean' && b.verdict !== 'clean') return 1;
+      return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+    });
+    currentLiveRadarSession.results = combined.slice(0, 300);
+
+    if (threatsToQuarantine.length > 0) {
+      const existingQuarantine: ThreatQuarantineItem[] = storeRef.get('aiThreatQuarantine') || [];
+      const existingQDomains = new Set(existingQuarantine.map((q) => q.domain));
+      const filtered = threatsToQuarantine.filter((t) => !existingQDomains.has(t.domain));
+      if (filtered.length > 0) {
+        storeRef.set('aiThreatQuarantine', [...filtered, ...existingQuarantine].slice(0, 200));
+        console.log(`[Live Radar] Auto-quarantined ${filtered.length} new threat(s)`);
+      }
+    }
+
+    broadcastLiveRadarUpdate();
+  } catch (err: any) {
+    console.error('[Live Radar] Poll error:', err);
+    currentLiveRadarSession.lastError = err?.message || String(err);
+    broadcastLiveRadarUpdate();
+  }
+}
+
+function startLiveRadarSession(
+  options: { service: 'adguard' | 'pihole'; durationMinutes: number; pollIntervalSeconds?: number },
+  storeRef: ElectronStore<StoreSchema>
+): LiveRadarSessionState {
+  if (liveRadarTimer) {
+    clearInterval(liveRadarTimer);
+    liveRadarTimer = null;
+  }
+
+  const durationMin = Math.max(0, options.durationMinutes || 0);
+  const intervalSec = Math.max(3, Math.min(60, options.pollIntervalSeconds || 10));
+  const now = Date.now();
+
+  currentLiveRadarSession = {
+    active: true,
+    service: options.service,
+    durationMinutes: durationMin,
+    pollIntervalSeconds: intervalSec,
+    startTime: now,
+    endTime: durationMin > 0 ? now + durationMin * 60 * 1000 : 0,
+    pollCount: 0,
+    totalQueriesAnalyzed: 0,
+    flaggedCount: 0,
+    cleanCount: 0,
+    results: [],
+  };
+
+  console.log(`[Live Radar] Started session: service=${options.service}, duration=${durationMin}m, interval=${intervalSec}s`);
+  broadcastLiveRadarUpdate();
+
+  pollLiveRadarQueries(storeRef);
+
+  liveRadarTimer = setInterval(() => {
+    pollLiveRadarQueries(storeRef);
+  }, intervalSec * 1000);
+
+  return currentLiveRadarSession;
+}
+
+function stopLiveRadarSession(storeRef: ElectronStore<StoreSchema>, reason?: string): LiveRadarSessionState {
+  if (liveRadarTimer) {
+    clearInterval(liveRadarTimer);
+    liveRadarTimer = null;
+  }
+  currentLiveRadarSession.active = false;
+  if (reason) {
+    currentLiveRadarSession.notice = reason;
+  }
+  console.log(`[Live Radar] Stopped session. Analyzed: ${currentLiveRadarSession.totalQueriesAnalyzed}, Flagged: ${currentLiveRadarSession.flaggedCount}`);
+  broadcastLiveRadarUpdate();
+  return currentLiveRadarSession;
 }
 
 let appTray: Tray | null = null;
@@ -1772,6 +2013,55 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       return getFeedServerStatus();
     });
 
+    ipcMain.handle('get-auto-start-feed-server', async () => {
+      return Boolean(store.get('autoStartFeedServer'));
+    });
+
+    ipcMain.handle('set-auto-start-feed-server', async (_event, enabled: boolean) => {
+      try {
+        const val = Boolean(enabled);
+        store.set('autoStartFeedServer', val);
+        if (val) {
+          const status = getFeedServerStatus();
+          if (!status.isRunning) {
+            await startFeedServer(9191, store);
+          }
+        }
+        return { success: true };
+      } catch (err: any) {
+        console.error('Failed to set auto-start feed server:', err);
+        return { success: false, error: err?.message || String(err) };
+      }
+    });
+
+    ipcMain.handle('get-launch-on-startup', async () => {
+      try {
+        const settings = app.getLoginItemSettings();
+        const storeVal = store.get('launchOnStartup');
+        return typeof storeVal === 'boolean' ? storeVal : settings.openAtLogin;
+      } catch {
+        return Boolean(store.get('launchOnStartup'));
+      }
+    });
+
+    ipcMain.handle('set-launch-on-startup', async (_event, enabled: boolean) => {
+      try {
+        const val = Boolean(enabled);
+        store.set('launchOnStartup', val);
+        try {
+          app.setLoginItemSettings({
+            openAtLogin: val,
+          });
+        } catch (loginErr) {
+          console.warn('app.setLoginItemSettings notice (expected in unpacked development):', loginErr);
+        }
+        return { success: true };
+      } catch (err: any) {
+        console.error('Failed to set launch on startup:', err);
+        return { success: false, error: err?.message || String(err) };
+      }
+    });
+
     ipcMain.handle('test-sinkhole-connection', async (_event, service: 'pihole' | 'adguard' | 'webhook') => {
       const startTime = Date.now();
       try {
@@ -1940,6 +2230,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         console.error('[IPC Main] Error getting last process time:', error);
         throw new Error('Failed to retrieve last process time');
       }
+    });
+
+    ipcMain.handle('get-app-version', async () => {
+      return app.getVersion();
     });
 
     ipcMain.handle('get-theme', async (): Promise<ThemeType> => {
@@ -2299,6 +2593,22 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       return { success: true };
     });
 
+    // Live Radar Background Scanning Session [Beta]
+    ipcMain.handle('start-live-radar-session', async (_event, options: { service: 'adguard' | 'pihole'; durationMinutes: number; pollIntervalSeconds?: number }) => {
+      return startLiveRadarSession(options, store);
+    });
+
+    ipcMain.handle('stop-live-radar-session', async () => {
+      return stopLiveRadarSession(store, 'Stopped by user');
+    });
+
+    ipcMain.handle('get-live-radar-session', async () => {
+      if (currentLiveRadarSession.active && currentLiveRadarSession.endTime > 0 && Date.now() >= currentLiveRadarSession.endTime) {
+        stopLiveRadarSession(store, 'Session duration completed');
+      }
+      return currentLiveRadarSession;
+    });
+
     // AI Sentinel Watchdog Settings [Beta]
     ipcMain.handle('get-ai-watchdog-config', async () => {
       return store.get('aiWatchdogConfig') || {
@@ -2466,18 +2776,10 @@ const createWindow = async () => {
       contextIsolation: true,
       sandbox: false,
       preload: preloadPath,
+      backgroundThrottling: false,
     },
     show: false,
   });
-
-  const isSafeExternalUrl = (url: string): boolean => {
-    try {
-      const parsed = new URL(url);
-      return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:';
-    } catch {
-      return false;
-    }
-  };
 
   // Open external links in user's default browser safely
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -2525,7 +2827,7 @@ const createWindow = async () => {
     );
   }
 
-  if (isDev) {
+  if (isDev && process.env.OPEN_DEVTOOLS === 'true') {
     mainWindow.webContents.openDevTools();
   }
 
@@ -2558,6 +2860,27 @@ async function initialize() {
     await createWindow();
     createTray();
 
+    // Auto-start local HTTP feed server if enabled in settings
+    const shouldAutoStartFeed = Boolean(store.get('autoStartFeedServer'));
+    if (shouldAutoStartFeed) {
+      console.log('[Feed Server] Auto-starting feed server on launch...');
+      startFeedServer(9191, store)
+        .then((res) => console.log(`[Feed Server] Auto-started successfully on port ${res.port}`))
+        .catch((err) => console.error('[Feed Server] Failed to auto-start feed server:', err));
+    }
+
+    // Sync launchOnStartup settings if configured
+    const launchOnStartupSetting = store.get('launchOnStartup');
+    if (typeof launchOnStartupSetting === 'boolean') {
+      try {
+        app.setLoginItemSettings({
+          openAtLogin: launchOnStartupSetting,
+        });
+      } catch {
+        // Ignored in unpackaged dev environment
+      }
+    }
+
     app.on('before-quit', () => {
       stopFeedServer();
       if (autoScheduleTimer) {
@@ -2567,6 +2890,10 @@ async function initialize() {
       if (aiWatchdogTimer) {
         clearInterval(aiWatchdogTimer);
         aiWatchdogTimer = null;
+      }
+      if (liveRadarTimer) {
+        clearInterval(liveRadarTimer);
+        liveRadarTimer = null;
       }
       if (appTray) {
         try {

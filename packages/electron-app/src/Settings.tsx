@@ -50,6 +50,21 @@ const Settings: React.FC<SettingsProps> = ({
     applyAccentColor(id);
   };
 
+  const [appVersion, setAppVersion] = useState<string>(() => {
+    return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.0';
+  });
+
+  useEffect(() => {
+    if (window.electron?.getAppVersion) {
+      window.electron
+        .getAppVersion()
+        .then((v) => {
+          if (v) setAppVersion(v);
+        })
+        .catch(() => {});
+    }
+  }, []);
+
   // Existing state variables
   const [exportFormat, setExportFormat] = useState('');
   const [isLoadingFormat, setIsLoadingFormat] = useState(true);
@@ -114,6 +129,9 @@ const Settings: React.FC<SettingsProps> = ({
   const [aiTestResult, setAiTestResult] = useState<{ success: boolean; latencyMs?: number; message: string } | null>(null);
   const [showAiKey, setShowAiKey] = useState(false);
   const [learnedFeedbackCount, setLearnedFeedbackCount] = useState<number>(0);
+  const [autoStartFeedServer, setAutoStartFeedServer] = useState(false);
+  const [launchOnStartup, setLaunchOnStartup] = useState(false);
+  const [startupMessage, setStartupMessage] = useState('');
 
   // Path state variables
   const [savePath, setSavePath] = useState('');
@@ -206,6 +224,18 @@ const Settings: React.FC<SettingsProps> = ({
       }).catch(console.error);
     }
 
+    if (window.electron?.getAutoStartFeedServer) {
+      window.electron.getAutoStartFeedServer().then((val) => {
+        if (isMounted) setAutoStartFeedServer(Boolean(val));
+      }).catch(console.error);
+    }
+
+    if (window.electron?.getLaunchOnStartup) {
+      window.electron.getLaunchOnStartup().then((val) => {
+        if (isMounted) setLaunchOnStartup(Boolean(val));
+      }).catch(console.error);
+    }
+
     loadExportFormat();
     loadSavePath();
 
@@ -223,6 +253,32 @@ const Settings: React.FC<SettingsProps> = ({
       await window.electron.openExternal(url);
     } catch (error) {
       console.error('Failed to open link:', error);
+    }
+  };
+
+  const handleToggleAutoStartFeedServer = async (enabled: boolean) => {
+    setAutoStartFeedServer(enabled);
+    if (window.electron?.setAutoStartFeedServer) {
+      try {
+        await window.electron.setAutoStartFeedServer(enabled);
+        setStartupMessage(enabled ? 'Auto-start feed server enabled' : 'Auto-start feed server disabled');
+        safeSetTimeout(() => setStartupMessage(''), 3000);
+      } catch (err) {
+        console.error('Failed to set auto-start feed server:', err);
+      }
+    }
+  };
+
+  const handleToggleLaunchOnStartup = async (enabled: boolean) => {
+    setLaunchOnStartup(enabled);
+    if (window.electron?.setLaunchOnStartup) {
+      try {
+        await window.electron.setLaunchOnStartup(enabled);
+        setStartupMessage(enabled ? 'Launch at startup enabled' : 'Launch at startup disabled');
+        safeSetTimeout(() => setStartupMessage(''), 3000);
+      } catch (err) {
+        console.error('Failed to set launch on startup:', err);
+      }
     }
   };
 
@@ -742,6 +798,55 @@ const Settings: React.FC<SettingsProps> = ({
               Sends an HTTP POST payload with compilation statistics whenever blocklists are updated, allowing Pi-hole, AdGuard Home, or DNS servers to reload automatically.
             </p>
           </div>
+        </div>
+
+        {/* Startup & Background Services Card */}
+        <div className="setting-card">
+          <div className="setting-card-header">
+            <h3>
+              <span className="setting-icon-svg">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </span>
+              Startup & Background Services
+            </h3>
+            <span className="setting-badge">System</span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px' }}>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.85rem' }}>
+              <input
+                type="checkbox"
+                checked={launchOnStartup}
+                onChange={(e) => handleToggleLaunchOnStartup(e.target.checked)}
+                style={{ marginTop: '2px', cursor: 'pointer', accentColor: 'var(--primary-color, #0a84ff)' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontWeight: 600 }}>Launch Blockingmachine on Computer Startup</span>
+                <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                  Automatically start Blockingmachine when you log into your Mac so background distribution and scheduled compilations remain uninterrupted.
+                </span>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.85rem' }}>
+              <input
+                type="checkbox"
+                checked={autoStartFeedServer}
+                onChange={(e) => handleToggleAutoStartFeedServer(e.target.checked)}
+                style={{ marginTop: '2px', cursor: 'pointer', accentColor: 'var(--primary-color, #0a84ff)' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontWeight: 600 }}>Auto-Start Local LAN Feed Server on Launch</span>
+                <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                  Automatically start the HTTP feed server (port 9191) on app launch so Home Assistant, Pi-hole, and LAN devices can pull updated blocklists anytime.
+                </span>
+              </div>
+            </label>
+          </div>
+
+          {startupMessage && <p className="setting-message success" style={{ marginTop: '10px' }}>{startupMessage}</p>}
         </div>
 
         {/* Network Sinkholes & DNS Integration Card */}
@@ -1712,7 +1817,7 @@ const Settings: React.FC<SettingsProps> = ({
         </div>
 
         {/* About & Contact Section */}
-        <div className="setting-card">
+        <div className="setting-card" id="about-community">
           <div className="setting-card-header">
             <h3>
               <span className="setting-icon-svg">
@@ -1722,7 +1827,7 @@ const Settings: React.FC<SettingsProps> = ({
               </span>
               About & Community
             </h3>
-            <span className="setting-badge secondary">v1.0.0-rc.1</span>
+            <span className="setting-badge secondary">v{appVersion}</span>
           </div>
 
           <div className="about-app-banner">
@@ -1731,19 +1836,19 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
             <div className="about-app-meta">
               <h4>Blockingmachine</h4>
-              <p>High-performance adblock compiler and DNS rule deduplicator. Created by Daniel Hipskind.</p>
+              <p>High-performance adblock compiler and DNS rule deduplicator. Developed by Greigh Studios LLC.</p>
             </div>
           </div>
 
           <div className="about-links-grid">
             <a
-              href="https://danielhipskind.com"
-              onClick={(e) => handleExternalLink(e, 'https://danielhipskind.com')}
+              href="https://greighstudios.com"
+              onClick={(e) => handleExternalLink(e, 'https://greighstudios.com')}
               className="about-link-item"
               rel="noopener noreferrer"
             >
               <div className="about-link-left">
-                <span className="about-link-icon">
+                <span className="about-link-icon" style={{ color: '#38bdf8' }}>
                   <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                     <circle cx="12" cy="12" r="10" />
                     <line x1="2" y1="12" x2="22" y2="12" />
@@ -1751,8 +1856,8 @@ const Settings: React.FC<SettingsProps> = ({
                   </svg>
                 </span>
                 <div className="about-link-texts">
-                  <span className="about-link-title">Personal Website</span>
-                  <span className="about-link-subtitle">danielhipskind.com</span>
+                  <span className="about-link-title">Greigh Studios LLC</span>
+                  <span className="about-link-subtitle">greighstudios.com</span>
                 </div>
               </div>
               <span className="about-link-arrow">↗</span>
@@ -1779,80 +1884,40 @@ const Settings: React.FC<SettingsProps> = ({
             </a>
 
             <a
-              href="https://bsky.app/profile/danielhipskind.com"
-              onClick={(e) => handleExternalLink(e, 'https://bsky.app/profile/danielhipskind.com')}
+              href="https://x.com/GreighStudios"
+              onClick={(e) => handleExternalLink(e, 'https://x.com/GreighStudios')}
               className="about-link-item"
               rel="noopener noreferrer"
             >
               <div className="about-link-left">
-                <span className="about-link-icon" style={{ color: '#0091FF' }}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 10.8c-1.087-2.114-4.046-6.053-6.798-7.995C2.566 1.01 0 1.88 0 5.6c0 1.04.148 4.79.52 6.01.69 2.27 3.23 3.03 5.48 2.59-3.23 1.07-4.14 3.73-2.33 5.56 3.44 3.47 7.07-.86 8.33-4.04 1.26 3.18 4.89 7.51 8.33 4.04 1.81-1.83.9-4.49-2.33-5.56 2.25.44 4.79-.32 5.48-2.59.372-1.22.52-4.97.52-6.01 0-3.72-2.566-4.59-5.202-2.795C16.046 4.747 13.087 8.686 12 10.8z" />
-                  </svg>
-                </span>
-                <div className="about-link-texts">
-                  <span className="about-link-title">Bluesky</span>
-                  <span className="about-link-subtitle">@danielhipskind.com</span>
-                </div>
-              </div>
-              <span className="about-link-arrow">↗</span>
-            </a>
-
-            <a
-              href="https://mastodon.social/@danielhipskind"
-              onClick={(e) => handleExternalLink(e, 'https://mastodon.social/@danielhipskind')}
-              className="about-link-item"
-              rel="me noopener noreferrer"
-            >
-              <div className="about-link-left">
-                <span className="about-link-icon" style={{ color: '#6364FF' }}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M21.327 8.566c0-4.339-2.843-5.61-2.843-5.61C17.067 2.247 14.156 2 12 2s-5.067.247-6.484.956c0 0-2.843 1.271-2.843 5.61 0 .993-.015 2.186.045 3.518.23 5.106 2.898 9.542 7.822 9.878 2.235.152 4.195-.394 4.195-.394l-.09-1.84s-1.57.49-3.327.433c-1.743-.056-3.585-.306-3.83-2.378a3.67 3.67 0 0 1-.05-.595s1.86.452 4.225.565c1.458.07 2.83-.07 4.21-.24 2.89-.356 5.4-2.193 5.72-5.185.34-3.176.35-6.198.35-6.726zM17.43 13.68h-2.188V9.167c0-1.745-.738-2.63-2.213-2.63-1.63 0-2.445 1.053-2.445 3.16v2.983H8.416V9.697c0-2.107-.815-3.16-2.445-3.16-1.475 0-2.213.885-2.213 2.63v4.513H1.57V8.922c0-1.745.445-3.13 1.335-4.155C3.795 3.742 5.04 3.22 6.64 3.22c1.868 0 3.267.717 4.197 2.15.93-1.433 2.33-2.15 4.197-2.15 1.6 0 2.845.522 3.735 1.547.89 1.025 1.335 2.41 1.335 4.155v4.758z" />
-                  </svg>
-                </span>
-                <div className="about-link-texts">
-                  <span className="about-link-title">Mastodon</span>
-                  <span className="about-link-subtitle">@danielhipskind@mastodon.social</span>
-                </div>
-              </div>
-              <span className="about-link-arrow">↗</span>
-            </a>
-
-            <a
-              href="https://twitter.com/danielhipskind_"
-              onClick={(e) => handleExternalLink(e, 'https://twitter.com/danielhipskind_')}
-              className="about-link-item"
-              rel="noopener noreferrer"
-            >
-              <div className="about-link-left">
-                <span className="about-link-icon">
+                <span className="about-link-icon" style={{ color: '#1d9bf0' }}>
                   <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
                   </svg>
                 </span>
                 <div className="about-link-texts">
                   <span className="about-link-title">X / Twitter</span>
-                  <span className="about-link-subtitle">@danielhipskind_</span>
+                  <span className="about-link-subtitle">@GreighStudios</span>
                 </div>
               </div>
               <span className="about-link-arrow">↗</span>
             </a>
 
             <a
-              href="mailto:me@danielhipskind.com"
-              onClick={(e) => handleExternalLink(e, 'mailto:me@danielhipskind.com')}
+              href="mailto:support@greighstudios.com"
+              onClick={(e) => handleExternalLink(e, 'mailto:support@greighstudios.com')}
               className="about-link-item"
             >
               <div className="about-link-left">
-                <span className="about-link-icon" style={{ color: '#007aff' }}>
+                <span className="about-link-icon" style={{ color: '#10b981' }}>
                   <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                     <rect x="2" y="4" width="20" height="16" rx="2" />
                     <path d="M22 6l-10 7L2 6" />
                   </svg>
                 </span>
                 <div className="about-link-texts">
-                  <span className="about-link-title">Email Contact</span>
-                  <span className="about-link-subtitle">me@danielhipskind.com</span>
+                  <span className="about-link-title">Support & Inquiries</span>
+                  <span className="about-link-subtitle">support@greighstudios.com</span>
                 </div>
               </div>
               <span className="about-link-arrow">↗</span>

@@ -117,19 +117,43 @@ export const CustomRulesView: React.FC<CustomRulesViewProps> = ({
           {/* Metrics Pill Grid */}
           <div className="syntax-metrics-pills">
             <span className="syntax-pill active-total">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                <polyline points="2 17 12 22 22 17" />
+                <polyline points="2 12 12 17 22 12" />
+              </svg>
               <strong>{totalActiveRules}</strong> active
             </span>
             <span className="syntax-pill pill-block" title="Domain/Network Blocks (||)">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                <line x1="9.5" y1="9.5" x2="14.5" y2="14.5" />
+                <line x1="14.5" y1="9.5" x2="9.5" y2="14.5" />
+              </svg>
               <strong>{blockCount}</strong> blocks
             </span>
             <span className="syntax-pill pill-exception" title="Allowlist Exceptions (@@)">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                <path d="M9 12l2 2 4-4" />
+              </svg>
               <strong>{exceptionCount}</strong> allowlists
             </span>
             <span className="syntax-pill pill-cosmetic" title="Cosmetic / Element Hiding (##)">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
               <strong>{cosmeticCount}</strong> cosmetic
             </span>
             {hostsCount > 0 && (
               <span className="syntax-pill pill-hosts" title="Hosts DNS entries (0.0.0.0)">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+                  <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+                  <line x1="6" y1="6" x2="6.01" y2="6" />
+                  <line x1="6" y1="18" x2="6.01" y2="18" />
+                </svg>
                 <strong>{hostsCount}</strong> hosts
               </span>
             )}
