@@ -69,15 +69,60 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
 
   const getRuleBadge = (rule: CompiledRuleItem) => {
     if (rule.isException) {
-      return <span className="status-badge active" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' }}>Exception</span>;
+      return (
+        <span className="rule-category-badge badge-exception" title="Allowlist / Exception Rule (@@)">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            <path d="M9 12l2 2 4-4" />
+          </svg>
+          <span>Exception</span>
+        </span>
+      );
     }
-    if (rule.raw.includes('##') || rule.raw.includes('#@#')) {
-      return <span className="status-badge warning" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)' }}>Cosmetic</span>;
+    if (rule.raw.includes('+js(') || rule.raw.includes('#%#') || rule.raw.includes('##+js')) {
+      return (
+        <span className="rule-category-badge badge-scriptlet" title="Scriptlet Injection Rule">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+          </svg>
+          <span>Scriptlet</span>
+        </span>
+      );
+    }
+    if (rule.raw.includes('##') || rule.raw.includes('#@#') || rule.raw.includes('#?#') || rule.raw.includes('#$#')) {
+      return (
+        <span className="rule-category-badge badge-cosmetic" title="Cosmetic / Element Hiding Rule (##)">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          <span>Cosmetic</span>
+        </span>
+      );
     }
     if (rule.raw.startsWith('||') || rule.raw.includes('^')) {
-      return <span className="status-badge primary" style={{ background: 'rgba(99, 102, 241, 0.15)', color: '#818cf8', border: '1px solid rgba(99, 102, 241, 0.3)' }}>Network</span>;
+      return (
+        <span className="rule-category-badge badge-network" title="Network Blocking Rule (||)">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="2" y1="12" x2="22" y2="12" />
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+          </svg>
+          <span>Network</span>
+        </span>
+      );
     }
-    return <span className="status-badge info" style={{ background: 'rgba(14, 165, 233, 0.15)', color: '#38bdf8', border: '1px solid rgba(14, 165, 233, 0.3)' }}>Hosts/DNS</span>;
+    return (
+      <span className="rule-category-badge badge-hosts" title="DNS / Hosts Sinkhole Entry">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+          <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+          <line x1="6" y1="6" x2="6.01" y2="6" />
+          <line x1="6" y1="18" x2="6.01" y2="18" />
+        </svg>
+        <span>Hosts/DNS</span>
+      </span>
+    );
   };
 
   return (
@@ -159,30 +204,72 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
             )}
           </div>
 
-          <div style={{ display: 'flex', gap: '6px', background: 'var(--bg-tertiary, rgba(255,255,255,0.05))', padding: '4px', borderRadius: '8px' }}>
-            {(['all', 'blocking', 'exceptions', 'cosmetic'] as const).map((t) => (
-              <button
-                key={t}
-                className={`secondary-button ${typeFilter === t ? 'active-tab' : ''}`}
-                style={{
-                  padding: '6px 14px',
-                  borderRadius: '6px',
-                  fontSize: '0.8rem',
-                  fontWeight: 600,
-                  textTransform: 'capitalize',
-                  border: typeFilter === t ? '1px solid var(--accent-primary, #6366f1)' : '1px solid transparent',
-                  background: typeFilter === t ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
-                  color: typeFilter === t ? 'var(--accent-primary, #818cf8)' : 'inherit',
-                  cursor: 'pointer',
-                }}
-                onClick={() => {
-                  setTypeFilter(t);
-                  setPage(0);
-                }}
-              >
-                {t}
-              </button>
-            ))}
+          <div className="rule-filter-segmented-group">
+            <button
+              type="button"
+              className={`rule-filter-btn filter-all ${typeFilter === 'all' ? 'active' : ''}`}
+              onClick={() => {
+                setTypeFilter('all');
+                setPage(0);
+              }}
+              title="Show all compiled rules"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                <polyline points="2 17 12 22 22 17" />
+                <polyline points="2 12 12 17 22 12" />
+              </svg>
+              <span>All</span>
+            </button>
+
+            <button
+              type="button"
+              className={`rule-filter-btn filter-blocking ${typeFilter === 'blocking' ? 'active' : ''}`}
+              onClick={() => {
+                setTypeFilter('blocking');
+                setPage(0);
+              }}
+              title="Filter to network and DNS blocking rules"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                <line x1="9.5" y1="9.5" x2="14.5" y2="14.5" />
+                <line x1="14.5" y1="9.5" x2="9.5" y2="14.5" />
+              </svg>
+              <span>Blocking</span>
+            </button>
+
+            <button
+              type="button"
+              className={`rule-filter-btn filter-exceptions ${typeFilter === 'exceptions' ? 'active' : ''}`}
+              onClick={() => {
+                setTypeFilter('exceptions');
+                setPage(0);
+              }}
+              title="Filter to allowlist exception rules (@@)"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                <path d="M9 12l2 2 4-4" />
+              </svg>
+              <span>Exceptions</span>
+            </button>
+
+            <button
+              type="button"
+              className={`rule-filter-btn filter-cosmetic ${typeFilter === 'cosmetic' ? 'active' : ''}`}
+              onClick={() => {
+                setTypeFilter('cosmetic');
+                setPage(0);
+              }}
+              title="Filter to cosmetic element-hiding rules (##)"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              <span>Cosmetic</span>
+            </button>
           </div>
 
           {onTriggerCompile && (
@@ -279,7 +366,7 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
                 <tr style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))' }}>
                   <th style={{ padding: '12px 16px', width: '50px' }}>#</th>
                   <th style={{ padding: '12px 16px' }}>Rule Pattern</th>
-                  <th style={{ padding: '12px 16px', width: '120px' }}>Category</th>
+                  <th style={{ padding: '12px 16px', width: '135px' }}>Category</th>
                   <th style={{ padding: '12px 16px', width: '80px', textAlign: 'right' }}>Action</th>
                 </tr>
               </thead>

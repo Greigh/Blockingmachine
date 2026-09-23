@@ -24,6 +24,7 @@ interface BulkImportViewProps {
   ) => Promise<void>;
   setError: (error: string | null) => void;
   setSuccessMessage: (message: string | null) => void;
+  onNavigateList?: () => void;
 }
 
 export const BulkImportView: React.FC<BulkImportViewProps> = ({
@@ -31,6 +32,7 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
   saveSources,
   setError,
   setSuccessMessage,
+  onNavigateList,
 }) => {
   const [bulkUrls, setBulkUrls] = useState('');
   const [isImporting, setIsImporting] = useState(false);
@@ -231,6 +233,15 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
             <span>Tip: Lines starting with <code>#</code> or <code>!</code> are treated as comments.</span>
           </div>
           <div className="bulk-buttons-group">
+            {onNavigateList && (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={onNavigateList}
+              >
+                ← Back to Feeds
+              </button>
+            )}
             {bulkUrls && (
               <button
                 type="button"

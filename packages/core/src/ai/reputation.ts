@@ -1,5 +1,12 @@
 import { calculateShannonEntropy, decomposeDomain } from './entropy.js';
-import type { ThreatCategory } from './types.js';
+import type {
+  AntiAdblockDetection,
+  CategoryAdjustment,
+  InfraClassification,
+  InfraKind,
+  ReputationFeatures,
+  ThreatCategory,
+} from './types.js';
 
 /**
  * Registrable-domain and hostname-suffix reputation for the embedded classifier.
@@ -20,7 +27,9 @@ export const HIGH_ABUSE_TLDS = new Set([
 export const SUSPICIOUS_AD_TOKENS = [
   'ads', 'adserver', 'adservice', 'adnxs', 'adform', 'adtech',
   'doubleclick', 'googleadservices', 'googlesyndication', 'moatads', 'amazon-adsystem',
-  'bidder', 'bidding',
+  'bidder', 'bidding', 'prebid', 'openrtb', 'adkernel', 'adman', 'yieldlove',
+  'smartclip', 'connatix', 'applovin', 'unityads', 'ironsrc', 'vungle', 'mintegral',
+  'springserve', 'smaato', 'chartboost', 'liftoff',
   'popunder', 'popcash', 'propeller', 'propellerads', 'outbrain', 'taboola', 'mgid',
   'revcontent', 'criteo', 'pubmatic', 'rubiconproject', 'openx', 'casalemedia', 'smartadserver',
   'adsystem', 'adtrack', 'advert', 'advertising', 'adzerk', 'adblade',
@@ -38,6 +47,9 @@ export const SUSPICIOUS_TRACKER_TOKENS = [
   'amplitude', 'sentry', 'datadoghq', 'hotjar', 'fullstory',
   'mouseflow', 'optimizely', 'newrelic', 'heapanalytics',
   'googleanalytics', 'google-analytics', 'googletagmanager', 'googletagservices',
+  'fingerprint', 'fingerprintjs', 'clarity', 'sessioncam', 'decibelinsight',
+  'contentsquare', 'inspectlet', 'woopra', 'luckyorange', 'crazyegg',
+  'singular', 'kochava', 'iterable', 'braze', 'onesignal', 'matomo', 'posthog',
 ] as const;
 
 /** One hit on these names is enough to call a host an ad or tracker network. */
@@ -47,6 +59,7 @@ export const SPECIFIC_NETWORK_TOKENS = new Set<string>([
   'scorecardresearch', 'quantserve', 'googleanalytics', 'google-analytics',
   'googletagmanager', 'googletagservices', 'amazon-adsystem', 'adform',
   'casalemedia', 'smartadserver', 'propellerads', 'mgid', 'revcontent',
+  'fingerprint', 'posthog', 'contentsquare', 'smartclip', 'connatix', 'yieldlove', 'adkernel',
 ]);
 
 const TELEMETRY_NAME_TOKENS = new Set<string>([
@@ -76,9 +89,13 @@ const HIGH_PROFILE_BRANDS = [
   'trustwallet', 'facebook', 'instagram', 'dropbox', 'steam', 'twitter', 'discord',
   'roblox', 'fedex', 'usps', 'ups', 'dhl', 'office365', 'outlook', 'onedrive',
   'whatsapp', 'telegram', 'tiktok', 'snapchat', 'linkedin', 'walmart', 'costco', 'target',
+  'adobe', 'spotify', 'shopify', 'ebay',
 ] as const;
 
-const PHISH_KEYWORDS = /login|verify|security|auth|update|account|support|wallet|token|claim|signin|password|secure|unlock|billing|delivery|parcel|package|reschedule|tracking|track|seed|phrase|validate|portal|helpdesk|alert|banking|statement|overdue|invoice|recover|recovery/;
+const PHISH_KEYWORDS = /login|verify|security|auth|update|account|support|wallet|token|claim|signin|password|secure|unlock|billing|delivery|parcel|package|reschedule|tracking|track|seed|phrase|validate|portal|helpdesk|alert|banking|statement|overdue|invoice|recover|recovery|airdrop|mint|stake|presale|reward|rewards|vault|kyc|otp|2fa|mfa|credential|credentials|payout|refund|rebate|shipment|customs|redelivery|reship|courier|dispatch|suspend|suspended|suspension|unauthorized|restriction|restricted|action-required|violation/;
+
+const PSEUDO_TLD_PATTERN = /(?:[-_](?:com|net|org|app|online|site|gov|co|info|io|xyz))(?:[-_]|$)/i;
+const PSEUDO_TLD_SUFFIXES = new Set(['com', 'net', 'org', 'app', 'online', 'site', 'gov', 'co', 'info', 'io', 'xyz']);
 
 const BENIGN_ENDPOINT_LABELS = new Set([
   'status', 'statuspage', 'uptime', 'health', 'healthz',
@@ -112,45 +129,6 @@ const STRUCTURAL_SLD_WORDS = new Set([
   'content', 'delivery', 'network',
 ]);
 
-export type InfraKind =
-  | 'ad-network'
-  | 'tracker-network'
-  | 'cloud'
-  | 'cdn'
-  | 'iot'
-  | 'vendor'
-  | 'platform'
-  | 'dns'
-  | 'none';
-
-export interface InfraClassification {
-  safe: boolean;
-  adNetwork: boolean;
-  kind: InfraKind;
-  suffix?: string;
-  reason: string;
-}
-
-export interface ReputationFeatures {
-  brandSpoofScore: number;
-  knownSafeInfra: number;
-  adKeywordWeight: number;
-  trackerKeywordWeight: number;
-  trigramPerplexity: number;
-  entropySld: number;
-  sldLength: number;
-  highRiskTld: number;
-  punycode: number;
-  consecutiveConsonants: number;
-  vowelRatio: number;
-  userTuneBias?: number;
-}
-
-export interface CategoryAdjustment {
-  category: ThreatCategory;
-  probability: number;
-  policyReason?: string;
-}
 
 interface SuffixGroup {
   kind: InfraKind;
@@ -227,6 +205,10 @@ const AD_NETWORK_SUFFIXES = [
   'unityads.com',
   'liftoff.io',
   'mintegral.com',
+  'adkernel.com',
+  'yieldlove.com',
+  'smartclip.tv',
+  'smartclip.net',
   'admob.com',
   'getadmiral.com',
   'admiraldrm.com',
@@ -337,6 +319,10 @@ const TRACKER_NETWORK_SUFFIXES = [
   'yieldify.com',
   'sl-edge.com',
   'dnsdelegation.io',
+  'fingerprint.com',
+  'fingerprintjs.com',
+  'posthog.com',
+  'plausible.io',
 ] as const;
 
 const CLOUD_SUFFIXES = [
@@ -453,13 +439,15 @@ const VENDOR_SUFFIXES = [
   'coursera.org', 'edx.org', 'udemy.com', 'khanacademy.org', 'duolingo.com',
   'britannica.com', 'dictionary.com', 'merriam-webster.com',
   'weather.com', 'accuweather.com', 'flightaware.com', 'flightradar24.com',
+  'statuspage.io', 'service-now.com', 'custhelp.com', 'jira.com', 'confluence.cloud',
   'usps.com', 'ups.com', 'fedex.com', 'dhl.com',
 ] as const;
 
 const PLATFORM_SUFFIXES = [
-  'github.io', 'herokuapp.com', 'herokussl.com', 'netlify.app', 'vercel.app',
+  'github.io', 'gitlab.io', 'herokuapp.com', 'herokussl.com', 'netlify.app', 'vercel.app',
   'pages.dev', 'workers.dev', 'r2.dev', 'digitalocean.com',
   'digitaloceanspaces.com', 'ondigitalocean.com',
+  'statuspage.io', 'service-now.com', 'custhelp.com',
 ] as const;
 
 const DNS_SUFFIXES = [
@@ -645,22 +633,6 @@ export function isActiveDirectoryOrLocalDomain(domain: string): boolean {
   return false;
 }
 
-export type AntiAdblockProviderId =
-  | 'admiral'
-  | 'google-fc'
-  | 'blockthrough'
-  | 'adinplay'
-  | 'ezoic'
-  | 'nitropay'
-  | 'snigel'
-  | 'generic';
-
-export interface AntiAdblockDetection {
-  detected: boolean;
-  provider?: AntiAdblockProviderId;
-  providerName?: string;
-  reason?: string;
-}
 
 /**
  * Detects whether a hostname belongs to anti-adblock detection, ad-recovery circumvention,
@@ -990,7 +962,11 @@ function isTypoSquat(token: string, brand: string): boolean {
   if (Math.abs(token.length - brand.length) > 2) return false;
   const dist = computeLevenshtein(token, brand);
   if (dist <= 0 || dist > 2) return false;
-  if (/\d/.test(token) && (dist === 1 || (brand.length >= 6 && dist === 2))) return true;
+  // 1. Character substitution with digits / leetspeak (e.g. g00gle, paypa1, app1e, m1crosoft)
+  if (/\d/.test(token) && (dist === 1 || (brand.length >= 5 && dist === 2))) return true;
+  // 2. Repeated character insertion typosquat (e.g. appple, gooogle, payyypal, netfflix)
+  if (dist === 1 && brand.length >= 5 && /([a-z])\1{2,}/i.test(token)) return true;
+  // 3. For longer brands (7+ chars), 1-edit distance rarely collides with standard English words (e.g. twiter, netflx, microsofd, coinbse)
   if (dist === 1 && brand.length >= 7) return true;
   return false;
 }
@@ -1090,6 +1066,22 @@ const HOMOGLYPH_MAP: Record<string, string> = {
   '\u03c5': 'u', '\u03a5': 'y', // Greek υ, Υ
   '\u03c7': 'x', '\u03a7': 'x', // Greek χ, Χ
   '\u03c9': 'w', // Greek ω
+  // Additional Cyrillic lookalikes
+  '\u0432': 'b', '\u0412': 'b', // Cyrillic в, В
+  '\u0433': 'r',                // Cyrillic г
+  '\u043f': 'n',                // Cyrillic п
+  '\u043d': 'h', '\u041d': 'h', // Cyrillic н, Н
+  '\u0438': 'u',                // Cyrillic и
+  '\u0448': 'w',                // Cyrillic ш
+  // Latin accented / diacritic lookalikes
+  '\u00e1': 'a', '\u00e0': 'a', '\u00e2': 'a', '\u00e4': 'a', '\u00e3': 'a', '\u00e5': 'a',
+  '\u00e9': 'e', '\u00e8': 'e', '\u00ea': 'e', '\u00eb': 'e',
+  '\u00ed': 'i', '\u00ec': 'i', '\u00ee': 'i', '\u00ef': 'i', '\u0131': 'i',
+  '\u00f3': 'o', '\u00f2': 'o', '\u00f4': 'o', '\u00f6': 'o', '\u00f5': 'o',
+  '\u00fa': 'u', '\u00f9': 'u', '\u00fb': 'u', '\u00fc': 'u',
+  '\u00f1': 'n',
+  '\u00e7': 'c',
+  '\u0142': 'l',
 };
 
 export function normalizeHomoglyphs(str: string): string {
@@ -1097,10 +1089,108 @@ export function normalizeHomoglyphs(str: string): string {
 }
 
 /**
+ * Multi-tenant enterprise platforms where subdomains routinely match company/tenant names.
+ * A tenant subdomain alone is benign unless accompanied by an explicit phishing keyword lure.
+ */
+export const MULTI_TENANT_PLATFORMS: ReadonlySet<string> = new Set([
+  'statuspage.io', 'zendesk.com', 'zdassets.com', 'service-now.com',
+  'custhelp.com', 'slack.com', 'okta.com', 'oktacdn.com',
+  'atlassian.net', 'jira.com', 'confluence.cloud', 'salesforce.com',
+  'force.com', 'github.io', 'gitlab.io', 'hubspot.com',
+  'freshdesk.com', 'intercom.io', 'workday.com', 'zoom.us',
+  'box.com', 'docusign.net', 'docusign.com', 'notion.site',
+]);
+
+/**
+ * Legitimate second-level domains and infrastructure owned by high-profile brands.
+ * Subdomains on these ecosystem domains are authentic properties, not impersonation spoofs.
+ */
+export const BRAND_ECOSYSTEMS: Record<string, readonly string[]> = {
+  microsoft: [
+    'microsoft.com', 'microsoftonline.com', 'azure.com', 'azurewebsites.net',
+    'office.com', 'office365.com', 'sharepoint.com', 'outlook.com', 'live.com',
+    'bing.com', 'visualstudio.com', 'msn.com', 'windows.net', 'windows.com',
+    'msedge.net', 'xbox.com', 'linkedin.com', 'skype.com', 's-microsoft.com',
+    'msftconnecttest.com', 'msftncsi.com', 'gfx.ms',
+  ],
+  google: [
+    'google.com', 'googleapis.com', 'gstatic.com', 'googleusercontent.com',
+    'youtube.com', 'gmail.com', 'android.com', '1e100.net', 'appspot.com',
+    'withgoogle.com', 'gvt1.com', 'gvt2.com', 'gvt3.com', 'pkg.dev', 'run.app',
+    'firebaseio.com', 'firebaseapp.com', 'web.app', 'blogger.com', 'chromium.org',
+  ],
+  apple: [
+    'apple.com', 'icloud.com', 'apple-cloudkit.com', 'apple-dns.net',
+    'cdn-apple.com', 'mzstatic.com', 'aaplimg.com', 'apple-mapkit.com', 'apple.news',
+  ],
+  amazon: [
+    'amazon.com', 'amazonaws.com', 'cloudfront.net', 'awsstatic.com',
+    'amazontrust.com', 'a2z.com', 'media-amazon.com', 'ssl-images-amazon.com',
+    'amazonvideo.com', 'primevideo.com',
+  ],
+  facebook: [
+    'facebook.com', 'fbcdn.net', 'instagram.com', 'cdninstagram.com',
+    'whatsapp.com', 'messenger.com', 'meta.com',
+  ],
+  github: [
+    'github.com', 'githubassets.com', 'githubusercontent.com', 'github.io',
+  ],
+  twitter: [
+    'twitter.com', 'x.com', 'twimg.com', 't.co',
+  ],
+  steam: [
+    'steampowered.com', 'steamcommunity.com', 'steamstatic.com', 'steamcontent.com', 'steamserver.net',
+  ],
+  discord: [
+    'discord.com', 'discordapp.com', 'discord.gg', 'discord.media',
+  ],
+  netflix: [
+    'netflix.com', 'nflxvideo.net', 'nflximg.net', 'nflxso.net',
+  ],
+  paypal: [
+    'paypal.com', 'paypalobjects.com',
+  ],
+  usps: [
+    'usps.com', 'usps.gov',
+  ],
+  ups: [
+    'ups.com',
+  ],
+  dhl: [
+    'dhl.com', 'dhl.de',
+  ],
+  fedex: [
+    'fedex.com',
+  ],
+  chase: [
+    'chase.com',
+  ],
+  coinbase: [
+    'coinbase.com',
+  ],
+  binance: [
+    'binance.com',
+  ],
+  spotify: [
+    'spotify.com', 'scdn.co', 'spotifycdn.com',
+  ],
+  shopify: [
+    'shopify.com', 'myshopify.com', 'shopifycdn.com',
+  ],
+  adobe: [
+    'adobe.com', 'adobe.io', 'typekit.net',
+  ],
+  ebay: [
+    'ebay.com', 'ebaystatic.com', 'ebayimg.com',
+  ],
+};
+
+/**
  * Brand impersonation score with Punycode IDN homograph phishing defense.
  * The real brand on a non-abusive TLD is not a spoof (`paypal.com`, `login.github.com`).
  * A brand plus a credential lure on some other zone is (`paypal-login.azurewebsites.net`).
  * Homograph domains (`xn--pple-43d.com` -> `аpple.com`) are flagged immediately.
+ * Benign multi-tenant SaaS / status dashboards (e.g. `apple.statuspage.io`) are protected.
  */
 export function scoreBrandSpoof(domain: string): number {
   const clean = normalizeHostname(domain);
@@ -1125,23 +1215,66 @@ export function scoreBrandSpoof(domain: string): number {
   const tld = decomposition.tld.toLowerCase();
   const abuseTld = HIGH_ABUSE_TLDS.has(tld);
   const labels = decodedClean.split('.').filter(Boolean);
+  const infra = classifyInfrastructure(clean);
 
   for (const brand of HIGH_PROFILE_BRANDS) {
+    // 1. Is the domain part of the brand's verified ecosystem?
+    const ecosystem = BRAND_ECOSYSTEMS[brand];
+    if (ecosystem && ecosystem.some((eco) => clean === eco || clean.endsWith(`.${eco}`))) {
+      continue;
+    }
+
     const registrableIsBrand = sld === brand;
     if (registrableIsBrand && !abuseTld && !hasPunycode) continue;
     if (registrableIsBrand && (abuseTld || hasPunycode)) return 1;
+
+    // Check if domain is a recognized multi-tenant SaaS platform or verified safe infrastructure
+    const isMultiTenant = Array.from(MULTI_TENANT_PLATFORMS).some(
+      (platform) => clean === platform || clean.endsWith(`.${platform}`)
+    );
+    const isSafeInfra = infra.safe && !infra.adNetwork && infra.kind !== 'tracker-network';
 
     // The final label is the TLD (`dns.google`), not an impersonation subdomain.
     for (const label of labels.slice(0, -1)) {
       const tokens = label.split(/[-_]/).filter(Boolean);
       const candidates = tokens.length > 1 ? [label, ...tokens] : [label];
       for (const tok of candidates) {
-        if (tok === brand && !registrableIsBrand && (label === brand || PHISH_KEYWORDS.test(label))) {
+        if (tok === brand && !registrableIsBrand) {
+          if (isMultiTenant || isSafeInfra) {
+            // A brand token alone (e.g. apple.statuspage.io or apple.zendesk.com) is the company's legitimate tenant.
+            // Only trigger if an explicit phishing keyword lure is attached to the label!
+            if (PHISH_KEYWORDS.test(label) && label !== brand) {
+              return 1;
+            }
+          } else {
+            // On untrusted / arbitrary domains (e.g. apple.evil.com, apple-login.xyz, paypal-com.net)
+            if (label === brand || PHISH_KEYWORDS.test(label) || PSEUDO_TLD_PATTERN.test(label)) {
+              return 1;
+            }
+          }
+        }
+        if (isTypoSquat(tok, brand)) {
+          if (isSafeInfra && !PHISH_KEYWORDS.test(label)) {
+            continue;
+          }
           return 1;
         }
-        if (isTypoSquat(tok, brand)) return 1;
       }
-      if (brand.length >= 5 && label.includes(brand) && label !== brand && PHISH_KEYWORDS.test(label)) return 1;
+      // Combosquatting for 4+ letter brands (e.g. uspsdelivery, chasealert, robloxrewards)
+      if (brand.length >= 4 && label.includes(brand) && label !== brand && PHISH_KEYWORDS.test(label)) {
+        return 1;
+      }
+      // Combosquatting for 3-letter brands (ups, dhl, pnc) anchored at start or end with a phish keyword lure
+      if (brand.length === 3 && (label.startsWith(brand) || label.endsWith(brand)) && label !== brand && PHISH_KEYWORDS.test(label)) {
+        return 1;
+      }
+      // Combosquatting with pseudo-TLD suffix on untrusted zones (e.g. paypalcom, applecom, netflixapp)
+      if (label.startsWith(brand) && label !== brand && !isSafeInfra && !isMultiTenant) {
+        const remainder = label.slice(brand.length).replace(/^[-_]+/, '');
+        if (PSEUDO_TLD_SUFFIXES.has(remainder)) {
+          return 1;
+        }
+      }
     }
   }
   return 0;
@@ -1184,14 +1317,26 @@ export function hasCorroboratedMalwareSignals(domain: string, features: Reputati
   if (features.brandSpoofScore > 0) return true;
   if (features.punycode > 0 && (features.highRiskTld > 0 || features.brandSpoofScore > 0)) return true;
 
-  const sld = decomposeDomain(normalizeHostname(domain)).sld.toLowerCase();
+  const decomp = decomposeDomain(normalizeHostname(domain));
+  const sld = decomp.sld.toLowerCase();
   if (!sld || sldLooksStructural(sld)) return false;
 
   const compact = sld.replace(/[^a-z0-9]/g, '');
   const sldLong = compact.length >= 10;
   const sldDga = sldLong && features.trigramPerplexity >= 0.8 && features.entropySld >= 0.4;
-  if (!sldDga) return false;
-  return features.highRiskTld > 0;
+
+  const subLabel = decomp.subdomains.length > 0 ? decomp.subdomains[0].toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+  const subDga = subLabel.length >= 10 && features.trigramPerplexity >= 0.8 && ((features.entropySubdomain || 0) >= 0.4 || features.entropySld >= 0.4);
+
+  if (!sldDga && !subDga) return false;
+
+  // Independent corroborating evidence:
+  if (features.highRiskTld > 0) return true;
+  if (features.consecutiveConsonants >= 0.6) return true;
+  if (features.vowelRatio <= 0.1) return true;
+  if ((compact.length >= 16 && /^[a-f0-9]+$/i.test(compact)) || (subLabel.length >= 16 && /^[a-f0-9]+$/i.test(subLabel))) return true;
+
+  return false;
 }
 
 /**

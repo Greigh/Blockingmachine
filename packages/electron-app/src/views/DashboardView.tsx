@@ -12,17 +12,19 @@ import {
   YAxis,
   CartesianGrid,
 } from 'recharts';
-import type { ProcessingResult, FilterSource, CompilationSnapshot } from '../types';
+import type { ProcessingResult, FilterSource, CompilationSnapshot, FeedServerStatus } from '../types';
 import { BrandLogo } from '../components/BrandLogo';
 
 interface DashboardViewProps {
   savePath: string;
   autoTriggerCompile?: boolean;
+  onNavigate?: (view: string) => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   savePath,
   autoTriggerCompile,
+  onNavigate,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +34,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     percent: number;
   } | null>(null);
   const [history, setHistory] = useState<CompilationSnapshot[]>([]);
+  const [feedServerStatus, setFeedServerStatus] = useState<FeedServerStatus | null>(null);
+  const [showWorkflowGuide, setShowWorkflowGuide] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bm-show-workflow-guide') !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const [dashboardStats, setDashboardStats] = useState<{
     enabledSources: number;
     totalSources: number;
@@ -66,6 +76,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       const lastProcessTime = await window.electron.getLastProcessTime();
       const historySnapshots = await window.electron.getCompilationHistory();
 
+      let fServerStatus: FeedServerStatus | null = null;
+      if (window.electron?.getFeedServerStatus) {
+        try {
+          fServerStatus = await window.electron.getFeedServerStatus();
+        } catch {}
+      }
+
       if (isMountedRef.current) {
         setDashboardStats({
           enabledSources,
@@ -74,6 +91,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           lastProcessedTime: lastProcessTime,
         });
         setHistory(historySnapshots || []);
+        if (fServerStatus) {
+          setFeedServerStatus(fServerStatus);
+        }
       }
     } catch (err) {
       console.error('Failed to load dashboard stats:', err);
@@ -178,6 +198,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span>Engine Ready</span>
               {dashboardStats.lastProcessedTime && (
                 <span className="last-run-timestamp">Last run: {dashboardStats.lastProcessedTime}</span>
+              )}
+              {feedServerStatus?.isRunning && (
+                <button
+                  type="button"
+                  className="feed-server-live-tag"
+                  onClick={() => onNavigate?.('deploy')}
+                  title="Feed Server is active. Click to open Deploy & Sync."
+                >
+                  <span className="status-dot-mini pulse" />
+                  <span>LAN Server :{feedServerStatus.port}</span>
+                </button>
               )}
             </div>
             <h2 className="hero-heading">Compile & Export Filter Lists</h2>
@@ -316,9 +347,152 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         )}
       </div>
 
+      {/* 3-Step Newcomer & Core Workflow Guide */}
+      <div className="desktop-card workflow-guide-card">
+        <div className="workflow-guide-header">
+          <div className="workflow-guide-title-wrap">
+            <span className="workflow-badge">Core Workflow</span>
+            <h3 className="workflow-title">How Blockingmachine Works</h3>
+            <p className="workflow-subtitle">
+              Follow these 3 simple steps to curate, compile, and distribute clean blocklists.
+            </p>
+          </div>
+          {lastResult && (
+            <button
+              type="button"
+              className="workflow-toggle-btn"
+              onClick={() => {
+                setShowWorkflowGuide((prev) => {
+                  try {
+                    localStorage.setItem('bm-show-workflow-guide', String(!prev));
+                  } catch {}
+                  return !prev;
+                });
+              }}
+              title={showWorkflowGuide ? 'Hide guide' : 'Show guide'}
+            >
+              {showWorkflowGuide ? 'Hide Guide' : 'Show Guide'}
+            </button>
+          )}
+        </div>
+
+        {(showWorkflowGuide || !lastResult) && (
+          <div className="workflow-steps-grid">
+            {/* Step 1 */}
+            <div
+              className="workflow-step-item"
+              onClick={() => onNavigate?.('sources')}
+              role="button"
+              tabIndex={0}
+            >
+              <div className="workflow-step-top">
+                <div className="step-icon-wrap">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  </svg>
+                </div>
+                <span className="workflow-step-pill">Step 1</span>
+              </div>
+              <div className="step-content">
+                <h4 className="step-title">Curate Feeds</h4>
+                <p className="step-desc">
+                  Subscribe to remote blocklists, malware feeds, or drop custom text files.
+                </p>
+                <div className="step-meta">
+                  <span className="step-tag">{dashboardStats.enabledSources} active feeds</span>
+                  <span className="step-action-link">Manage Feeds →</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 2 */}
+            <div
+              className="workflow-step-item highlight-step"
+              onClick={handleRunProcess}
+              role="button"
+              tabIndex={0}
+            >
+              <div className="workflow-step-top">
+                <div className="step-icon-wrap">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                    <path fillRule="evenodd" d="M14.615 1.595a.75.75 0 01.359.852L12.982 9.75h7.268a.75.75 0 01.548 1.262l-10.5 11.25a.75.75 0 01-1.272-.71l1.992-7.302H3.75a.75.75 0 01-.548-1.262l10.5-11.25a.75.75 0 01.913-.143z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <span className="workflow-step-pill">Step 2</span>
+              </div>
+              <div className="step-content">
+                <h4 className="step-title">Compile & Optimize</h4>
+                <p className="step-desc">
+                  Concurrently fetch, validate syntax, and eliminate duplicate entries.
+                </p>
+                <div className="step-meta">
+                  <span className="step-tag">Shortcut: ⌘R</span>
+                  <span className="step-action-link">Run Processor →</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 3 */}
+            <div
+              className="workflow-step-item"
+              onClick={() => onNavigate?.('deploy')}
+              role="button"
+              tabIndex={0}
+            >
+              <div className="workflow-step-top">
+                <div className="step-icon-wrap">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="3" width="20" height="6" rx="2" />
+                    <rect x="2" y="15" width="20" height="6" rx="2" />
+                    <path d="M6 6h.01M6 18h.01M12 9v6M8 12h8" />
+                  </svg>
+                </div>
+                <span className="workflow-step-pill">Step 3</span>
+              </div>
+              <div className="step-content">
+                <h4 className="step-title">Deploy & Protect</h4>
+                <p className="step-desc">
+                  Stream via LAN Feed Server or push directly to Pi-hole & AdGuard Home.
+                </p>
+                <div className="step-meta">
+                  <span className="step-tag">
+                    {feedServerStatus?.isRunning
+                      ? `LAN Server :${feedServerStatus.port}`
+                      : 'Deploy Hub'}
+                  </span>
+                  <span className="step-action-link">Setup Deploy →</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Detailed KPI Results & Visualizations */}
       {lastResult && lastResult.success ? (
         <div className="results-suite-container">
+          {/* Deploy Next-Step Banner */}
+          <div className="desktop-card deploy-next-banner">
+            <div className="deploy-next-left">
+              <span className="deploy-next-dot" />
+              <div>
+                <span className="deploy-next-title">Blocklists successfully compiled</span>
+                <span className="deploy-next-sub">
+                  Output ready in {savePath || 'designated directory'}. Connect to Pi-hole, AdGuard, or your LAN devices.
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="primary-button deploy-next-btn"
+              onClick={() => onNavigate?.('deploy')}
+            >
+              <span>Open Deploy Hub (⌘8)</span>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+              </svg>
+            </button>
+          </div>
           {/* 4-Column Hero KPI Grid */}
           <div className="results-kpi-grid">
             <div className="desktop-card kpi-metric-card">

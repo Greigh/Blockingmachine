@@ -1,6 +1,6 @@
 {
   "name": "blockingmachine-monorepo",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0-rc.3",
   "private": true,
   "description": "High-performance adblock compiler, DNS rule deduplicator, and AI-powered network defense suite for Pi-hole, AdGuard Home, and modern desktops.",
   "license": "BSD-3-Clause",
@@ -18,7 +18,8 @@
     "start": "npm run --prefix packages/electron-app start",
     "dev": "npm start",
     "package": "npm run --prefix packages/electron-app package",
-    "make": "npm run --prefix packages/electron-app make"
+    "make": "npm run --prefix packages/electron-app make",
+    "version:bump": "node scripts/bump-version.mjs"
   },
   "author": {
     "name": "Daniel Hipskind",

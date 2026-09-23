@@ -1,5 +1,7 @@
 const path = require('path');
+const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const packageJson = require('./package.json');
 
 /** @type {import('webpack').Configuration} */
 module.exports = {
@@ -39,6 +41,9 @@ module.exports = {
     ]
   },
   plugins: [
+    new webpack.DefinePlugin({
+      __APP_VERSION__: JSON.stringify(packageJson.version),
+    }),
     new HtmlWebpackPlugin({
       template: './src/index.html',
       favicon: path.resolve(__dirname, 'assets/Blockingmachine.png')

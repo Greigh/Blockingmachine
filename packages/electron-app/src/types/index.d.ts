@@ -253,6 +253,29 @@ export interface QueryLogScanResult {
   notice?: string;
 }
 
+export interface LiveRadarSession {
+  active: boolean;
+  service: 'adguard' | 'pihole';
+  durationMinutes: number; // 0 = continuous until stopped
+  pollIntervalSeconds: number;
+  startTime: number;
+  endTime: number; // 0 for continuous
+  pollCount: number;
+  totalQueriesAnalyzed: number;
+  flaggedCount: number;
+  cleanCount: number;
+  results: AiScanResult[];
+  lastPollTime?: number;
+  lastError?: string;
+  notice?: string;
+}
+
+export interface LiveRadarStartOptions {
+  service: 'adguard' | 'pihole';
+  durationMinutes: number; // 0 = continuous until stopped
+  pollIntervalSeconds?: number;
+}
+
 export interface CrawlScanResult {
   url: string;
   scannedAt: string;
@@ -290,6 +313,8 @@ export interface StoreSchema {
   aiThreatQuarantine?: ThreatQuarantineItem[];
   aiWatchdogConfig?: AiWatchdogConfig;
   miniAiFeedback?: Record<string, number>;
+  autoStartFeedServer?: boolean;
+  launchOnStartup?: boolean;
 }
 
 // Electron API interface
@@ -364,6 +389,10 @@ export interface ElectronAPI {
     includeComments?: boolean;
     confidence?: number;
   }) => Promise<{ success: boolean; rules: string[]; error?: string }>;
+  startLiveRadarSession?: (options: LiveRadarStartOptions) => Promise<LiveRadarSession>;
+  stopLiveRadarSession?: () => Promise<LiveRadarSession>;
+  getLiveRadarSession?: () => Promise<LiveRadarSession>;
+  onLiveRadarSessionUpdate?: (callback: (session: LiveRadarSession) => void) => () => void;
 
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
@@ -381,10 +410,16 @@ export interface ElectronAPI {
   onLaunchOnboarding?: (callback: () => void) => () => void;
   receive?: (channel: string, func: (...args: any[]) => void) => (() => void) | void;
   removeAllListeners?: (channel: string) => void;
+  getAppVersion?: () => Promise<string>;
+  getAutoStartFeedServer?: () => Promise<boolean>;
+  setAutoStartFeedServer?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  getLaunchOnStartup?: () => Promise<boolean>;
+  setLaunchOnStartup?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
 }
 
 // Global declarations
 declare global {
+  const __APP_VERSION__: string;
   interface Window {
     electron: ElectronAPI;
   }

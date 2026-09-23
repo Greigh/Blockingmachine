@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld('electron', {
   testSinkholeConnection: (service: 'pihole' | 'adguard' | 'webhook') => ipcRenderer.invoke('test-sinkhole-connection', service),
   getTheme: () => ipcRenderer.invoke('get-theme'),
   setTheme: (theme: ThemeType) => ipcRenderer.invoke('set-theme', theme),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version') as Promise<string>,
+  getAutoStartFeedServer: () => ipcRenderer.invoke('get-auto-start-feed-server'),
+  setAutoStartFeedServer: (enabled: boolean) => ipcRenderer.invoke('set-auto-start-feed-server', enabled),
+  getLaunchOnStartup: () => ipcRenderer.invoke('get-launch-on-startup'),
+  setLaunchOnStartup: (enabled: boolean) => ipcRenderer.invoke('set-launch-on-startup', enabled),
   getModuleContent: (moduleName: string) => ipcRenderer.invoke('get-module-content', moduleName) as Promise<string | null>,
 
   // AI Radar Methods [Beta]
@@ -73,6 +78,16 @@ contextBridge.exposeInMainWorld('electron', {
   checkRuleConflict: (rule: string) => ipcRenderer.invoke('check-rule-conflict', rule),
   getMiniAiFeedbackStats: () => ipcRenderer.invoke('get-mini-ai-feedback-stats'),
   synthesizeCustomRules: (input: any) => ipcRenderer.invoke('synthesize-custom-rules', input),
+  startLiveRadarSession: (options: any) => ipcRenderer.invoke('start-live-radar-session', options),
+  stopLiveRadarSession: () => ipcRenderer.invoke('stop-live-radar-session'),
+  getLiveRadarSession: () => ipcRenderer.invoke('get-live-radar-session'),
+  onLiveRadarSessionUpdate: (callback: (session: any) => void) => {
+    const handler = (_event: IpcRendererEvent, session: any) => callback(session);
+    ipcRenderer.on('live-radar-session-update', handler);
+    return () => {
+      ipcRenderer.removeListener('live-radar-session-update', handler);
+    };
+  },
 
   onUpdateAvailable: (callback: (info: UpdateInfo) => void) => {
     const handler = (_event: IpcRendererEvent, info: UpdateInfo) => callback(info);

@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/core",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0-rc.3",
   "description": "Core rule parsing, deduplication, format export, and embedded Mini-AI classification engine for Blockingmachine.",
   "type": "module",
   "author": {
@@ -46,12 +46,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/greigh/Blockingmachine-core.git"
+    "url": "git+https://github.com/greigh/Blockingmachine.git",
+    "directory": "packages/core"
   },
   "bugs": {
-    "url": "https://github.com/greigh/Blockingmachine-core/issues"
+    "url": "https://github.com/greigh/Blockingmachine/issues"
   },
-  "homepage": "https://github.com/greigh/Blockingmachine-core#readme",
+  "homepage": "https://github.com/greigh/Blockingmachine#readme",
   "dependencies": {
     "chalk": "^6.0.0",
     "node-fetch": "^3.3.2",

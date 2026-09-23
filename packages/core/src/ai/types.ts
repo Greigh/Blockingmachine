@@ -153,3 +153,177 @@ export interface RuleConflictResult {
   reason?: string;
 }
 
+/**
+ * Verdict of evaluating a domain against a set of filter rules.
+ */
+export type DomainVerdict = 'blocked' | 'exception' | 'not_blocked';
+
+/**
+ * Details of a filter rule matching a queried domain.
+ */
+export interface DomainRuleMatch {
+  rule: string;
+  pattern: string;
+  isWildcard: boolean;
+  isImportant: boolean;
+  source?: string;
+  ruleType?: string;
+}
+
+/**
+ * Complete evaluation report of a domain against loaded filter rules.
+ */
+export interface DomainEvaluationResult {
+  domain: string;
+  verdict: DomainVerdict;
+  matchingRule?: string;
+  matchingRules: DomainRuleMatch[];
+  exceptionRule?: string;
+  overriddenRules: string[];
+  details: string;
+}
+
+/**
+ * Result of DGA pattern analysis on a domain.
+ */
+export interface DgaDetectionResult {
+  isLikelyDga: boolean;
+  score: number; // 0 (normal) to 100 (high probability machine generated)
+  reasons: string[];
+}
+
+/**
+ * Network infrastructure kind classified by heuristic analyzer.
+ */
+export type InfraKind =
+  | 'ad-network'
+  | 'tracker-network'
+  | 'cloud'
+  | 'cdn'
+  | 'iot'
+  | 'vendor'
+  | 'platform'
+  | 'dns'
+  | 'none';
+
+/**
+ * Classification details for known network infrastructure.
+ */
+export interface InfraClassification {
+  safe: boolean;
+  adNetwork: boolean;
+  kind: InfraKind;
+  suffix?: string;
+  reason: string;
+}
+
+/**
+ * Lexical and behavioral feature signals used for reputation classification.
+ */
+export interface ReputationFeatures {
+  brandSpoofScore: number;
+  knownSafeInfra: number;
+  adKeywordWeight: number;
+  trackerKeywordWeight: number;
+  trigramPerplexity: number;
+  entropySld: number;
+  entropySubdomain?: number;
+  sldLength: number;
+  highRiskTld: number;
+  punycode: number;
+  consecutiveConsonants: number;
+  vowelRatio: number;
+  userTuneBias?: number;
+}
+
+/**
+ * Policy adjustment mapping raw model winner to final verdict policy.
+ */
+export interface CategoryAdjustment {
+  category: ThreatCategory;
+  probability: number;
+  policyReason?: string;
+}
+
+/**
+ * Input configuration for filter rule synthesizer.
+ */
+export interface RuleSynthesisInput {
+  domain: string;
+  verdict: AiVerdict;
+  category: ThreatCategory;
+  cnames?: string[];
+  isSubdomain?: boolean;
+  target?: SynthesisTarget;
+  includeComments?: boolean;
+  confidence?: number;
+}
+
+/**
+ * Vector of extracted numerical features for domain threat classification.
+ */
+export interface DomainFeatureVector {
+  entropyFull: number;
+  entropySld: number;
+  entropySubdomain: number;
+  domainLength: number;
+  sldLength: number;
+  subdomainDepth: number;
+  vowelRatio: number;
+  consonantRatio: number;
+  digitRatio: number;
+  consecutiveConsonants: number;
+  consecutiveDigits: number;
+  hexScore: number;
+  trigramPerplexity: number;
+  adKeywordWeight: number;
+  trackerKeywordWeight: number;
+  cnameKnownTracker: number;
+  cnameExternal: number;
+  cnameDepth: number;
+  knownSafeInfra: number;
+  highRiskTld: number;
+  punycode: number;
+  hyphenRatio: number;
+  syllableCadence: number;
+  numericSubdomain: number;
+  userTuneBias: number;
+  brandSpoofScore: number;
+}
+
+/**
+ * Result of CNAME chain traversal and cloaking detection.
+ */
+export interface CnameResolutionResult {
+  domain: string;
+  cnames: string[];
+  ips: string[];
+  hasCnameCloaking: boolean;
+  cloakedTarget?: string;
+  knownTrackerTarget?: string;
+}
+
+/**
+ * Supported anti-adblock circumvention / detection providers.
+ */
+export type AntiAdblockProviderId =
+  | 'admiral'
+  | 'google-fc'
+  | 'blockthrough'
+  | 'adinplay'
+  | 'ezoic'
+  | 'nitropay'
+  | 'snigel'
+  | 'generic';
+
+/**
+ * Result of anti-adblock detection analysis.
+ */
+export interface AntiAdblockDetection {
+  detected: boolean;
+  provider?: AntiAdblockProviderId;
+  providerName?: string;
+  reason?: string;
+}
+
+

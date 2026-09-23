@@ -351,12 +351,17 @@ export class AiDetectorService {
     const flaggedHosts: AiScanResult[] = [];
     const synthesizedRules: string[] = [];
 
-    // Scan extracted origins
-    for (const host of extractedHosts.slice(0, 25)) {
-      const scan = await this.scanDomain(host, config);
-      if (scan.verdict !== 'clean') {
-        flaggedHosts.push(scan);
-        synthesizedRules.push(...scan.generatedRules);
+    // Scan extracted origins with bounded parallel concurrency (6 at a time)
+    const candidates = extractedHosts.slice(0, 25);
+    const BATCH_SIZE = 6;
+    for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
+      const batch = candidates.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map((host) => this.scanDomain(host, config)));
+      for (const scan of batchResults) {
+        if (scan.verdict !== 'clean') {
+          flaggedHosts.push(scan);
+          synthesizedRules.push(...scan.generatedRules);
+        }
       }
     }
 

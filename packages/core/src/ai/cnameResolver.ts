@@ -1,13 +1,7 @@
 import { promises as dns } from 'dns';
-
-export interface CnameResolutionResult {
-  domain: string;
-  cnames: string[];
-  ips: string[];
-  hasCnameCloaking: boolean;
-  cloakedTarget?: string;
-  knownTrackerTarget?: string;
-}
+import { decomposeDomain } from './entropy.js';
+import { classifyInfrastructure } from './reputation.js';
+import type { CnameResolutionResult } from './types.js';
 
 // Known third-party tracker CNAME cloaking destinations
 export const KNOWN_CLOAKED_TARGETS: Record<string, string> = {
@@ -160,17 +154,30 @@ export async function resolveCnameChain(domain: string, timeoutMs = 2500): Promi
   let knownTrackerTarget: string | undefined;
 
   if (cnames.length > 0) {
-    hasCnameCloaking = true;
     cloakedTarget = cnames[cnames.length - 1];
 
     for (const cname of cnames) {
       for (const [providerDomain, providerName] of Object.entries(KNOWN_CLOAKED_TARGETS)) {
         if (cname === providerDomain || cname.endsWith('.' + providerDomain)) {
           knownTrackerTarget = `${providerName} (${cname})`;
+          hasCnameCloaking = true;
           break;
         }
       }
       if (knownTrackerTarget) break;
+    }
+
+    if (!knownTrackerTarget && cloakedTarget) {
+      const domainDecomp = decomposeDomain(cleanDomain);
+      const targetDecomp = decomposeDomain(cloakedTarget);
+      const isSameSite =
+        Boolean(domainDecomp.sld && targetDecomp.sld && domainDecomp.sld === targetDecomp.sld && domainDecomp.tld === targetDecomp.tld);
+      const infra = classifyInfrastructure(cloakedTarget);
+      const isKnownCdnOrCloud = infra.safe && (infra.kind === 'cdn' || infra.kind === 'cloud');
+
+      if (!isSameSite && !isKnownCdnOrCloud) {
+        hasCnameCloaking = true;
+      }
     }
   }
 

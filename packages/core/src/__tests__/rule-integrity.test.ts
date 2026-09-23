@@ -5,6 +5,8 @@ import {
   resolveDnsPrecedence,
   evaluateDomainRules,
   parseFilterList,
+  checkRuleConflict,
+  RuleCoverageTrie,
   type FilterMetadata,
 } from '../index.js';
 
@@ -304,5 +306,68 @@ nytimes.com##.sponsor-ad
       expect(res.verdict).toBe('not_blocked');
       expect(res.matchingRules).toHaveLength(0);
     });
+
+    it('neutralizes blocking rules when a matching $badfilter rule is present', () => {
+      const badfilterTestRules = [
+        '||bad-tracker.com^',
+        '||bad-tracker.com^$badfilter',
+      ];
+      const res = evaluateDomainRules('bad-tracker.com', badfilterTestRules);
+      expect(res.verdict).toBe('not_blocked');
+      expect(res.overriddenRules).toContain('||bad-tracker.com^');
+    });
+
+    it('evaluates Unbound DNS format rules correctly', () => {
+      const unboundRules = ['local-zone: "unbound-blocked.com" always_nxdomain'];
+      const res = evaluateDomainRules('sub.unbound-blocked.com', unboundRules);
+      expect(res.verdict).toBe('blocked');
+      expect(res.matchingRule).toBe('local-zone: "unbound-blocked.com" always_nxdomain');
+    });
+
+    it('evaluates Pi-hole regex format rules correctly', () => {
+      const piholeRules = ['(^|\\.)pihole-regex\\.org$'];
+      const res = evaluateDomainRules('ads.pihole-regex.org', piholeRules);
+      expect(res.verdict).toBe('blocked');
+      expect(res.matchingRule).toBe('(^|\\.)pihole-regex\\.org$');
+    });
+
+    it('evaluates wildcard asterisk rules correctly', () => {
+      const wildcardRules = ['||ad*.telemetry-evil.com^'];
+      const res = evaluateDomainRules('adserver.telemetry-evil.com', wildcardRules);
+      expect(res.verdict).toBe('blocked');
+    });
+  });
+
+  describe('RuleCoverageTrie & Conflict Resolution Across Formats', () => {
+    it('indexes and detects coverage across ABP, hosts, dnsmasq, unbound, and wildcard formats', () => {
+      const trie = new RuleCoverageTrie();
+      trie.insertRules([
+        '||adnetwork.com^',
+        '0.0.0.0 hosts-bad.org',
+        'address=/dnsmasq-tracker.net/0.0.0.0',
+        'local-zone: "unbound-sinkhole.io" always_nxdomain',
+        '*.wildcard-danger.com',
+      ]);
+
+      expect(trie.isCovered('sub.adnetwork.com').isCovered).toBe(true);
+      expect(trie.isCovered('hosts-bad.org').isCovered).toBe(true);
+      expect(trie.isCovered('api.dnsmasq-tracker.net').isCovered).toBe(true);
+      expect(trie.isCovered('edge.unbound-sinkhole.io').isCovered).toBe(true);
+      expect(trie.isCovered('node.wildcard-danger.com').isCovered).toBe(true);
+      expect(trie.isCovered('clean-service.com').isCovered).toBe(false);
+    });
+
+    it('detects allowlist conflict and suggests override for dnsmasq and unbound rules', () => {
+      const allowRules = ['@@||essential-analytics.com^'];
+
+      const dnsmasqConflict = checkRuleConflict('address=/essential-analytics.com/0.0.0.0', allowRules);
+      expect(dnsmasqConflict.hasConflict).toBe(true);
+      expect(dnsmasqConflict.suggestedOverrideRule).toBe('||essential-analytics.com^$important');
+
+      const unboundConflict = checkRuleConflict('local-zone: "essential-analytics.com" always_nxdomain', allowRules);
+      expect(unboundConflict.hasConflict).toBe(true);
+      expect(unboundConflict.suggestedOverrideRule).toBe('||essential-analytics.com^$important');
+    });
   });
 });
+
