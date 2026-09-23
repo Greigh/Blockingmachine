@@ -3,6 +3,7 @@ const path = require('path');
 /** @type {import('webpack').Configuration} */
 module.exports = {
   mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
+  devtool: false,
   entry: {
     index: './src/index.ts',
     preload: './src/preload.ts'
