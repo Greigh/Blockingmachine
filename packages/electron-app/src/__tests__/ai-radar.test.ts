@@ -28,9 +28,22 @@ describe('Electron App AI Radar Helpers & Workflows', () => {
     it('flags DGA domain patterns with high entropy', () => {
       const entropy = calculateShannonEntropy('a9f1b4c8d2e6');
       expect(entropy).toBeGreaterThan(3.0);
+      expect(entropy).toBeLessThanOrEqual(5.0); // Within standard 0.0 - 5.0 scale
       const dga = detectDgaPatterns('a9f1b4c8d2e6.adtracker.org');
       expect(dga.score).toBeGreaterThanOrEqual(40);
       expect(dga.reasons.length).toBeGreaterThan(0);
+    });
+
+    it('classifies entropy tiers across the 0.00 to 5.00 scale correctly', () => {
+      const normalEntropy = calculateShannonEntropy('google');
+      expect(normalEntropy).toBeLessThan(3.4); // Normal tier: 0.00 - 3.39
+
+      const elevatedEntropy = calculateShannonEntropy('google-analytics');
+      expect(elevatedEntropy).toBeGreaterThanOrEqual(3.4); // Elevated tier: 3.40 - 3.79
+      expect(elevatedEntropy).toBeLessThan(3.8);
+
+      const highEntropy = calculateShannonEntropy('a9f1b4c8d2e6');
+      expect(highEntropy).toBeGreaterThanOrEqual(3.4); // High/DGA range
     });
 
     it('identifies clean domains correctly', async () => {

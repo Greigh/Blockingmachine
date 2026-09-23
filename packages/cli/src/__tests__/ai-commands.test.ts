@@ -73,6 +73,10 @@ describe('CLI AI Radar Commands', () => {
     });
 
     it('crawls public url and handles non-existent pages gracefully without crashing', async () => {
+      const fetchSpy = jest
+        .spyOn(globalThis, 'fetch')
+        .mockRejectedValueOnce(new Error('getaddrinfo ENOTFOUND non-existent-crawl-domain-testing-12345.org'));
+
       const cmd = new AiCrawlCommand({ config: mockConfig, logger: mockLogger });
       const result = await cmd.execute({
         url: 'https://non-existent-crawl-domain-testing-12345.org',
@@ -81,6 +85,50 @@ describe('CLI AI Radar Commands', () => {
 
       expect(result.success).toBe(true);
       expect(result.data.extractedHosts).toEqual([]);
+      fetchSpy.mockRestore();
+    });
+
+    it('crawls HTML and extracts discovered third-party script and iframe hosts', async () => {
+      const mockHtml = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <script src="https://adservice.google.com/ads.js"></script>
+            <script src="https://telemetry.tracker.io/beacon.js"></script>
+          </head>
+          <body>
+            <iframe src="https://cdn.example.org/embed"></iframe>
+          </body>
+        </html>
+      `;
+      const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        url: 'https://example-site.com',
+        body: {
+          getReader() {
+            let done = false;
+            return {
+              async read() {
+                if (done) return { done: true, value: undefined };
+                done = true;
+                return { done: false, value: new TextEncoder().encode(mockHtml) };
+              },
+              async cancel() {},
+            };
+          },
+        },
+      } as any);
+
+      const cmd = new AiCrawlCommand({ config: mockConfig, logger: mockLogger });
+      const result = await cmd.execute({
+        url: 'https://example-site.com',
+        provider: 'local-heuristics',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data.extractedHosts).toContain('adservice.google.com');
+      expect(result.data.extractedHosts).toContain('telemetry.tracker.io');
+      fetchSpy.mockRestore();
     });
   });
 });

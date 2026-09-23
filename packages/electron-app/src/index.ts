@@ -967,7 +967,7 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
     results.push({ service: 'AdGuard Home', status: 'skipped', message: 'Not configured' });
   }
 
-  // Custom Homelab Webhook / Automation Endpoint ("or any other thing like it")
+  // Custom Homelab Webhook / Automation Endpoint
   if (customWebhookUrl && customWebhookUrl.trim()) {
     const webhook = normalizeWebhookUrl(customWebhookUrl);
     if (!webhook.ok) {

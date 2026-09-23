@@ -521,9 +521,9 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 <div className="metric-card">
                   <span className="card-label">Shannon Entropy</span>
                   <span className="card-value" style={{ fontSize: 16 }}>
-                    {aiResult?.entropy !== undefined ? aiResult.entropy.toFixed(2) : '0.00'}
+                    {aiResult?.entropy !== undefined ? `${aiResult.entropy.toFixed(2)} / 5.0` : '0.00 / 5.0'}
                   </span>
-                  <span className="card-sub">{aiResult?.isLikelyDga ? 'Randomized DGA' : 'Natural Syntax'}</span>
+                  <span className="card-sub">{aiResult?.entropy !== undefined && aiResult.entropy >= 3.8 ? 'High Randomness (DGA)' : aiResult?.entropy !== undefined && aiResult.entropy >= 3.4 ? 'Elevated Complexity' : 'Natural Syntax'}</span>
                 </div>
                 <div className="metric-card">
                   <span className="card-label">CNAME Cloaking</span>
@@ -690,7 +690,9 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 <span style={{ color: 'var(--text-secondary)' }}>•</span>
                 <span>Engine: {aiResult?.modelUsed || 'Mini-AI Embedded Classifier'}</span>
                 <span style={{ color: 'var(--text-secondary)' }}>•</span>
-                <span>Shannon Entropy: {aiResult?.entropy !== undefined ? aiResult.entropy.toFixed(2) : '0.00'}</span>
+                <span title="Shannon Entropy: 0.0 to 5.0 scale measuring character randomness. Scores >= 3.8 indicate machine-generated tracking tokens or DGA.">
+                  Shannon Entropy: {aiResult?.entropy !== undefined ? `${aiResult.entropy.toFixed(2)} / 5.0` : '0.00 / 5.0'}
+                </span>
                 <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10b981', fontWeight: 600 }}>
                   100% In-Memory Air-Gapped
                 </span>
