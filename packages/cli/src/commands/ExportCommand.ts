@@ -10,6 +10,7 @@ import {
   parseFilterList,
   filterDNSRules,
   formatAdguardRule,
+  resolveDnsPrecedence,
 } from "@blockingmachine/core";
 import type { FilterListMetadata } from "../types.js";
 import fs from "fs/promises";
@@ -41,31 +42,35 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
         lastUpdated: new Date().toISOString(),
       };
 
-      // Read the imported rules
-      const inputFile = path.join(paths.output.dir, "imported-rules.txt");
+      const formats = options.formats || ["hosts", "dnsmasq", "adguard"];
+      const outputPath =
+        options.output || options.outputPath || path.join(paths.output.dir, "export");
+
+      // Read rules from imported file or database
+      const importedRulesPath = path.join(
+        paths.output.dir,
+        "imported-rules.txt",
+      );
       let rules: string[] = [];
-      let content = "";
 
       try {
-        content = await fs.readFile(inputFile, "utf-8");
-        rules = content.split("\n").filter((rule) => rule.trim());
-        this.logger.info(`Loaded ${rules.length} rules from: ${inputFile}`);
+        const content = await fs.readFile(importedRulesPath, "utf-8");
+        rules = content.split("\n").filter((line) => line.trim().length > 0);
+        this.logger.info(`Loaded ${rules.length} rules from: ${importedRulesPath}`);
       } catch {
         this.logger.warn(
-          `Could not read rules from ${inputFile}, creating empty filter lists`,
+          "Could not read imported rules file, using empty rule set",
         );
       }
 
-      const parsedRules = content ? parseFilterList(content) : [];
+      const results = [];
+      const parsedRules =
+        rules.length > 0
+          ? parseFilterList(rules.join("\n"), "imported-rules")
+          : [];
       const dnsSafeRules = filterDNSRules(parsedRules);
 
-      // Generate filter lists in different formats
-      const outputPath = options.outputPath || paths.output.dir;
-      const formats = options.formats || ["adguard"];
-
       this.logger.info(`Exporting to: ${outputPath}`);
-
-      const results = [];
 
       for (const format of formats) {
         try {
@@ -102,16 +107,16 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
               break;
             }
             case "hosts": {
+              const precedence = resolveDnsPrecedence(dnsSafeRules);
               const formattedRules: string[] = [];
-              for (const rule of dnsSafeRules) {
-                if (rule.isException || rule.raw.startsWith("@@")) {
-                  formattedRules.push(`# EXCEPTION: ${rule.raw}`);
-                } else {
-                  const domain = cleanDomainPattern(rule.raw) || rule.domain;
-                  if (domain) {
-                    formattedRules.push(`0.0.0.0 ${domain}`);
-                  }
+              for (const rule of precedence.activeBlocks) {
+                const domain = cleanDomainPattern(rule.raw) || rule.domain;
+                if (domain) {
+                  formattedRules.push(`0.0.0.0 ${domain}`);
                 }
+              }
+              for (const rule of precedence.effectiveExceptions) {
+                formattedRules.push(`# EXCEPTION: ${rule.raw}`);
               }
               const hostsHeader = [
                 `# Title: ${meta.title}`,
@@ -126,16 +131,19 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
               break;
             }
             case "dnsmasq": {
+              const precedence = resolveDnsPrecedence(dnsSafeRules);
               const formattedRules: string[] = [];
-              for (const rule of dnsSafeRules) {
-                if (rule.isException || rule.raw.startsWith("@@")) {
-                  formattedRules.push(`# EXCEPTION: ${rule.raw}`);
-                } else {
-                  const domain = cleanDomainPattern(rule.raw) || rule.domain;
-                  if (domain) {
-                    formattedRules.push(`address=/${domain}/0.0.0.0`);
-                  }
+              for (const rule of precedence.activeBlocks) {
+                const domain = cleanDomainPattern(rule.raw) || rule.domain;
+                if (domain) {
+                  formattedRules.push(`address=/${domain}/0.0.0.0`);
                 }
+              }
+              for (const sub of precedence.subdomainExceptions) {
+                formattedRules.push(`server=/${sub.subdomain}/#`);
+              }
+              for (const rule of precedence.effectiveExceptions) {
+                formattedRules.push(`# EXCEPTION: ${rule.raw}`);
               }
               const dnsmasqHeader = [
                 `# Title: ${meta.title}`,

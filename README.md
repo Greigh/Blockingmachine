@@ -4,11 +4,11 @@
 # Blockingmachine
 
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.0.0--rc.1-orange.svg)](https://github.com/greigh/Blockingmachine/releases)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--rc.2-orange.svg)](https://github.com/greigh/Blockingmachine/releases)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/)
 [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/)
 [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/Tests-185%20Passing%20(100%25)-brightgreen.svg)](https://github.com/greigh/Blockingmachine/actions)
+[![Tests](https://img.shields.io/badge/Tests-357%20Passing%20(100%25)-brightgreen.svg)](https://github.com/greigh/Blockingmachine/actions)
 [![Code Quality](https://img.shields.io/badge/ESLint-0%20Warnings-blueviolet.svg)]()
 
 _High-performance adblock compiler, DNS rule deduplicator, and AI-powered network defense suite for Pi-hole, AdGuard Home, and modern desktops._

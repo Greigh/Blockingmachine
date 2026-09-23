@@ -362,7 +362,13 @@ export class RuleProcessor {
       dollarIndex !== -1 &&
       !trimmedRule.includes("##") &&
       !trimmedRule.includes("#?#") &&
-      !trimmedRule.includes("#@#")
+      !trimmedRule.includes("#@#") &&
+      !trimmedRule.includes("#$#") &&
+      !trimmedRule.includes("#$?#") &&
+      !trimmedRule.includes("#%#") &&
+      !trimmedRule.includes("#@%#") &&
+      !trimmedRule.includes("#@$#") &&
+      !trimmedRule.includes("$$")
     ) {
       const modifierString = trimmedRule.slice(dollarIndex + 1);
       const modifiers = modifierString.split(",");
@@ -386,7 +392,18 @@ export class RuleProcessor {
     if (trimmedRule.includes("$$")) {
       return "extended-css";
     }
-    // 5. Cosmetic Rules & Exceptions
+    // 5. Scriptlet Injection / JS Rules (uBO ##+js, #@#+js, AdGuard #%#, #@%#, #$#, #@$#)
+    if (
+      trimmedRule.includes("##+js(") ||
+      trimmedRule.includes("#@#+js(") ||
+      trimmedRule.includes("#%#") ||
+      trimmedRule.includes("#@%#") ||
+      trimmedRule.includes("#$#") ||
+      trimmedRule.includes("#@$#")
+    ) {
+      return "scriptlet";
+    }
+    // 6. Cosmetic Rules & Exceptions
     if (
       trimmedRule.includes("##") ||
       trimmedRule.includes("#?#") ||
@@ -396,10 +413,6 @@ export class RuleProcessor {
       trimmedRule.includes("#.")
     ) {
       return "cosmetic";
-    }
-    // 6. Scriptlet Injection / JS Rules
-    if (trimmedRule.includes("#$#") || trimmedRule.includes("#%#")) {
-      return "scriptlet";
     }
 
     // 7. Specific Advanced Rules by Modifier (prioritize browser context if applicable)

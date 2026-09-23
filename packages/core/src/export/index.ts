@@ -1,14 +1,18 @@
 import type { StoredRule } from "../RuleStore.js";
 import { RuleStore } from "../RuleStore.js";
-import { RuleProcessor } from "../RuleProcessor.js"; // Add this import
+import { RuleProcessor } from "../RuleProcessor.js";
 import type {
   FilterListMetadata,
   SupportedFormat,
   ExportOptions,
 } from "../types.js";
-import { formatRuleForType } from "./formatters.js";
+import { formatRuleForType, isException } from "./formatters.js";
 import { generateHeader } from "./headers.js";
-import { filterDNSRules, filterBrowserRules } from "./ruleFilters.js";
+import {
+  filterDNSRules,
+  filterBrowserRules,
+  resolveDnsPrecedence,
+} from "./ruleFilters.js";
 import { writeFile } from "fs/promises";
 import { join } from "path";
 
@@ -19,15 +23,135 @@ export async function exportFormat(
   rules: StoredRule[],
   meta: FilterListMetadata,
 ): Promise<void> {
-  const header = generateHeader(meta, format);
+  const isDnsFormat = [
+    "hosts",
+    "dnsmasq",
+    "unbound",
+    "bind",
+    "privoxy",
+    "shadowrocket",
+    "domains",
+  ].includes(format);
 
+  if (isDnsFormat) {
+    const precedence = resolveDnsPrecedence(rules);
+    const lines: string[] = [];
+
+    // Active blocks
+    for (const rule of precedence.activeBlocks) {
+      const line = formatRuleForType(rule, format);
+      if (line) lines.push(line);
+    }
+
+    // Subdomain bypasses
+    if (format === "dnsmasq") {
+      for (const sub of precedence.subdomainExceptions) {
+        lines.push(`server=/${sub.subdomain}/#`);
+      }
+    } else if (format === "unbound") {
+      for (const sub of precedence.subdomainExceptions) {
+        lines.push(`  local-zone: "${sub.subdomain}" transparent`);
+      }
+    }
+
+    // Effective exception comments
+    for (const exRule of precedence.effectiveExceptions) {
+      lines.push(`# EXCEPTION: ${exRule.raw}`);
+    }
+
+    for (const ovRule of precedence.overriddenExceptions) {
+      lines.push(
+        `# EXCEPTION OVERRIDDEN BY $important: ${ovRule.raw}`,
+      );
+    }
+
+    const uniqueLines = Array.from(new Set(lines));
+    const header = generateHeader(meta, format);
+    const output = `${header}\n${uniqueLines.join("\n")}`;
+    await writeFile(outputPath, output, "utf8");
+    return;
+  }
+
+  if (format === "adguard" || format === "abp") {
+    // Canonical sections
+    const whitelistRules: string[] = [];
+    const scriptletRules: string[] = [];
+    const cosmeticRules: string[] = [];
+    const networkRules: string[] = [];
+
+    for (const rule of rules) {
+      const formatted = formatRuleForType(rule, format);
+      if (!formatted) continue;
+
+      if (isException(rule)) {
+        whitelistRules.push(formatted);
+      } else if (
+        rule.type === "scriptlet" ||
+        rule.raw.includes("##+js(") ||
+        rule.raw.includes("#@#+js(") ||
+        rule.raw.includes("#%#") ||
+        rule.raw.includes("#@%#") ||
+        rule.raw.includes("#$#") ||
+        rule.raw.includes("#@$#") ||
+        rule.raw.includes("#$?#")
+      ) {
+        scriptletRules.push(formatted);
+      } else if (
+        rule.type === "cosmetic" ||
+        rule.type === "extended-css" ||
+        rule.type === "html-filtering" ||
+        rule.raw.includes("##") ||
+        rule.raw.includes("#?#") ||
+        rule.raw.includes("$$")
+      ) {
+        cosmeticRules.push(formatted);
+      } else {
+        networkRules.push(formatted);
+      }
+    }
+
+    const uniqueWhitelist = Array.from(new Set(whitelistRules)).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" }),
+    );
+    const uniqueScriptlets = Array.from(new Set(scriptletRules)).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" }),
+    );
+    const uniqueCosmetics = Array.from(new Set(cosmeticRules)).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" }),
+    );
+    const uniqueNetwork = Array.from(new Set(networkRules)).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" }),
+    );
+
+    const sections: { title: string; rules: string[] }[] = [
+      { title: "Whitelist & Exception Rules", rules: uniqueWhitelist },
+      { title: "Procedural Scriptlet Defusers", rules: uniqueScriptlets },
+      { title: "Cosmetic & Element Hiding Rules", rules: uniqueCosmetics },
+      { title: "Network Blocking Rules", rules: uniqueNetwork },
+    ];
+
+    const bodyParts: string[] = [];
+    for (const sec of sections) {
+      if (sec.rules.length > 0) {
+        bodyParts.push(
+          `! ===============================================================\n! ${sec.title}\n! ===============================================================\n${sec.rules.join("\n")}`,
+        );
+      }
+    }
+
+    const header = generateHeader(meta, format);
+    const output = `${header}\n${bodyParts.join("\n\n")}`;
+    await writeFile(outputPath, output, "utf8");
+    return;
+  }
+
+  // Fallback default
+  const header = generateHeader(meta, format);
   const formattedRules = rules
     .map((rule) => formatRuleForType(rule, format))
     .filter(Boolean)
     .join("\n");
-
   const output = `${header}\n${formattedRules}`;
-
   await writeFile(outputPath, output, "utf8");
 }
 

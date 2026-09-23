@@ -78,7 +78,12 @@ export class RuleDeduplicator {
     if (!rule) return "";
     try {
       let stripped = rule;
-      const isException = stripped.startsWith("@@") || stripped.includes("#@#");
+      const isException =
+        stripped.startsWith("@@") ||
+        stripped.includes("#@#") ||
+        stripped.includes("#@%") ||
+        stripped.includes("#@$") ||
+        stripped.includes("#$?#");
       if (stripped.startsWith("@@")) {
         stripped = stripped.slice(2); // Remove the @@ prefix
       }
@@ -90,7 +95,12 @@ export class RuleDeduplicator {
         stripped.includes("#$#") ||
         stripped.includes("#$?#") ||
         stripped.includes("#%#") ||
+        stripped.includes("#@%#") ||
+        stripped.includes("#@$#") ||
         stripped.includes("$$");
+
+      const isScriptletRule =
+        /(?:##\+js\(|#@#\+js\(|#\$#|#\$\?#|#%#|#@%#|#@\$#)/.test(stripped);
 
       // 1. Extract and Normalize Key Modifiers/Selectors
       const parts = {
@@ -106,15 +116,22 @@ export class RuleDeduplicator {
               .filter((m) => m && m !== "domain") // Ensure 'domain' modifier itself isn't included here
               .sort()
               .join(","),
-        selector: (stripped.match(/(?:##|#@#)(.+)/)?.[1] || "")
-          .toLowerCase()
-          .replace(/\s+/g, " ")
-          .trim(),
+        selector: !isScriptletRule
+          ? (stripped.match(/(?:##|#@#)(.+)/)?.[1] || "")
+              .toLowerCase()
+              .replace(/\s+/g, " ")
+              .trim()
+          : "",
         extendedSelector: (stripped.match(/#\?#(.+)/)?.[1] || "")
           .toLowerCase()
           .replace(/\s+/g, " ")
           .trim(),
-        scriptlet: (stripped.match(/(?:#\$#|#\$\?#|#%#)(.+)/)?.[1] || "")
+        scriptlet: (
+          stripped.match(/(?:##|#@#)(\+js\(.+\))/)?.[1] ||
+          stripped.match(
+            /(?:#\$#|#\$\?#|#%#|#@%#|#@\$#)(.+)/,
+          )?.[1] || ""
+        )
           .toLowerCase()
           .replace(/\s+/g, " ")
           .trim(),
@@ -128,7 +145,10 @@ export class RuleDeduplicator {
       if (isCosmeticOrScriptlet) {
         stripped = stripped
           .replace(/\$\$.*$/, "") // Remove HTML filtering section
-          .replace(/(?:##|#@#|#\?#|#\$#|#\$\?#|#%#).*$/, "") // Remove cosmetic/extended/scriptlet selectors
+          .replace(
+            /(?:##\+js\(|#@#\+js\(|##|#@#|#\?#|#\$#|#\$\?#|#%#|#@%#|#@\$#).*$/,
+            "",
+          ) // Remove cosmetic/extended/scriptlet selectors
           .replace(/\s+#.*$/, ""); // Remove trailing comments
       } else {
         stripped = stripped

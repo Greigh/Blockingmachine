@@ -10,28 +10,33 @@ import type { ThreatCategory } from './types.js';
 export const HIGH_ABUSE_TLDS = new Set([
   'top', 'xyz', 'buzz', 'click', 'fit', 'rest', 'tk', 'cf', 'gq', 'ml', 'ga',
   'work', 'cam', 'surf', 'loan', 'racing', 'icu', 'gdn', 'vip', 'monster',
+  'country', 'stream', 'date', 'faith', 'review', 'download', 'trade', 'webcam',
+  'win', 'men', 'party', 'science', 'cricket', 'accountant', 'mom', 'sbs',
+  'cfd', 'skin', 'quest', 'beauty', 'hair', 'makeup', 'cyou', 'best', 'boats',
+  'bond', 'casa', 'lol',
 ]);
 
 /** Delimited ad-tech tokens. Short or generic words match only on label boundaries. */
 export const SUSPICIOUS_AD_TOKENS = [
-  'ad', 'ads', 'adserver', 'adservice', 'adnxs', 'adform', 'adtech',
+  'ads', 'adserver', 'adservice', 'adnxs', 'adform', 'adtech',
   'doubleclick', 'googleadservices', 'googlesyndication', 'moatads', 'amazon-adsystem',
-  'bid', 'bidder', 'bidding', 'rtb', 'dsp', 'ssp',
+  'bidder', 'bidding',
   'popunder', 'popcash', 'propeller', 'propellerads', 'outbrain', 'taboola', 'mgid',
   'revcontent', 'criteo', 'pubmatic', 'rubiconproject', 'openx', 'casalemedia', 'smartadserver',
   'adsystem', 'adtrack', 'advert', 'advertising', 'adzerk', 'adblade',
 ] as const;
 
 /**
- * Tracker tokens. `stat` is intentionally absent: it is a prefix of `status`
- * and was matching product status hosts.
+ * Tracker tokens. Ambiguous words ('stats', 'counter', 'click', 'branch', 'adjust', 'segment')
+ * are excluded as they frequently collide with legitimate sites; dedicated networks
+ * are matched via TRACKER_NETWORK_SUFFIXES instead.
  */
 export const SUSPICIOUS_TRACKER_TOKENS = [
-  'pixel', 'beacon', 'collect', 'telemetry', 'analytics', 'tracker', 'tracking',
-  'click', 'conversion', 'attribution', 'affiliate', 'stats', 'counter',
-  'scorecardresearch', 'quantserve', 'branch', 'appsflyer', 'adjust', 'mixpanel',
-  'segment', 'amplitude', 'sentry', 'datadoghq', 'hotjar', 'fullstory',
-  'clarity', 'mouseflow', 'optimizely', 'newrelic', 'heapanalytics',
+  'pixel', 'beacon', 'telemetry', 'analytics', 'tracker', 'tracking',
+  'conversion', 'attribution', 'affiliate',
+  'scorecardresearch', 'quantserve', 'appsflyer', 'mixpanel',
+  'amplitude', 'sentry', 'datadoghq', 'hotjar', 'fullstory',
+  'mouseflow', 'optimizely', 'newrelic', 'heapanalytics',
   'googleanalytics', 'google-analytics', 'googletagmanager', 'googletagservices',
 ] as const;
 
@@ -45,15 +50,15 @@ export const SPECIFIC_NETWORK_TOKENS = new Set<string>([
 ]);
 
 const TELEMETRY_NAME_TOKENS = new Set<string>([
-  'pixel', 'beacon', 'collect', 'telemetry', 'analytics', 'tracker', 'tracking',
+  'pixel', 'beacon', 'telemetry', 'analytics', 'tracker', 'tracking',
   'scorecardresearch', 'quantserve', 'googleanalytics', 'google-analytics',
-  'googletagmanager', 'googletagservices', 'mixpanel', 'segment', 'hotjar',
+  'googletagmanager', 'googletagservices', 'mixpanel', 'hotjar',
   'fullstory', 'mouseflow', 'optimizely', 'newrelic', 'sentry', 'amplitude',
-  'appsflyer', 'branch', 'adjust',
+  'appsflyer',
 ]);
 
 const AD_INTENT_LABELS = new Set([
-  'ad', 'ads', 'adserver', 'adservice', 'pagead', 'doubleclick', 'banner',
+  'ads', 'adserver', 'adservice', 'pagead', 'doubleclick', 'banner',
   'popunder', 'preroll', 'sponsor', 'sponsors', 'adtech',
 ]);
 
@@ -66,17 +71,33 @@ const STRONG_AD_TOKENS = [
 
 const HIGH_PROFILE_BRANDS = [
   'paypal', 'google', 'apple', 'microsoft', 'amazon', 'netflix', 'github',
-  'chase', 'bankofamerica', 'wellsfargo', 'facebook', 'instagram', 'dropbox',
-  'coinbase', 'binance', 'steam', 'twitter', 'discord', 'roblox',
+  'chase', 'bankofamerica', 'wellsfargo', 'citibank', 'capitalone', 'pnc', 'usbank',
+  'venmo', 'zelle', 'cashapp', 'coinbase', 'binance', 'kraken', 'metamask', 'ledger',
+  'trustwallet', 'facebook', 'instagram', 'dropbox', 'steam', 'twitter', 'discord',
+  'roblox', 'fedex', 'usps', 'ups', 'dhl', 'office365', 'outlook', 'onedrive',
+  'whatsapp', 'telegram', 'tiktok', 'snapchat', 'linkedin', 'walmart', 'costco', 'target',
 ] as const;
 
-const PHISH_KEYWORDS = /login|verify|security|auth|update|account|support|wallet|token|claim|signin|password|secure|unlock|billing/;
+const PHISH_KEYWORDS = /login|verify|security|auth|update|account|support|wallet|token|claim|signin|password|secure|unlock|billing|delivery|parcel|package|reschedule|tracking|track|seed|phrase|validate|portal|helpdesk|alert|banking|statement|overdue|invoice|recover|recovery/;
 
 const BENIGN_ENDPOINT_LABELS = new Set([
   'status', 'statuspage', 'uptime', 'health', 'healthz',
   'api', 'apis', 'cdn', 'static', 'assets',
   'update', 'updates', 'download', 'downloads', 'swupdate', 'firmware',
   'ocsp', 'crl', 'ntp', 'time', 'diag', 'diagnostics', 'setup',
+  'mail', 'email', 'webmail', 'smtp', 'imap', 'pop', 'autodiscover',
+  'portal', 'login', 'signin', 'auth', 'sso', 'idp', 'saml', 'oauth', 'accounts',
+  'support', 'help', 'helpdesk', 'service', 'services', 'kb', 'faq', 'docs',
+  'dev', 'developer', 'developers', 'git', 'gitlab', 'code', 'repo', 'pkg', 'npm',
+  'vpn', 'remote', 'connect', 'gateway', 'access', 'secure',
+  'app', 'apps', 'web', 'dashboard', 'admin', 'console', 'manage',
+  'shop', 'store', 'cart', 'checkout', 'pay', 'billing',
+  'cloud', 'hub', 'sync', 'storage', 'backup', 'files', 'media', 'img', 'images',
+  'forum', 'community', 'news', 'blog', 'pub', 'public',
+  'search', 'dns', 'ns', 'ns1', 'ns2',
+  'test', 'demo', 'sandbox', 'stage', 'staging', 'preview', 'prod', 'production',
+  'ping', 'check', 'captive', 'network',
+  'meet', 'conference', 'chat', 'voice',
 ]);
 
 const STRUCTURAL_SLD_WORDS = new Set([
@@ -122,6 +143,7 @@ export interface ReputationFeatures {
   punycode: number;
   consecutiveConsonants: number;
   vowelRatio: number;
+  userTuneBias?: number;
 }
 
 export interface CategoryAdjustment {
@@ -174,6 +196,77 @@ const AD_NETWORK_SUFFIXES = [
   'adservice.google.com',
   'ads.google.com',
   'pagead2.googlesyndication.com',
+  'adroll.com',
+  'adsterra.com',
+  'inmobi.com',
+  'ironsrc.com',
+  'vungle.com',
+  'adcolony.com',
+  'spotxchange.com',
+  'spotx.tv',
+  'mediavine.com',
+  'ezoic.com',
+  'ezoic.net',
+  'sovrn.com',
+  'appnexus.com',
+  'exoclick.com',
+  'undertone.com',
+  'conversantmedia.com',
+  'exponential.com',
+  'media.net',
+  'monetizemore.com',
+  'yieldmo.com',
+  'triplelift.com',
+  'connatix.com',
+  'aniview.com',
+  'springserve.com',
+  'smaato.net',
+  'chartboost.com',
+  'applovin.com',
+  'unityads.unity3d.com',
+  'unityads.com',
+  'liftoff.io',
+  'mintegral.com',
+  'admob.com',
+  'getadmiral.com',
+  'admiraldrm.com',
+  'admiralservices.com',
+  'admiralcloud.com',
+  'carter-carrier.com',
+  'whisperingwax.com',
+  'chiseledcherry.com',
+  'defiantdigital.com',
+  'spitefulsoup.com',
+  'sylvansteam.com',
+  'decklibrary.com',
+  'credential.net',
+  'incongruousmeasure.com',
+  'defiantiron.com',
+  'familiarrailway.com',
+  'greasyloss.com',
+  'fundingchoicesmessages.google.com',
+  'fc.yahoo.com',
+  'btloader.com',
+  'blockthrough.com',
+  'blockthrough.net',
+  'pagefair.com',
+  'pagefair.net',
+  'adinplay.com',
+  'adinplay.bid',
+  'adinplay.eu',
+  'fuckadblock.com',
+  'blockadblock.com',
+  'antiblock.org',
+  'snack-media.com',
+  'adblockdetector.com',
+  'adunblock.com',
+  'yavli.com',
+  'realsrv.com',
+  'antiadblocksystems.com',
+  'anti-adblock.herokuapp.com',
+  'nitropay.com',
+  'snigelweb.com',
+  'snigel.com',
 ] as const;
 
 const TRACKER_NETWORK_SUFFIXES = [
@@ -212,6 +305,38 @@ const TRACKER_NETWORK_SUFFIXES = [
   'exelator.com',
   'connect.facebook.net',
   'facebook.net',
+  'trackcmp.net',
+  'crazyegg.com',
+  'luckyorange.com',
+  'inspectlet.com',
+  'woopra.com',
+  'clicky.com',
+  'statcounter.com',
+  'flurry.com',
+  'singular.net',
+  'kochava.com',
+  'braze.com',
+  'iterable.com',
+  'onesignal.com',
+  'heap.io',
+  'heapanalytics.com',
+  'loggly.com',
+  'clarity.ms',
+  'contentsquare.net',
+  'decibelinsight.net',
+  'sessioncam.com',
+  'matomo.cloud',
+  'piwik.pro',
+  'qualtrics.com',
+  'userzoom.com',
+  'kissmetrics.io',
+  'adlooxtracking.com',
+  's-onetag.com',
+  'bounceexchange.com',
+  'wunderkind.co',
+  'yieldify.com',
+  'sl-edge.com',
+  'dnsdelegation.io',
 ] as const;
 
 const CLOUD_SUFFIXES = [
@@ -236,6 +361,9 @@ const CLOUD_SUFFIXES = [
   'gmail.com', 'youtube.com', 'ytimg.com', 'googlevideo.com', 'android.com',
   'chromium.org', 'blogger.com', 'gcr.io', 'pkg.dev', 'cloudfunctions.net',
   'run.app', 'firebaseio.com', 'firebaseapp.com', 'web.app',
+  // Enterprise cloud / identity / auth
+  'docker.com', 'docker.io', 'postman.com', 'auth0.com', 'okta.com',
+  'oktacdn.com', 'docusign.net', 'docusign.com', 'elastic.co',
 ] as const;
 
 const CDN_SUFFIXES = [
@@ -244,7 +372,7 @@ const CDN_SUFFIXES = [
   'akamai.net', 'akamaized.net', 'akamaihd.net', 'akamaiedge.net',
   'edgekey.net', 'edgesuite.net', 'akamai.com',
   'jsdelivr.net', 'unpkg.com', 'bootstrapcdn.com', 'fontawesome.com', 'jquery.com',
-  'stackpathcdn.com',
+  'stackpathcdn.com', 'cdnjs.com', 'bunny.net', 'b-cdn.net', 'keycdn.com', 'gcore.com',
 ] as const;
 
 const IOT_SUFFIXES = [
@@ -253,7 +381,10 @@ const IOT_SUFFIXES = [
   'wyze.com', 'wyzecam.com', 'tplinkcloud.com', 'tplinkra.com', 'tp-link.com',
   'kasasmart.com', 'tuya.com', 'tuyaus.com', 'tuyaeu.com', 'tuyacn.com',
   'smartthings.com', 'smartthingscloud.com', 'samsung.com', 'samsungcloud.com',
-  'samsungiotcloud.com', 'lg.com', 'lge.com', 'lgthinq.com', 'lgsmartthinq.com',
+  'samsungiotcloud.com', 'samsungcloudplatform.com', 'samsungosp.com', 'samsungqbe.com',
+  'lg.com', 'lge.com', 'lgthinq.com', 'lgsmartthinq.com', 'lgtvcommon.com', 'lgappstv.com',
+  'sony.com', 'sonynetworkentertainment.com', 'playstation.com', 'playstation.net', 'sie.com',
+  'vizio.com', 'viziotv.com',
   'sonos.com', 'irobot.com', 'arlo.com', 'arlocloud.com', 'eufylife.com', 'eufy.com',
   'blinkforhome.com', 'immedia-semi.com', 'august.com', 'yalehome.com', 'schlage.com',
   'honeywell.com', 'resideo.com', 'lutron.com', 'leviton.com', 'control4.com',
@@ -262,6 +393,12 @@ const IOT_SUFFIXES = [
   'home-assistant.io', 'nabucasa.com', 'nuki.io',
   'bosch-smarthome.com', 'home-connect.com', 'myqdevice.com', 'chamberlain.com',
   'simplisafe.com', 'wink.com', 'insteon.com', 'logitech.com',
+  'garmin.com', 'fitbit.com', 'withings.com',
+  'synology.com', 'quickconnect.to', 'synology.me', 'qnap.com', 'myqnapcloud.com',
+  'netgear.com', 'routerlogin.net', 'mynetgear.com',
+  'asus.com', 'router.asus.com', 'asuscomm.com',
+  'tplinkwifi.net', 'tplinknvr.net', 'linksys.com', 'linksyssmartwifi.com',
+  'ubnt.com', 'ui.com', 'amplifi.com', 'hp.com', 'canon.com', 'epson.com', 'brother.com',
 ] as const;
 
 const VENDOR_SUFFIXES = [
@@ -280,15 +417,43 @@ const VENDOR_SUFFIXES = [
   'netflix.com', 'nflxvideo.net', 'nflximg.net', 'nflxso.net',
   'discord.com', 'discordapp.com', 'discord.gg', 'discord.media',
   'reddit.com', 'redditstatic.com', 'redd.it',
-  'steampowered.com', 'steamcommunity.com', 'steamstatic.com', 'steamcontent.com',
+  'steampowered.com', 'steamcommunity.com', 'steamstatic.com', 'steamcontent.com', 'steamserver.net',
+  'epicgames.com', 'unrealengine.com', 'ea.com', 'origin.com', 'electronicarts.com',
+  'blizzard.com', 'battle.net', 'battlenet.com', 'ubisoft.com', 'uplay.com',
+  'riotgames.com', 'leagueoflegends.com', 'xbox.com', 'xboxlive.com',
+  'nintendo.com', 'nintendo.net', 'gog.com', 'rbxcdn.com', 'unity.com', 'unity3d.com',
+  'counter-strike.net',
   'wikipedia.org', 'wikimedia.org',
   'openai.com', 'oaistatic.com', 'anthropic.com',
   'paypal.com', 'paypalobjects.com',
-  'chase.com', 'bankofamerica.com', 'wellsfargo.com',
+  'chase.com', 'bankofamerica.com', 'wellsfargo.com', 'citi.com', 'capitalone.com',
+  'fidelity.com', 'schwab.com', 'vanguard.com', 'amex.com', 'americanexpress.com', 'discover.com',
   'coinbase.com', 'binance.com',
   'facebook.com', 'fbcdn.net', 'instagram.com', 'cdninstagram.com',
   'twitter.com', 'x.com', 'twimg.com',
   'roblox.com',
+  'roku.com', 'rokutime.com', 'hulu.com', 'hulustream.com', 'disneyplus.com',
+  'disney-plus.net', 'bamgrid.com', 'disney.com', 'max.com', 'hbomax.com', 'hbo.com',
+  'peacocktv.com', 'paramountplus.com', 'paramount.com', 'plex.tv', 'plex.direct',
+  'twitch.tv', 'ttvnw.net', 'jtvnw.net', 'vimeo.com', 'vimeocdn.com',
+  'soundcloud.com', 'sndcdn.com', 'deezer.com', 'tidal.com', 'pandora.com', 'audible.com',
+  'bose.com', 'boseconnect.com',
+  'npmjs.com', 'npmjs.org', 'yarnpkg.com', 'pypi.org', 'python.org',
+  'crates.io', 'rust-lang.org', 'golang.org', 'pkg.go.dev', 'rubygems.org',
+  'archlinux.org', 'debian.org', 'ubuntu.com', 'fedoraproject.org', 'centos.org',
+  'kernel.org', 'apache.org',
+  'stackexchange.com', 'stackoverflow.com', 'superuser.com', 'serverfault.com',
+  'askubuntu.com', 'mathoverflow.net', 'grafana.com',
+  'asana.com', 'clickup.com', 'monday.com', 'basecamp.com', 'miro.com', 'airtable.com',
+  'canva.com', 'grammarly.com', 'hubspot.com', 'salesforce.com', 'force.com',
+  'zendesk.com', 'zdassets.com', 'freshdesk.com', 'intercom.io', 'intercomcdn.com',
+  'stripe.com', 'stripe.network', 'square.com', 'squareup.com',
+  'uber.com', 'lyft.com', 'airbnb.com', 'booking.com', 'expedia.com',
+  'mayoclinic.org', 'hopkinsmedicine.org',
+  'coursera.org', 'edx.org', 'udemy.com', 'khanacademy.org', 'duolingo.com',
+  'britannica.com', 'dictionary.com', 'merriam-webster.com',
+  'weather.com', 'accuweather.com', 'flightaware.com', 'flightradar24.com',
+  'usps.com', 'ups.com', 'fedex.com', 'dhl.com',
 ] as const;
 
 const PLATFORM_SUFFIXES = [
@@ -360,9 +525,23 @@ const SAFE_INDEXES = SUFFIX_GROUPS.map((group) => ({
 
 export function normalizeHostname(input: string): string {
   let clean = input.trim().toLowerCase();
+  // Strip hosts file prefixes (e.g. "0.0.0.0 domain.com", "127.0.0.1 domain.com", "::1 domain.com")
+  clean = clean.replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|\S+@)\s+/, '');
+  // Strip ABP / AdGuard rule prefixes and modifiers (e.g. "||domain.com^$third-party" -> "domain.com")
+  clean = clean.replace(/^\|\|/, '');
+  clean = clean.replace(/\^.*$/, '');
+  clean = clean.replace(/\$.*$/, '');
+  // Strip wildcards (e.g. "*.domain.com" -> "domain.com")
+  clean = clean.replace(/^\*\.?/, '');
+  // Strip protocol scheme (http://, https://, etc.)
   clean = clean.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  // Strip path, query params, hash fragments
   clean = clean.split('/')[0]?.split('?')[0]?.split('#')[0] ?? clean;
-  clean = clean.split(':')[0] ?? clean;
+  // Strip port numbers (when not an IPv6 address)
+  if (!clean.includes('::') && (clean.match(/:/g) || []).length === 1) {
+    clean = clean.split(':')[0] ?? clean;
+  }
+  // Strip leading and trailing dots
   clean = clean.replace(/^\.+|\.+$/g, '');
   if (clean.endsWith('.')) clean = clean.slice(0, -1);
   return clean;
@@ -383,10 +562,294 @@ function matchIndexed(hostname: string, index: Map<string, string[]>): string | 
   return best;
 }
 
+/**
+ * Detects institutional top-level and second-level domains for government,
+ * military, international treaties, and higher education.
+ * These zones are strictly managed and do not operate commercial ad/tracker infrastructure.
+ */
+export function isInstitutionalDomain(domain: string): boolean {
+  const clean = normalizeHostname(domain);
+  if (!clean) return false;
+  const parts = clean.split('.');
+  if (parts.length < 2) return false;
+
+  const tld = parts[parts.length - 1];
+  const sld = parts[parts.length - 2];
+
+  // Primary institutional TLDs (.gov, .mil, .edu, .int)
+  if (tld === 'gov' || tld === 'mil' || tld === 'edu' || tld === 'int') {
+    return true;
+  }
+
+  // Country-code institutional second-level domains (.gov.xx, .gouv.xx, .gob.xx, .ac.xx, .edu.xx, .mil.xx)
+  if (parts.length >= 3) {
+    if (sld === 'gov' || sld === 'gouv' || sld === 'gob' || sld === 'ac' || sld === 'edu' || sld === 'mil') {
+      return true;
+    }
+  }
+
+  // Specific national government zones
+  if (clean === 'gc.ca' || clean.endsWith('.gc.ca') || clean.endsWith('.fed.us')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Detects Microsoft Active Directory, domain controllers, and private corporate LAN infrastructure.
+ */
+export function isActiveDirectoryOrLocalDomain(domain: string): boolean {
+  const clean = normalizeHostname(domain);
+  if (!clean) return false;
+
+  // Never match known advertising or tracking networks as Active Directory
+  if (matchIndexed(clean, AD_INDEX) || matchIndexed(clean, TRACKER_INDEX)) {
+    return false;
+  }
+
+  const labels = clean.split('.');
+
+  // Internal LAN / corp TLDs
+  const tld = labels[labels.length - 1];
+  if (
+    tld === 'local' ||
+    tld === 'corp' ||
+    tld === 'internal' ||
+    tld === 'lan' ||
+    tld === 'home' ||
+    tld === 'priv' ||
+    tld === 'intra' ||
+    clean.endsWith('.home.arpa')
+  ) {
+    return true;
+  }
+
+  // Active Directory and domain controller prefix/labels:
+  // ad.domain.com, dc1.ad.company.com, adfs.school.edu, kdc.corp.org, ldap.company.com
+  const firstLabel = labels[0];
+  if (
+    firstLabel === 'ad' ||
+    firstLabel === 'adfs' ||
+    firstLabel === 'kdc' ||
+    firstLabel === 'ldap' ||
+    firstLabel === 'ldaps'
+  ) {
+    return true;
+  }
+  // Subdomain labeled .ad. or .dc. (e.g. dc01.ad.example.com)
+  if (labels.length >= 3 && (labels[1] === 'ad' || labels[labels.length - 2] === 'ad')) {
+    return true;
+  }
+
+  return false;
+}
+
+export type AntiAdblockProviderId =
+  | 'admiral'
+  | 'google-fc'
+  | 'blockthrough'
+  | 'adinplay'
+  | 'ezoic'
+  | 'nitropay'
+  | 'snigel'
+  | 'generic';
+
+export interface AntiAdblockDetection {
+  detected: boolean;
+  provider?: AntiAdblockProviderId;
+  providerName?: string;
+  reason?: string;
+}
+
+/**
+ * Detects whether a hostname belongs to anti-adblock detection, ad-recovery circumvention,
+ * or modal lock wall infrastructure across multiple vendors (Admiral, Google Funding Choices,
+ * BlockThrough/PageFair, AdInPlay, Ezoic, NitroPay, Snigel, and FuckAdBlock/BlockAdBlock).
+ *
+ * @beta
+ */
+export function detectAntiAdblock(domain: string): AntiAdblockDetection {
+  const clean = normalizeHostname(domain);
+  if (!clean) return { detected: false };
+
+  // 1. Admiral Anti-Adblock
+  if (
+    clean === 'getadmiral.com' || clean.endsWith('.getadmiral.com') ||
+    clean === 'admiraldrm.com' || clean.endsWith('.admiraldrm.com') ||
+    clean === 'admiralservices.com' || clean.endsWith('.admiralservices.com') ||
+    clean === 'admiralcloud.com' || clean.endsWith('.admiralcloud.com') ||
+    clean === 'carter-carrier.com' || clean.endsWith('.carter-carrier.com') ||
+    clean === 'whisperingwax.com' || clean.endsWith('.whisperingwax.com') ||
+    clean === 'chiseledcherry.com' || clean.endsWith('.chiseledcherry.com') ||
+    clean === 'defiantdigital.com' || clean.endsWith('.defiantdigital.com') ||
+    clean === 'spitefulsoup.com' || clean.endsWith('.spitefulsoup.com') ||
+    clean === 'sylvansteam.com' || clean.endsWith('.sylvansteam.com') ||
+    clean === 'decklibrary.com' || clean.endsWith('.decklibrary.com') ||
+    clean === 'incongruousmeasure.com' || clean.endsWith('.incongruousmeasure.com') ||
+    clean === 'defiantiron.com' || clean.endsWith('.defiantiron.com') ||
+    clean === 'familiarrailway.com' || clean.endsWith('.familiarrailway.com') ||
+    clean === 'greasyloss.com' || clean.endsWith('.greasyloss.com')
+  ) {
+    return {
+      detected: true,
+      provider: 'admiral',
+      providerName: 'Admiral Anti-Adblock & Paywall Bypass',
+      reason: 'Admiral anti-adblock detection and ad-recovery platform',
+    };
+  }
+
+  // Dynamic compound dictionary domains generated by Admiral (e.g. molecularhouseholdadmiral.com, admiralugly.com)
+  const labels = clean.split('.');
+  if (labels.length >= 2) {
+    const sld = labels[labels.length - 2];
+    // Exclude the legitimate UK insurer "admiral.com" or "admiral.co.uk"
+    if (sld !== 'admiral' && sld.includes('admiral')) {
+      return {
+        detected: true,
+        provider: 'admiral',
+        providerName: 'Admiral Dynamic Anti-Adblock Domain',
+        reason: 'Admiral dynamic compound anti-adblock delivery domain',
+      };
+    }
+  }
+
+  // 2. Google Funding Choices / Privacy & Messaging
+  if (
+    clean === 'fundingchoicesmessages.google.com' ||
+    clean.endsWith('.fundingchoicesmessages.google.com') ||
+    clean === 'fc.yahoo.com' ||
+    clean.endsWith('.fc.yahoo.com')
+  ) {
+    return {
+      detected: true,
+      provider: 'google-fc',
+      providerName: 'Google Funding Choices Anti-Adblock',
+      reason: 'Google Funding Choices anti-adblock detection and modal wall',
+    };
+  }
+
+  // 3. BlockThrough / PageFair (Ad Recovery / BT Loader)
+  if (
+    clean === 'btloader.com' || clean.endsWith('.btloader.com') ||
+    clean === 'blockthrough.com' || clean.endsWith('.blockthrough.com') ||
+    clean === 'blockthrough.net' || clean.endsWith('.blockthrough.net') ||
+    clean === 'pagefair.com' || clean.endsWith('.pagefair.com') ||
+    clean === 'pagefair.net' || clean.endsWith('.pagefair.net') ||
+    clean === 'b-cdn.net' || clean.endsWith('.b-cdn.net')
+  ) {
+    return {
+      detected: true,
+      provider: 'blockthrough',
+      providerName: 'BlockThrough / PageFair Ad Recovery',
+      reason: 'BlockThrough / PageFair anti-adblock circumvention and ad recovery',
+    };
+  }
+
+  // 4. AdInPlay (Game adblock detector & canvas blocker)
+  if (
+    clean === 'adinplay.com' || clean.endsWith('.adinplay.com') ||
+    clean === 'adinplay.bid' || clean.endsWith('.adinplay.bid') ||
+    clean === 'adinplay.eu' || clean.endsWith('.adinplay.eu')
+  ) {
+    return {
+      detected: true,
+      provider: 'adinplay',
+      providerName: 'AdInPlay Game Anti-Adblock',
+      reason: 'AdInPlay game canvas adblock detection and gameplay locker',
+    };
+  }
+
+  // 5. Ezoic Ad-Recovery / Privacy Gateway
+  if (
+    clean === 'ezodn.com' || clean.endsWith('.ezodn.com') ||
+    clean === 'ezoiccdn.com' || clean.endsWith('.ezoiccdn.com') ||
+    (clean.includes('ezoic') && (clean.startsWith('go.') || clean.startsWith('gateway.')))
+  ) {
+    return {
+      detected: true,
+      provider: 'ezoic',
+      providerName: 'Ezoic Ad Recovery Gateway',
+      reason: 'Ezoic ad recovery proxy and anti-adblock privacy gateway',
+    };
+  }
+
+  // 6. NitroPay Ad Recovery
+  if (
+    clean === 'nitropay.com' || clean.endsWith('.nitropay.com')
+  ) {
+    return {
+      detected: true,
+      provider: 'nitropay',
+      providerName: 'NitroPay Ad Recovery',
+      reason: 'NitroPay anti-adblock detection and ad recovery platform',
+    };
+  }
+
+  // 7. Snigel Ad-Recovery / AdConsent
+  if (
+    clean === 'snigelweb.com' || clean.endsWith('.snigelweb.com') ||
+    clean === 'snigel.com' || clean.endsWith('.snigel.com')
+  ) {
+    return {
+      detected: true,
+      provider: 'snigel',
+      providerName: 'Snigel AdEngine Recovery',
+      reason: 'Snigel ad recovery and CMP anti-adblock barrier',
+    };
+  }
+
+  // 8. Generic Anti-Adblock & FuckAdBlock / BlockAdBlock / Bait systems
+  if (
+    clean === 'fuckadblock.com' || clean.endsWith('.fuckadblock.com') ||
+    clean === 'blockadblock.com' || clean.endsWith('.blockadblock.com') ||
+    clean === 'antiblock.org' || clean.endsWith('.antiblock.org') ||
+    clean === 'snack-media.com' || clean.endsWith('.snack-media.com') ||
+    clean === 'adblockdetector.com' || clean.endsWith('.adblockdetector.com') ||
+    clean === 'adunblock.com' || clean.endsWith('.adunblock.com') ||
+    clean === 'yavli.com' || clean.endsWith('.yavli.com') ||
+    clean === 'antiadblocksystems.com' || clean.endsWith('.antiadblocksystems.com') ||
+    clean === 'anti-adblock.herokuapp.com' || clean.endsWith('.anti-adblock.herokuapp.com') ||
+    clean.startsWith('antiadblock.') || clean.startsWith('anti-adblock.') ||
+    clean.includes('antiadblock') || clean.includes('anti-adblock')
+  ) {
+    return {
+      detected: true,
+      provider: 'generic',
+      providerName: 'Generic Anti-Adblock Detection Engine',
+      reason: 'Generic anti-adblock detection script or bait infrastructure',
+    };
+  }
+
+  return { detected: false };
+}
+
+/**
+ * Detects Admiral Anti-Adblock and visitor relationship management circumvention endpoints.
+ * Catches both core infrastructure and dynamic dictionary-word domains generated by Admiral.
+ * Preserves the legitimate UK insurance provider "admiral.com".
+ */
+export function isAdmiralAntiAdblock(domain: string): boolean {
+  const res = detectAntiAdblock(domain);
+  return res.detected && res.provider === 'admiral';
+}
+
 export function classifyInfrastructure(domain: string): InfraClassification {
   const clean = normalizeHostname(domain);
   if (!clean) {
     return { safe: false, adNetwork: false, kind: 'none', reason: '' };
+  }
+
+  // Anti-Adblock & circumvention detection
+  const aab = detectAntiAdblock(clean);
+  if (aab.detected) {
+    return {
+      safe: false,
+      adNetwork: true,
+      kind: 'ad-network',
+      suffix: aab.provider || 'anti-adblock',
+      reason: aab.reason || 'Anti-adblock detection and ad-recovery platform',
+    };
   }
 
   const adSuffix = matchIndexed(clean, AD_INDEX);
@@ -408,6 +871,26 @@ export function classifyInfrastructure(domain: string): InfraClassification {
       kind: 'tracker-network',
       suffix: trackerSuffix,
       reason: `Known tracker or analytics network (${trackerSuffix})`,
+    };
+  }
+
+  // Institutional government / military / education guard
+  if (isInstitutionalDomain(clean)) {
+    return {
+      safe: true,
+      adNetwork: false,
+      kind: 'vendor',
+      reason: 'Verified institutional government or educational infrastructure',
+    };
+  }
+
+  // Enterprise Active Directory / internal network guard
+  if (isActiveDirectoryOrLocalDomain(clean)) {
+    return {
+      safe: true,
+      adNetwork: false,
+      kind: 'vendor',
+      reason: 'Active Directory or enterprise infrastructure endpoint',
     };
   }
 
@@ -437,11 +920,15 @@ export function classifyInfrastructure(domain: string): InfraClassification {
  * Token match on label boundaries (dot or hyphen). Long network names also
  * match when concatenated inside a label (`googleanalytics`).
  */
+const MAX_TOKEN_REGEX_CACHE = 500;
 const tokenRegexCache = new Map<string, RegExp>();
 
 function boundaryRegex(token: string): RegExp {
   const cached = tokenRegexCache.get(token);
   if (cached) return cached;
+  if (tokenRegexCache.size >= MAX_TOKEN_REGEX_CACHE) {
+    tokenRegexCache.clear();
+  }
   const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const compiled = new RegExp(`(?:^|[.\\-])${escaped}(?:[.\\-]|$)`, 'i');
   tokenRegexCache.set(token, compiled);
@@ -509,23 +996,140 @@ function isTypoSquat(token: string, brand: string): boolean {
 }
 
 /**
- * Brand impersonation score.
+ * Minimal RFC 3492 Punycode decoder (zero external dependencies).
+ */
+export function decodePunycodeLabel(input: string): string {
+  if (!input.toLowerCase().startsWith('xn--')) return input;
+  const str = input.slice(4).toLowerCase();
+  const base = 36;
+  const tmin = 1;
+  const tmax = 26;
+  const skew = 38;
+  const damp = 700;
+  const initialBias = 72;
+  const initialN = 128;
+  const delimiter = '-';
+
+  let n = initialN;
+  let i = 0;
+  let bias = initialBias;
+  const output: number[] = [];
+
+  const delimIndex = str.lastIndexOf(delimiter);
+  let pos = 0;
+  if (delimIndex > 0) {
+    for (let j = 0; j < delimIndex; j++) {
+      output.push(str.charCodeAt(j));
+    }
+    pos = delimIndex + 1;
+  }
+
+  const adapt = (delta: number, numpoints: number, firsttime: boolean): number => {
+    let d = firsttime ? Math.floor(delta / damp) : Math.floor(delta / 2);
+    d += Math.floor(d / numpoints);
+    let k = 0;
+    while (d > Math.floor(((base - tmin) * tmax) / 2)) {
+      d = Math.floor(d / (base - tmin));
+      k += base;
+    }
+    return k + Math.floor(((base - tmin + 1) * d) / (d + skew));
+  };
+
+  while (pos < str.length) {
+    const oldi = i;
+    let w = 1;
+    let k = base;
+    while (true) {
+      if (pos >= str.length) break;
+      const code = str.charCodeAt(pos++);
+      const digit = code >= 97 && code <= 122 ? code - 97 : code >= 48 && code <= 57 ? code - 22 : base;
+      if (digit >= base) break;
+      i += digit * w;
+      const t = k <= bias ? tmin : k >= bias + tmax ? tmax : k - bias;
+      if (digit < t) break;
+      w *= base - t;
+      k += base;
+    }
+    bias = adapt(i - oldi, output.length + 1, oldi === 0);
+    n += Math.floor(i / (output.length + 1));
+    i = i % (output.length + 1);
+    output.splice(i, 0, n);
+    i++;
+  }
+
+  return String.fromCodePoint(...output);
+}
+
+const HOMOGLYPH_MAP: Record<string, string> = {
+  // Cyrillic lookalikes
+  '\u0430': 'a', '\u0410': 'a', // Cyrillic а, А
+  '\u0441': 'c', '\u0421': 'c', // Cyrillic с, С
+  '\u0434': 'd', // Cyrillic д
+  '\u0435': 'e', '\u0415': 'e', // Cyrillic е, Е
+  '\u0456': 'i', '\u0406': 'i', // Ukrainian і, І
+  '\u0458': 'j', '\u0408': 'j', // Cyrillic ј, Ј
+  '\u043a': 'k', '\u041a': 'k', // Cyrillic к, К
+  '\u043c': 'm', '\u041c': 'm', // Cyrillic м, М
+  '\u043e': 'o', '\u041e': 'o', // Cyrillic о, О
+  '\u0440': 'p', '\u0420': 'p', // Cyrillic р, Р
+  '\u0455': 's', '\u0405': 's', // Macedonian ѕ, Ѕ
+  '\u0442': 't', '\u0422': 't', // Cyrillic т, Т
+  '\u0445': 'x', '\u0425': 'x', // Cyrillic х, Х
+  '\u0443': 'y', '\u0423': 'y', // Cyrillic у, У
+  // Greek lookalikes
+  '\u03b1': 'a', '\u0391': 'a', // Greek α, Α
+  '\u03b2': 'b', '\u0392': 'b', // Greek β, Β
+  '\u03b5': 'e', '\u0395': 'e', // Greek ε, Ε
+  '\u03b7': 'n', '\u0397': 'h', // Greek η, Η
+  '\u03b9': 'i', '\u0399': 'i', // Greek ι, Ι
+  '\u03ba': 'k', '\u039a': 'k', // Greek κ, Κ
+  '\u03bd': 'v', '\u039d': 'n', // Greek ν, Ν
+  '\u03bf': 'o', '\u039f': 'o', // Greek ο, Ο
+  '\u03c1': 'p', '\u03a1': 'p', // Greek ρ, Ρ
+  '\u03c4': 't', '\u03a4': 't', // Greek τ, Τ
+  '\u03c5': 'u', '\u03a5': 'y', // Greek υ, Υ
+  '\u03c7': 'x', '\u03a7': 'x', // Greek χ, Χ
+  '\u03c9': 'w', // Greek ω
+};
+
+export function normalizeHomoglyphs(str: string): string {
+  return str.split('').map((ch) => HOMOGLYPH_MAP[ch] || ch).join('');
+}
+
+/**
+ * Brand impersonation score with Punycode IDN homograph phishing defense.
  * The real brand on a non-abusive TLD is not a spoof (`paypal.com`, `login.github.com`).
  * A brand plus a credential lure on some other zone is (`paypal-login.azurewebsites.net`).
+ * Homograph domains (`xn--pple-43d.com` -> `аpple.com`) are flagged immediately.
  */
 export function scoreBrandSpoof(domain: string): number {
   const clean = normalizeHostname(domain);
   if (!clean || !clean.includes('.')) return 0;
-  const decomposition = decomposeDomain(clean);
+
+  // Decode Punycode labels if any
+  const decodedParts = clean.split('.').map((part) => {
+    if (part.startsWith('xn--')) {
+      try {
+        return normalizeHomoglyphs(decodePunycodeLabel(part));
+      } catch {
+        return part;
+      }
+    }
+    return part;
+  });
+  const decodedClean = decodedParts.join('.');
+  const hasPunycode = clean.includes('xn--');
+
+  const decomposition = decomposeDomain(decodedClean);
   const sld = decomposition.sld.toLowerCase();
   const tld = decomposition.tld.toLowerCase();
   const abuseTld = HIGH_ABUSE_TLDS.has(tld);
-  const labels = clean.split('.').filter(Boolean);
+  const labels = decodedClean.split('.').filter(Boolean);
 
   for (const brand of HIGH_PROFILE_BRANDS) {
     const registrableIsBrand = sld === brand;
-    if (registrableIsBrand && !abuseTld && !clean.includes('xn--')) continue;
-    if (registrableIsBrand && (abuseTld || clean.includes('xn--'))) return 1;
+    if (registrableIsBrand && !abuseTld && !hasPunycode) continue;
+    if (registrableIsBrand && (abuseTld || hasPunycode)) return 1;
 
     // The final label is the TLD (`dns.google`), not an impersonation subdomain.
     for (const label of labels.slice(0, -1)) {
@@ -537,7 +1141,7 @@ export function scoreBrandSpoof(domain: string): number {
         }
         if (isTypoSquat(tok, brand)) return 1;
       }
-      if (label.includes(brand) && label !== brand && PHISH_KEYWORDS.test(label)) return 1;
+      if (brand.length >= 5 && label.includes(brand) && label !== brand && PHISH_KEYWORDS.test(label)) return 1;
     }
   }
   return 0;
@@ -550,8 +1154,6 @@ export function isBenignServiceEndpoint(domain: string): boolean {
   if (infra.adNetwork || infra.kind === 'tracker-network') return false;
   if (hasStrongAdIntent(clean)) return false;
   if (scoreBrandSpoof(clean) > 0) return false;
-  if (SUSPICIOUS_AD_TOKENS.some((token) => hostnameHasToken(clean, token))) return false;
-  if (SUSPICIOUS_TRACKER_TOKENS.some((token) => hostnameHasToken(clean, token))) return false;
 
   const labels = clean.split('.').filter(Boolean);
   if (!labels.some((label) => BENIGN_ENDPOINT_LABELS.has(label))) return false;
@@ -609,6 +1211,15 @@ export function adjustThreatCategory(
       category: 'Clean',
       probability: 0.99,
       policyReason: 'Verified Essential Infrastructure / Whitelisted (Protected by False Positive Guard)',
+    };
+  }
+
+  // Deterministic user whitelist feedback override (False Positive guard)
+  if (features.userTuneBias !== undefined && features.userTuneBias <= -0.9) {
+    return {
+      category: 'Clean',
+      probability: 0.99,
+      policyReason: 'Whitelisted by user feedback (False Positive Override)',
     };
   }
 

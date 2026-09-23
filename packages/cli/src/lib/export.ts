@@ -5,6 +5,7 @@ import type {
   ExportOptions,
 } from "../types.js";
 import { StoredRuleModel } from "./db.js";
+import { resolveDnsPrecedence } from "@blockingmachine/core";
 import fs from "fs/promises";
 import path from "path";
 
@@ -49,8 +50,11 @@ function generateHeader(
 function formatRuleForType(rule: StoredRule, format: SupportedFormat): string {
   const isException =
     rule.type === "exception" ||
+    rule.type === "unblocking" ||
     rule.raw.startsWith("@@") ||
-    rule.raw.includes("#@#");
+    rule.raw.includes("#@#") ||
+    rule.raw.includes("#@%") ||
+    rule.raw.includes("#@$");
 
   switch (format) {
     case "hosts":
@@ -96,9 +100,43 @@ export async function exportFormat(
   try {
     await fs.mkdir(outputDir, { recursive: true });
 
-    const formattedRules = rules
-      .map((rule) => formatRuleForType(rule, format))
-      .filter((line) => Boolean(line && line.trim()));
+    let formattedRules: string[] = [];
+    const isDns = [
+      "hosts",
+      "dnsmasq",
+      "unbound",
+      "bind",
+      "privoxy",
+      "shadowrocket",
+    ].includes(format);
+
+    if (isDns) {
+      const precedence = resolveDnsPrecedence(rules as any);
+      for (const r of precedence.activeBlocks) {
+        const line = formatRuleForType(r as any, format);
+        if (line) formattedRules.push(line);
+      }
+      if (format === "dnsmasq") {
+        for (const sub of precedence.subdomainExceptions) {
+          formattedRules.push(`server=/${sub.subdomain}/#`);
+        }
+      } else if (format === "unbound") {
+        for (const sub of precedence.subdomainExceptions) {
+          formattedRules.push(`local-zone: "${sub.subdomain}" transparent`);
+        }
+      }
+      for (const ex of precedence.effectiveExceptions) {
+        formattedRules.push(`# EXCEPTION: ${ex.raw}`);
+      }
+      for (const ov of precedence.overriddenExceptions) {
+        formattedRules.push(`# EXCEPTION OVERRIDDEN BY $important: ${ov.raw}`);
+      }
+    } else {
+      formattedRules = rules
+        .map((rule) => formatRuleForType(rule, format))
+        .filter((line) => Boolean(line && line.trim()));
+    }
+
     const header = generateHeader(meta, format);
     const content = [header, ...formattedRules].join("\n");
 

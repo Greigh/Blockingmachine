@@ -45,6 +45,10 @@ export {
   type FetchOptions,
   type FetchResult,
 } from "./fetch.js";
+export {
+  isSafePublicWebUrl,
+  type SafeUrlCheckResult,
+} from "./utils/urlSafety.js";
 
 // Export / Formatters
 export {
@@ -57,7 +61,12 @@ export {
 export { formatRuleForType, formatAdguardRule } from "./export/formatters.js";
 export { generateHeader } from "./export/headers.js";
 export { exportFormat, exportWithOptions } from "./export/index.js";
-export { filterDNSRules, filterBrowserRules } from "./export/ruleFilters.js";
+export {
+  filterDNSRules,
+  filterBrowserRules,
+  resolveDnsPrecedence,
+  type DnsPrecedenceResult,
+} from "./export/ruleFilters.js";
 
 // Types
 export type {

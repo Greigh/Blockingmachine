@@ -3,6 +3,8 @@ import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { isSafePublicWebUrl } from "./utils/urlSafety.js";
+
 // --- Determine Base Directory ---
 const getBaseDir = (): string => {
   try {
@@ -26,6 +28,7 @@ const MAX_PAYLOAD_SIZE = 100 * 1024 * 1024; // 100MB max payload limit
 export interface FetchOptions {
   etag?: string;
   lastModified?: string;
+  allowPrivateNetworks?: boolean;
 }
 
 export interface FetchResult {
@@ -239,6 +242,19 @@ export async function fetchWithConditionalCache(
       return { content: null, notModified: false, status: 500 };
     }
   } else {
+    if (!cacheOptions?.allowPrivateNetworks) {
+      const safety = isSafePublicWebUrl(url);
+      if (!safety.isSafe) {
+        if (safety.reason === 'Malformed or invalid URL') {
+          console.error(`❌ Invalid URL encountered: ${url}`);
+          return { content: null, notModified: false, status: 400 };
+        }
+        console.error(
+          `❌ SSRF Guard blocked fetch request to ${url}: ${safety.reason}`,
+        );
+        return { content: null, notModified: false, status: 403 };
+      }
+    }
     return await fetchWithRetry(url, options);
   }
 }

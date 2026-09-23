@@ -111,9 +111,78 @@ twitch.tv##+js(vaft-ublock-origin)
 ||istockphoto.com^$important
 ! iPhone Games Fix
 ||ads-a.unity3d.com^$important
-! Admiral Anti-Adblock
+! Anti-Adblock & Circumvention Neutralizer Suite
+! Admiral Core Infrastructure & Delivery
+||getadmiral.com^$important
+||admiraldrm.com^$important
+||admiralservices.com^$important
+||admiralcloud.com^$important
 ||credential.net^$important
 ||decklibrary.com^$important
+||carter-carrier.com^$important
+||whisperingwax.com^$important
+||chiseledcherry.com^$important
+||defiantdigital.com^$important
+||spitefulsoup.com^$important
+||sylvansteam.com^$important
+||admiralimaginablesnarl.com^$important
+||admiralugly.com^$important
+||molecularhouseholdadmiral.com^$important
+||proverbadmiraluphill.com^$important
+||admiralbusinesswilliam.com^$important
+! Google Funding Choices & CMP Walls
+||fundingchoicesmessages.google.com^$important
+||fc.yahoo.com^$important
+! BlockThrough & PageFair Ad Recovery
+||btloader.com^$important
+||blockthrough.com^$important
+||blockthrough.net^$important
+||pagefair.com^$important
+||pagefair.net^$important
+||b-cdn.net^$important
+! AdInPlay Game Ad-Block Locks
+||adinplay.com^$important
+||adinplay.bid^$important
+||adinplay.eu^$important
+! Ezoic, NitroPay & Snigel Ad Recovery
+||ezodn.com^$important
+||ezoiccdn.com^$important
+||nitropay.com^$important
+||snigelweb.com^$important
+! BlockAdblock / FuckAdblock / Bait Systems
+||fuckadblock.com^$important
+||blockadblock.com^$important
+||antiblock.org^$important
+||snack-media.com^$important
+||antiadblocksystems.com^$important
+||anti-adblock.herokuapp.com^$important
+! In-Page Procedural Scriptlet Defusers & Anti-Adblock Modal Neutralizers
+##+js(set, admiral, noopfn)
+##+js(set, Admiral, noopfn)
+##+js(set, admiral.properties.suppress, true)
+##+js(abort-current-script, admiral)
+##+js(set, googlefc, undefined)
+##+js(set, google_ad_client, undefined)
+##+js(abort-current-script, googlefc)
+##+js(set, blockthrough, noopfn)
+##+js(set, BT_LOADER, undefined)
+##+js(abort-current-script, btloader)
+##+js(abort-current-script, blockthrough)
+##+js(set, aiptag, { cmd: { display: noopfn, player: noopfn } })
+##+js(set, aipPlayer, noopfn)
+##+js(set, ezstandalone, noopfn)
+##+js(set, nitropay, noopfn)
+##+js(set, snigel, noopfn)
+##+js(set, FuckAdBlock, noopfn)
+##+js(set, BlockAdBlock, noopfn)
+##+js(set, fuckAdBlock, noopfn)
+##+js(set, blockAdBlock, noopfn)
+##+js(set, canRunAds, true)
+##+js(set, isAdBlockActive, false)
+##+js(set, adblock, false)
+##+js(set, adblockDetected, false)
+##.admiral-overlay, [id^="admiral-"], [class*="admiral-"], .admiral-active, .fc-ab-root, .fc-dialog-container, .fc-dialog-overlay, .fc-consent-root, .fc-monetization-root, .bt-ad-container, [id^="bt-"], [id^="aip-preroll"], #aip-ad-container, .aip-overlay, .ezoic-ad, [class*="ez-wall"], .nitropay-ad, .nitropay-overlay, .snigel-ad-container, #blockadblock, .adblock-overlay, .adblock-modal, .anti-adblock-modal, #adblock-nag, .adblocker-overlay, .adblock-blocker, [class*="adblock-wall"], [id*="adblock-wall"], .sp_veil, .sp_message_container { display: none !important; }
+##html, body { overflow: auto !important; position: static !important; }
 ! Allow Reverse DNS lookup
 @@||*.in-addr.arpa^$important
 ! Unblock Focus Train Your Brain app

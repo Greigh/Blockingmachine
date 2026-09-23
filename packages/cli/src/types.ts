@@ -1,4 +1,5 @@
 import { Logger } from "./lib/logger.js";
+import type { RuleType as CoreRuleType } from "@blockingmachine/core";
 
 // Categories
 export enum CategoryType {
@@ -161,8 +162,7 @@ export interface FilterSource extends Source {
 }
 
 // Rule-related types
-export type RuleType =
-  "domain" | "regex" | "exception" | "cosmetic" | "unknown";
+export type RuleType = CoreRuleType;
 
 // Simplified modifier type - just strings now
 export type RuleModifier = string;
@@ -262,6 +262,7 @@ export interface CommandOptions {
 
 export interface ExportOptions {
   outputPath?: string;
+  output?: string;
   formats?: SupportedFormat[];
   categories?: CategoryName[];
   excludeCategories?: CategoryName[];

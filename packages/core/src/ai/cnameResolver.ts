@@ -22,6 +22,26 @@ export const KNOWN_CLOAKED_TARGETS: Record<string, string> = {
   'commandersact.com': 'Commanders Act CDP',
   'at-o.net': 'AT Internet / Piano Analytics',
   'wt-eu02.net': 'Mapp Intelligence / Webtrekk',
+  'webtrekk.net': 'Webtrekk Telemetry',
+  'omtrdc.net': 'Adobe Audience Manager / Experience Cloud',
+  'demdex.net': 'Adobe Audience Manager',
+  'everesttech.net': 'Adobe Advertising Cloud',
+  '2o7.net': 'Adobe Omniture Tracking',
+  'dnsdelegation.io': 'Keywee / Content Tracker Cloak',
+  'exacttarget.com': 'Salesforce Marketing Cloud Telemetry',
+  'actonsoftware.com': 'Act-On Marketing Automation Tracker',
+  'hubspot.net': 'HubSpot Tracking Domain',
+  'krux.net': 'Salesforce Krux DMP',
+  'sail-horizon.com': 'Sailthru Email & Conversion Tracker',
+  'bounceexchange.com': 'Wunderkind / BounceX Behavioral Tracker',
+  'wunderkind.co': 'Wunderkind Behavioral Tracker',
+  'yieldify.com': 'Yieldify Conversion Telemetry',
+  'sl-edge.com': 'Smartlook Analytics Edge',
+  'adlooxtracking.com': 'Adloox Verification & Tracking',
+  's-onetag.com': 'Sharethrough Tag / Tracker',
+  'awin1.com': 'Awin Affiliate Tracker',
+  'linksynergy.com': 'Rakuten LinkShare Affiliate Tracker',
+  'impactradius.com': 'Impact Affiliate Tracker',
   'segment.io': 'Segment Customer Data Platform',
   'pardot.com': 'Salesforce Pardot Marketing Tracker',
   'marketo.com': 'Adobe Marketo Lead Tracker',
@@ -29,6 +49,30 @@ export const KNOWN_CLOAKED_TARGETS: Record<string, string> = {
   'singular.net': 'Singular ROI Tracking',
   'adjust.com': 'Adjust Mobile Measurement Tracker',
   'kochava.com': 'Kochava Attribution & Analytics Engine',
+  'trackcmp.net': 'ActiveCampaign Telemetry & Tracking',
+  'admiraldrm.com': 'Admiral Anti-Adblock & Paywall Bypass',
+  'getadmiral.com': 'Admiral Anti-Adblock & Paywall Bypass',
+  'admiralservices.com': 'Admiral Anti-Adblock & Paywall Bypass',
+  'admiralcloud.com': 'Admiral Anti-Adblock & Paywall Bypass',
+  'carter-carrier.com': 'Admiral Anti-Adblock Dynamic Cloak',
+  'whisperingwax.com': 'Admiral Anti-Adblock Dynamic Cloak',
+  'chiseledcherry.com': 'Admiral Anti-Adblock Dynamic Cloak',
+  'defiantdigital.com': 'Admiral Anti-Adblock Dynamic Cloak',
+  'spitefulsoup.com': 'Admiral Anti-Adblock Dynamic Cloak',
+  'sylvansteam.com': 'Admiral Anti-Adblock Dynamic Cloak',
+  'btloader.com': 'BlockThrough Anti-Adblock Bypass',
+  'blockthrough.com': 'BlockThrough Anti-Adblock Bypass',
+  'pagefair.com': 'PageFair Anti-Adblock Bypass',
+  'pagefair.net': 'PageFair Anti-Adblock Bypass',
+  'adinplay.com': 'AdInPlay Anti-Adblock Bypass',
+  'adinplay.bid': 'AdInPlay Anti-Adblock Bypass',
+  'adinplay.eu': 'AdInPlay Anti-Adblock Bypass',
+  'fundingchoicesmessages.google.com': 'Google Funding Choices Anti-Adblock',
+  'fc.yahoo.com': 'Google Funding Choices / Yahoo Consent Anti-Adblock',
+  'ezodn.com': 'Ezoic Ad-Recovery CNAME Cloak',
+  'ezoiccdn.com': 'Ezoic Ad-Recovery CNAME Cloak',
+  'snigelweb.com': 'Snigel Ad-Recovery CNAME Cloak',
+  'bolt.playwire.com': 'Playwire Ad-Recovery CNAME Cloak',
 };
 
 /**
@@ -121,7 +165,7 @@ export async function resolveCnameChain(domain: string, timeoutMs = 2500): Promi
 
     for (const cname of cnames) {
       for (const [providerDomain, providerName] of Object.entries(KNOWN_CLOAKED_TARGETS)) {
-        if (cname.includes(providerDomain)) {
+        if (cname === providerDomain || cname.endsWith('.' + providerDomain)) {
           knownTrackerTarget = `${providerName} (${cname})`;
           break;
         }

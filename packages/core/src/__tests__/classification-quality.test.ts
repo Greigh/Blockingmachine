@@ -170,4 +170,223 @@ describe('Classification quality', () => {
     expect(verdictBadgeLabel('suspicious')).toBe('SUSPICIOUS');
     expect(verdictBadgeLabel('clean')).toBe('CLEAN');
   });
+
+  describe('False Positive Guard & Active Directory / Institutional Domain Protection', () => {
+    const activeDirectoryDomains = [
+      'ad.ucla.edu',
+      'ad.gatech.edu',
+      'ad.washington.edu',
+      'ad.corp.local',
+      'ad.contoso.com',
+      'ad.internal.corp',
+      'dc1.ad.company.com',
+      'adfs.university.edu',
+    ];
+
+    it.each(activeDirectoryDomains)('treats Active Directory / enterprise host %s as clean', (domain) => {
+      const pred = classifier.classify(domain);
+      expect(pred.verdict).toBe('clean');
+      expect(pred.category).toBe('Clean');
+      expect(pred.riskLevel).toBe('none');
+    });
+
+    const institutionalDomains = [
+      'ad.state.gov',
+      'bid.ny.gov',
+      'bids.sc.gov',
+      'stats.bls.gov',
+      'weather.gov',
+      'irs.gov',
+      'cdc.gov',
+      'stats.ox.ac.uk',
+      'stats.stanford.edu',
+      'counter.unesco.org',
+    ];
+
+    it.each(institutionalDomains)('protects government and educational endpoint %s as clean', (domain) => {
+      const pred = classifier.classify(domain);
+      expect(pred.verdict).toBe('clean');
+      expect(pred.category).toBe('Clean');
+      expect(pred.riskLevel).toBe('none');
+    });
+
+    const legitimateServiceDomains = [
+      'stats.nba.com',
+      'stats.espn.com',
+      'stats.stackexchange.com',
+      'stats.worldbank.org',
+      'stats.oecd.org',
+      'dsp.stackexchange.com',
+      'click.docusign.net',
+      'click.redditmail.com',
+      'click.uber.com',
+      'counter-strike.net',
+      'theguardian.com',
+      'washingtonpost.com',
+      'homedepot.com',
+      'stackoverflow.com',
+      'mayoclinic.org',
+      'accuweather.com',
+      'flightaware.com',
+    ];
+
+    it.each(legitimateServiceDomains)('does not falsely flag legitimate site/service %s', (domain) => {
+      const pred = classifier.classify(domain);
+      expect(pred.verdict).toBe('clean');
+      expect(pred.category).toBe('Clean');
+      expect(pred.riskLevel).toBe('none');
+    });
+
+    it('deterministically overrides any domain to Clean when user marks whitelist feedback', () => {
+      const testDomain = 'adserver.adtech.de';
+      const before = classifier.classify(testDomain);
+      expect(before.verdict).not.toBe('clean');
+
+      classifier.tuneDomainFeedback(testDomain, 'whitelist');
+      const after = classifier.classify(testDomain);
+      expect(after.verdict).toBe('clean');
+      expect(after.category).toBe('Clean');
+      expect(after.confidence).toBe(99);
+      expect(after.riskLevel).toBe('none');
+      expect(after.classProbabilities.Clean).toBe(1.0);
+      expect(after.reasons).toContain('Whitelisted by user feedback (False Positive Override)');
+
+      // Reset
+      classifier.tuneDomainFeedback(testDomain, 'reset');
+      const reset = classifier.classify(testDomain);
+      expect(reset.verdict).not.toBe('clean');
+    });
+
+    it('detects previously unlisted ad networks as Advertising', () => {
+      const adNetworks = [
+        'adroll.com',
+        'adsterra.com',
+        'inmobi.com',
+        'ironsrc.com',
+        'vungle.com',
+        'adcolony.com',
+        'mediavine.com',
+        'ezoic.com',
+        'ezoic.net',
+        'sovrn.com',
+        'appnexus.com',
+        'exoclick.com',
+      ];
+      for (const domain of adNetworks) {
+        const pred = classifier.classify(domain);
+        expect(pred.category).toBe('Advertising');
+        expect(pred.verdict).not.toBe('clean');
+        expect(pred.confidence).toBeGreaterThanOrEqual(70);
+      }
+    });
+
+    it('detects previously unlisted tracking networks as Telemetry/Analytics', () => {
+      const trackerNetworks = [
+        'trackcmp.net',
+        'crazyegg.com',
+        'luckyorange.com',
+        'inspectlet.com',
+        'woopra.com',
+        'clicky.com',
+        'statcounter.com',
+        'flurry.com',
+        'singular.net',
+        'kochava.com',
+        'braze.com',
+        'iterable.com',
+        'onesignal.com',
+      ];
+      for (const domain of trackerNetworks) {
+        const pred = classifier.classify(domain);
+        expect(pred.category).toBe('Telemetry/Analytics');
+        expect(pred.verdict).not.toBe('clean');
+        expect(pred.confidence).toBeGreaterThanOrEqual(70);
+      }
+    });
+
+    it('detects IDN Punycode homograph phishing spoofing attacks', () => {
+      // xn--pple-43d.com decodes to аpple.com (Cyrillic 'а')
+      const homograph = classifier.classify('xn--pple-43d.com');
+      expect(homograph.category).toBe('Malware/Phishing');
+      expect(homograph.verdict).toBe('malicious');
+      expect(homograph.riskLevel).toBe('critical');
+      expect(homograph.topContributions.some((item) => item.name === 'Brand Typo-Squatting')).toBe(true);
+    });
+
+    it('detects delivery, banking, and crypto credential harvesting lures', () => {
+      const lures = [
+        'fedex-delivery-reschedule.xyz',
+        'citibank-online-verify.com',
+        'ledger-device-validate.xyz',
+        'office365-verify-account.com',
+        'usps-tracking-package.com',
+        'metamask-seed-phrase.xyz',
+      ];
+      for (const domain of lures) {
+        const pred = classifier.classify(domain);
+        expect(pred.category).toBe('Malware/Phishing');
+        expect(pred.verdict).toBe('malicious');
+        expect(pred.riskLevel).toBe('critical');
+      }
+    });
+
+    it('handles compound ccTLD institutional domains correctly without false positives', () => {
+      const institutionalCcTld = [
+        'service.transport.gov.in',
+        'stats.nsw.gov.au',
+        'canada.gc.ca',
+        'research.ox.ac.uk',
+      ];
+      for (const domain of institutionalCcTld) {
+        const pred = classifier.classify(domain);
+        expect(pred.verdict).toBe('clean');
+        expect(pred.category).toBe('Clean');
+        expect(pred.riskLevel).toBe('none');
+      }
+    });
+
+    it('handles empty, whitespace, and malformed inputs gracefully with 0% confidence', () => {
+      const invalidInputs = ['', '   ', 'localhost', '...', 'http://'];
+      for (const input of invalidInputs) {
+        const pred = classifier.classify(input);
+        expect(pred.verdict).toBe('clean');
+        expect(pred.category).toBe('Clean');
+        expect(pred.confidence).toBe(0);
+        expect(pred.riskLevel).toBe('none');
+        expect(pred.reasons).toContain('Empty or malformed domain string');
+      }
+    });
+
+    it('correctly normalizes and classifies Adblock Plus rules and Hosts file lines', () => {
+      const ruleCases = [
+        { input: '||adroll.com^$third-party', expectedCategory: 'Advertising' },
+        { input: '0.0.0.0 doubleclick.net', expectedCategory: 'Advertising' },
+        { input: '127.0.0.1 trackcmp.net', expectedCategory: 'Telemetry/Analytics' },
+        { input: '*.vungle.com', expectedCategory: 'Advertising' },
+        { input: '||status.cursor.com^', expectedCategory: 'Clean' },
+      ];
+      for (const { input, expectedCategory } of ruleCases) {
+        const pred = classifier.classify(input);
+        expect(pred.category).toBe(expectedCategory);
+      }
+    });
+
+    it('handles loopback, private, and public DNS IP addresses gracefully without false alarms', () => {
+      const privateIps = ['127.0.0.1', '192.168.1.1', '10.0.0.1', '::1'];
+      for (const ip of privateIps) {
+        const pred = classifier.classify(ip);
+        expect(pred.verdict).toBe('clean');
+        expect(pred.category).toBe('Clean');
+        expect(pred.confidence).toBe(99);
+      }
+
+      const publicDnsIps = ['8.8.8.8', '1.1.1.1', '9.9.9.9'];
+      for (const ip of publicDnsIps) {
+        const pred = classifier.classify(ip);
+        expect(pred.verdict).toBe('clean');
+        expect(pred.category).toBe('Clean');
+        expect(pred.confidence).toBe(99);
+      }
+    });
+  });
 });

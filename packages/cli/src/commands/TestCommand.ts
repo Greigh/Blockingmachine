@@ -3,7 +3,10 @@ import {
   type CommandOptions,
   type CommandResult,
 } from "./BaseCommand.js";
-import { createPaths, cleanDomainPattern } from "@blockingmachine/core";
+import {
+  createPaths,
+  evaluateDomainRules,
+} from "@blockingmachine/core";
 import fs from "fs/promises";
 import path from "path";
 import chalk from "chalk";
@@ -26,46 +29,50 @@ export class TestCommand extends BaseCommand<TestOptions> {
       );
     }
 
-    // Strip protocol, port, or leading slashes
-    const targetDomain = rawTarget
-      .replace(/^(?:https?:\/\/)?(?:www\.)?/i, "")
-      .split(/[/:]/)[0];
+    const targetDomain = rawTarget.replace(/^(?:https?:\/\/)?(?:www\.)?/, "").split("/")[0].split("?")[0];
 
     const config = this.config;
-    const baseDir = config.baseDir || process.cwd();
+    const baseDir = config?.baseDir || process.cwd();
     const paths = createPaths(baseDir);
-    const candidateFiles = [
-      path.join(paths.output.dir, "imported-rules.txt"),
-      path.join(paths.output.dir, "filter-list.txt"),
-      path.join(paths.output.dir, "adguard.txt"),
-      path.join(paths.output.dir, "hosts.txt"),
-      path.join(
-        process.cwd(),
-        "packages",
-        "electron-app",
-        "filters",
-        "output",
-        "hosts.txt",
-      ),
-    ];
+    const candidateFiles: string[] = [];
 
-    if (options?.file) {
-      candidateFiles.unshift(options.file);
+    if (options.file) {
+      candidateFiles.push(path.resolve(process.cwd(), options.file));
+    } else {
+      candidateFiles.push(
+        path.join(paths.output.dir, "imported-rules.txt"),
+        path.join(paths.output.dir, "filter-list.txt"),
+        path.join(paths.output.dir, "adguard.txt"),
+        path.join(paths.output.dir, "hosts.txt"),
+        path.join(paths.input.dir, "custom-rules.txt"),
+        path.join(
+          process.cwd(),
+          "packages",
+          "electron-app",
+          "filters",
+          "output",
+          "hosts.txt",
+        ),
+      );
     }
 
     let rules: string[] = [];
     let foundFile = "";
-    for (const candidate of candidateFiles) {
+
+    for (const file of candidateFiles) {
       try {
-        const content = await fs.readFile(candidate, "utf-8");
-        rules = content
+        const content = await fs.readFile(file, "utf8");
+        const lines = content
           .split("\n")
           .map((l) => l.trim())
-          .filter(Boolean);
-        foundFile = candidate;
-        break;
+          .filter((l) => l && !l.startsWith("!") && !l.startsWith("#"));
+        if (lines.length > 0) {
+          rules = lines;
+          foundFile = file;
+          break;
+        }
       } catch {
-        // try next
+        // Continue to next candidate
       }
     }
 
@@ -79,49 +86,7 @@ export class TestCommand extends BaseCommand<TestOptions> {
       `Analyzing domain ${chalk.bold.cyan(targetDomain)} across ${rules.length} loaded rules...`,
     );
 
-    const matchingExceptions: string[] = [];
-    const matchingBlocks: {
-      rule: string;
-      matchedPattern: string;
-      isWildcard: boolean;
-    }[] = [];
-
-    for (const rule of rules) {
-      if (rule.startsWith("!") || rule.startsWith("#")) continue;
-
-      if (rule.startsWith("@@")) {
-        const pattern = cleanDomainPattern(rule);
-        if (
-          pattern &&
-          (targetDomain === pattern || targetDomain.endsWith("." + pattern))
-        ) {
-          matchingExceptions.push(rule);
-        }
-      } else {
-        const pattern = cleanDomainPattern(rule);
-        if (pattern) {
-          if (targetDomain === pattern) {
-            matchingBlocks.push({
-              rule,
-              matchedPattern: pattern,
-              isWildcard: false,
-            });
-          } else if (
-            rule.startsWith("||") &&
-            targetDomain.endsWith("." + pattern)
-          ) {
-            matchingBlocks.push({
-              rule,
-              matchedPattern: pattern,
-              isWildcard: true,
-            });
-          }
-        }
-      }
-    }
-
-    const isException = matchingExceptions.length > 0;
-    const isBlocked = matchingBlocks.length > 0 && !isException;
+    const evalResult = evaluateDomainRules(targetDomain, rules);
 
     console.log(
       "\n" + chalk.bold.underline("Domain Inspection Analysis:") + "\n",
@@ -131,24 +96,24 @@ export class TestCommand extends BaseCommand<TestOptions> {
       console.log(`  Rule Source:       ${chalk.dim(foundFile)}`);
     }
 
-    if (isException) {
+    if (evalResult.verdict === "exception") {
       console.log(
         `  Final Verdict:     ${chalk.bold.green("ALLOWED")} (Explicit exception rule overrides block)`,
       );
       console.log(
-        `  Exception Rule:    ${chalk.green(matchingExceptions.join(", "))}`,
+        `  Exception Rule:    ${chalk.green(evalResult.exceptionRule || evalResult.matchingRule || "")}`,
       );
-      if (matchingBlocks.length > 0) {
+      if (evalResult.overriddenRules.length > 0) {
         console.log(
-          `  Overridden Blocks: ${matchingBlocks.map((b) => b.rule).join(", ")}`,
+          `  Overridden Blocks: ${evalResult.overriddenRules.join(", ")}`,
         );
       }
-    } else if (isBlocked) {
+    } else if (evalResult.verdict === "blocked") {
       console.log(`  Final Verdict:     ${chalk.bold.red("BLOCKED")}`);
       console.log(
-        `  Matching Rules:    ${chalk.red(matchingBlocks.length.toString())}`,
+        `  Matching Rules:    ${chalk.red(evalResult.matchingRules.length.toString())}`,
       );
-      matchingBlocks.slice(0, 5).forEach((match, idx) => {
+      evalResult.matchingRules.slice(0, 5).forEach((match, idx) => {
         const typeDesc = match.isWildcard
           ? "(wildcard parent block)"
           : "(exact match)";
@@ -156,26 +121,48 @@ export class TestCommand extends BaseCommand<TestOptions> {
           `    ${idx + 1}. ${chalk.yellow(match.rule)} ${chalk.dim(typeDesc)}`,
         );
       });
-      if (matchingBlocks.length > 5) {
+      if (evalResult.matchingRules.length > 5) {
         console.log(
-          `    ... and ${matchingBlocks.length - 5} more matching rules`,
+          `    ... and ${evalResult.matchingRules.length - 5} more matching rules`,
+        );
+      }
+      if (evalResult.overriddenRules.length > 0) {
+        console.log(
+          `  Overridden Exceptions: ${evalResult.overriddenRules.join(", ")}`,
         );
       }
     } else {
       console.log(
-        `  Final Verdict:     ${chalk.bold.gray("UNBLOCKED")} (No matching blocking rules found)`,
+        `  Final Verdict:     ${chalk.bold.cyan("UNBLOCKED")} (No matching blocking rules found)`,
       );
     }
     console.log("");
 
+    const verdictStr =
+      evalResult.verdict === "exception"
+        ? "ALLOWED"
+        : evalResult.verdict === "blocked"
+          ? "BLOCKED"
+          : "UNBLOCKED";
+
+    const matchingBlocks =
+      evalResult.verdict === "blocked"
+        ? evalResult.matchingRules.map((b) => b.rule)
+        : evalResult.overriddenRules;
+
+    const matchingExceptions =
+      evalResult.verdict === "exception"
+        ? evalResult.matchingRules.map((e) => e.rule)
+        : evalResult.overriddenRules;
+
     return this.success(
       {
         domain: targetDomain,
-        verdict: isException ? "ALLOWED" : isBlocked ? "BLOCKED" : "UNBLOCKED",
-        matchingBlocks: matchingBlocks.map((b) => b.rule),
+        verdict: verdictStr,
+        matchingBlocks,
         matchingExceptions,
       },
-      `Inspection for ${targetDomain} complete: ${isException ? "ALLOWED" : isBlocked ? "BLOCKED" : "UNBLOCKED"}`,
+      `Inspection for ${targetDomain} complete: ${verdictStr}`,
     );
   }
 }

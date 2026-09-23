@@ -8,7 +8,7 @@ import { URL } from "url";
 import fs from "fs/promises";
 import path from "path";
 import chalk from "chalk";
-import { createPaths, cleanDomainPattern } from "@blockingmachine/core";
+import { createPaths, evaluateDomainRules } from "@blockingmachine/core";
 
 export interface ServeOptions {
   port?: number;
@@ -52,13 +52,6 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("!") && !l.startsWith("#"));
-
-    // Pre-parse patterns once at startup to avoid repeated regex operations on every HTTP check request
-    const parsedRules = lines.map((line) => {
-      const isEx = line.startsWith("@@");
-      const pattern = cleanDomainPattern(line);
-      return { line, isEx, pattern };
-    });
 
     const server = http.createServer(async (req, res) => {
       try {
@@ -119,38 +112,26 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
           }
 
           const target = domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split(/[/?#:]/)[0];
-
-          // Match against pre-parsed rules
-          const matchedRules: string[] = [];
-          let exceptionRule: string | null = null;
-
-          for (const item of parsedRules) {
-            if (item.pattern && (target === item.pattern || target.endsWith(`.${item.pattern}`))) {
-              if (item.isEx) {
-                exceptionRule = item.line;
-                break;
-              } else {
-                matchedRules.push(item.line);
-              }
-            }
-          }
-
-          const isBlocked = exceptionRule ? false : matchedRules.length > 0;
-          const verdict = exceptionRule
-            ? "ALLOWED (Exception rule overrides block)"
-            : isBlocked
-              ? "BLOCKED"
-              : "UNBLOCKED";
+          const evaluation = evaluateDomainRules(target, lines);
+          const isBlocked = evaluation.verdict === "blocked";
+          const matchedRuleStrings = evaluation.matchingRules.map((m) => m.rule);
+          const verdictString =
+            evaluation.verdict === "exception"
+              ? "ALLOWED (Exception rule overrides block)"
+              : isBlocked
+                ? "BLOCKED"
+                : "UNBLOCKED";
 
           res.statusCode = 200;
           res.end(
             JSON.stringify({
               domain: target,
               blocked: isBlocked,
-              verdict,
-              exceptionRule,
-              matchedRules,
-              totalMatches: matchedRules.length,
+              verdict: verdictString,
+              reason: evaluation.details,
+              exceptionRule: evaluation.exceptionRule || null,
+              matchedRules: matchedRuleStrings,
+              totalMatches: matchedRuleStrings.length,
             }),
           );
           return;

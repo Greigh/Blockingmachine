@@ -7,7 +7,10 @@ export function isException(rule: StoredRule): boolean {
     rule.isException ||
     rule.type === "unblocking" ||
     rule.raw.startsWith("@@") ||
-    rule.raw.includes("#@#")
+    rule.raw.includes("#@#") ||
+    rule.raw.includes("#@%") ||
+    rule.raw.includes("#@$") ||
+    rule.raw.includes("#$?#")
   );
 }
 

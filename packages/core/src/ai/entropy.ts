@@ -89,18 +89,52 @@ export function detectDgaPatterns(domain: string): DgaDetectionResult {
 
 // Common two-part public suffixes / ccTLDs
 export const COMPOUND_CCTLDS = new Set([
-  'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'me.uk',
-  'com.au', 'net.au', 'org.au', 'edu.au',
-  'co.nz', 'net.nz', 'org.nz',
-  'co.jp', 'ne.jp', 'or.jp',
-  'co.kr', 'ne.kr',
-  'com.br', 'net.br', 'org.br',
-  'com.mx', 'org.mx',
-  'com.sg', 'org.sg',
-  'co.za', 'org.za',
-  'com.tr', 'org.tr',
-  'com.tw', 'org.tw',
-  'com.hk', 'org.hk',
+  // United Kingdom
+  'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'me.uk', 'net.uk', 'ltd.uk', 'plc.uk',
+  // Australia
+  'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au', 'asn.au', 'id.au',
+  // New Zealand
+  'co.nz', 'net.nz', 'org.nz', 'govt.nz', 'ac.nz', 'edu.nz', 'geek.nz',
+  // Japan
+  'co.jp', 'ne.jp', 'or.jp', 'ac.jp', 'ad.jp', 'ed.jp', 'go.jp', 'gr.jp', 'lg.jp',
+  // South Korea
+  'co.kr', 'ne.kr', 'or.kr', 're.kr', 'pe.kr', 'go.kr', 'mil.kr', 'ac.kr', 'hs.kr',
+  // Brazil
+  'com.br', 'net.br', 'org.br', 'gov.br', 'edu.br', 'mil.br', 'art.br',
+  // Mexico
+  'com.mx', 'org.mx', 'edu.mx', 'gob.mx', 'net.mx',
+  // Singapore
+  'com.sg', 'org.sg', 'net.sg', 'gov.sg', 'edu.sg', 'per.sg',
+  // South Africa
+  'co.za', 'org.za', 'net.za', 'gov.za', 'ac.za', 'edu.za',
+  // Turkey
+  'com.tr', 'org.tr', 'net.tr', 'gov.tr', 'edu.tr',
+  // Taiwan
+  'com.tw', 'org.tw', 'net.tw', 'gov.tw', 'edu.tw', 'idv.tw',
+  // Hong Kong
+  'com.hk', 'org.hk', 'net.hk', 'gov.hk', 'edu.hk', 'idv.hk',
+  // India
+  'co.in', 'net.in', 'org.in', 'gov.in', 'nic.in', 'ac.in', 'edu.in', 'res.in',
+  // Canada
+  'gc.ca',
+  // China
+  'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn',
+  // Argentina
+  'com.ar', 'net.ar', 'org.ar', 'gob.ar', 'gov.ar',
+  // Colombia
+  'com.co', 'net.co', 'org.co', 'gov.co', 'edu.co',
+  // Philippines
+  'com.ph', 'net.ph', 'org.ph', 'gov.ph', 'edu.ph',
+  // Pakistan
+  'com.pk', 'net.pk', 'org.pk', 'gov.pk', 'edu.pk',
+  // Nigeria
+  'com.ng', 'net.ng', 'org.ng', 'gov.ng', 'edu.ng',
+  // Ukraine
+  'com.ua', 'net.ua', 'org.ua', 'gov.ua', 'edu.ua',
+  // Israel
+  'co.il', 'org.il', 'net.il', 'gov.il', 'ac.il', 'muni.il',
+  // Russia
+  'com.ru', 'net.ru', 'org.ru', 'gov.ru', 'edu.ru',
 ]);
 
 /**
