@@ -102,6 +102,8 @@ function toResult(status: number, statusText: string, body: string): SinkholeHtt
   };
 }
 
+const MAX_SINKHOLE_PAYLOAD_SIZE = 25 * 1024 * 1024; // 25MB
+
 function nodeRequest(
   urlStr: string,
   opts: { method: string; headers?: Record<string, string>; body?: string; timeoutMs: number; rejectUnauthorized: boolean },
@@ -128,7 +130,16 @@ function nodeRequest(
   return new Promise((resolve, reject) => {
     const onResponse = (res: IncomingMessage) => {
       const chunks: Buffer[] = [];
-      res.on('data', (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      let totalBytes = 0;
+      res.on('data', (chunk: Buffer | string) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buf.length;
+        if (totalBytes > MAX_SINKHOLE_PAYLOAD_SIZE) {
+          res.destroy(new Error(`Sinkhole response exceeded payload limit of 25MB: >${totalBytes} bytes`));
+          return;
+        }
+        chunks.push(buf);
+      });
       res.on('end', () => {
         const location = typeof res.headers.location === 'string' ? res.headers.location : undefined;
         resolve({

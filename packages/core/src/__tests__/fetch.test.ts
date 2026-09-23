@@ -95,4 +95,31 @@ describe("fetchWithConditionalCache", () => {
     expect(resCR.status).toBe(400);
     expect(resCR.content).toBeNull();
   });
+
+  test("rejects SSRF requests to loopback, private networks, and cloud metadata with 403", async () => {
+    const resLoopback = await fetchWithConditionalCache("http://127.0.0.1:8080/admin");
+    expect(resLoopback.status).toBe(403);
+    expect(resLoopback.content).toBeNull();
+
+    const resMetadata = await fetchWithConditionalCache("http://169.254.169.254/latest/meta-data");
+    expect(resMetadata.status).toBe(403);
+    expect(resMetadata.content).toBeNull();
+
+    const resPrivate = await fetchWithConditionalCache("http://10.0.0.1/sensitive.txt");
+    expect(resPrivate.status).toBe(403);
+    expect(resPrivate.content).toBeNull();
+
+    const resLocalhost = await fetchWithConditionalCache("http://localhost:3000/api");
+    expect(resLocalhost.status).toBe(403);
+    expect(resLocalhost.content).toBeNull();
+
+    const resMappedLoopback = await fetchWithConditionalCache("http://[::ffff:127.0.0.1]:8080/admin");
+    expect(resMappedLoopback.status).toBe(403);
+    expect(resMappedLoopback.content).toBeNull();
+
+    const resMappedMetadata = await fetchWithConditionalCache("http://[::ffff:169.254.169.254]/latest/meta-data");
+    expect(resMappedMetadata.status).toBe(403);
+    expect(resMappedMetadata.content).toBeNull();
+  });
 });
+

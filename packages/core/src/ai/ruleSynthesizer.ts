@@ -7,6 +7,10 @@ import type {
   ThreatCategory,
 } from './types.js';
 import { COMPOUND_CCTLDS } from './entropy.js';
+import {
+  detectAntiAdblock,
+  type AntiAdblockProviderId,
+} from './reputation.js';
 
 export interface RuleSynthesisInput {
   domain: string;
@@ -237,8 +241,150 @@ function escapeRegex(str: string): string {
 }
 
 /**
+ * Synthesizes procedural scriptlet defusers, CSS element hiding rules, and DOM modal
+ * suppressors to completely defeat anti-adblock detection and prevent scroll-lock freezes
+ * across multiple vendors (Admiral, Google Funding Choices, BlockThrough, AdInPlay, Ezoic,
+ * NitroPay, Snigel, and Generic Bait Defusers).
+ *
+ * @beta
+ */
+export function synthesizeAntiAdblockDefusers(
+  domain?: string,
+  provider?: AntiAdblockProviderId | 'generic',
+): string[] {
+  const defusers: string[] = [];
+  const clean = domain ? sanitizeDomain(domain) : null;
+
+  if (clean) {
+    defusers.push(`||${clean}^$important`);
+    defusers.push(`0.0.0.0 ${clean}`);
+  }
+
+  // 1. Admiral Anti-Adblock
+  if (!provider || provider === 'admiral') {
+    defusers.push('||getadmiral.com^$important');
+    defusers.push('||admiraldrm.com^$important');
+    defusers.push('||admiralservices.com^$important');
+    defusers.push('||admiralcloud.com^$important');
+
+    defusers.push('##+js(set, admiral, noopfn)');
+    defusers.push('##+js(set, Admiral, noopfn)');
+    defusers.push('##+js(set, admiral.properties.suppress, true)');
+    defusers.push('##+js(abort-current-script, admiral)');
+
+    defusers.push('##.admiral-overlay, [id^="admiral-"], [class*="admiral-"], .admiral-active');
+  }
+
+  // 2. Google Funding Choices / Privacy & Messaging
+  if (!provider || provider === 'google-fc') {
+    defusers.push('||fundingchoicesmessages.google.com^$important');
+    defusers.push('||fc.yahoo.com^$important');
+
+    defusers.push('##+js(set, googlefc, undefined)');
+    defusers.push('##+js(set, google_ad_client, undefined)');
+    defusers.push('##+js(abort-current-script, googlefc)');
+
+    defusers.push('##.fc-ab-root, .fc-dialog-container, .fc-dialog-overlay, .fc-consent-root, .fc-monetization-root');
+    defusers.push('##html.fc-ab-root, body.fc-ab-root { overflow: auto !important; position: static !important; }');
+  }
+
+  // 3. BlockThrough / PageFair (BT Loader)
+  if (!provider || provider === 'blockthrough') {
+    defusers.push('||btloader.com^$important');
+    defusers.push('||blockthrough.com^$important');
+    defusers.push('||pagefair.com^$important');
+
+    defusers.push('##+js(set, blockthrough, noopfn)');
+    defusers.push('##+js(set, BT_LOADER, undefined)');
+    defusers.push('##+js(abort-current-script, btloader)');
+    defusers.push('##+js(abort-current-script, blockthrough)');
+
+    defusers.push('##.bt-ad-container, [id^="bt-"], [class*="bt-ad"]');
+  }
+
+  // 4. AdInPlay (Game adblock & canvas lock)
+  if (!provider || provider === 'adinplay') {
+    defusers.push('||adinplay.com^$important');
+    defusers.push('||adinplay.bid^$important');
+
+    defusers.push('##+js(set, aiptag, { cmd: { display: noopfn, player: noopfn } })');
+    defusers.push('##+js(set, aipPlayer, noopfn)');
+    defusers.push('##+js(set, aiptag.cmd.player, noopfn)');
+    defusers.push('##+js(set, aiptag.cmd.display, noopfn)');
+
+    defusers.push('##[id^="aip-preroll"], #aip-ad-container, .aip-overlay');
+  }
+
+  // 5. Ezoic Ad-Recovery Gateway
+  if (!provider || provider === 'ezoic') {
+    defusers.push('||ezodn.com^$important');
+    defusers.push('||ezoiccdn.com^$important');
+
+    defusers.push('##+js(set, ezstandalone, noopfn)');
+    defusers.push('##+js(abort-current-script, ezstandalone)');
+
+    defusers.push('##.ezoic-ad, [id*="ezoic-pub-ad"], [class*="ez-wall"]');
+  }
+
+  // 6. NitroPay Ad Recovery
+  if (!provider || provider === 'nitropay') {
+    defusers.push('||nitropay.com^$important');
+
+    defusers.push('##+js(set, nitropay, noopfn)');
+    defusers.push('##+js(abort-current-script, nitropay)');
+
+    defusers.push('##.nitropay-ad, [id^="nitropay-"], .nitropay-overlay');
+  }
+
+  // 7. Snigel Ad Recovery
+  if (!provider || provider === 'snigel') {
+    defusers.push('||snigelweb.com^$important');
+    defusers.push('||snigel.com^$important');
+
+    defusers.push('##+js(set, snigel, noopfn)');
+    defusers.push('##+js(abort-current-script, snigel)');
+
+    defusers.push('##.snigel-ad-container, [id^="snigel-"]');
+  }
+
+  // 8. Generic FuckAdBlock / BlockAdBlock / Bait & Overlay Defusers
+  if (!provider || provider === 'generic') {
+    defusers.push('||fuckadblock.com^$important');
+    defusers.push('||blockadblock.com^$important');
+    defusers.push('||antiblock.org^$important');
+    defusers.push('||snack-media.com^$important');
+
+    defusers.push('##+js(set, FuckAdBlock, noopfn)');
+    defusers.push('##+js(set, BlockAdBlock, noopfn)');
+    defusers.push('##+js(set, fuckAdBlock, noopfn)');
+    defusers.push('##+js(set, blockAdBlock, noopfn)');
+    defusers.push('##+js(set, canRunAds, true)');
+    defusers.push('##+js(set, isAdBlockActive, false)');
+    defusers.push('##+js(set, adblock, false)');
+    defusers.push('##+js(set, adBlockDetected, false)');
+
+    defusers.push('##.adblock-modal, .adblock-overlay, .anti-adblock-modal, #adblock-nag, .adblocker-overlay, .adblock-blocker, [class*="adblock-wall"], [id*="adblock-wall"], .sp_veil, .sp_message_container');
+  }
+
+  // Always neutralize anti-adblock scroll-lock (overflow: hidden on html/body)
+  defusers.push('##html, body { overflow: auto !important; position: static !important; }');
+
+  return Array.from(new Set(defusers));
+}
+
+/**
+ * Synthesizes procedural scriptlet defusers and DOM modal suppressors to completely
+ * defeat Admiral Anti-Adblock (ad recovery) paywalls and prevent scroll-lock freezes.
+ * @beta
+ */
+export function synthesizeAdmiralDefusers(domain?: string): string[] {
+  return synthesizeAntiAdblockDefusers(domain, 'admiral');
+}
+
+/**
  * Synthesizes target-specific blocking rules for detected ad/tracker/threat infrastructure.
  * Supports universal ABP syntax, AdGuard Home, Pi-hole regex, uBlock Origin, Unbound, dnsmasq, and hosts.
+ * Automatically injects anti-adblock defusers when Admiral or circumvention infrastructure is detected.
  *
  * @beta
  */
@@ -314,27 +460,41 @@ export function synthesizeRules(input: RuleSynthesisInput): string[] {
     case 'all':
     default: {
       // Primary standard ABP rule
-      if (category === 'Advertising' || verdict === 'ad_server') {
+      if (category === 'CNAME Cloaking') {
+        rules.push(`||${cleanDomain}^`);
+        rules.push(`||${cleanDomain}^$third-party`);
+      } else if (category === 'Advertising' || verdict === 'ad_server') {
         rules.push(`||${cleanDomain}^`);
       } else if (category === 'Telemetry/Analytics' || verdict === 'tracker') {
         rules.push(`||${cleanDomain}^`);
         rules.push(`||${cleanDomain}^$third-party`);
-      } else if (category === 'CNAME Cloaking') {
-        rules.push(`||${cleanDomain}^`);
-        if (cnames && cnames.length > 0) {
-          const lastCname = sanitizeDomain(cnames[cnames.length - 1]);
-          if (lastCname && lastCname !== cleanDomain) {
-            rules.push(`||${lastCname}^`);
-          }
-        }
       } else {
         rules.push(`||${cleanDomain}^`);
+      }
+
+      // Add uncloaked rules for all resolved CNAME targets
+      if (cnames && cnames.length > 0) {
+        for (const cname of cnames) {
+          const cleanCname = sanitizeDomain(cname);
+          if (cleanCname && cleanCname !== cleanDomain) {
+            rules.push(`||${cleanCname}^`);
+          }
+        }
       }
 
       // Add standard hosts entry
       rules.push(`0.0.0.0 ${cleanDomain}`);
       break;
     }
+  }
+
+  // If domain or CNAME target is an anti-adblock provider, inject procedural defusers & modal suppressors
+  const aabDomain = detectAntiAdblock(cleanDomain);
+  const aabCname = cnames?.map((c) => detectAntiAdblock(c)).find((res) => res.detected);
+  const detectedAab = aabDomain.detected ? aabDomain : aabCname;
+
+  if (detectedAab?.detected && (target === 'all' || target === 'ublock' || target === 'adguard')) {
+    rules.push(...synthesizeAntiAdblockDefusers(cleanDomain, detectedAab.provider));
   }
 
   const uniqueRules = Array.from(new Set(rules));

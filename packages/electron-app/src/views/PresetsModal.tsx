@@ -188,6 +188,24 @@ export const PRESET_CATALOG: PresetItem[] = [
     features: ['Banking portal fixes', 'SSO allowlists', 'Anti-breakage rules (@@)'],
     recommendedFor: 'Essential for all configurations to guarantee normal app functionality',
   },
+  {
+    name: 'GetAdmiral Domains',
+    url: 'https://raw.githubusercontent.com/LanikSJ/ubo-filters/main/filters/getadmiral-domains.txt',
+    scope: 'dns',
+    category: 'Advertising',
+    description: 'Neutralizes and blocks hundreds of known dynamic and static domains associated with Admiral anti-adblock detection and paywall circumvention.',
+    features: ['Admiral neutralization', 'Paywall circumvention bypass', 'Pure DNS domains'],
+    recommendedFor: 'Bypassing anti-adblock paywalls and nag screens network-wide',
+  },
+  {
+    name: 'Anti-Adblock & Ad-Recovery Defusers',
+    url: 'https://raw.githubusercontent.com/greigh/blockingmachine/main/packages/database/sources/blockingmachine-rules.txt',
+    scope: 'hybrid',
+    category: 'Advertising',
+    description: 'Multi-vendor circumvention mitigation neutralizing Admiral, Google Funding Choices, BlockThrough, AdInPlay, Ezoic, and Bait Defusers.',
+    features: ['Scriptlet Defusers', 'Anti-Adblock Modal Suppression', 'Scroll-Lock Removal', 'Multi-Vendor Shield'],
+    recommendedFor: 'Bypassing aggressive anti-adblock modals, game canvas locks, and paywall overlays',
+  },
 ];
 
 export interface PresetBundle {
@@ -201,12 +219,24 @@ export interface PresetBundle {
 
 export const PRESET_BUNDLES: PresetBundle[] = [
   {
+    id: 'anti-adblock-defuser',
+    name: 'Anti-Adblock & Paywall Defuser',
+    description: 'Comprehensive circumvention mitigation neutralizing Admiral, Google Funding Choices, BlockThrough, AdInPlay, and aggressive anti-adblock nag screens.',
+    badge: 'Anti-Circumvention',
+    category: 'Anti-Adblock Mitigation',
+    items: [
+      PRESET_CATALOG[PRESET_CATALOG.length - 2], // GetAdmiral Domains
+      PRESET_CATALOG[PRESET_CATALOG.length - 1], // Anti-Adblock & Ad-Recovery Defusers
+      PRESET_CATALOG[9], // AdGuard Annoyances Filter
+    ],
+  },
+  {
     id: 'blockingmachine-suite',
     name: 'Defense Suite [Beta]',
     description: 'Our complete 8-part native modular defense suite: Base Ads, Privacy Engine, Smart TV & IoT Shield, Web Annoyances, Social Neutralizer, Threat Defense, URL Tracking Stripper, and Safe Exceptions.',
     badge: 'First-Party Beta',
     category: 'Full Defense [Beta]',
-    items: PRESET_CATALOG.filter((p) => p.url.startsWith('./filters/modules/blockingmachine-')),
+    items: PRESET_CATALOG.filter((p) => p.url.startsWith('./filters/modules/blockingmachine-') && p.name.includes('[Beta]')),
   },
   {
     id: 'essential',

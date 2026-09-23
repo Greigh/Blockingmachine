@@ -5,3 +5,4 @@ export * from './cnameResolver.js';
 export * from './ruleSynthesizer.js';
 export * from './AiDetectorService.js';
 export * from './MiniAiClassifier.js';
+export * from './domainEvaluator.js';

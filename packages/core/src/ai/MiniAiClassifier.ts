@@ -5,6 +5,7 @@ import {
   SUSPICIOUS_TRACKER_TOKENS,
   adjustThreatCategory,
   classifyInfrastructure,
+  detectAntiAdblock,
   hasStrongAdIntent,
   hostnameHasToken,
   normalizeHostname,
@@ -23,11 +24,34 @@ import type {
  * Machine-generated (DGA) domains have drastically lower trigram familiarity.
  */
 const COMMON_TRIGRAMS = new Set([
-  'the', 'and', 'ing', 'ion', 'tio', 'ent', 'ati', 'for', 'ter', 'com',
-  'pro', 'con', 'ver', 'all', 'app', 'sta', 'res', 'ser', 'out', 'new',
-  'web', 'lin', 'int', 'sys', 'gen', 'str', 'col', 'tra', 'net', 'dev',
-  'api', 'hub', 'box', 'doc', 'art', 'dat', 'dig', 'map', 'log', 'dns',
-  'pay', 'sec', 'cdn', 'med', 'off', 'lan', 'car', 'cit', 'inf', 'vid',
+  // Top 100 natural English language trigrams (corpus-derived)
+  'the', 'and', 'ing', 'ion', 'tio', 'ent', 'ati', 'for', 'her', 'ter',
+  'hat', 'tha', 'ere', 'ate', 'his', 'con', 'res', 'ver', 'all', 'ons',
+  'nce', 'men', 'ith', 'ted', 'ers', 'pro', 'thi', 'wit', 'are', 'ess',
+  'not', 'ive', 'was', 'ect', 'rea', 'com', 'eve', 'per', 'int', 'est',
+  'sta', 'cti', 'ica', 'ist', 'ear', 'ain', 'one', 'our', 'iti', 'rat',
+  'tra', 'der', 'ste', 'art', 'cal', 'lan', 'ell', 'ill', 'ard', 'igh',
+  'ght', 'lin', 'out', 'sto', 'mar', 'par', 'man', 'can', 'day', 'way',
+  'wor', 'kin', 'new', 'ber', 'ble', 'cle', 'fle', 'ple', 'tle', 'ine',
+  'ane', 'ise', 'ize', 'ous', 'ful', 'les', 'nes', 'ish', 'dis', 'mis',
+  'sub', 'pre', 'pos', 'non', 'ove', 'und', 'rec', 'aut', 'bio', 'geo',
+  // Common internet, technical, brand & service vocabulary trigrams
+  'app', 'web', 'dev', 'net', 'api', 'sys', 'gen', 'hub', 'box', 'doc',
+  'dat', 'dig', 'map', 'log', 'dns', 'sec', 'pay', 'cdn', 'med', 'off',
+  'car', 'cit', 'inf', 'vid', 'col', 'ord', 'ews', 'lab', 'clu', 'lub',
+  'spo', 'por', 'ort', 'gam', 'ame', 'pla', 'lay', 'mus', 'usi', 'sic',
+  'ide', 'deo', 'pic', 'ict', 'tur', 'ure', 'boo', 'ook', 'pag', 'age',
+  'hom', 'ome', 'liv', 'fil', 'ilm', 'mov', 'ovi', 'vie', 'ser', 'erv',
+  'blo', 'mai', 'ail', 'cod', 'ode', 'clo', 'lou', 'oud', 'gua', 'uard',
+  'pos', 'dep', 'epo', 'pot', 'ack', 'eck', 'ick', 'ock', 'uck', 'ash',
+  'esh', 'osh', 'ush', 'ang', 'eng', 'ong', 'ung', 'ank', 'enk', 'ink',
+  'onk', 'unk', 'tch', 'dge', 'str', 'spl', 'spr', 'scr', 'shr', 'thr',
+  'squ', 'tac', 'tov', 'erf', 'rfl', 'flo', 'low', 'tac', 'ack',
+  'kin', 'ing', 'lin', 'cor', 'orp', 'cen', 'tra', 'ral', 'nor', 'ort',
+  'sou', 'eas', 'wes', 'dir', 'rec', 'tor', 'ory', 'hos', 'osp', 'pit',
+  'ita', 'tal', 'uni', 'niv', 'ive', 'ver', 'ers', 'rsi', 'sit', 'ity',
+  'gov', 'ove', 'ern', 'rnm', 'nme', 'ent', 'sch', 'cho', 'hoo', 'ool',
+  'gui', 'lid', 'cli', 'nic', 'wea', 'eat', 'ath', 'the', 'her', 'new',
 ]);
 
 export interface DomainFeatureVector {
@@ -258,7 +282,7 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     lenSld: -1.0,
     consecutiveConsonants: -4.0,
     hexScore: -6.0,
-    trigramPerplexity: -4.0,
+    trigramPerplexity: -2.0,
     adKeywordWeight: -7.0,
     trackerKeywordWeight: -7.0,
     cnameKnownTracker: -10.0,
@@ -334,7 +358,7 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     lenSld: 1.5,
     consecutiveConsonants: 5.0,
     hexScore: 5.0,
-    trigramPerplexity: 4.5,
+    trigramPerplexity: 2.5,
     adKeywordWeight: -5.0,
     trackerKeywordWeight: -5.0,
     cnameKnownTracker: 0.0,
@@ -443,7 +467,136 @@ export class MiniAiClassifier {
     },
   ): MiniAiPrediction {
     const startTime = performance.now();
+
+    // Guard against empty, non-string, or malformed domain inputs
+    const normalized = typeof domain === 'string' ? normalizeHostname(domain) : '';
+    if (!normalized || (!normalized.includes('.') && !normalized.includes(':'))) {
+      const elapsed = Math.round((performance.now() - startTime) * 1000) / 1000;
+      return {
+        verdict: 'clean',
+        category: 'Clean',
+        confidence: 0,
+        riskLevel: 'none',
+        classProbabilities: {
+          Clean: 1.0,
+          Advertising: 0,
+          'Telemetry/Analytics': 0,
+          'CNAME Cloaking': 0,
+          'Malware/Phishing': 0,
+          Unknown: 0,
+        },
+        topContributions: [],
+        inferenceTimeMs: elapsed,
+        reasons: ['Empty or malformed domain string'],
+      };
+    }
+
+    // Guard against raw IP address inputs
+    const isIpv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(normalized);
+    const isIpv6 = normalized.includes(':') || /^[a-f0-9]{1,4}(:[a-f0-9]{1,4}){1,7}$/i.test(normalized);
+    if (isIpv4 || isIpv6) {
+      const elapsed = Math.round((performance.now() - startTime) * 1000) / 1000;
+      if (
+        normalized === '127.0.0.1' ||
+        normalized === '0.0.0.0' ||
+        normalized === '::1' ||
+        normalized.startsWith('10.') ||
+        normalized.startsWith('192.168.') ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(normalized) ||
+        normalized.startsWith('169.254.')
+      ) {
+        return {
+          verdict: 'clean',
+          category: 'Clean',
+          confidence: 99,
+          riskLevel: 'none',
+          classProbabilities: { Clean: 1.0, Advertising: 0, 'Telemetry/Analytics': 0, 'CNAME Cloaking': 0, 'Malware/Phishing': 0, Unknown: 0 },
+          topContributions: [
+            {
+              name: 'Private/Local IP Address',
+              value: 1.0,
+              weight: 15.0,
+              impact: 'clean',
+              description: 'Local loopback or RFC 1918 private network endpoint',
+            },
+          ],
+          inferenceTimeMs: elapsed,
+          reasons: ['Local loopback or RFC 1918 private network endpoint (protected)'],
+        };
+      }
+
+      if (
+        normalized === '8.8.8.8' ||
+        normalized === '8.8.4.4' ||
+        normalized === '1.1.1.1' ||
+        normalized === '1.0.0.1' ||
+        normalized === '9.9.9.9' ||
+        normalized === '149.112.112.112'
+      ) {
+        return {
+          verdict: 'clean',
+          category: 'Clean',
+          confidence: 99,
+          riskLevel: 'none',
+          classProbabilities: { Clean: 1.0, Advertising: 0, 'Telemetry/Analytics': 0, 'CNAME Cloaking': 0, 'Malware/Phishing': 0, Unknown: 0 },
+          topContributions: [
+            {
+              name: 'Known Public DNS',
+              value: 1.0,
+              weight: 15.0,
+              impact: 'clean',
+              description: 'Known public recursive DNS resolver endpoint',
+            },
+          ],
+          inferenceTimeMs: elapsed,
+          reasons: ['Known public recursive DNS resolver endpoint'],
+        };
+      }
+
+      return {
+        verdict: 'clean',
+        category: 'Clean',
+        confidence: 85,
+        riskLevel: 'none',
+        classProbabilities: { Clean: 0.9, Advertising: 0.02, 'Telemetry/Analytics': 0.02, 'CNAME Cloaking': 0.01, 'Malware/Phishing': 0.05, Unknown: 0 },
+        topContributions: [],
+        inferenceTimeMs: elapsed,
+        reasons: ['Raw IP address endpoint (not a domain hostname)'],
+      };
+    }
+
     const userBias = this.getDomainFeedback(domain);
+
+    // If user explicitly whitelisted the domain (False Positive feedback override):
+    if (userBias <= -0.9) {
+      const elapsed = Math.round((performance.now() - startTime) * 1000) / 1000;
+      return {
+        verdict: 'clean',
+        category: 'Clean',
+        confidence: 99,
+        riskLevel: 'none',
+        classProbabilities: {
+          Clean: 1.0,
+          Advertising: 0,
+          'Telemetry/Analytics': 0,
+          'CNAME Cloaking': 0,
+          'Malware/Phishing': 0,
+          Unknown: 0,
+        },
+        topContributions: [
+          {
+            name: 'User Whitelist Feedback',
+            value: 1.0,
+            weight: 20.0,
+            impact: 'clean',
+            description: 'Explicit user whitelist tuning (False Positive Override)',
+          },
+        ],
+        inferenceTimeMs: elapsed,
+        reasons: ['Whitelisted by user feedback (False Positive Override)'],
+      };
+    }
+
     const features = extractDomainFeatures(domain, {
       ...context,
       userFeedbackBias: userBias,
@@ -573,6 +726,17 @@ export class MiniAiClassifier {
       });
     }
 
+    const aabCheck = detectAntiAdblock(domain);
+    if (aabCheck.detected) {
+      contributions.push({
+        name: 'Anti-Adblock Infrastructure',
+        value: 1.0,
+        weight: 12.0,
+        impact: 'threat',
+        description: aabCheck.reason || 'Anti-adblock and ad-recovery platform',
+      });
+    }
+
     if (features.adKeywordWeight > 0.3) {
       contributions.push({
         name: 'Ad Keywords',
@@ -661,9 +825,13 @@ export class MiniAiClassifier {
       reasons.push('Registered on high-abuse top-level domain frequently used for ad evasion');
     }
 
-    if ((bestCategory === 'Clean' || bestCategory === 'Unknown') && adjustment.policyReason) {
-      reasons.length = 0;
-      reasons.push(adjustment.policyReason);
+    if (adjustment.policyReason) {
+      if (bestCategory === 'Clean' || bestCategory === 'Unknown') {
+        reasons.length = 0;
+      }
+      if (!reasons.includes(adjustment.policyReason)) {
+        reasons.unshift(adjustment.policyReason);
+      }
     }
 
     if (reasons.length === 0) {

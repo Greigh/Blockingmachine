@@ -407,7 +407,13 @@ export class RuleStore {
       return;
     }
 
-    const isException = type === "unblocking" || originalRule.startsWith("@@");
+    const isException =
+      type === "unblocking" ||
+      originalRule.startsWith("@@") ||
+      originalRule.includes("#@#") ||
+      originalRule.includes("#@%") ||
+      originalRule.includes("#@$") ||
+      originalRule.includes("#$?#");
     const ruleHash = this.generateHash(originalRule);
 
     const ruleData: StoredRule = {

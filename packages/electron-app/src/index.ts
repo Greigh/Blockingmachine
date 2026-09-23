@@ -44,7 +44,6 @@ import { emptyUnblockedNotice, fetchAdguardQueryLog, separateAdguardUrls, type S
 import {
   downloadAndParseSource,
   parseFilterList,
-  cleanDomainPattern,
   RuleDeduplicator,
   generateFilterList,
   filterLists,
@@ -57,6 +56,7 @@ import {
   compactSubdomainRules,
   checkRuleConflict,
   synthesizeRules,
+  evaluateDomainRules,
   type AiProviderConfig,
   type RawDnsQuery,
 } from '@blockingmachine/core';
@@ -451,6 +451,17 @@ function setupAutoScheduleTimer(schedule: 'disabled' | '12h' | '24h' | 'weekly',
 
 // AI Sentinel Watchdog Background Timer [Beta]
 let aiWatchdogTimer: NodeJS.Timeout | null = null;
+let sharedAiDetectorService: AiDetectorService | null = null;
+let sharedAiDetectorConfigKey = '';
+
+function getSharedAiDetectorService(config: Partial<AiProviderConfig>): AiDetectorService {
+  const key = JSON.stringify(config);
+  if (!sharedAiDetectorService || sharedAiDetectorConfigKey !== key) {
+    sharedAiDetectorService = new AiDetectorService(config);
+    sharedAiDetectorConfigKey = key;
+  }
+  return sharedAiDetectorService;
+}
 
 function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<StoreSchema>): void {
   if (aiWatchdogTimer) {
@@ -470,7 +481,7 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
     try {
       console.log('[AI Watchdog] Running periodic background query scout...');
       const savedConfig = (storeRef.get('aiConfig') || {}) as Partial<AiProviderConfig>;
-      const service = new AiDetectorService(savedConfig);
+      const service = getSharedAiDetectorService(savedConfig);
 
       const queries: RawDnsQuery[] = [];
       const limit = 50;
@@ -1562,56 +1573,31 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
 
       const rulesToSearch = await getOrLoadCompiledRules(store);
+      const evalResult = evaluateDomainRules(cleanDomain, rulesToSearch);
 
-      // Check exception rules first
-      const exceptionRule = rulesToSearch.find((r) => {
-        const isEx = r.isException || (r.raw && r.raw.startsWith('@@'));
-        if (!isEx) return false;
-        const dom = r.domain || cleanDomainPattern(r.raw || '');
-        if (dom && (cleanDomain === dom || cleanDomain.endsWith(`.${dom}`))) {
-          return true;
-        }
-        return Boolean(r.raw && r.raw.includes(cleanDomain));
-      });
-
-      if (exceptionRule) {
+      if (evalResult.verdict === 'exception') {
+        const matchingRuleObj = rulesToSearch.find((r) => r.raw === evalResult.matchingRule);
         return {
           domain: cleanDomain,
           inputQuery: rawInput,
           verdict: 'exception',
-          matchingRule: exceptionRule.raw,
-          sourceName: exceptionRule.metadata?.sourceInfo?.url || 'Custom Rules / Allowlist',
-          ruleType: exceptionRule.type || 'exception',
-          details: 'Domain is explicitly allowlisted by an exception rule.',
+          matchingRule: evalResult.matchingRule || '',
+          sourceName: matchingRuleObj?.metadata?.sourceInfo?.url || 'Custom Rules / Allowlist',
+          ruleType: matchingRuleObj?.type || 'exception',
+          details: evalResult.details,
         };
       }
 
-      // Check blocking rules
-      const blockRule = rulesToSearch.find((r) => {
-        const dom = r.domain || cleanDomainPattern(r.raw || '');
-        if (dom && (cleanDomain === dom || cleanDomain.endsWith(`.${dom}`))) {
-          return true;
-        }
-        if (r.raw) {
-          if (r.raw.includes(`||${cleanDomain}^`) || r.raw.includes(`||${cleanDomain}`)) {
-            return true;
-          }
-          if (r.raw.endsWith(` ${cleanDomain}`) || r.raw.endsWith(`\t${cleanDomain}`)) {
-            return true;
-          }
-        }
-        return false;
-      });
-
-      if (blockRule) {
+      if (evalResult.verdict === 'blocked') {
+        const matchingRuleObj = rulesToSearch.find((r) => r.raw === evalResult.matchingRule);
         return {
           domain: cleanDomain,
           inputQuery: rawInput,
           verdict: 'blocked',
-          matchingRule: blockRule.raw,
-          sourceName: blockRule.metadata?.sourceInfo?.url || 'Filter Feeds',
-          ruleType: blockRule.type || 'domain',
-          details: `Blocked by rule: ${blockRule.raw}`,
+          matchingRule: evalResult.matchingRule || '',
+          sourceName: matchingRuleObj?.metadata?.sourceInfo?.url || 'Filter Feeds',
+          ruleType: matchingRuleObj?.type || 'domain',
+          details: evalResult.details,
         };
       }
 
@@ -2179,14 +2165,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle('ai-scan-domain', async (_event, domain: string, overrideConfig?: Partial<AiProviderConfig>) => {
       const savedConfig = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
       const activeConfig = { ...savedConfig, ...overrideConfig };
-      const service = new AiDetectorService(activeConfig);
+      const service = getSharedAiDetectorService(activeConfig);
       return await service.scanDomain(domain, activeConfig);
     });
 
     ipcMain.handle('ai-scan-querylog', async (_event, options: { service: 'adguard' | 'pihole'; limit?: number }, overrideConfig?: Partial<AiProviderConfig>) => {
       const savedConfig = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
       const activeConfig = { ...savedConfig, ...overrideConfig };
-      const service = new AiDetectorService(activeConfig);
+      const service = getSharedAiDetectorService(activeConfig);
 
       const queries: RawDnsQuery[] = [];
       const limit = options.limit || 50;
@@ -2244,7 +2230,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
       const savedConfig = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
       const activeConfig = { ...savedConfig, ...overrideConfig };
-      const service = new AiDetectorService(activeConfig);
+      const service = getSharedAiDetectorService(activeConfig);
       return await service.crawlAndScanUrl(url, activeConfig);
     });
 
@@ -2484,9 +2470,18 @@ const createWindow = async () => {
     show: false,
   });
 
+  const isSafeExternalUrl = (url: string): boolean => {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:';
+    } catch {
+      return false;
+    }
+  };
+
   // Open external links in user's default browser safely
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http:') || url.startsWith('https:') || url.startsWith('mailto:')) {
+    if (isSafeExternalUrl(url)) {
       shell.openExternal(url);
     }
     return { action: 'deny' };
@@ -2500,7 +2495,7 @@ const createWindow = async () => {
       (typeof MAIN_WINDOW_WEBPACK_ENTRY === 'undefined' || !navigationUrl.startsWith(MAIN_WINDOW_WEBPACK_ENTRY))
     ) {
       event.preventDefault();
-      if (navigationUrl.startsWith('http:') || navigationUrl.startsWith('https:')) {
+      if (isSafeExternalUrl(navigationUrl)) {
         shell.openExternal(navigationUrl);
       }
     }
@@ -2606,7 +2601,7 @@ async function initialize() {
       });
 
       contents.setWindowOpenHandler(({ url }) => {
-        if (url.startsWith('http:') || url.startsWith('https:') || url.startsWith('mailto:')) {
+        if (isSafeExternalUrl(url)) {
           shell.openExternal(url);
         }
         return { action: 'deny' };

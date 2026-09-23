@@ -171,6 +171,24 @@ async function generateAdditionalFormats(adguardFilePath) {
     });
     const skippedModifierRules = Array.from(skippedModifierRulesSet);
 
+    // Collect exception domains upfront so they are suppressed from blocking sinkhole entries
+    const exceptionDomains = new Set();
+    lines.forEach((line) => {
+      const match = line.match(/^@@\|\|([^\/\^$]+)\^$/);
+      if (match) {
+        exceptionDomains.add(match[1].toLowerCase().trim());
+      }
+    });
+
+    const isDomainAllowed = (d) => {
+      const lower = d.toLowerCase();
+      if (exceptionDomains.has(lower)) return true;
+      for (const ex of exceptionDomains) {
+        if (lower.endsWith('.' + ex)) return true;
+      }
+      return false;
+    };
+
     // Generate hosts format
     const hostsRules = [];
     hostsRules.push('# Title: Blockingmachine AdGuard List');
@@ -203,7 +221,7 @@ async function generateAdditionalFormats(adguardFilePath) {
       const hostsMatch = line.match(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([^\s#]+)/);
       if (hostsMatch) {
         const domain = hostsMatch[1].trim();
-        if (domain && !domain.includes('*') && !domain.includes('$')) {
+        if (domain && !domain.includes('*') && !domain.includes('$') && !isDomainAllowed(domain)) {
           hostsRules.push(`0.0.0.0 ${domain}`);
           hostsCount++;
         }
@@ -213,7 +231,7 @@ async function generateAdditionalFormats(adguardFilePath) {
       // Normal blocking domain rules (AdGuard/uBO format)
       if (line.match(/^\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^\|\|/, '').replace(/\^$/, '');
-        if (domain && !domain.includes('*') && !domain.includes('$')) {
+        if (domain && !domain.includes('*') && !domain.includes('$') && !isDomainAllowed(domain)) {
           hostsRules.push(`0.0.0.0 ${domain}`);
           hostsCount++;
         }
@@ -236,13 +254,15 @@ async function generateAdditionalFormats(adguardFilePath) {
     dnsmasqRules.push(`# Last Updated: ${new Date().toISOString()}`);
     dnsmasqRules.push('# Expires: 1 day');
     dnsmasqRules.push('');
-    const dnsmasqCountIndex = dnsmasqRules.length - 2; // position of rules count will be inserted earlier
     let dnsmasqCount = 0;
 
     lines.forEach((line) => {
       if (line.match(/^@@\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^@@\|\|/, '').replace(/\^$/, '');
-        if (domain) dnsmasqRules.push(`# EXCEPTION: @@||${domain}^`);
+        if (domain) {
+          dnsmasqRules.push(`# EXCEPTION: @@||${domain}^`);
+          dnsmasqRules.push(`server=/${domain}/#`);
+        }
         return;
       }
 
@@ -253,7 +273,7 @@ async function generateAdditionalFormats(adguardFilePath) {
       const hostsMatch = line.match(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([^\s#]+)/);
       if (hostsMatch) {
         const domain = hostsMatch[1].trim();
-        if (domain && !domain.includes('*') && !domain.includes('$')) {
+        if (domain && !domain.includes('*') && !domain.includes('$') && !isDomainAllowed(domain)) {
           dnsmasqRules.push(`address=/${domain}/0.0.0.0`);
           dnsmasqCount++;
         }
@@ -262,7 +282,7 @@ async function generateAdditionalFormats(adguardFilePath) {
 
       if (line.match(/^\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^\|\|/, '').replace(/\^$/, '');
-        if (domain && !domain.includes('*') && !domain.includes('$')) {
+        if (domain && !domain.includes('*') && !domain.includes('$') && !isDomainAllowed(domain)) {
           dnsmasqRules.push(`address=/${domain}/0.0.0.0`);
           dnsmasqCount++;
         }
@@ -292,6 +312,7 @@ async function generateAdditionalFormats(adguardFilePath) {
         const domain = line.replace(/^@@\|\|/, '').replace(/\^$/, '');
         if (domain) {
           unboundRules.push(`# EXCEPTION: @@||${domain}^`);
+          unboundRules.push(`local-zone: "${domain}" transparent`);
         }
         return;
       }
@@ -301,7 +322,7 @@ async function generateAdditionalFormats(adguardFilePath) {
 
       if (line.match(/^\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^\|\|/, '').replace(/\^$/, '');
-        if (domain && !domain.includes('*') && !domain.includes('$')) {
+        if (domain && !domain.includes('*') && !domain.includes('$') && !isDomainAllowed(domain)) {
           unboundRules.push(`local-zone: "${domain}" redirect`);
           unboundRules.push(`local-data: "${domain} A 0.0.0.0"`);
           unboundCount++;
@@ -338,7 +359,7 @@ async function generateAdditionalFormats(adguardFilePath) {
 
       if (line.match(/^\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^\|\|/, '').replace(/\^$/, '');
-        if (domain && !domain.includes('*') && !domain.includes('$')) {
+        if (domain && !domain.includes('*') && !domain.includes('$') && !isDomainAllowed(domain)) {
           namedRules.push(`zone "${domain}" { type master; file "/dev/null"; };`);
           namedCount++;
         }
@@ -378,7 +399,7 @@ async function generateAdditionalFormats(adguardFilePath) {
 
       if (line.match(/^\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^\|\|/, '').replace(/\^$/, '');
-        if (domain && !domain.includes('*') && !domain.includes('$')) {
+        if (domain && !domain.includes('*') && !domain.includes('$') && !isDomainAllowed(domain)) {
           privoxyRules.push(`.${domain}`);
           privoxyCount++;
         }
@@ -417,7 +438,7 @@ async function generateAdditionalFormats(adguardFilePath) {
 
       if (line.match(/^\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^\|\|/, '').replace(/\^$/, '');
-        if (domain && !domain.includes('*') && !domain.includes('$')) {
+        if (domain && !domain.includes('*') && !domain.includes('$') && !isDomainAllowed(domain)) {
           shadowrocketRules.push(`DOMAIN-SUFFIX,${domain},REJECT`);
           shadowCount++;
         }

@@ -1,7 +1,7 @@
 import { calculateShannonEntropy, detectDgaPatterns, decomposeDomain } from './entropy.js';
 import { resolveCnameChain } from './cnameResolver.js';
 import { sanitizeDomain, synthesizeRules } from './ruleSynthesizer.js';
-import { classifyDomainWithMiniAi } from './MiniAiClassifier.js';
+import { classifyDomainWithMiniAi, globalMiniAiClassifier } from './MiniAiClassifier.js';
 import {
   SUSPICIOUS_AD_TOKENS,
   SUSPICIOUS_TRACKER_TOKENS,
@@ -25,121 +25,8 @@ import type {
   ThreatCategory,
 } from './types.js';
 
-export interface SafeUrlCheckResult {
-  isSafe: boolean;
-  reason?: string;
-}
-
-/**
- * Validates whether a target URL is safe for web crawling and canary analysis.
- * Strictly blocks private RFC 1918 subnets, loopback, link-local metadata (169.254.169.254),
- * local network hostnames (.local, .lan, localhost), and non-HTTP(S) protocols against SSRF attacks.
- * @beta
- */
-export function isSafePublicWebUrl(urlStr: string): SafeUrlCheckResult {
-  if (!urlStr || typeof urlStr !== 'string') {
-    return { isSafe: false, reason: 'URL must be a non-empty string' };
-  }
-
-  let toParse = urlStr.trim();
-  if (/^[a-z][a-z0-9+.-]*:/i.test(toParse)) {
-    if (!/^https?:\/\//i.test(toParse)) {
-      const scheme = toParse.split(':')[0].toLowerCase();
-      return { isSafe: false, reason: `Forbidden protocol "${scheme}:": only http and https are permitted` };
-    }
-  } else {
-    toParse = `https://${toParse}`;
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(toParse);
-  } catch {
-    return { isSafe: false, reason: 'Malformed or invalid URL' };
-  }
-
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return { isSafe: false, reason: `Forbidden protocol "${parsed.protocol}": only http and https are permitted` };
-  }
-
-  let host = parsed.hostname.toLowerCase().trim();
-  if (host.startsWith('[') && host.endsWith(']')) {
-    host = host.slice(1, -1);
-  }
-
-  if (
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    host.endsWith('.local') ||
-    host.endsWith('.internal') ||
-    host.endsWith('.lan') ||
-    host.endsWith('.home.arpa')
-  ) {
-    return { isSafe: false, reason: 'Target resolved to localhost or internal network domain' };
-  }
-
-  if (
-    host === '::1' ||
-    host === '::' ||
-    host.startsWith('fe80:') ||
-    host.startsWith('fc00:') ||
-    host.startsWith('fd00:')
-  ) {
-    return { isSafe: false, reason: 'Target resolved to IPv6 loopback, link-local, or private address' };
-  }
-
-  const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (ipv4Match) {
-    const [o0, o1, o2, o3] = [
-      Number(ipv4Match[1]),
-      Number(ipv4Match[2]),
-      Number(ipv4Match[3]),
-      Number(ipv4Match[4]),
-    ];
-    if (o0 > 255 || o1 > 255 || o2 > 255 || o3 > 255) {
-      return { isSafe: false, reason: 'Invalid IPv4 address' };
-    }
-
-    // Loopback 127.0.0.0/8
-    if (o0 === 127) {
-      return { isSafe: false, reason: 'Target is IPv4 loopback address (127.0.0.0/8)' };
-    }
-    // Unspecified 0.0.0.0/8
-    if (o0 === 0) {
-      return { isSafe: false, reason: 'Target is IPv4 unspecified address (0.0.0.0/8)' };
-    }
-    // Link-local / Cloud metadata 169.254.0.0/16
-    if (o0 === 169 && o1 === 254) {
-      return { isSafe: false, reason: 'Target is link-local or cloud metadata address (169.254.0.0/16)' };
-    }
-    // RFC 1918 Private Subnets
-    if (o0 === 10) {
-      return { isSafe: false, reason: 'Target is RFC 1918 private subnet (10.0.0.0/8)' };
-    }
-    if (o0 === 172 && o1 >= 16 && o1 <= 31) {
-      return { isSafe: false, reason: 'Target is RFC 1918 private subnet (172.16.0.0/12)' };
-    }
-    if (o0 === 192 && o1 === 168) {
-      return { isSafe: false, reason: 'Target is RFC 1918 private subnet (192.168.0.0/16)' };
-    }
-    // Broadcast 255.255.255.255
-    if (o0 === 255 && o1 === 255 && o2 === 255 && o3 === 255) {
-      return { isSafe: false, reason: 'Target is broadcast address' };
-    }
-    // Documentation / Test networks RFC 5737
-    if (o0 === 192 && o1 === 0 && o2 === 2) {
-      return { isSafe: false, reason: 'Target is documentation/test address (192.0.2.0/24)' };
-    }
-    if (o0 === 198 && o1 === 51 && o2 === 100) {
-      return { isSafe: false, reason: 'Target is documentation/test address (198.51.100.0/24)' };
-    }
-    if (o0 === 203 && o1 === 0 && o2 === 113) {
-      return { isSafe: false, reason: 'Target is documentation/test address (203.0.113.0/24)' };
-    }
-  }
-
-  return { isSafe: true };
-}
+import { isSafePublicWebUrl, type SafeUrlCheckResult } from '../utils/urlSafety.js';
+export { isSafePublicWebUrl, type SafeUrlCheckResult };
 
 interface ScanCacheEntry {
   result: AiScanResult;
@@ -200,6 +87,9 @@ export class AiDetectorService {
    */
   public isSafeInfrastructure(domain: string, allowlist?: string[]): boolean {
     const clean = this.normalizeDomain(domain);
+    if (globalMiniAiClassifier.getDomainFeedback(clean) <= -0.9) {
+      return true;
+    }
     if (allowlist && allowlist.length > 0) {
       if (allowlist.some((al) => clean === al.toLowerCase() || clean.endsWith(`.${al.toLowerCase()}`))) {
         return true;
