@@ -619,7 +619,7 @@ Respond ONLY with a valid JSON object matching this schema:
     const mainHost = parsedPageUrl.hostname.toLowerCase();
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 3500);
     timeout?.unref?.();
 
     try {

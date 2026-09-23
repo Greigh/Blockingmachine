@@ -6900,7 +6900,7 @@ button.format-tile .format-target {
   font-size: 9.5px;
   font-weight: 700;
   line-height: 1;
-  padding: 2px 6px;
+  padding: 2.5px 6.5px;
   border-radius: 5px;
   background: rgba(0, 122, 255, 0.2);
   color: #38bdf8;
@@ -6909,8 +6909,10 @@ button.format-tile .format-target {
   text-transform: uppercase;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   vertical-align: middle;
   flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(56, 189, 248, 0.15);
 }
 
 .module-tag-row {
@@ -7537,6 +7539,10 @@ button.format-tile .format-target {
   font-weight: 700;
   color: var(--heading-color);
   margin: 0 0 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .radar-card-desc {
@@ -7678,18 +7684,29 @@ button.format-tile .format-target {
   gap: 16px;
 }
 
+.threat-title-col {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+}
+
 .threat-domain-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  row-gap: 6px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .threat-domain {
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 700;
   color: var(--heading-color);
   font-family: ui-monospace, SFMono-Regular, monospace;
+  word-break: break-all;
 }
 
 .verdict-chip {
@@ -7742,10 +7759,117 @@ button.format-tile .format-target {
 .threat-entropy-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  row-gap: 6px;
+  flex-wrap: wrap;
   font-size: 11.5px;
   color: var(--secondary-color);
-  margin-top: 4px;
+  margin-top: 0;
+}
+
+.entropy-score-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 2.5px 8px;
+  font-size: 11px;
+  color: var(--secondary-color);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.entropy-score-badge:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(56, 189, 248, 0.45);
+}
+
+.entropy-label {
+  font-weight: 500;
+  color: var(--secondary-color);
+}
+
+.entropy-val {
+  color: var(--heading-color);
+  font-family: ui-monospace, monospace;
+  font-weight: 700;
+}
+
+.entropy-max {
+  font-size: 10px;
+  color: var(--muted-text);
+  font-weight: 500;
+}
+
+.entropy-badge-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-left: 2px;
+}
+
+.entropy-badge-tag.high {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.entropy-badge-tag.elevated {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.entropy-badge-tag.normal {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.entropy-help-icon-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 2px;
+  color: var(--muted-text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.entropy-help-icon-btn:hover {
+  opacity: 1;
+  color: #38bdf8;
+}
+
+.entropy-guide-badge-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(56, 189, 248, 0.08);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  margin-left: auto;
+}
+
+.entropy-guide-badge-btn:hover {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.45);
 }
 
 .cname-chain-pill {
@@ -8505,4 +8629,213 @@ button.format-tile .format-target {
   font-size: 11px;
   color: var(--secondary-color);
   white-space: nowrap;
+}
+
+/* ========================================================================= */
+/* Shannon Entropy Guide Modal                                               */
+/* ========================================================================= */
+
+.entropy-guide-card {
+  max-width: 650px;
+}
+
+.entropy-guide-body {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-height: 75vh;
+  overflow-y: auto;
+}
+
+.entropy-summary-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.entropy-scale-lead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scale-num {
+  font-size: 16px;
+  font-weight: 800;
+  font-family: ui-monospace, monospace;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.15);
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.scale-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--heading-color);
+}
+
+.entropy-scale-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-color);
+  margin: 0;
+}
+
+.entropy-meter-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.entropy-meter-bar {
+  display: flex;
+  height: 24px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.entropy-segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.3px;
+}
+
+.segment-normal {
+  flex: 3.4;
+  background: linear-gradient(90deg, #059669, #10b981);
+}
+
+.segment-elevated {
+  flex: 0.4;
+  background: linear-gradient(90deg, #d97706, #f59e0b);
+}
+
+.segment-high {
+  flex: 1.2;
+  background: linear-gradient(90deg, #dc2626, #ef4444);
+}
+
+.entropy-meter-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted-text);
+  font-family: ui-monospace, monospace;
+  padding: 0 2px;
+}
+
+.entropy-tiers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.entropy-tier-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--control-bg-color);
+  border: 1px solid var(--border-color);
+}
+
+.entropy-tier-card.normal {
+  border-left: 3px solid #10b981;
+}
+
+.entropy-tier-card.elevated {
+  border-left: 3px solid #f59e0b;
+}
+
+.entropy-tier-card.high {
+  border-left: 3px solid #ef4444;
+}
+
+.tier-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tier-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--heading-color);
+}
+
+.tier-desc {
+  font-size: 12px;
+  color: var(--secondary-color);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.tier-example {
+  font-size: 11px;
+  color: var(--muted-text);
+  margin-top: 2px;
+}
+
+.tier-example code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  color: #38bdf8;
+}
+
+.entropy-faq-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 600px) {
+  .entropy-faq-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.faq-card {
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.faq-question {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--heading-color);
+}
+
+.faq-answer {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--secondary-color);
+  line-height: 1.45;
+}
+
+.faq-answer code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: ui-monospace, monospace;
+  font-size: 10.5px;
 }

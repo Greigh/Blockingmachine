@@ -10,6 +10,8 @@ import type {
   RuleConflictResult,
 } from '../types/';
 import { formatConfidencePercent, verdictBadgeLabel } from '../aiDisplay';
+import { BetaBadge } from '../components/BetaBadge';
+import { EntropyGuideModal } from '../components/EntropyGuideModal';
 
 interface AIRadarViewProps {
   onTriggerCompile?: () => void;
@@ -61,6 +63,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
   const [scoutError, setScoutError] = useState<string | null>(null);
   const [sinkholeConfig, setSinkholeConfig] = useState<SinkholeConfig | null>(null);
   const [blockedItemsMap, setBlockedItemsMap] = useState<Set<string>>(new Set());
+  const [isEntropyModalOpen, setIsEntropyModalOpen] = useState(false);
 
   // Watchdog state
   const [watchdogConfig, setWatchdogConfig] = useState<AiWatchdogConfig>({
@@ -560,7 +563,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             <span className="ai-beta-tag">BETA</span>
           </div>
           <h2 className="ai-radar-title">
-            AI Ad & Tracker Discovery Engine <span className="title-beta-badge">Beta</span>
+            AI Ad & Tracker Discovery Engine <BetaBadge />
           </h2>
           <p className="ai-radar-subtitle">
             Detect rapidly shifting ad servers, ephemeral bidding hostnames, CNAME cloaking, and zero-day trackers before they evade static filter lists.
@@ -691,7 +694,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                     <line x1="16" y1="16" x2="16" y2="16" />
                   </svg>
                   <span>AI Sentinel Watchdog</span>
-                  <span className="title-beta-badge">Beta</span>
+                  <BetaBadge />
                 </span>
                 <span className={`provider-status-dot ${watchdogConfig.enabled ? 'active' : ''}`} />
               </div>
@@ -729,7 +732,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           <div className="radar-card">
             <div className="radar-card-header">
               <div>
-                <h3 className="radar-card-title">Live Homelab Query Log Scout [Beta]</h3>
+                <h3 className="radar-card-title">
+                  <span>Live Homelab Query Log Scout</span>
+                  <BetaBadge />
+                </h3>
                 <p className="radar-card-desc">
                   Inspect unblocked DNS queries passing through your AdGuard Home or Pi-hole to identify stealthy ad exchanges and telemetry endpoints.
                 </p>
@@ -843,6 +849,19 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   <span className="metric-num">{scoutResult.cleanCount}</span>
                   <span className="metric-label">Clean Services</span>
                 </div>
+                <button
+                  type="button"
+                  className="entropy-guide-badge-btn"
+                  onClick={() => setIsEntropyModalOpen(true)}
+                  title="Understand Shannon Entropy and the 0.0 – 5.0 randomness scale"
+                >
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                  </svg>
+                  <span>What is Entropy? (0–5 Scale)</span>
+                </button>
                 {scoutResult.flaggedCount > 0 && (
                   <button
                     type="button"
@@ -913,7 +932,36 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                               <span className="category-chip">{item.category}</span>
                             </div>
                             <div className="threat-entropy-row">
-                              <span>Entropy: <strong>{item.entropy}</strong></span>
+                              <div
+                                className="entropy-score-badge"
+                                onClick={() => setIsEntropyModalOpen(true)}
+                                title="Shannon Entropy: Measures character randomness on a 0.0 to 5.0 scale. Click for detailed guide."
+                                role="button"
+                                tabIndex={0}
+                              >
+                                <span className="entropy-label">Entropy:</span>
+                                <strong className="entropy-val">{Number(item.entropy).toFixed(2)}</strong>
+                                <span className="entropy-max">/ 5.0</span>
+                                <span className={`entropy-badge-tag ${item.entropy >= 3.8 ? 'high' : item.entropy >= 3.4 ? 'elevated' : 'normal'}`}>
+                                  {item.entropy >= 3.8 ? 'High Randomness' : item.entropy >= 3.4 ? 'Elevated' : 'Normal'}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="entropy-help-icon-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIsEntropyModalOpen(true);
+                                  }}
+                                  title="What does Shannon Entropy mean?"
+                                  aria-label="What does Shannon Entropy mean?"
+                                >
+                                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <line x1="12" y1="16" x2="12" y2="12" />
+                                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                                  </svg>
+                                </button>
+                              </div>
                               {item.cnames.length > 0 && (
                                 <span className="cname-chain-pill">
                                   CNAME → {item.cnames[item.cnames.length - 1]}
@@ -1030,7 +1078,8 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             </div>
 
             <h3 className="radar-card-title">
-              Real-Time Domain & Payload Inspector <span className="title-beta-badge">Beta</span>
+              <span>Real-Time Domain & Payload Inspector</span>
+              <BetaBadge />
             </h3>
             <p className="radar-card-desc">
               Execute deep heuristic scoring, CNAME uncloaking, Shannon entropy measurements, and LLM reasoning against any suspect domain.
@@ -1111,10 +1160,22 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 </div>
 
                 <div className="inspector-metrics-grid">
-                  <div className="metric-card">
-                    <span className="card-label">Shannon Entropy</span>
-                    <span className="card-value">{inspectorResult.entropy}</span>
-                    <span className="card-sub">{inspectorResult.entropy >= 3.6 ? 'High (Ad cluster)' : 'Normal distribution'}</span>
+                  <div
+                    className="metric-card"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setIsEntropyModalOpen(true)}
+                    title="Click for Shannon Entropy scale breakdown"
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span className="card-label">Shannon Entropy</span>
+                      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--muted-text)' }}>
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="16" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12.01" y2="8" />
+                      </svg>
+                    </div>
+                    <span className="card-value">{Number(inspectorResult.entropy).toFixed(2)} <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>/ 5.0</span></span>
+                    <span className="card-sub">{inspectorResult.entropy >= 3.8 ? 'High Randomness (DGA)' : inspectorResult.entropy >= 3.4 ? 'Elevated Complexity' : 'Normal distribution'}</span>
                   </div>
                   <div className="metric-card">
                     <span className="card-label">DGA Score</span>
@@ -1189,7 +1250,9 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   <span style={{ color: 'var(--text-secondary)' }}>•</span>
                   <span>Engine: {inspectorResult.modelUsed || 'Mini-AI Embedded Classifier'}</span>
                   <span style={{ color: 'var(--text-secondary)' }}>•</span>
-                  <span>Entropy Index: {inspectorResult.entropy.toFixed(2)}</span>
+                  <span title="Shannon Entropy: 0.0 to 5.0 scale measuring character randomness">
+                    Entropy Index: {inspectorResult.entropy.toFixed(2)} / 5.0
+                  </span>
                   <span style={{ color: 'var(--text-secondary)' }}>•</span>
                   <span style={{ color: '#3b82f6', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1351,7 +1414,8 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
         <div className="radar-tab-content">
           <div className="radar-card">
             <h3 className="radar-card-title">
-              Web Canary Page Crawler <span className="title-beta-badge">Beta</span>
+              <span>Web Canary Page Crawler</span>
+              <BetaBadge />
             </h3>
             <p className="radar-card-desc">
               Scan any web page to discover hidden third-party script beacons, ad iframe origins, and real-time programmatic bidding partners.
@@ -1480,7 +1544,8 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             <div className="radar-card-header">
               <div>
                 <h3 className="radar-card-title">
-                  Discovered Threat Quarantine Ledger <span className="title-beta-badge">Beta</span>
+                  <span>Discovered Threat Quarantine Ledger</span>
+                  <BetaBadge />
                 </h3>
                 <p className="radar-card-desc">
                   Persistent record of all anomalous ad networks, programmatic bidders, and stealth trackers intercepted across Sinkhole Scout, Watchdog, Inspector, and Crawler.
@@ -1666,8 +1731,8 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             <div className="ai-modal-header">
               <div className="ai-modal-title-col">
                 <h4 className="ai-modal-title">
-                  AI Radar Provider Configuration
-                  <span className="title-beta-badge">Beta</span>
+                  <span>AI Radar Provider Configuration</span>
+                  <BetaBadge />
                 </h4>
                 <p className="ai-modal-desc">
                   Select your discovery engine. Local Heuristics runs with 0 network calls; Ollama provides high-intelligence private local LLM analysis.
@@ -1886,6 +1951,11 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           </div>
         </div>
       )}
+      {/* Shannon Entropy & Randomness Guide Modal */}
+      <EntropyGuideModal
+        isOpen={isEntropyModalOpen}
+        onClose={() => setIsEntropyModalOpen(false)}
+      />
     </div>
   );
 };

@@ -2004,7 +2004,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                 <div className="step-content">
                   <div className="step-header-row">
                     <div>
-                      <h4>Homelab & Custom Webhook Automation ("Or Any Other System")</h4>
+                      <h4>Homelab & Custom Webhook Automation</h4>
                       <p>
                         Trigger custom reload scripts, Home Assistant automations, Node-RED, n8n, Technitium DNS, Blocky, or pfSense/OPNsense webhook handlers on compile.
                       </p>

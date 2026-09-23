@@ -1217,7 +1217,7 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           </div>
 
-          {/* Homelab & Custom Webhook Endpoint ("Or Any Other Thing") */}
+          {/* Homelab & Custom Webhook Endpoint */}
           <div style={{ marginTop: '14px', background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1226,7 +1226,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <line x1="2" y1="12" x2="22" y2="12" />
                   <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
                 </svg>
-                <span>Homelab &amp; Custom Automation Webhook (&quot;Or Any Other Thing&quot;)</span>
+                <span>Homelab &amp; Custom Automation Webhook</span>
               </div>
               <button
                 type="button"
