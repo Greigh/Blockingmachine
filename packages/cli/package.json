@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/cli",
-  "version": "1.0.0-rc.3",
+  "version": "1.0.0-rc.4",
   "description": "Production command-line interface for automated filter list compilation, local feed serving, diffing, and DNS diagnostics.",
   "homepage": "https://github.com/greigh/Blockingmachine#readme",
   "repository": {
@@ -28,7 +28,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@blockingmachine/core": "^1.0.0-rc.3",
+    "@blockingmachine/core": "^1.0.0-rc.4",
     "chalk": "^6.0.0",
     "commander": "^15.0.0",
     "cosmiconfig": "^10.0.1",
