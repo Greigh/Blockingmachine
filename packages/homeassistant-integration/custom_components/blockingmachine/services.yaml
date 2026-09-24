@@ -1,0 +1,15 @@
+compile:
+  name: Compile Rules
+  description: Triggers immediate deduplication and compilation of all filter lists in the Blockingmachine hub.
+
+check_domain:
+  name: Check Domain
+  description: Checks whether a domain is blocked by compiled rules or flagged by the AI Radar classifier.
+  fields:
+    domain:
+      name: Domain
+      description: The domain name to evaluate (e.g. tracker.example.com).
+      required: true
+      example: doubleclick.net
+      selector:
+        text:

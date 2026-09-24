@@ -1,0 +1,7 @@
+{
+  "name": "@blockingmachine/homeassistant-addon",
+  "version": "1.0.0-rc.3",
+  "description": "Home Assistant Add-on for Blockingmachine Hub",
+  "private": true,
+  "type": "module"
+}

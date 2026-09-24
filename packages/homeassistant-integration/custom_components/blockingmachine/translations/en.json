@@ -1,0 +1,31 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Blockingmachine Hub",
+        "description": "Enter the host and port of your Blockingmachine on-computer desktop app or Add-on.",
+        "data": {
+          "host": "Host / IP Address",
+          "port": "Port (default 9191)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Blockingmachine hub. Ensure the feed server is running.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Blockingmachine instance is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Blockingmachine Options",
+        "data": {
+          "scan_interval": "Status polling interval in seconds"
+        }
+      }
+    }
+  }
+}

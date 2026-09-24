@@ -1,0 +1,33 @@
+#!/usr/bin/with-contenv bash
+set -e
+
+echo "[Blockingmachine Add-on] Starting Blockingmachine Hub & Feed Server..."
+
+OPTIONS_FILE="/data/options.json"
+FEED_PORT=9191
+AUTO_COMPILE="24h"
+ENABLE_AI=true
+LOG_LEVEL="info"
+
+if [ -f "$OPTIONS_FILE" ]; then
+    FEED_PORT=$(jq -r '.feed_port // 9191' "$OPTIONS_FILE")
+    AUTO_COMPILE=$(jq -r '.auto_compile_interval // "24h"' "$OPTIONS_FILE")
+    ENABLE_AI=$(jq -r '.enable_ai_radar // true' "$OPTIONS_FILE")
+    LOG_LEVEL=$(jq -r '.log_level // "info"' "$OPTIONS_FILE")
+fi
+
+export FEED_PORT="$FEED_PORT"
+export AUTO_COMPILE="$AUTO_COMPILE"
+export ENABLE_AI="$ENABLE_AI"
+export LOG_LEVEL="$LOG_LEVEL"
+export DATA_DIR="/data/blockingmachine"
+
+mkdir -p "$DATA_DIR"
+
+echo "[Blockingmachine Add-on] Initialized on port $FEED_PORT with $AUTO_COMPILE compilation schedule."
+echo "[Blockingmachine Add-on] Dedicated endpoints available:"
+echo "  - DNS feed: http://homeassistant.local:$FEED_PORT/dns.txt"
+echo "  - Browser feed: http://homeassistant.local:$FEED_PORT/browser.txt"
+echo "  - REST API: http://homeassistant.local:$FEED_PORT/v1/status"
+
+exec node /app/server.js
