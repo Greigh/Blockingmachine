@@ -11,28 +11,37 @@ const defaultConfig: DaemonConfig = {
   upstreamDoHUrl: 'https://dns.quad9.net/dns-query',
   sinkholeIpv4: '0.0.0.0',
   sinkholeIpv6: '::',
-  feedUrl: process.env.FEED_URL || 'http://127.0.0.1:9191/rules.txt'
+  feedUrl: process.env.FEED_URL || 'http://127.0.0.1:9191/dns.txt'
 };
 
 export async function startDaemon(config: DaemonConfig = defaultConfig) {
   const trie = new DomainTrie();
 
   // Load initial rules from local feed server
-  try {
-    console.log(`[Daemon] Fetching filter rules from ${config.feedUrl}...`);
-    const res = await fetch(config.feedUrl);
-    if (res.ok) {
-      const text = await res.text();
-      const lines = text.split('\n');
-      for (const line of lines) {
-        trie.addRule(line);
+  const candidateUrls = [config.feedUrl, 'http://127.0.0.1:9191/adguardDns.txt', 'http://127.0.0.1:9191/rules.txt'];
+  let rulesLoaded = false;
+
+  for (const url of candidateUrls) {
+    if (rulesLoaded) break;
+    try {
+      console.log(`[Daemon] Fetching filter rules from ${url}...`);
+      const res = await fetch(url);
+      if (res.ok) {
+        const text = await res.text();
+        const lines = text.split('\n');
+        for (const line of lines) {
+          trie.addRule(line);
+        }
+        console.log(`[Daemon] Successfully ingested ${lines.length} rule lines into DNS memory trie from ${url}.`);
+        rulesLoaded = true;
       }
-      console.log(`[Daemon] Successfully ingested ${lines.length} rule lines into memory trie.`);
-    } else {
-      console.warn(`[Daemon] Feed server returned HTTP ${res.status}. Starting with baseline protection.`);
+    } catch {
+      // Continue to next candidate
     }
-  } catch (err) {
-    console.warn(`[Daemon] Feed server unreachable at ${config.feedUrl}. Daemon active with fallback resolver.`);
+  }
+
+  if (!rulesLoaded) {
+    console.warn(`[Daemon] Local hub feeds unreachable. Starting with baseline protection and DoH fallback.`);
   }
 
   // Add default baseline telemetry blocks

@@ -46,6 +46,86 @@ const NETWORK_RULE_BROWSER_MODIFIERS = new Set([
   "xmlhttprequest",
   "content",
   "elemhide",
+  "generichide",
+  "genericblock",
+  "specifichide",
+  "redirect",
+  "match-case",
+  "denyallow",
+  "stealth",
+  "jsinject",
+  "urlblock",
+  "cookie",
+  "csp",
+  "permissions",
+  "replace",
+  "all",
+  "hls",
+  "inline-script",
+  "inline-font",
+  "jsonprune",
+  "xmlprune",
+  "removeheader",
+  "removeparam",
+  "urltransform",
+  "noop",
+  "empty",
+  "mp4",
+  "webrtc",
+]);
+
+const DNS_ONLY_MODIFIERS = new Set([
+  "client",
+  "dnstype",
+  "dnsrewrite",
+  "ctag",
+]);
+
+const RESERVED_INFRASTRUCTURE_DOMAINS = new Set([
+  "localhost",
+  "local",
+  "broadcasthost",
+  "home.arpa",
+  "ip6-localhost",
+  "ip6-loopback",
+  "invalid",
+  "test",
+  "example",
+  "onion",
+]);
+
+const BARE_PUBLIC_SUFFIXES = new Set([
+  "co.uk",
+  "org.uk",
+  "gov.uk",
+  "ac.uk",
+  "me.uk",
+  "com.au",
+  "net.au",
+  "org.au",
+  "edu.au",
+  "gov.au",
+  "co.nz",
+  "org.nz",
+  "net.nz",
+  "co.jp",
+  "ne.jp",
+  "or.jp",
+  "com.br",
+  "org.br",
+  "net.br",
+  "com.cn",
+  "net.cn",
+  "org.cn",
+  "co.in",
+  "net.in",
+  "org.in",
+  "github.io",
+  "pages.dev",
+  "vercel.app",
+  "cloudfront.net",
+  "azurewebsites.net",
+  "amazonaws.com",
 ]);
 
 export function filterDNSRules(rules: StoredRule[]): StoredRule[] {
@@ -67,7 +147,8 @@ export function filterDNSRules(rules: StoredRule[]): StoredRule[] {
       rule.raw.includes("#@$#") ||
       rule.raw.includes("$$") ||
       rule.raw.includes("#.") ||
-      rule.raw.includes("#,")
+      rule.raw.includes("#,") ||
+      rule.raw.includes("+js(")
     ) {
       return false;
     }
@@ -92,12 +173,56 @@ export function filterDNSRules(rules: StoredRule[]): StoredRule[] {
         }
       }
     }
+
+    // Exclude reserved infrastructure and reverse DNS (.arpa)
+    const domain = (rule.domain || cleanDomainPattern(rule.raw) || "").toLowerCase();
+    if (RESERVED_INFRASTRUCTURE_DOMAINS.has(domain) || domain.endsWith(".arpa")) {
+      return false;
+    }
+
+    // Exclude bare public suffixes when wildcard-blocked (e.g. ||co.uk^ or ||pages.dev^)
+    if (rule.raw.startsWith("||") && BARE_PUBLIC_SUFFIXES.has(domain)) {
+      return false;
+    }
+
     return true;
   });
 }
 
 export function filterBrowserRules(rules: StoredRule[]): StoredRule[] {
-  return rules.filter((rule) => BROWSER_SUITABLE_RULE_TYPES.has(rule.type));
+  return rules.filter((rule) => {
+    if (!BROWSER_SUITABLE_RULE_TYPES.has(rule.type)) return false;
+    if (!rule.raw) return false;
+
+    // Prune DNS-only directives from browser rule lists
+    const dollarIdx = rule.raw.indexOf("$");
+    if (dollarIdx !== -1) {
+      const modString = rule.raw.slice(dollarIdx + 1);
+      const mods = modString.split(",");
+      for (const rawMod of mods) {
+        const modName = rawMod.split("=")[0].trim().toLowerCase();
+        if (DNS_ONLY_MODIFIERS.has(modName)) {
+          return false;
+        }
+      }
+    }
+
+    // Prune reverse DNS arpa lookups from browser extensions
+    if (rule.raw.includes(".arpa")) {
+      return false;
+    }
+
+    // Prune raw hosts mappings for loopback / broadcasthost
+    if (
+      /^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+(?:localhost|broadcasthost|local)/i.test(
+        rule.raw
+      )
+    ) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 export function filterBrowserOnlyRules(rules: StoredRule[]): StoredRule[] {
