@@ -1,14 +1,15 @@
 :root {
-  --bg-primary: #0f1117;
-  --bg-surface: #1a1d26;
-  --bg-surface-hover: #222634;
+  --bg-primary: #0b0f19;
+  --bg-surface: #141b2d;
+  --bg-surface-hover: #1f293d;
   --border-color: rgba(255, 255, 255, 0.08);
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
-  --accent: #3b82f6;
-  --accent-glow: rgba(59, 130, 246, 0.2);
+  --accent: #06b6d4;
+  --accent-glow: rgba(6, 182, 212, 0.25);
   --danger: #ef4444;
   --success: #10b981;
+  --warning: #f59e0b;
 }
 
 body {
@@ -22,10 +23,10 @@ body {
 }
 
 .popup-container {
-  padding: 16px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .popup-header {
@@ -33,13 +34,13 @@ body {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border-color);
-  padding-bottom: 12px;
+  padding-bottom: 10px;
 }
 
 .brand-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .brand-title {
@@ -58,6 +59,45 @@ body {
   color: var(--success);
 }
 
+.sse-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nav-tabs {
+  display: flex;
+  background: var(--bg-surface);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--border-color);
+}
+
+.nav-tab {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nav-tab.active {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
 .metrics-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -68,7 +108,7 @@ body {
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   display: flex;
   flex-direction: column;
 }
@@ -81,7 +121,7 @@ body {
 }
 
 .metric-value {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 800;
   color: var(--text-primary);
   margin-top: 2px;
@@ -94,7 +134,7 @@ body {
 }
 
 .section-title {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -102,7 +142,7 @@ body {
 }
 
 .tracker-list {
-  max-height: 140px;
+  max-height: 120px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -113,7 +153,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 8px;
+  padding: 5px 8px;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: 6px;
@@ -140,24 +180,97 @@ body {
 
 .popup-footer {
   display: flex;
-  gap: 8px;
-  margin-top: 4px;
+  gap: 6px;
+  margin-top: 2px;
 }
 
 .action-btn {
   flex: 1;
-  padding: 8px 12px;
+  padding: 7px 10px;
   font-size: 11px;
   font-weight: 600;
   border-radius: 6px;
-  border: none;
+  border: 1px solid var(--border-color);
   cursor: pointer;
-  background: var(--bg-surface-hover);
+  background: var(--bg-surface);
   color: var(--text-primary);
   transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
 }
 
-.action-btn:hover {
+.action-btn:hover:not(:disabled) {
+  background: var(--bg-surface-hover);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.action-btn.primary {
   background: var(--accent);
+  color: #000;
+  border: none;
+}
+
+.action-btn.primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Settings Form Styles */
+.settings-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.form-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.form-input {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  padding: 6px 8px;
   color: #fff;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+}
+
+.form-input:focus {
+  border-color: var(--accent);
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
 }

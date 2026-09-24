@@ -33,6 +33,7 @@ gantt
 ## 📋 Comprehensive Execution Checklist
 
 ### ✅ Milestone 0: Core Architecture & Boundary Hardening (COMPLETED)
+
 - [x] **Strict DNS vs. Browser Filtering Boundary:** Hardened `filterDNSRules` and `filterBrowserRules` in `@blockingmachine/core`. Zero cosmetic selectors or browser modifiers reach the DNS daemon; zero DNS directives reach the browser extension.
 - [x] **Automated MV3 Compliance Guardian:** AST verification script (`scripts/verify-mv3-compliance.mjs`) guarding against `eval`, `new Function`, deprecated APIs, or unverified background contexts.
 - [x] **Desktop REST API Layer:** Implemented `/v1/status`, `/v1/compile`, `/v1/check`, and `/v1/telemetry` on port 9191.
@@ -41,6 +42,7 @@ gantt
 ---
 
 ### ✅ Phase 1: Initiative 1 — System DNS Daemon Desktop Integration (COMPLETED)
+
 > **Goal:** Provide one-click, zero-latency local DNS adblocking on macOS, Linux, and Windows directly from the Electron app.
 
 - [x] **Daemon Telemetry & Control API (`@blockingmachine/system-daemon`):**
@@ -66,6 +68,7 @@ gantt
 ---
 
 ### ✅ Phase 2: Initiative 4 — Home Assistant Extension & Custom Integration (COMPLETED)
+
 > **Goal:** Deliver a production-grade, HACS-ready Home Assistant experience with automated CI validation and repository metadata.
 
 - [x] **Scaffolding Completed:**
@@ -86,45 +89,48 @@ gantt
 
 ---
 
-### 🌐 Phase 3: Initiative 2 — Browser Extension Real-Time Push & Visual Element Picker
+### ✅ Phase 3: Initiative 2 — Browser Extension Real-Time Push & Visual Element Picker (COMPLETED)
+
 > **Goal:** Enable instant rule synchronization from the desktop app to browsers and provide visual point-and-click ad element blocking.
 
-- [ ] **Server-Sent Events (SSE) Live Sync:**
-  - [ ] Expose `/v1/events` on the desktop feed server (:9191).
-  - [ ] Broadcast `compile_completed`, `rules_updated`, and `quarantine_added`.
-  - [ ] Extension background service worker connects via `EventSource` and triggers `syncAndApplyRules()` within < 250ms.
-- [ ] **Visual Element Picker (Point-and-Click Cosmetic Blocking):**
-  - [ ] Content script element inspection mode with crosshair cursor and bounding highlight box.
-  - [ ] Minimal CSS selector generator algorithm.
-  - [ ] In-page confirmation card to preview element removal and persist rule into `chrome.storage.local`.
-- [ ] **Multi-Store Packaging Automation:**
-  - [ ] Create `scripts/package-extension.mjs`.
-  - [ ] Package clean `.zip` archives for Chrome Web Store and Firefox AMO.
+- [x] **Server-Sent Events (SSE) Live Sync:**
+  - [x] Expose `/v1/events` on the desktop feed server (:9191).
+  - [x] Broadcast `compile_completed`, `rules_updated`, and `quarantine_added`.
+  - [x] Extension background service worker connects via `LiveListener` and triggers `syncAndApplyRules()` within < 250ms.
+- [x] **Visual Element Picker (Point-and-Click Cosmetic Blocking):**
+  - [x] Content script element inspection mode with crosshair cursor and bounding highlight box (`ElementPicker`).
+  - [x] Minimal CSS selector generator algorithm.
+  - [x] In-page confirmation card to preview element removal and persist rule into `chrome.storage.local`.
+- [x] **Multi-Store Packaging Automation:**
+  - [x] Create `scripts/package-extension.mjs`.
+  - [x] Package clean `.zip` archives for Chrome Web Store and Firefox AMO.
 
 ---
 
-### 🔗 Phase 4: Initiative 6 — Bidirectional Home Assistant <-> Browser Communication Bridge
+### ✅ Phase 4: Initiative 6 — Bidirectional Home Assistant <-> Browser Communication Bridge (COMPLETED)
+
 > **Goal:** Connect browser extensions directly to Home Assistant for centralized home privacy automation, remote blocking toggles, and live telemetry reporting.
 
-- [ ] **Home Assistant Ingress / LAN Feed Discovery:**
-  - [ ] Add option in Browser Extension Popup: "Connect to Home Assistant" (`http://homeassistant.local:8123` or Add-on `:9191`).
-  - [ ] Support Long-Lived Access Token authentication for secure remote Home Assistant instances.
-  - [ ] Resilient fallback chain: Desktop App (:9191) -> Home Assistant Add-on (:9191) -> GitHub / CDN static backup.
-- [ ] **HA Remote Control Plane (Home Assistant -> Browser):**
-  - [ ] WebSocket / webhook push from Home Assistant: `blockingmachine.reload_browser_rules` triggers instant rule reload across all active browser extension instances on the network.
-  - [ ] `switch.blockingmachine_browser_cosmetics`: Toggle element-hiding cosmetic shield remotely via HA dashboard or automations.
-  - [ ] Smart Home Scenes: Integrate with HA modes (e.g. "Work / Deep Focus" activates strict scriptlet defusers and social tracker blocking; "Guest Mode" applies relaxed policies).
-- [ ] **Browser Telemetry Reporting (Browser -> Home Assistant):**
-  - [ ] Browser extension periodically aggregates blocked trackers and POSTs telemetry to Home Assistant (`/api/webhook/blockingmachine_browser_telemetry` or `/v1/telemetry`).
-  - [ ] New Home Assistant entities:
-    - [ ] `sensor.blockingmachine_browser_trackers_blocked`: Count of network requests intercepted in browser.
-    - [ ] `sensor.blockingmachine_browser_cosmetic_elements_hidden`: Count of DOM ad containers hidden.
-    - [ ] `binary_sensor.blockingmachine_browser_threat_detected`: Turns ON when procedural scriptlet defusers block hostile fingerprinting/cryptomining.
-  - [ ] Native Home Assistant notifications when a browser client visits a quarantined high-risk domain.
+- [x] **Home Assistant Ingress / LAN Feed Discovery:**
+  - [x] Add option in Browser Extension Popup: "Connect to Home Assistant" (`http://homeassistant.local:8123` or Add-on `:9191`).
+  - [x] Support Long-Lived Access Token authentication for secure remote Home Assistant instances.
+  - [x] Resilient fallback chain: Desktop App (:9191) -> Home Assistant Add-on (:9191) -> GitHub / CDN static backup.
+- [x] **HA Remote Control Plane (Home Assistant -> Browser):**
+  - [x] WebSocket / webhook push from Home Assistant: `blockingmachine.reload_browser_rules` / `button.reload_browser_rules` triggers instant rule reload across all active browser extension instances on the network.
+  - [x] `switch.blockingmachine_browser_cosmetics`: Toggle element-hiding cosmetic shield remotely via HA dashboard or automations.
+  - [x] Smart Home Scenes: Integrate with HA modes (e.g. "Work / Deep Focus" activates strict scriptlet defusers and social tracker blocking; "Guest Mode" applies relaxed policies).
+- [x] **Browser Telemetry Reporting (Browser -> Home Assistant):**
+  - [x] Browser extension periodically aggregates blocked trackers and POSTs telemetry to Home Assistant (`/api/webhook/blockingmachine_browser_telemetry` or `/v1/telemetry/browser`).
+  - [x] New Home Assistant entities:
+    - [x] `sensor.blockingmachine_browser_trackers_blocked`: Count of network requests intercepted in browser.
+    - [x] `sensor.blockingmachine_browser_cosmetic_elements_hidden`: Count of DOM ad containers hidden.
+    - [x] `binary_sensor.blockingmachine_browser_threat_detected`: Turns ON when procedural scriptlet defusers block hostile fingerprinting/cryptomining.
+  - [x] Native Home Assistant notifications when a browser client visits a quarantined high-risk domain.
 
 ---
 
 ### 🛡️ Phase 5: Initiative 3 — AI Threat Quarantine Dynamic Feeds
+
 > **Goal:** Materialize AI Radar detections into live, auto-updating blocklists for all network devices.
 
 - [ ] **Dynamic Threat Feed Endpoints:**
@@ -137,6 +143,7 @@ gantt
 ---
 
 ### 📦 Phase 6: Initiative 5 — Cross-Platform Release Packaging
+
 > **Goal:** Automate release binaries for macOS (DMG/Zip), Windows (NSIS/exe), and Linux (deb/AppImage).
 
 - [ ] **Electron Forge Configuration:**
@@ -147,6 +154,7 @@ gantt
 ---
 
 ## 📌 Implementation Conventions
+
 1. **Design First:** Always outline data flow and schema before editing code.
 2. **Quality Gates:** 100% test pass rate across all suites; zero ESLint warnings or errors.
 3. **Dual Git Remote Invariant:** All commits must push to both `origin` (GitHub) and `forgejo` (`git.greighstudios.com`).

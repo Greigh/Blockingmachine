@@ -41,6 +41,18 @@ SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
+        key="browser_trackers_blocked",
+        name="Browser Trackers Blocked",
+        icon="mdi:shield-bug",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="browser_elements_hidden",
+        name="Browser Elements Hidden",
+        icon="mdi:eye-off",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
         key="last_compile",
         name="Last Compilation",
         icon="mdi:clock-check-outline",
@@ -91,6 +103,7 @@ class BlockingmachineSensor(CoordinatorEntity[BlockingmachineDataUpdateCoordinat
             return None
 
         rules = data.get("rules", {})
+        browser = data.get("browserTelemetry", {})
         if self.entity_description.key == "total_rules":
             return rules.get("total", 0)
         if self.entity_description.key == "dns_rules":
@@ -99,6 +112,10 @@ class BlockingmachineSensor(CoordinatorEntity[BlockingmachineDataUpdateCoordinat
             return rules.get("browser", 0)
         if self.entity_description.key == "quarantined_threats":
             return rules.get("quarantinedThreats", 0)
+        if self.entity_description.key == "browser_trackers_blocked":
+            return browser.get("trackersBlocked", 0)
+        if self.entity_description.key == "browser_elements_hidden":
+            return browser.get("elementsHidden", 0)
         if self.entity_description.key == "last_compile":
             return data.get("lastCompile")
 

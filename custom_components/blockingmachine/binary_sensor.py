@@ -25,6 +25,12 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[BinarySensorEntityDescription, ...] = (
         name="AI Threat Alert",
         device_class=BinarySensorDeviceClass.PROBLEM,
     ),
+    BinarySensorEntityDescription(
+        key="browser_threat_detected",
+        name="Browser Threat Detected",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        icon="mdi:shield-alert",
+    ),
 )
 
 
@@ -74,6 +80,9 @@ class BlockingmachineBinarySensor(CoordinatorEntity[BlockingmachineDataUpdateCoo
             return data.get("status") == "online"
         if self.entity_description.key == "threat_detected":
             threats = data.get("rules", {}).get("quarantinedThreats", 0)
+            return threats > 0
+        if self.entity_description.key == "browser_threat_detected":
+            threats = data.get("browserTelemetry", {}).get("threatsDetected", 0)
             return threats > 0
 
         return False
