@@ -75,6 +75,7 @@ import type {
   ThreatQuarantineItem,
   AiWatchdogConfig,
 } from './types';
+import { DaemonManager } from './daemonManager';
 
 async function installExtensions() {
   if (!isDev) return;
@@ -136,6 +137,8 @@ function isSafeExternalUrl(url: string): boolean {
 
 // Set official application name for native macOS application menu
 app.name = 'Blockingmachine';
+
+const daemonManager = new DaemonManager();
 
 const isMac = process.platform === 'darwin';
 
@@ -1371,7 +1374,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         if (lowerPath === '/v1/check') {
           const domainToCheck = reqUrl.searchParams.get('domain') || '';
           const clean = domainToCheck.trim().toLowerCase();
-          const isCovered = clean ? isDomainCoveredByRules(clean, latestCompiledRules) : false;
+          const isCovered = clean ? isDomainCoveredByRules(clean, latestCompiledRules.map((r) => r.raw)) : false;
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ domain: clean, blocked: isCovered, timestamp: new Date().toISOString() }));
           return;
@@ -1886,6 +1889,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           await fs.writeFile(join(outputDir, 'adguardDns.txt'), dnsContent, 'utf8');
           console.log(`[IPC Main] Segregated DNS endpoints saved: dns.txt (${dnsRules.length} rules)`);
 
+          // Automatically hot-reload System DNS Daemon if running
+          daemonManager.reloadRules().catch(() => {});
+
           const browserRules = filterBrowserRules(uniqueRules);
           const browserMeta: FilterListMetadata = {
             ...metadata,
@@ -2266,6 +2272,49 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         console.error('Failed to set launch on startup:', err);
         return { success: false, error: err?.message || String(err) };
       }
+    });
+
+    // ====================================================================
+    // Local System DNS Daemon IPC Handlers
+    // ====================================================================
+    ipcMain.handle('daemon:get-status', async () => {
+      return await daemonManager.getStatus();
+    });
+
+    ipcMain.handle('daemon:start', async () => {
+      return await daemonManager.start();
+    });
+
+    ipcMain.handle('daemon:stop', async () => {
+      return await daemonManager.stop();
+    });
+
+    ipcMain.handle('daemon:reload', async () => {
+      return await daemonManager.reloadRules();
+    });
+
+    ipcMain.handle('daemon:toggle', async (_event, enabled?: boolean) => {
+      return await daemonManager.toggleProtection(enabled);
+    });
+
+    ipcMain.handle('daemon:set-system-dns', async (_event, serviceName?: string) => {
+      return await daemonManager.setSystemDns(serviceName);
+    });
+
+    ipcMain.handle('daemon:restore-system-dns', async (_event, serviceName?: string) => {
+      return await daemonManager.restoreSystemDns(serviceName);
+    });
+
+    ipcMain.handle('daemon:flush-cache', async () => {
+      return await daemonManager.flushCache();
+    });
+
+    ipcMain.handle('daemon:get-service-script', async () => {
+      return daemonManager.getServiceInstallInstructions();
+    });
+
+    ipcMain.handle('daemon:get-network-services', async () => {
+      return await daemonManager.getNetworkServices();
     });
 
     ipcMain.handle('test-sinkhole-connection', async (_event, service: 'pihole' | 'adguard' | 'webhook') => {

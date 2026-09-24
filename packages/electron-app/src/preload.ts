@@ -167,6 +167,18 @@ contextBridge.exposeInMainWorld('electron', {
   notifyResize: (width: number, height: number) => ipcRenderer.send('notify-resize', width, height),
   runImportProcess: () => ipcRenderer.invoke('run-import-process'),
 
+  // Local System DNS Daemon Integration
+  getDaemonStatus: () => ipcRenderer.invoke('daemon:get-status'),
+  startDaemonProcess: () => ipcRenderer.invoke('daemon:start'),
+  stopDaemonProcess: () => ipcRenderer.invoke('daemon:stop'),
+  reloadDaemonRules: () => ipcRenderer.invoke('daemon:reload'),
+  toggleDaemonProtection: (enabled?: boolean) => ipcRenderer.invoke('daemon:toggle', enabled),
+  setSystemDns: (serviceName?: string) => ipcRenderer.invoke('daemon:set-system-dns', serviceName),
+  restoreSystemDns: (serviceName?: string) => ipcRenderer.invoke('daemon:restore-system-dns', serviceName),
+  flushDnsCache: () => ipcRenderer.invoke('daemon:flush-cache'),
+  getServiceInstallScript: () => ipcRenderer.invoke('daemon:get-service-script'),
+  getNetworkServices: () => ipcRenderer.invoke('daemon:get-network-services'),
+
   // Secure channel-checked fallback for legacy listeners
   receive: (channel: string, callback: (...args: unknown[]) => void) => {
     if (ALLOWED_CHANNELS.has(channel)) {

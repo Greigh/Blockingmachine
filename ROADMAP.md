@@ -38,7 +38,7 @@ gantt
 
 ---
 
-### 🚀 Phase 1: Initiative 1 — System DNS Daemon Desktop Integration (IN PROGRESS)
+### ✅ Phase 1: Initiative 1 — System DNS Daemon Desktop Integration (COMPLETED)
 > **Goal:** Provide one-click, zero-latency local DNS adblocking on macOS, Linux, and Windows directly from the Electron app.
 
 - [x] **Daemon Telemetry & Control API (`@blockingmachine/system-daemon`):**
@@ -50,16 +50,16 @@ gantt
   - [x] macOS `launchd` plist generator (`com.blockingmachine.daemon.plist`) running on port 53.
   - [x] Linux `systemd` unit generator (`blockingmachine.service`) with `CAP_NET_BIND_SERVICE`.
   - [x] Network adapter DNS switching and cache-flush command definitions (`networksetup`, `resolvectl`, `netsh`).
-- [ ] **Electron Process Manager & IPC Bridge (`packages/electron-app`):**
-  - [ ] Implement `src/daemonManager.ts` in Electron main process to monitor, launch, reload, and toggle the daemon.
-  - [ ] Add IPC channels in `preload.ts` (`daemon:getStatus`, `daemon:start`, `daemon:stop`, `daemon:reload`, `daemon:setSystemDns`, `daemon:restoreSystemDns`, `daemon:flushCache`).
-  - [ ] Automatically trigger daemon `/v1/reload` whenever compilation completes in the desktop hub.
-- [ ] **Deploy Hub UI Integration (`packages/electron-app/src/views/DeployHubView.tsx`):**
-  - [ ] Add dedicated **Local System DNS** platform tab.
-  - [ ] Status card: Active (Shield Green), Paused (Amber), or Stopped (Gray).
-  - [ ] One-click action buttons: "Start Local Protection", "Set as OS DNS", "Restore Default DNS", "Flush DNS Cache".
-  - [ ] Live stats ribbon: Queries processed, blocked queries, block rate %, and upstream DoH latency.
-  - [ ] OS Service Installation commands drawer (one-click copy for macOS `launchd` & Linux `systemd`).
+- [x] **Electron Process Manager & IPC Bridge (`packages/electron-app`):**
+  - [x] Implement `src/daemonManager.ts` in Electron main process to monitor, launch, reload, and toggle the daemon.
+  - [x] Add IPC channels in `preload.ts` (`daemon:getStatus`, `daemon:start`, `daemon:stop`, `daemon:reload`, `daemon:setSystemDns`, `daemon:restoreSystemDns`, `daemon:flushCache`).
+  - [x] Automatically trigger daemon `/v1/reload` whenever compilation completes in the desktop hub.
+- [x] **Deploy Hub UI Integration (`packages/electron-app/src/views/DeployHubView.tsx`):**
+  - [x] Add dedicated **Local System DNS** platform tab.
+  - [x] Status card: Active (Shield Green), Paused (Amber), or Stopped (Gray).
+  - [x] One-click action buttons: "Start Local Protection", "Set as OS DNS", "Restore Default DNS", "Flush DNS Cache".
+  - [x] Live stats ribbon: Queries processed, blocked queries, block rate %, and upstream DoH latency.
+  - [x] OS Service Installation commands drawer (one-click copy for macOS `launchd` & Linux `systemd`).
 
 ---
 

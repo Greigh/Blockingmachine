@@ -87,6 +87,22 @@ const BARE_PUBLIC_SUFFIXES = new Set([
  */
 export class DomainTrie {
   private root: TrieNode = { children: new Map() };
+  private ruleCount: number = 0;
+
+  /**
+   * Resets the trie to empty state.
+   */
+  clear(): void {
+    this.root = { children: new Map() };
+    this.ruleCount = 0;
+  }
+
+  /**
+   * Returns the total count of successfully ingested filtering rules.
+   */
+  getRuleCount(): number {
+    return this.ruleCount;
+  }
 
   /**
    * Adds an adblock or hosts rule to the index.
@@ -192,6 +208,7 @@ export class DomainTrie {
     } else {
       current.exactBlock = entry;
     }
+    this.ruleCount++;
   }
 
   /**
