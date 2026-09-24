@@ -30,6 +30,7 @@ module.exports = {
   entry: {
     background: './src/background/index.ts',
     content: './src/content/index.ts',
+    defusers: './src/content/scriptletInjector.ts',
     popup: './src/popup/index.tsx'
   },
   output: {
@@ -38,7 +39,11 @@ module.exports = {
     clean: true
   },
   resolve: {
-    extensions: ['.ts', '.tsx', '.js', '.jsx', '.json']
+    extensions: ['.ts', '.tsx', '.js', '.jsx', '.json'],
+    extensionAlias: {
+      '.js': ['.ts', '.js'],
+      '.jsx': ['.tsx', '.jsx']
+    }
   },
   module: {
     rules: [
