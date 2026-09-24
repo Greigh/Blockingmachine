@@ -182,18 +182,18 @@ export async function fetchWithConditionalCache(
         filePath = path.resolve(process.cwd(), url);
       }
 
-      const stat = await fs.stat(filePath);
-      if (!stat.isFile()) {
-        console.error(`❌ Local path is not a file: ${filePath}`);
-        return { content: null, notModified: false, status: 404 };
-      }
-      if (stat.size > MAX_PAYLOAD_SIZE) {
+      // Read file content directly to prevent check-before-use race condition
+      const content = await fs.readFile(filePath, "utf8");
+
+      if (Buffer.byteLength(content, "utf8") > MAX_PAYLOAD_SIZE) {
         console.error(
-          `❌ Local file exceeds 100MB limit: ${filePath} (${stat.size} bytes)`,
+          `❌ Local file exceeds 100MB limit: ${filePath}`,
         );
         return { content: null, notModified: false, status: 413 };
       }
 
+      // Query metadata after reading for conditional cache inspection
+      const stat = await fs.stat(filePath);
       const fileLastModified = stat.mtime.toUTCString();
       if (
         cacheOptions?.lastModified &&
@@ -207,7 +207,6 @@ export async function fetchWithConditionalCache(
         };
       }
 
-      const content = await fs.readFile(filePath, "utf8");
       return {
         content,
         notModified: false,
