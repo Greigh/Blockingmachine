@@ -675,7 +675,7 @@ export class RuleDeduplicator {
     // Access sourceInfo safely
     if (metadata.sourceInfo?.trusted) score += 15;
     // Access attribution safely
-    if (metadata.attribution?.toLowerCase().includes("daniel hipskind"))
+    if (metadata.attribution?.toLowerCase().includes("greigh studios llc"))
       score += 20; // Lowercase for comparison
 
     // Domain-specific rules

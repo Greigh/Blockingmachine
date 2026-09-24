@@ -18,18 +18,20 @@ const config = {
       }
     ],
     icon: './assets/Blockingmachine',
-    platform: 'darwin',
-    arch: 'arm64',
-    osxSign: {
-      identity: 'Developer ID Application: Daniel Hipskind (365KR8NF53)',
-      hardenedRuntime: true,
-      entitlements: 'build/entitlements.mac.plist',
-      'entitlements-inherit': 'build/entitlements.mac.plist',
-      'gatekeeper-assess': false
-    },
+    osxSign:
+      process.platform === 'darwin'
+        ? {
+            identity: 'Developer ID Application: Greigh Studios LLC (365KR8NF53)',
+            hardenedRuntime: true,
+            entitlements: 'build/entitlements.mac.plist',
+            'entitlements-inherit': 'build/entitlements.mac.plist',
+            'gatekeeper-assess': false,
+          }
+        : undefined,
     // Notarization: prefer canonical env var names, but allow fallbacks for older names
     osxNotarize:
-      process.env.APPLE_ID || process.env.APPLEID
+      process.platform === 'darwin' &&
+      (process.env.APPLE_ID || process.env.APPLEID)
         ? {
             tool: 'notarytool',
             appleId: process.env.APPLE_ID || process.env.APPLEID,
@@ -43,6 +45,7 @@ const config = {
   makers: [
     {
       name: '@electron-forge/maker-dmg',
+      platforms: ['darwin'],
       config: {
         format: 'ULFO',
         name: 'Blockingmachine',
@@ -63,6 +66,45 @@ const config = {
             path: './out/Blockingmachine-darwin-arm64/Blockingmachine.app'
           }
         ]
+      }
+    },
+    {
+      name: '@electron-forge/maker-zip',
+      platforms: ['darwin', 'win32', 'linux']
+    },
+    {
+      name: '@electron-forge/maker-squirrel',
+      platforms: ['win32'],
+      config: {
+        name: 'Blockingmachine',
+        setupExe: 'BlockingmachineSetup.exe',
+        setupIcon: './assets/Blockingmachine.ico',
+        iconUrl: 'https://raw.githubusercontent.com/greigh/Blockingmachine/main/packages/electron-app/assets/Blockingmachine.ico'
+      }
+    },
+    {
+      name: '@electron-forge/maker-deb',
+      platforms: ['linux'],
+      config: {
+        options: {
+          name: 'blockingmachine',
+          productName: 'Blockingmachine',
+          icon: './assets/Blockingmachine.png',
+          categories: ['Utility', 'Network'],
+          maintainer: 'Greigh Studios LLC <daniel@greighstudios.com>'
+        }
+      }
+    },
+    {
+      name: '@electron-forge/maker-rpm',
+      platforms: ['linux'],
+      config: {
+        options: {
+          name: 'blockingmachine',
+          productName: 'Blockingmachine',
+          icon: './assets/Blockingmachine.png',
+          categories: ['Utility', 'Network']
+        }
       }
     }
   ],

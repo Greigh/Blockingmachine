@@ -2,6 +2,11 @@
   "name": "@blockingmachine/system-daemon",
   "version": "1.0.0-rc.4",
   "description": "High-throughput loopback DNS filtering proxy and system-level endpoint protection daemon for Blockingmachine.",
+  "author": {
+    "name": "Greigh Studios LLC",
+    "email": "daniel@greighstudios.com",
+    "url": "https://greighstudios.com"
+  },
   "type": "module",
   "bin": {
     "blockingmachine-daemon": "./bin/blockingmachine-daemon.js"

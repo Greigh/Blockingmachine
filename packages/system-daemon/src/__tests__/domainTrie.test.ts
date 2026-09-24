@@ -90,4 +90,11 @@ describe('DomainTrie engine', () => {
     expect(trie.evaluate('tele-tracker.com').verdict).toBe('BLOCKED');
     expect(trie.evaluate('pure-adserver.com').verdict).toBe('BLOCKED');
   });
+
+  test('evaluates dynamically injected quarantined domains', () => {
+    const domain = 'malicious-dga-q1w2e3r4t5y6.biz';
+    trie.addRule(`||${domain}^`);
+    expect(trie.evaluate(domain).verdict).toBe('BLOCKED');
+    expect(trie.evaluate(`sub.${domain}`).verdict).toBe('BLOCKED');
+  });
 });

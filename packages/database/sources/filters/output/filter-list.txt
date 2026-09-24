@@ -1,6 +1,6 @@
 ! Title: Blockingmachine Filter List
 ! Description: Combined filter list from multiple sources
-! Homepage: https://github.com/danielhipskind/blockingmachine
+! Homepage: https://github.com/greigh/blockingmachine
 ! Version: 3.0.0
 ! Last updated: 2025-07-12T13:43:31.623Z
 ! Rules count: 281884

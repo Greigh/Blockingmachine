@@ -220,6 +220,7 @@ export interface AiWatchdogConfig {
   service: 'adguard' | 'pihole';
   lastRun?: string;
   lastThreatsFound?: number;
+  autoQuarantineEntropyDga?: boolean;
 }
 
 export interface AiScanResult {

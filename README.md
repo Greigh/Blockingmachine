@@ -10,7 +10,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/)
 [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/)
 [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/Tests-398%20Passing%20(100%25)-brightgreen.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml)
+[![Tests](<https://img.shields.io/badge/Tests-398%20Passing%20(100%25)-brightgreen.svg>)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml)
 [![CI](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml)
 [![CodeQL Analysis](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml)
 [![HACS Validation](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml)
@@ -44,15 +44,16 @@ Designed for network engineers, homelab operators, and privacy advocates, Blocki
 
 ### Desktop Application (macOS Apple Silicon)
 
-The latest pre-release desktop application is cryptographically signed with an Apple Developer ID (`Daniel Hipskind (365KR8NF53)`):
+The latest pre-release desktop application is cryptographically signed with an Apple Developer ID (`Greigh Studios LLC (365KR8NF53)`):
 
-| Package / Installer | Architecture | Download |
-|---|---|---|
-| **Apple Silicon Disk Image (`.dmg`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.dmg`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.4/Blockingmachine-1.0.0-rc.4-arm64.dmg) |
+| Package / Installer                        | Architecture                | Download                                                                                                                               |
+| ------------------------------------------ | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Apple Silicon Disk Image (`.dmg`)**      | macOS `arm64` (M1/M2/M3/M4) | [Download `.dmg`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.4/Blockingmachine-1.0.0-rc.4-arm64.dmg)        |
 | **Standalone Application Bundle (`.zip`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.4/Blockingmachine-darwin-arm64-1.0.0-rc.4.zip) |
-| **SHA-256 Checksums** | All Platforms | [Download `SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.4/SHA256SUMS.txt) |
+| **SHA-256 Checksums**                      | All Platforms               | [Download `SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.4/SHA256SUMS.txt)                    |
 
 #### Checksum Verification
+
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
 ```
@@ -64,6 +65,7 @@ shasum -a 256 -c SHA256SUMS.txt
 Blockingmachine distributes its core parsing engine and command-line interface as standalone packages on **GitHub Packages** and **Forgejo Packages**:
 
 #### From GitHub Packages
+
 ```bash
 # Core Library
 npm install @greigh/blockingmachine-core@1.0.0-rc.4 --registry=https://npm.pkg.github.com
@@ -73,6 +75,7 @@ npm install -g @greigh/blockingmachine-cli@1.0.0-rc.4 --registry=https://npm.pkg
 ```
 
 #### From Forgejo Package Registry (`git.greighstudios.com`)
+
 ```bash
 # Core Library
 npm install @blockingmachine/core@1.0.0-rc.4 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
@@ -82,6 +85,7 @@ npm install -g @blockingmachine/cli@1.0.0-rc.4 --registry=https://git.greighstud
 ```
 
 Direct tarballs are also attached to [Release v1.0.0-rc.4](https://github.com/Greigh/Blockingmachine/releases/tag/v1.0.0-rc.4):
+
 - `blockingmachine-core-1.0.0-rc.4.tgz`
 - `blockingmachine-cli-1.0.0-rc.4.tgz`
 
@@ -90,19 +94,22 @@ Direct tarballs are also attached to [Release v1.0.0-rc.4](https://github.com/Gr
 ## Key Features
 
 ### 🔍 Unified Rule & AI Inspector (`⌘5`)
+
 - **Simultaneous Static & AI Evaluation**: Instantly assesses any domain or URL against your active compiled filter lists while simultaneously running live AI threat heuristics.
 - **Heuristic Threat Profiling**: Measures lexical Shannon entropy ($H(X)$), detects algorithmic Domain Generation Algorithms (DGA), resolves multi-hop CNAME cloaking aliases, and breaks down mathematical feature weights.
 - **Multi-Format Rule Synthesizer**: Generates syntax-perfect blocking rules in Universal (`||domain^`), AdGuard (`||domain^$important`), Pi-hole regex, uBlock Origin, Unbound, or Hosts format.
 - **$badfilter Neutralization**: Automatically generates `$badfilter` exception syntax to neutralize upstream false positives and erroneous filter rules without altering third-party feeds.
-- **1-Click Actions**: One-click **Add to Custom Rules**, **Whitelist (`@@`)**, rule clipboard copying, and Mini-AI feedback tuning (*Confirm Threat* / *Mark Safe*).
+- **1-Click Actions**: One-click **Add to Custom Rules**, **Whitelist (`@@`)**, rule clipboard copying, and Mini-AI feedback tuning (_Confirm Threat_ / _Mark Safe_).
 
 ### 📡 AI Defense Radar Hub (`⌘9`)
+
 - **Sinkhole Query Scout**: Connects directly to AdGuard Home or Pi-hole to inspect recent DNS query logs for anomalous, uncategorized ad beacons and tracking telemetry.
 - **Subdomain Compaction Engine**: Collapses swarms of ephemeral subdomains into clean parent zone wildcard rules to prevent list bloat.
 - **Web Canary Crawler**: Proactively crawls target URLs to audit and extract third-party trackers, beacons, and programmatic ad auctions before you visit them.
 - **Threat Quarantine Ledger**: Centralized persistent ledger tracking intercepted threats with category filtering, batch exports (ABP, Hosts, JSON), and one-click firewall blocking.
 
 ### 🧠 Centralized AI Engine & Sentinel Watchdog (Preferences `⌘,`)
+
 - **Built-in Mini-AI Classifier (Default & Recommended)**: Embedded 25-feature mathematical neural classifier executing on-device in **<0.05ms** with zero daemons, zero cloud telemetry, and zero network overhead.
 - **Calibrated Entropy Engine**: Multi-tiered Shannon entropy scoring with base64 anomaly detection, segment decomposition, and bigram transition scoring.
 - **Flexible Provider Support**:
@@ -114,17 +121,20 @@ Direct tarballs are also attached to [Release v1.0.0-rc.4](https://github.com/Gr
 - **Active Feedback Memory**: Tracks user corrections to refine heuristic weights over time, with one-click memory reset.
 
 ### 🌐 Manifest V3 Browser Extension (`@blockingmachine/browser-extension`)
+
 - **DeclarativeNetRequest Rulesets**: Translates network blocking rules into native browser DNR rulesets for zero-latency network interception.
 - **Procedural Scriptlet Defusers**: Defuses hostile anti-adblock detection walls (e.g. Admiral, Google Funding Choices CMP) without breaking legitimate page layouts.
 - **Interactive Element Picker**: Visual element isolation tool allowing users to click and eliminate cosmetic annoyances directly in the browser DOM.
 - **Real-Time SSE Sync**: Connects to the local Blockingmachine Hub via Server-Sent Events (`/v1/events`) to instantly hot-reload rules upon compilation without browser restarts.
 
 ### ⚙️ System Loopback DNS Proxy (`@blockingmachine/system-daemon`)
+
 - **In-Memory Reversed-Label Trie**: Ultra-fast $O(k)$ suffix lookup trie matching DNS queries in nanoseconds regardless of list size (100k+ rules).
 - **Service Configuration Generators**: One-click generation and installation of macOS `launchd` plist daemons and Linux `systemd` services with `CAP_NET_BIND_SERVICE`.
 - **Precedence & Wildcards**: Full resolution of `$important` flags, whitelist exceptions (`@@`), and multi-level subdomain wildcards (`*.telemetry.example.com`).
 
 ### 🏠 Home Assistant Integration & HACS Hub
+
 - **HACS Compliant Integration**: Native Home Assistant integration with standard configuration flow and automatic hub discovery.
 - **Telemetry Mesh Sensors**: Publishes real-time browser and network protection metrics:
   - `sensor.blockingmachine_browser_blocked_today`
@@ -134,6 +144,7 @@ Direct tarballs are also attached to [Release v1.0.0-rc.4](https://github.com/Gr
 - **Remote Cosmetic Shield Toggles**: Enable or disable cosmetic hiding and scriptlet defusers directly from Home Assistant automations or Lovelace dashboards.
 
 ### 🛡️ First-Party Curated Defense Modules (`⌘3`)
+
 1. **Base Ad Shield**: Network-level blocking for major ad exchanges, programmatic bidding, and banner injection.
 2. **Privacy Engine**: Web beacons, browser fingerprinting, and analytics telemetry neutralizer.
 3. **Smart TV & IoT Shield**: Automatic Content Recognition (ACR) telemetry and ad blocker for Roku, Samsung Tizen, LG webOS, Fire TV, and smart appliances.
@@ -144,6 +155,7 @@ Direct tarballs are also attached to [Release v1.0.0-rc.4](https://github.com/Gr
 8. **Unbreak & Safe Exceptions**: Hand-crafted allowlist rules (`@@`) preventing breakage for banking, SSO identity providers, and DRM streaming.
 
 ### 🚀 Deploy & Sync Hub (`⌘8`)
+
 - **Pi-hole Integration**: Syncs compiled blocklists directly into Pi-hole gravity databases via API with instant connection testing.
 - **AdGuard Home Integration**: Native integration supporting Direct (Port 3000), Home Assistant API (Port 8123), HA Webhooks, and Nabu Casa Cloud tunnels.
 - **Custom Automation Webhooks**: Emits HTTP POST event payloads to Technitium DNS, pfSense, OPNsense, Blocky, or Node-RED upon every compilation.
@@ -153,19 +165,19 @@ Direct tarballs are also attached to [Release v1.0.0-rc.4](https://github.com/Gr
 
 ## Keyboard Shortcuts Matrix
 
-| Shortcut | View | Purpose |
-| :---: | :--- | :--- |
-| `⌘1` | **Process & Stats** | Dashboard, compile metrics, feed status, and instant compilation trigger |
-| `⌘2` | **Sources** | Manage remote filter list subscriptions, feed toggles, and health checks |
-| `⌘3` | **Defense Modules** | First-party curated shields (Smart TV, Telemetry, Annoyances, Privacy) |
-| `⌘4` | **Custom Rules** | Custom domain blocks, whitelist exceptions (`@@`), and syntax validation |
-| `⌘5` | **Rule & AI Inspector** | Simultaneous filter rule matching and live AI heuristic threat analysis |
-| `⌘6` | **Rule Browser** | Search, filter, and paginate through tens of thousands of active compiled rules |
-| `⌘7` | **Bulk Import** | Add multiple feed URLs simultaneously or import text files via drag-and-drop |
-| `⌘8` | **Deploy & Sync** | Push compiled lists to Pi-hole, AdGuard Home, and homelab webhooks |
-| `⌘9` | **AI Radar Hub** | Homelab Sinkhole Scout, Web Canary Crawler, and Threat Quarantine Ledger |
-| `⌘,` | **Preferences** | Output formats, directory paths, AI engines, Watchdog, and accent colors |
-| `⌘R` | **Compile Now** | Global trigger to compile and deduplicate all active filter lists |
+| Shortcut | View                    | Purpose                                                                         |
+| :------: | :---------------------- | :------------------------------------------------------------------------------ |
+|   `⌘1`   | **Process & Stats**     | Dashboard, compile metrics, feed status, and instant compilation trigger        |
+|   `⌘2`   | **Sources**             | Manage remote filter list subscriptions, feed toggles, and health checks        |
+|   `⌘3`   | **Defense Modules**     | First-party curated shields (Smart TV, Telemetry, Annoyances, Privacy)          |
+|   `⌘4`   | **Custom Rules**        | Custom domain blocks, whitelist exceptions (`@@`), and syntax validation        |
+|   `⌘5`   | **Rule & AI Inspector** | Simultaneous filter rule matching and live AI heuristic threat analysis         |
+|   `⌘6`   | **Rule Browser**        | Search, filter, and paginate through tens of thousands of active compiled rules |
+|   `⌘7`   | **Bulk Import**         | Add multiple feed URLs simultaneously or import text files via drag-and-drop    |
+|   `⌘8`   | **Deploy & Sync**       | Push compiled lists to Pi-hole, AdGuard Home, and homelab webhooks              |
+|   `⌘9`   | **AI Radar Hub**        | Homelab Sinkhole Scout, Web Canary Crawler, and Threat Quarantine Ledger        |
+|   `⌘,`   | **Preferences**         | Output formats, directory paths, AI engines, Watchdog, and accent colors        |
+|   `⌘R`   | **Compile Now**         | Global trigger to compile and deduplicate all active filter lists               |
 
 ---
 
@@ -195,14 +207,14 @@ Blockingmachine/
 
 ## Supported Export Formats
 
-| Format | Syntax Example | Target Platform / Resolver |
-| :--- | :--- | :--- |
-| **AdGuard Home** | `||example.com^` | AdGuard Home, AdGuard DNS, AdGuard apps |
-| **AdBlock Plus** | `||example.com^$third-party` | uBlock Origin, Brave Browser, browser extensions |
-| **Standard Hosts** | `0.0.0.0 example.com` | System `/etc/hosts`, Pi-hole, standard DNS |
-| **dnsmasq** | `address=/example.com/0.0.0.0` | OpenWrt, DD-WRT, pfSense, dnsmasq |
-| **Unbound** | `local-zone: "example.com" static` | OPNsense, pfSense, Unbound DNS resolvers |
-| **Plain Domains** | `example.com` | Minimalist domain blocklists, Pi-hole domain lists |
+| Format             | Syntax Example                     | Target Platform / Resolver                         |
+| :----------------- | :--------------------------------- | :------------------------------------------------- |
+| **AdGuard Home**   | `                                  |                                                    | example.com^`             | AdGuard Home, AdGuard DNS, AdGuard apps          |
+| **AdBlock Plus**   | `                                  |                                                    | example.com^$third-party` | uBlock Origin, Brave Browser, browser extensions |
+| **Standard Hosts** | `0.0.0.0 example.com`              | System `/etc/hosts`, Pi-hole, standard DNS         |
+| **dnsmasq**        | `address=/example.com/0.0.0.0`     | OpenWrt, DD-WRT, pfSense, dnsmasq                  |
+| **Unbound**        | `local-zone: "example.com" static` | OPNsense, pfSense, Unbound DNS resolvers           |
+| **Plain Domains**  | `example.com`                      | Minimalist domain blocklists, Pi-hole domain lists |
 
 ---
 
@@ -222,31 +234,40 @@ Blockingmachine/
 ## Installation & Build Guide
 
 ### 1. Clone the Repository
+
 ```bash
 git clone https://github.com/greigh/Blockingmachine.git
 cd Blockingmachine
 ```
 
 ### 2. Install Dependencies
+
 Install all workspace dependencies from the root directory:
+
 ```bash
 npm ci
 ```
 
 ### 3. Build All Workspaces
+
 Compile the core TypeScript engine, CLI binaries, browser extension, and Electron bundles:
+
 ```bash
 npm run build
 ```
 
 ### 4. Launch Desktop Application
+
 Run the Electron desktop suite in development mode:
+
 ```bash
 npm start
 ```
 
 ### 5. Package for Distribution
+
 Build native macOS, Linux, or Windows binaries:
+
 ```bash
 npm run package --workspace=@blockingmachine/electron-app
 ```
@@ -320,6 +341,7 @@ We treat security as a first-class feature across all network proxies and extens
 ## Remotes & CI/CD Pipelines
 
 Blockingmachine is concurrently mirrored and continuously tested across:
+
 - **GitHub Repository**: [github.com/Greigh/Blockingmachine](https://github.com/Greigh/Blockingmachine)
 - **Forgejo Repository**: [git.greighstudios.com/greighstudios/Blockingmachine](https://git.greighstudios.com/greighstudios/Blockingmachine)
 - **GitHub Actions**: `.github/workflows/ci.yml`, `.github/workflows/codeql.yml`, `.github/workflows/hacs-validation.yml`
@@ -330,6 +352,7 @@ Blockingmachine is concurrently mirrored and continuously tested across:
 ## Contributing
 
 We welcome community contributions! Please adhere to the following guidelines:
+
 1. Ensure all new features include unit test coverage in the corresponding `__tests__` directory.
 2. Verify that `npm run lint` passes with **0 errors and 0 warnings**.
 3. Ensure `npm test` passes with 100% success across all workspaces.
@@ -341,5 +364,5 @@ We welcome community contributions! Please adhere to the following guidelines:
 This project is licensed under the **BSD-3-Clause License**. See the [LICENSE](LICENSE) file for details.
 
 <div align="center">
-  <sub>Designed and engineered by <a href="https://danielhipskind.com/">Daniel Hipskind</a>.</sub>
+  <sub>Designed and engineered by <a href="https://greighstudios.com/">Greigh Studios LLC</a>.</sub>
 </div>

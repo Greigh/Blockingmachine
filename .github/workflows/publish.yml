@@ -1,17 +1,20 @@
-name: Publish Packages to GitHub Packages
+name: Release Packaging & Publishing
 
 on:
+  push:
+    tags:
+      - 'v*'
   release:
     types: [published]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
-  publish:
-    name: Publish to GitHub Packages
+  build-packages:
+    name: Build NPM Packages & Extensions
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
@@ -27,10 +30,129 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build packages
+      - name: Build monorepo
         run: npm run build
+
+      - name: Package browser extensions
+        run: npm run package:extension
+
+      - name: Pack NPM tarballs
+        run: |
+          mkdir -p dist/release-assets
+          cd packages/core && npm pack && mv blockingmachine-core-*.tgz ../../dist/release-assets/ && cd ../..
+          cd packages/cli && npm pack && mv blockingmachine-cli-*.tgz ../../dist/release-assets/ && cd ../..
+          cp dist/extensions/*.zip dist/release-assets/
 
       - name: Publish to GitHub Packages
         run: node scripts/publish-gpr.mjs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Upload common release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-and-extension-assets
+          path: dist/release-assets/*
+
+  build-electron:
+    name: Build Desktop App (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: darwin
+          - os: windows-latest
+            platform: win32
+          - os: ubuntu-26.04
+            platform: linux
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: "npm"
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm fakeroot dpkg
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build monorepo dependencies
+        run: npm run build
+
+      - name: Package and Make Electron App
+        run: npm run make
+        working-directory: packages/electron-app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Collect desktop release installers
+        shell: bash
+        run: |
+          mkdir -p dist/desktop-assets
+          find packages/electron-app/out/make -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} dist/desktop-assets/ \;
+          ls -la dist/desktop-assets/
+
+      - name: Upload desktop assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-assets-${{ matrix.platform }}
+          path: dist/desktop-assets/*
+
+  create-release:
+    name: Draft / Update GitHub Release
+    needs: [build-packages, build-electron]
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Compute SHA256 Checksums
+        run: |
+          cd release-artifacts
+          shasum -a 256 * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd ..
+
+      - name: Publish or Update GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME:-v1.0.0}"
+          if [[ "$GITHUB_REF" != refs/tags/* ]]; then
+            TAG="v1.0.0-rc.4"
+          fi
+          echo "Target Release Tag: $TAG"
+
+          # Determine release notes file if available
+          NOTES_FLAG=""
+          if [[ -f "scripts/release-notes-rc4.md" ]]; then
+            NOTES_FLAG="--notes-file scripts/release-notes-rc4.md"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Updating existing release $TAG..."
+            gh release upload "$TAG" release-artifacts/* --clobber
+          else
+            echo "Creating draft release $TAG..."
+            gh release create "$TAG" release-artifacts/* --title "Blockingmachine $TAG" $NOTES_FLAG --draft
+          fi

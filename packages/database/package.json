@@ -13,9 +13,9 @@
   },
   "homepage": "https://github.com/Greigh/Blockingmachine-database",
   "author": {
-    "name": "Daniel Hipskind aka Greigh",
-    "email": "me@danielhipskind.com",
-    "url": "https://danielhipskind.com"
+    "name": "Greigh Studios LLC",
+    "email": "daniel@greighstudios.com",
+    "url": "https://greighstudios.com"
   },
   "scripts": {
     "start": "node scripts/update.js"

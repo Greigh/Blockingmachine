@@ -4,6 +4,11 @@
   "description": "Manifest V3 browser extension for Blockingmachine with DeclarativeNetRequest filtering, procedural scriptlet defusers, and live AI Radar inspection.",
   "private": true,
   "type": "module",
+  "author": {
+    "name": "Greigh Studios LLC",
+    "email": "daniel@greighstudios.com",
+    "url": "https://greighstudios.com"
+  },
   "scripts": {
     "build": "webpack --mode production",
     "dev": "webpack --mode development --watch",

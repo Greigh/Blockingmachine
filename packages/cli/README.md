@@ -392,4 +392,4 @@ We use ESLint and Prettier to maintain code quality. Before submitting a pull re
 
 This project is licensed under the BSD-3-Clause License.
 
-<div align="center"> Made with ❤️ by <a href="https://danielhipskind.com/">Daniel Hipskind</a> </div>
+<div align="center"> Made with ❤️ by <a href="https://greighstudios.com/">Greigh Studios LLC</a> </div>
