@@ -48,6 +48,28 @@ export async function loadRulesFromFeeds(trie: DomainTrie, config: DaemonConfig)
     count = trie.getRuleCount();
   }
 
+  // Ingest live AI Threat Quarantine feed if available
+  try {
+    const threatRes = await fetch('http://127.0.0.1:9191/threats.txt');
+    if (threatRes.ok) {
+      const threatText = await threatRes.text();
+      let threatCount = 0;
+      for (const line of threatText.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith('!') && !trimmed.startsWith('#')) {
+          trie.addRule(trimmed);
+          threatCount++;
+        }
+      }
+      if (threatCount > 0) {
+        count = trie.getRuleCount();
+        console.log(`[Daemon] Ingested ${threatCount} active threat quarantine rules from AI Radar.`);
+      }
+    }
+  } catch {
+    // Threat feed server not running or offline
+  }
+
   return count;
 }
 
@@ -134,6 +156,35 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
         console.log(`[Daemon] Protection set to: ${enable ? 'ENABLED' : 'PAUSED'}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, protectionEnabled: enable }));
+      });
+      return;
+    }
+
+    if ((pathname === '/v1/quarantine' || pathname === '/quarantine') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(body || '{}');
+          const domain = payload.domain || payload.target;
+          const domains: string[] = Array.isArray(payload.domains)
+            ? payload.domains
+            : (domain ? [domain] : []);
+          let injected = 0;
+          for (const d of domains) {
+            if (typeof d === 'string' && d.trim()) {
+              const cleanD = d.trim().toLowerCase();
+              trie.addRule(`||${cleanD}^`);
+              injected++;
+            }
+          }
+          console.log(`[Daemon] Injected ${injected} quarantined threat domain(s) into active DNS trie memory.`);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, injected, ruleCount: trie.getRuleCount() }));
+        } catch (err: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: err?.message || 'Invalid payload' }));
+        }
       });
       return;
     }

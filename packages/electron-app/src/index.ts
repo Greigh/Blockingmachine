@@ -544,7 +544,14 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
 
       if (queries.length > 0) {
         const scan = await service.scanQueryLog(queries, savedConfig);
-        const threats = scan.results.filter((r) => r.verdict !== 'clean');
+        const autoQuarantine = config.autoQuarantineEntropyDga !== false;
+        const threats = scan.results.filter((r) => {
+          if (r.verdict === 'clean') return false;
+          if (!autoQuarantine) return true;
+          const conf = typeof r.confidence === 'number' ? (r.confidence > 1 ? r.confidence : r.confidence * 100) : 0;
+          return r.isLikelyDga || (typeof r.entropy === 'number' && r.entropy > 4.2) || conf >= 85 || r.riskLevel === 'high' || r.riskLevel === 'critical';
+        });
+
         if (threats.length > 0) {
           const existingQuarantine: ThreatQuarantineItem[] = storeRef.get('aiThreatQuarantine') || [];
           const existingDomains = new Set(existingQuarantine.map((q) => q.domain));
@@ -568,6 +575,11 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
             const updatedQuarantine = [...newItems, ...existingQuarantine].slice(0, 200);
             storeRef.set('aiThreatQuarantine', updatedQuarantine);
             console.log(`[AI Watchdog] Quarantined ${newItems.length} new threat domains`);
+            daemonManager.quarantineDomain(newItems.map((t) => t.domain)).catch(() => {});
+            broadcastSseEvent('quarantine_added', {
+              count: newItems.length,
+              domains: newItems.map((t) => t.domain),
+            });
           }
         }
 
@@ -703,6 +715,8 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
       existingDomainMap.set(r.domain, r);
     }
 
+    const watchdogConfig = (storeRef.get('aiWatchdogConfig') || {}) as AiWatchdogConfig;
+    const autoQuarantine = watchdogConfig.autoQuarantineEntropyDga !== false;
     const threatsToQuarantine: ThreatQuarantineItem[] = [];
 
     for (const fresh of scan.results) {
@@ -711,19 +725,23 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
         currentLiveRadarSession.totalQueriesAnalyzed++;
         if (fresh.verdict !== 'clean') {
           currentLiveRadarSession.flaggedCount++;
-          threatsToQuarantine.push({
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            domain: fresh.domain,
-            category: fresh.category,
-            verdict: fresh.verdict,
-            riskLevel: fresh.riskLevel,
-            confidence: fresh.confidence,
-            reasons: fresh.reasons,
-            generatedRules: fresh.generatedRules,
-            source: 'sinkhole',
-            timestamp: new Date().toISOString(),
-            blocked: false,
-          });
+          const conf = typeof fresh.confidence === 'number' ? (fresh.confidence > 1 ? fresh.confidence : fresh.confidence * 100) : 0;
+          const isDgaOrEntropy = fresh.isLikelyDga || (typeof fresh.entropy === 'number' && fresh.entropy > 4.2);
+          if (autoQuarantine || isDgaOrEntropy || conf >= 85 || fresh.riskLevel === 'high' || fresh.riskLevel === 'critical') {
+            threatsToQuarantine.push({
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              domain: fresh.domain,
+              category: fresh.category,
+              verdict: fresh.verdict,
+              riskLevel: fresh.riskLevel,
+              confidence: fresh.confidence,
+              reasons: fresh.reasons,
+              generatedRules: fresh.generatedRules,
+              source: 'sinkhole',
+              timestamp: new Date().toISOString(),
+              blocked: false,
+            });
+          }
         } else {
           currentLiveRadarSession.cleanCount++;
         }
@@ -745,6 +763,11 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
       if (filtered.length > 0) {
         storeRef.set('aiThreatQuarantine', [...filtered, ...existingQuarantine].slice(0, 200));
         console.log(`[Live Radar] Auto-quarantined ${filtered.length} new threat(s)`);
+        daemonManager.quarantineDomain(filtered.map((t) => t.domain)).catch(() => {});
+        broadcastSseEvent('quarantine_added', {
+          count: filtered.length,
+          domains: filtered.map((t) => t.domain),
+        });
       }
     }
 
@@ -1373,6 +1396,8 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
               lanIp: getLocalLanIp(),
               dnsFeedUrl: `http://${getLocalLanIp()}:${feedServerPort}/dns.txt`,
               browserFeedUrl: `http://${getLocalLanIp()}:${feedServerPort}/browser.txt`,
+              aiThreatsFeedUrl: `http://${getLocalLanIp()}:${feedServerPort}/ai-threats.txt`,
+              abpThreatsFeedUrl: `http://${getLocalLanIp()}:${feedServerPort}/threats.txt`,
             },
             protection: {
               enabled: true,
@@ -1530,6 +1555,63 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
             history: history.slice(0, 5),
             browser: browserTelemetryAggregator,
           }));
+          return;
+        }
+
+        if (lowerPath === '/ai-threats.txt' || lowerPath === '/ai-threats') {
+          const quarantine = (storeRef.get('aiThreatQuarantine') || []) as ThreatQuarantineItem[];
+          const highConfThreats = quarantine
+            .filter((t) => {
+              const conf = typeof t.confidence === 'number' ? (t.confidence > 1 ? t.confidence : t.confidence * 100) : 0;
+              return conf >= 85 && Boolean(t.domain);
+            })
+            .map((t) => t.domain.trim().toLowerCase());
+          const uniqueDomains = Array.from(new Set(highConfThreats)).sort();
+
+          const header = [
+            '# Title: Blockingmachine AI Threat Feed (Domain List)',
+            `# Updated: ${new Date().toISOString()}`,
+            `# High-Confidence Quarantined Domains: ${uniqueDomains.length}`,
+            '# Confidence Threshold: >= 85%',
+            '',
+          ].join('\n');
+
+          const body = uniqueDomains.length > 0 ? `${header}${uniqueDomains.join('\n')}\n` : `${header}# No active threats currently quarantined\n`;
+          res.writeHead(200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Access-Control-Allow-Origin': '*',
+          });
+          res.end(body);
+          return;
+        }
+
+        if (lowerPath === '/threats.txt' || lowerPath === '/threats') {
+          const quarantine = (storeRef.get('aiThreatQuarantine') || []) as ThreatQuarantineItem[];
+          const highConfThreats = quarantine
+            .filter((t) => {
+              const conf = typeof t.confidence === 'number' ? (t.confidence > 1 ? t.confidence : t.confidence * 100) : 0;
+              return conf >= 85 && Boolean(t.domain);
+            })
+            .map((t) => t.domain.trim().toLowerCase());
+          const uniqueDomains = Array.from(new Set(highConfThreats)).sort();
+
+          const header = [
+            '! Title: Blockingmachine AI Threat Feed (ABP Format)',
+            `! Updated: ${new Date().toISOString()}`,
+            `! High-Confidence Quarantined Domains: ${uniqueDomains.length}`,
+            '! Confidence Threshold: >= 85%',
+            '',
+          ].join('\n');
+
+          const abpRules = uniqueDomains.map((d) => `||${d}^`);
+          const body = abpRules.length > 0 ? `${header}${abpRules.join('\n')}\n` : `${header}! No active threats currently quarantined\n`;
+          res.writeHead(200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Access-Control-Allow-Origin': '*',
+          });
+          res.end(body);
           return;
         }
 
@@ -3004,6 +3086,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
           .slice(0, 200);
         store.set('aiThreatQuarantine', merged);
+        daemonManager.quarantineDomain(items.map((i) => i.domain)).catch(() => {});
+        broadcastSseEvent('quarantine_added', {
+          count: items.length,
+          domains: items.map((i) => i.domain),
+        });
         return { success: true, count: merged.length };
       } catch (err: any) {
         return { success: false, count: 0, error: err?.message || String(err) };
@@ -3043,6 +3130,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         enabled: false,
         intervalMinutes: 60,
         service: 'adguard',
+        autoQuarantineEntropyDga: true,
       };
     });
 
@@ -3051,6 +3139,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         enabled: false,
         intervalMinutes: 60,
         service: 'adguard',
+        autoQuarantineEntropyDga: true,
       }) as AiWatchdogConfig;
       const updated: AiWatchdogConfig = { ...current, ...cfg };
       store.set('aiWatchdogConfig', updated);

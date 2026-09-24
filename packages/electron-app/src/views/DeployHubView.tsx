@@ -1712,6 +1712,52 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                 </div>
               </div>
 
+              {/* Endpoint 4: AI Threat Quarantine Feed (ABP Format) */}
+              <div className="deploy-feed-box">
+                <div className="deploy-feed-box-top">
+                  <span className="deploy-feed-box-label">⚡ AI Threat Quarantine Feed (ABP Format)</span>
+                  <span className="deploy-feed-box-tag">Auto-updating DGA / Malware</span>
+                </div>
+                <div className="deploy-feed-input-row">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/threats.txt`}
+                    className="deploy-feed-input"
+                  />
+                  <button
+                    type="button"
+                    className={`deploy-copy-feed-btn ${copiedKey === 'ha-threats-abp-feed' ? 'copied' : ''}`}
+                    onClick={() => handleCopy(`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/threats.txt`, 'ha-threats-abp-feed')}
+                  >
+                    {copiedKey === 'ha-threats-abp-feed' ? '✓ Copied' : 'Copy ABP Threats'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Endpoint 5: AI Threat Quarantine Feed (Domain List) */}
+              <div className="deploy-feed-box">
+                <div className="deploy-feed-box-top">
+                  <span className="deploy-feed-box-label">🛑 AI Threat Feed (Raw Domains)</span>
+                  <span className="deploy-feed-box-tag">Zero-Day High Entropy</span>
+                </div>
+                <div className="deploy-feed-input-row">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/ai-threats.txt`}
+                    className="deploy-feed-input"
+                  />
+                  <button
+                    type="button"
+                    className={`deploy-copy-feed-btn ${copiedKey === 'ha-threats-raw-feed' ? 'copied' : ''}`}
+                    onClick={() => handleCopy(`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/ai-threats.txt`, 'ha-threats-raw-feed')}
+                  >
+                    {copiedKey === 'ha-threats-raw-feed' ? '✓ Copied' : 'Copy Domain Feed'}
+                  </button>
+                </div>
+              </div>
+
               {/* Live Status Inspector */}
               <div className="deploy-tool-box">
                 <div className="deploy-tool-box-header">

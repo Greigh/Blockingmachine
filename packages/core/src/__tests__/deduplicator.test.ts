@@ -132,7 +132,7 @@ doubleclick.net
       metadata: {
         sources: ["source1"],
         dateAdded: new Date(),
-        attribution: "Curated by Daniel Hipskind",
+        attribution: "Curated by Greigh Studios LLC",
       },
     };
 

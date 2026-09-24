@@ -104,7 +104,7 @@ When contributing new files, include this copyright header at the top:
 
 ```typescript
 /**
- * Copyright (c) 2025, Daniel Hipskind
+ * Copyright (c) 2025, Greigh Studios LLC
  * All rights reserved.
  *
  * This source code is licensed under the BSD-3-Clause license found in the

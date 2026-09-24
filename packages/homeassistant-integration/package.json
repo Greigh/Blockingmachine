@@ -5,5 +5,10 @@
   "private": true,
   "scripts": {
     "test": "python3 -m unittest discover -s tests"
+  },
+  "author": {
+    "name": "Greigh Studios LLC",
+    "email": "daniel@greighstudios.com",
+    "url": "https://greighstudios.com"
   }
 }

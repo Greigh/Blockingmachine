@@ -196,7 +196,7 @@ async function generateAdditionalFormats(adguardFilePath) {
     hostsRules.push('# Description: Combined filter list optimized for AdGuard');
     hostsRules.push('# Homepage: https://github.com/greigh/blockingmachine');
     hostsRules.push('# License: BSD-3-Clause');
-    hostsRules.push('# Made by: Daniel Hipskind aka Greigh');
+    hostsRules.push('# Made by: Greigh Studios LLC aka Greigh');
     hostsRules.push('# Version: 3.0.0');
     hostsRules.push(`# Last Updated: ${new Date().toISOString()}`);
     // placeholder for rules count (will be replaced after generation)
@@ -250,7 +250,7 @@ async function generateAdditionalFormats(adguardFilePath) {
     dnsmasqRules.push('# Description: Combined filter list optimized for AdGuard');
     dnsmasqRules.push('# Homepage: https://github.com/greigh/blockingmachine');
     dnsmasqRules.push('# License: BSD-3-Clause');
-    dnsmasqRules.push('# Made by: Daniel Hipskind aka Greigh');
+    dnsmasqRules.push('# Made by: Greigh Studios LLC aka Greigh');
     dnsmasqRules.push('# Version: 3.0.0');
     dnsmasqRules.push(`# Last Updated: ${new Date().toISOString()}`);
     dnsmasqRules.push('# Expires: 1 day');
@@ -301,7 +301,7 @@ async function generateAdditionalFormats(adguardFilePath) {
     unboundRules.push('# Description: Combined filter list optimized for unbound');
     unboundRules.push('# Homepage: https://github.com/greigh/blockingmachine');
     unboundRules.push('# License: BSD-3-Clause');
-    unboundRules.push('# Made by: Daniel Hipskind aka Greigh');
+    unboundRules.push('# Made by: Greigh Studios LLC aka Greigh');
     unboundRules.push('# Version: 3.0.0');
     unboundRules.push(`# Last Updated: ${new Date().toISOString()}`);
     unboundRules.push('# Expires: 1 day');
@@ -341,7 +341,7 @@ async function generateAdditionalFormats(adguardFilePath) {
     namedRules.push('# Description: Combined filter list optimized for BIND');
     namedRules.push('# Homepage: https://github.com/greigh/blockingmachine');
     namedRules.push('# License: BSD-3-Clause');
-    namedRules.push('# Made by: Daniel Hipskind aka Greigh');
+    namedRules.push('# Made by: Greigh Studios LLC aka Greigh');
     namedRules.push('# Version: 3.0.0');
     namedRules.push(`# Last Updated: ${new Date().toISOString()}`);
     namedRules.push('# Expires: 1 day');
@@ -377,7 +377,7 @@ async function generateAdditionalFormats(adguardFilePath) {
     privoxyRules.push('# Description: Combined filter list optimized for Privoxy');
     privoxyRules.push('# Homepage: https://github.com/greigh/blockingmachine');
     privoxyRules.push('# License: BSD-3-Clause');
-    privoxyRules.push('# Made by: Daniel Hipskind aka Greigh');
+    privoxyRules.push('# Made by: Greigh Studios LLC aka Greigh');
     privoxyRules.push('# Version: 3.0.0');
     privoxyRules.push(`# Last Updated: ${new Date().toISOString()}`);
     // privoxy header and placeholder for rules count
@@ -417,7 +417,7 @@ async function generateAdditionalFormats(adguardFilePath) {
     shadowrocketRules.push('# Description: Combined filter list optimized for Shadowrocket');
     shadowrocketRules.push('# Homepage: https://github.com/greigh/blockingmachine');
     shadowrocketRules.push('# License: BSD-3-Clause');
-    shadowrocketRules.push('# Made by: Daniel Hipskind aka Greigh');
+    shadowrocketRules.push('# Made by: Greigh Studios LLC aka Greigh');
     shadowrocketRules.push('# Version: 3.0.0');
     shadowrocketRules.push(`# Last Updated: ${new Date().toISOString()}`);
     shadowrocketRules.push('# Expires: 1 day');

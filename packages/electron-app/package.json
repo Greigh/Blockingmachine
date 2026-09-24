@@ -23,13 +23,17 @@
     "lint:fix": "eslint . --fix"
   },
   "author": {
-    "name": "Daniel Hipskind",
-    "email": "me@danielhipskind.com",
-    "url": "https://danielhipskind.com"
+    "name": "Greigh Studios LLC",
+    "email": "daniel@greighstudios.com",
+    "url": "https://greighstudios.com"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",
+    "@electron-forge/maker-deb": "^7.11.2",
     "@electron-forge/maker-dmg": "^7.11.2",
+    "@electron-forge/maker-rpm": "^7.11.2",
+    "@electron-forge/maker-squirrel": "^7.11.2",
+    "@electron-forge/maker-zip": "^7.11.2",
     "@electron-forge/plugin-webpack": "^7.11.2",
     "@electron-forge/shared-types": "^7.11.2",
     "@electron/rebuild": "^4.2.0",

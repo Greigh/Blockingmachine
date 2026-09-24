@@ -272,6 +272,31 @@ export class DaemonManager {
   }
 
   /**
+   * Injects one or more quarantined domains directly into the running DNS memory trie
+   */
+  async quarantineDomain(domainOrDomains: string | string[]): Promise<{ success: boolean; injected?: number; message?: string }> {
+    try {
+      const domains = Array.isArray(domainOrDomains) ? domainOrDomains : [domainOrDomains];
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`http://${this.bindHost}:${this.controlPort}/v1/quarantine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domains }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (res.ok) {
+        const data = await res.json();
+        return { success: true, injected: data.injected || domains.length, message: `Injected ${domains.length} domain(s) into DNS memory trie` };
+      }
+      return { success: false, message: `Daemon returned status ${res.status}` };
+    } catch (err: any) {
+      return { success: false, message: `Could not inject into daemon: ${err?.message || err}` };
+    }
+  }
+
+  /**
    * Generates formatted installation commands and scripts for macOS launchd and Linux systemd
    */
   getServiceInstallInstructions(): { mac: string; linux: string } {

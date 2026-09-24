@@ -24,18 +24,21 @@ _Modern, lightweight ad-blocking filter management tool for your desktop_
 ## Features
 
 ### 🚀 Advanced Filter Management
+
 - **Multiple Filter Sources**: Import and manage filter lists from various sources
 - **Custom Rules**: Add your own custom blocking rules alongside existing lists
 - **Smart Deduplication**: Automatically removes duplicate rules to optimize performance
 - **Rule Statistics**: View detailed information about processed rules
 
 ### 💡 User-Friendly Interface
+
 - **Light & Dark Mode**: Adapts to your system theme or choose your preference
 - **Modern UI**: Clean, intuitive interface with responsive design
 - **Interactive Dashboard**: Visualize your filter statistics
 - **Progress Tracking**: Real-time progress indicators during processing
 
 ### 🔄 Export Flexibility
+
 - **Multiple Application Support**: Export to various formats including:
   - AdGuard Home
   - AdBlock Plus
@@ -47,6 +50,7 @@ _Modern, lightweight ad-blocking filter management tool for your desktop_
   - Plain Text
 
 ### ⚙️ Seamless Experience
+
 - **Automatic Updates**: Stay current with the latest app improvements
 - **Cross-Platform**: Works on Windows (Coming soon), macOS (Beta), and Linux (Linux support coming soon)
 - **Persistent Settings**: Your configuration is saved between sessions
@@ -61,12 +65,14 @@ _Modern, lightweight ad-blocking filter management tool for your desktop_
 ## Installation
 
 ### macOS (Beta)
+
 1. Download the latest `.dmg` file from [Releases](https://github.com/greigh/Blockingmachine/releases)
 2. Open the `.dmg` file and drag Blockingmachine to your Applications folder
-3. Open Blockingmachine from your Applications folder 
+3. Open Blockingmachine from your Applications folder
 4. The app should be properly signed and notarized. If you encounter a security warning, open Privacy & Security settings, scroll to the bottom, and allow the app to run
 
 ### Windows (Coming Soon)
+
 1. Download the latest `.exe` installer from [Releases](https://github.com/greigh/Blockingmachine/releases)
 2. Run the installer and follow the prompts
 3. Launch Blockingmachine from the Start menu
@@ -75,6 +81,7 @@ _Modern, lightweight ad-blocking filter management tool for your desktop_
 6. **Reporting Windows Issues**: If you encounter issues with the Windows version, please check our [GitHub Issues](https://github.com/greigh/Blockingmachine/issues) to see if it's already reported.
 
 ### Linux (Coming Soon)
+
 1. Download the `.AppImage` or `.deb` package from [Releases](https://github.com/greigh/Blockingmachine/releases)
 2. Make the AppImage executable: `chmod +x Blockingmachine*.AppImage`
 3. Run the AppImage or install the .deb package
@@ -133,6 +140,7 @@ We're actively working to improve the Windows experience and appreciate your fee
 ## Development Timeline
 
 ### Current Release (v1.0.0-beta.3)
+
 - 🚀 Core functionality implementation
 - 💻 macOS support (beta - stable)
 - 🔄 Automatic updates (beta)
@@ -143,6 +151,7 @@ We're actively working to improve the Windows experience and appreciate your fee
 - 🐞 Initial bug fixes
 
 ### Upcoming Features (v1.0.0)
+
 - 📱 Enhanced UI responsiveness
 - 🖥️ Windows support
 - 🐧 Linux support
@@ -153,6 +162,7 @@ We're actively working to improve the Windows experience and appreciate your fee
 - 🔄 Background list updates
 
 ### Future Roadmap (v2.0+)
+
 - 🌐 Built-in network monitoring
 - ☁️ Optional cloud synchronization
 - 📊 Advanced analytics dashboard
@@ -165,6 +175,7 @@ We're actively working to improve the Windows experience and appreciate your fee
 ### Version History
 
 #### 1.0.0-beta.3 (Latest)
+
 - Fixed critical stability issues
 - Enhanced dark mode implementation
 - Improved memory usage for large filter lists
@@ -173,6 +184,7 @@ We're actively working to improve the Windows experience and appreciate your fee
 - ** Had to delay Windows support due to critical issues with the installer. I am working on a fix and will release an update soon. **
 
 #### 1.0.0-beta.2
+
 - 🎉 Initial public beta release
 - Performance optimizations
 - Improved UI responsiveness
@@ -183,6 +195,7 @@ We're actively working to improve the Windows experience and appreciate your fee
 - Added basic dashboard statistics
 
 #### 1.0.0-beta.1
+
 - Initial macOS-only release
 - Basic UI implementation
 - Core filtering functionality
@@ -202,7 +215,7 @@ We're actively working to improve the Windows experience and appreciate your fee
 }
 ```
 
-### Custom Rules Syntax 
+### Custom Rules Syntax
 
 Blockingmachine supports standard AdGuard/AdBlock Plus syntax:
 
@@ -266,34 +279,34 @@ Run Blockingmachine in debug mode to view detailed logs:
 
 ### Setup
 
-  ```bash
-  # Clone the repository
-  git clone https://github.com/greigh/Blockingmachine.git
+````bash
+# Clone the repository
+git clone https://github.com/greigh/Blockingmachine.git
 
-  # Navigate to the electron app directory
-  cd Blockingmachine/packages/electron-app
+# Navigate to the electron app directory
+cd Blockingmachine/packages/electron-app
 
-  # Install dependencies
-  npm install
+# Install dependencies
+npm install
 
-  # Start the development server
-  npm start
+# Start the development server
+npm start
 
-  # Build the application
-  npm run make
-  
+# Build the application
+npm run make
+
 ## Build Options
 
 ``` bash
-  # Build for macOS
-  npm run make -- --platform=darwin
+# Build for macOS
+npm run make -- --platform=darwin
 
-  # Build for Windows
-  npm run make -- --platform=win32
+# Build for Windows
+npm run make -- --platform=win32
 
-  # Build for Linux
-  npm run make -- --platform=linux
-```
+# Build for Linux
+npm run make -- --platform=linux
+````
 
 ## Contributing
 
@@ -329,6 +342,7 @@ We use ESLint and Prettier to maintain code quality. Before submitting a pull re
 - **@blockingmachine/core**: Core rule processing functionality
 
 ## License
+
 This project is licensed under the BSD-3-Clause License. Read the [LICENSE](LICENSE) file for details.
 
-<div align="center"> Made with ❤️ by <a href="https://danielhipskind.com/">Daniel Hipskind</a> </div>
+<div align="center"> Made with ❤️ by <a href="https://greighstudios.com/">Greigh Studios LLC</a> </div>

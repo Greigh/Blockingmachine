@@ -247,6 +247,15 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     }
   };
 
+  const handleToggleAutoQuarantineDga = async (checked: boolean) => {
+    const updated = { ...watchdogConfig, autoQuarantineEntropyDga: checked };
+    setWatchdogConfig(updated);
+    if (window.electron?.setAiWatchdogConfig) {
+      await window.electron.setAiWatchdogConfig(updated);
+      setSuccessMessage?.(`Auto-quarantine zero-day DGA / high-entropy domains ${checked ? 'enabled' : 'disabled'}.`);
+    }
+  };
+
   // Live Radar Background Scanning Handlers
   const handleStartLiveScan = async () => {
     if (!window.electron?.startLiveRadarSession) return;
@@ -725,6 +734,28 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 {watchdogConfig.enabled ? '✓ Active' : 'Enable'}
               </button>
             </div>
+          </div>
+
+          <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border-color, rgba(255, 255, 255, 0.08))' }}>
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontSize: '0.75rem',
+                color: 'var(--text-secondary, #94a3b8)',
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={watchdogConfig.autoQuarantineEntropyDga !== false}
+                onChange={(e) => handleToggleAutoQuarantineDga(e.target.checked)}
+                style={{ cursor: 'pointer', accentColor: 'var(--accent-color, #6366f1)' }}
+              />
+              <span>Auto-quarantine zero-day DGA / high-entropy domains</span>
+            </label>
           </div>
         </div>
       </div>
@@ -1845,6 +1876,58 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                   </svg>
                   <span>Clear Ledger</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Live Dynamic Threat Feeds Banner */}
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px',
+                background: 'rgba(99, 102, 241, 0.08)',
+                border: '1px solid rgba(99, 102, 241, 0.25)',
+                borderRadius: '8px',
+                padding: '12px 16px',
+                marginBottom: '16px',
+              }}
+            >
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-color, #f8fafc)' }}>
+                  <span>🛡️ Live Dynamic Threat Feeds (Port 9191)</span>
+                  <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'rgba(34, 197, 94, 0.2)', color: '#4ade80' }}>Auto-Updating</span>
+                </div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary, #94a3b8)', marginTop: '2px' }}>
+                  High-confidence (≥ 85%) quarantined zero-day threats are materialized in real time as network-wide feeds and auto-injected into DNS trie memory.
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                  onClick={() => {
+                    navigator.clipboard.writeText('http://127.0.0.1:9191/threats.txt');
+                    setSuccessMessage?.('Copied ABP threat feed URL to clipboard');
+                  }}
+                  title="Copy http://127.0.0.1:9191/threats.txt"
+                >
+                  Copy ABP Feed (/threats.txt)
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                  onClick={() => {
+                    navigator.clipboard.writeText('http://127.0.0.1:9191/ai-threats.txt');
+                    setSuccessMessage?.('Copied domain threat feed URL to clipboard');
+                  }}
+                  title="Copy http://127.0.0.1:9191/ai-threats.txt"
+                >
+                  Copy Domain Feed (/ai-threats.txt)
                 </button>
               </div>
             </div>
