@@ -6,7 +6,7 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
     {
       id: 'threat-1',
       domain: 'track-high-conf.com',
-      category: 'telemetry/analytics',
+      category: 'Telemetry/Analytics',
       verdict: 'tracker',
       riskLevel: 'high',
       confidence: 95,
@@ -16,7 +16,7 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
     {
       id: 'threat-2',
       domain: 'malware-dga.org',
-      category: 'malware/phishing',
+      category: 'Malware/Phishing',
       verdict: 'malicious',
       riskLevel: 'critical',
       confidence: 0.92, // Fractional 0-1 scale test
@@ -26,7 +26,7 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
     {
       id: 'threat-3',
       domain: 'low-conf-suspicious.net',
-      category: 'advertising',
+      category: 'Advertising',
       verdict: 'suspicious',
       riskLevel: 'medium',
       confidence: 65, // Below 85% threshold
@@ -36,7 +36,7 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
     {
       id: 'threat-4',
       domain: 'track-high-conf.com', // Duplicate entry
-      category: 'telemetry/analytics',
+      category: 'Telemetry/Analytics',
       verdict: 'tracker',
       riskLevel: 'high',
       confidence: 90,
@@ -112,7 +112,7 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
         verdict: 'malicious',
         confidence: 90,
         riskLevel: 'critical',
-        category: 'malware/phishing',
+        category: 'Malware/Phishing',
         reasons: ['High Shannon entropy', 'Zero-day DGA generation detected'],
         entropy: 4.85,
         isLikelyDga: true,
@@ -122,8 +122,8 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
         domain: 'standard-site.org',
         verdict: 'clean',
         confidence: 98,
-        riskLevel: 'clean',
-        category: 'clean',
+        riskLevel: 'none',
+        category: 'Clean',
         reasons: ['Known reputable domain'],
         entropy: 2.1,
         isLikelyDga: false,
