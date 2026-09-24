@@ -2,6 +2,7 @@ import { DnrManager } from './dnrManager.js';
 import { SyncClient } from './syncClient.js';
 import { Mv3Guard } from './mv3Guard.js';
 import { TabTelemetry, ExtensionMessage } from '../shared/types.js';
+import { STORAGE_KEY_COSMETICS } from '../shared/constants.js';
 
 const dnr = new DnrManager();
 const sync = new SyncClient();
@@ -92,13 +93,20 @@ async function pruneOrphanedTabTelemetry(): Promise<void> {
 async function syncAndApplyRules(): Promise<number> {
   try {
     console.log('[Blockingmachine] Fetching latest compiled rules from hub...');
-    const rules = await sync.fetchCompiledRules();
-    if (rules.length > 0) {
-      const count = await dnr.updateDynamicRules(rules);
-      console.log(`[Blockingmachine] Successfully applied ${count} dynamic DNR rules.`);
-      await pruneOrphanedTabTelemetry();
-      return count;
+    const { networkRules, cosmeticSelectors } = await sync.fetchCompiledRules();
+    let count = 0;
+    if (networkRules.length > 0) {
+      count = await dnr.updateDynamicRules(networkRules);
+      console.log(`[Blockingmachine] Successfully applied ${count} dynamic DNR network rules.`);
     }
+    if (cosmeticSelectors.length > 0) {
+      await chrome.storage.local.set({ [STORAGE_KEY_COSMETICS]: cosmeticSelectors });
+      console.log(
+        `[Blockingmachine] Stored ${cosmeticSelectors.length} dynamic cosmetic element-hiding selectors.`
+      );
+    }
+    await pruneOrphanedTabTelemetry();
+    return count;
   } catch (err) {
     console.warn('[Blockingmachine] Rule synchronization encountered an error:', err);
   }

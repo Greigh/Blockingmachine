@@ -70,7 +70,21 @@ describe('DomainTrie engine', () => {
     expect(trie.evaluate('content-site.org').verdict).toBe('ALLOWED');
     expect(trie.evaluate('media-site.net').verdict).toBe('ALLOWED');
 
-    // 4. Pure domain and hosts rules should be blocked
+    // 4. Scriptlets must NOT block at DNS level
+    trie.addRule('site.com##+js(set, adblock, true)');
+    expect(trie.evaluate('site.com').verdict).toBe('ALLOWED');
+
+    // 5. Bare public suffixes and reverse DNS must NOT be sinkholed
+    trie.addRule('||co.uk^');
+    trie.addRule('||pages.dev^');
+    trie.addRule('||1.0.0.127.in-addr.arpa^');
+    expect(trie.evaluate('co.uk').verdict).toBe('ALLOWED');
+    expect(trie.evaluate('bbc.co.uk').verdict).toBe('ALLOWED');
+    expect(trie.evaluate('pages.dev').verdict).toBe('ALLOWED');
+    expect(trie.evaluate('my-site.pages.dev').verdict).toBe('ALLOWED');
+    expect(trie.evaluate('1.0.0.127.in-addr.arpa').verdict).toBe('ALLOWED');
+
+    // 6. Pure domain and hosts rules should be blocked
     trie.addRule('0.0.0.0 tele-tracker.com');
     trie.addRule('||pure-adserver.com^');
     expect(trie.evaluate('tele-tracker.com').verdict).toBe('BLOCKED');

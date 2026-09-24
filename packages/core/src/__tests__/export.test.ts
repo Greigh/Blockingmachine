@@ -114,4 +114,40 @@ describe("exportWithOptions", () => {
     expect(hostsContent).toContain("0.0.0.0 plain-block.com");
     expect(hostsContent).not.toContain("adnetwork.com");
   });
+
+  test("enforces strict boundary: DNS excludes bare public suffixes, arpa, and path rules", async () => {
+    const processor = new RuleProcessor();
+    const store = new RuleStore(processor);
+    store.addRule("||co.uk^", "source-1");
+    store.addRule("||pages.dev^", "source-1");
+    store.addRule("||1.0.0.127.in-addr.arpa^", "source-1");
+    store.addRule("||site.com/ad/banner.png^", "source-1");
+    store.addRule("site.com##.sponsor-banner", "source-1");
+    store.addRule("||legit-domain.com^", "source-2");
+
+    await exportWithOptions(tmpDir, metadata, { formats: ["hosts"] }, store);
+
+    const hostsContent = await fs.readFile(join(tmpDir, "hosts.txt"), "utf8");
+    expect(hostsContent).toContain("0.0.0.0 legit-domain.com");
+    // DNS must never contain public suffixes, arpa, paths, or cosmetics
+    expect(hostsContent).not.toContain("co.uk");
+    expect(hostsContent).not.toContain("pages.dev");
+    expect(hostsContent).not.toContain("in-addr.arpa");
+    expect(hostsContent).not.toContain("site.com");
+  });
+
+  test("enforces strict boundary: Browser format excludes DNS-only directives ($dnsrewrite, $dnstype)", async () => {
+    const processor = new RuleProcessor();
+    const store = new RuleStore(processor);
+    store.addRule("||dns-only.com^$dnsrewrite=1.2.3.4", "source-1");
+    store.addRule("||dns-type.com^$dnstype=AAAA", "source-1");
+    store.addRule("||browser-track.com^$script", "source-2");
+
+    await exportWithOptions(tmpDir, metadata, { formats: ["adguard"] }, store);
+
+    const adguardContent = await fs.readFile(join(tmpDir, "adguard.txt"), "utf8");
+    expect(adguardContent).toContain("||browser-track.com^$script");
+    expect(adguardContent).not.toContain("dns-only.com");
+    expect(adguardContent).not.toContain("dns-type.com");
+  });
 });

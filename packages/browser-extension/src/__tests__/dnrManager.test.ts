@@ -134,4 +134,42 @@ describe('DnrManager', () => {
     expect(dnr.parseRule('||<script>.com^')).toBeNull();
     expect(dnr.parseRule('||not-a-domain^')).toBeNull();
   });
+
+  test('strictly rejects DNS-only directives from entering DNR rules', () => {
+    const dnr = new DnrManager();
+
+    // DNS server rewrite/query-type directives must never be treated as browser rules
+    expect(dnr.parseRule('||example.com^$dnsrewrite=1.2.3.4')).toBeNull();
+    expect(dnr.parseRule('||example.com^$dnstype=AAAA')).toBeNull();
+    expect(dnr.parseRule('||example.com^$client=192.168.1.10')).toBeNull();
+    expect(dnr.parseRule('||example.com^$ctag=safe')).toBeNull();
+    expect(dnr.parseRule('||1.0.0.127.in-addr.arpa^')).toBeNull();
+
+    // Loopback hosts entries must not pollute dynamic quotas
+    expect(dnr.parseRule('127.0.0.1 localhost')).toBeNull();
+    expect(dnr.parseRule('0.0.0.0 broadcasthost')).toBeNull();
+  });
+
+  test('strictly rejects cosmetic and scriptlet rules from entering DNR rules', () => {
+    const dnr = new DnrManager();
+
+    // Cosmetic element hiding must be handled in content scripts, not DNR
+    expect(dnr.parseRule('example.com##.ad-banner')).toBeNull();
+    expect(dnr.parseRule('example.com#@#.sponsor')).toBeNull();
+    expect(dnr.parseRule('##div[class*="ad-slot"]')).toBeNull();
+    expect(dnr.parseRule('example.com#?#div:has(> img.ad)')).toBeNull();
+    expect(dnr.parseRule('example.com#%#//scriptlet("abort-on-property-read", "adblock")')).toBeNull();
+    expect(dnr.parseRule('example.com##+js(set, ads, true)')).toBeNull();
+  });
+
+  test('strictly rejects bare public suffixes and reserved hostnames', () => {
+    const dnr = new DnrManager();
+
+    // Prevent collateral damage from wildcards on cloud roots or ccTLDs
+    expect(dnr.parseRule('||co.uk^')).toBeNull();
+    expect(dnr.parseRule('||pages.dev^')).toBeNull();
+    expect(dnr.parseRule('||github.io^')).toBeNull();
+    expect(dnr.parseRule('||cloudfront.net^')).toBeNull();
+    expect(dnr.parseRule('||localhost^')).toBeNull();
+  });
 });

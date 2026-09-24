@@ -11,6 +11,51 @@ export interface ParsedDnrCandidate {
 // Regex to validate syntactically compliant domain hostnames (RFC 1123)
 const DOMAIN_REGEX = /^[a-z0-9](?:[a-z0-9-_]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-_]{0,61}[a-z0-9])?)+$/;
 
+const RESERVED_INFRASTRUCTURE = new Set([
+  'localhost',
+  'local',
+  'broadcasthost',
+  'home.arpa',
+  'invalid',
+  'test',
+  'example',
+  'onion'
+]);
+
+const BARE_PUBLIC_SUFFIXES = new Set([
+  'co.uk',
+  'org.uk',
+  'gov.uk',
+  'ac.uk',
+  'me.uk',
+  'com.au',
+  'net.au',
+  'org.au',
+  'edu.au',
+  'gov.au',
+  'co.nz',
+  'org.nz',
+  'net.nz',
+  'co.jp',
+  'ne.jp',
+  'or.jp',
+  'com.br',
+  'org.br',
+  'net.br',
+  'com.cn',
+  'net.cn',
+  'org.cn',
+  'co.in',
+  'net.in',
+  'org.in',
+  'github.io',
+  'pages.dev',
+  'vercel.app',
+  'cloudfront.net',
+  'azurewebsites.net',
+  'amazonaws.com'
+]);
+
 export class DnrManager {
   private nextRuleId = 1;
 
@@ -21,6 +66,33 @@ export class DnrManager {
   parseRule(line: string): ParsedDnrCandidate | null {
     let clean = line.trim();
     if (!clean || clean.startsWith('#') || clean.startsWith('!')) return null;
+
+    // 1. Strictly exclude cosmetic filters and scriptlets (handled in content/defusers)
+    if (
+      clean.includes('##') ||
+      clean.includes('#@#') ||
+      clean.includes('#?#') ||
+      clean.includes('$$') ||
+      clean.includes('+js(')
+    ) {
+      return null;
+    }
+
+    // 2. Strictly exclude DNS-only directives
+    if (
+      clean.includes('$dnsrewrite') ||
+      clean.includes('$dnstype') ||
+      clean.includes('$client') ||
+      clean.includes('$ctag') ||
+      clean.includes('.arpa')
+    ) {
+      return null;
+    }
+
+    // 3. Exclude raw loopback / broadcasthost hosts mappings
+    if (/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+(?:localhost|broadcasthost|local)/i.test(clean)) {
+      return null;
+    }
 
     let isException = false;
     let isImportant = false;
@@ -52,6 +124,11 @@ export class DnrManager {
     // Validate that the remaining string is a syntactically valid domain name
     // to prevent Chrome DNR from throwing "Invalid urlFilter" on the entire batch
     if (!clean || !DOMAIN_REGEX.test(clean)) {
+      return null;
+    }
+
+    // Exclude reserved infrastructure and bare public suffixes
+    if (RESERVED_INFRASTRUCTURE.has(clean) || BARE_PUBLIC_SUFFIXES.has(clean)) {
       return null;
     }
 

@@ -57,6 +57,8 @@ import {
   checkRuleConflict,
   synthesizeRules,
   evaluateDomainRules,
+  filterDNSRules,
+  filterBrowserRules,
   type AiProviderConfig,
   type AiScanResult,
   type RawDnsQuery,
@@ -1296,10 +1298,48 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         const outputDir = dirname(savePath);
         const reqUrl = new URL(req.url || '/', 'http://localhost');
         const pathname = decodeURIComponent(reqUrl.pathname);
+        const lowerPath = pathname.toLowerCase();
+        const isDnsEndpoint =
+          lowerPath === '/dns.txt' ||
+          lowerPath === '/dns-rules.txt' ||
+          lowerPath === '/adguarddns.txt';
+        const isBrowserEndpoint =
+          lowerPath === '/browser.txt' ||
+          lowerPath === '/browser-rules.txt' ||
+          lowerPath === '/adguardbrowser.txt';
 
-        // Determine target file to serve
+        // Determine target file to serve with strict DNS vs Browser endpoint routing
         let targetFilePath = savePath;
-        if (pathname !== '/' && pathname.length > 1) {
+
+        if (isDnsEndpoint) {
+          const dnsCandidates = [
+            join(outputDir, 'dns.txt'),
+            join(outputDir, 'processed_dns.txt'),
+            join(outputDir, 'adguardDns.txt'),
+            join(outputDir, 'processed_domains.txt'),
+            join(outputDir, 'processed_hosts.txt'),
+          ];
+          for (const cand of dnsCandidates) {
+            if (existsSync(cand)) {
+              targetFilePath = cand;
+              break;
+            }
+          }
+        } else if (isBrowserEndpoint) {
+          const browserCandidates = [
+            join(outputDir, 'browser.txt'),
+            join(outputDir, 'processed_browser.txt'),
+            join(outputDir, 'adguardBrowser.txt'),
+            join(outputDir, 'processed_abp.txt'),
+            join(outputDir, 'processed_adguard.txt'),
+          ];
+          for (const cand of browserCandidates) {
+            if (existsSync(cand)) {
+              targetFilePath = cand;
+              break;
+            }
+          }
+        } else if (pathname !== '/' && pathname.length > 1) {
           const cleanName = basename(pathname);
           if (cleanName.startsWith('.')) {
             res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -1322,6 +1362,51 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
 
         try {
           if (existsSync(targetFilePath)) {
+            // If serving the fallback savePath for a dedicated DNS or Browser endpoint, filter on-the-fly
+            if (targetFilePath === savePath && (isDnsEndpoint || isBrowserEndpoint)) {
+              const rawText = await fs.readFile(savePath, 'utf8');
+              const lines = rawText.split('\n');
+              let filteredLines: string[] = [];
+
+              if (isDnsEndpoint) {
+                // Keep only DNS-safe rules (reject cosmetics, scriptlets, browser modifiers, paths, arpa)
+                filteredLines = lines.filter((line) => {
+                  const t = line.trim();
+                  if (!t || t.startsWith('!') || t.startsWith('#')) return true;
+                  if (t.includes('##') || t.includes('#@#') || t.includes('#?#') || t.includes('$$') || t.includes('+js(')) return false;
+                  if (t.includes('.arpa') || t.includes('/')) return false;
+                  if (t.includes('$')) {
+                    const mods = t.split('$')[1]?.toLowerCase().split(',') || [];
+                    if (mods.some((m) => ['image', 'script', 'stylesheet', 'websocket', 'csp', 'popup', 'media'].includes(m.split('=')[0]))) {
+                      return false;
+                    }
+                  }
+                  return true;
+                });
+              } else {
+                // Keep only browser-safe rules (reject DNS rewrite, query types, loopback hosts mappings)
+                filteredLines = lines.filter((line) => {
+                  const t = line.trim();
+                  if (!t || t.startsWith('!') || t.startsWith('#')) return true;
+                  if (t.includes('$dnsrewrite') || t.includes('$dnstype') || t.includes('$client') || t.includes('$ctag') || t.includes('.arpa')) {
+                    return false;
+                  }
+                  if (/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+(?:localhost|broadcasthost|local)/i.test(t)) {
+                    return false;
+                  }
+                  return true;
+                });
+              }
+
+              const payload = Buffer.from(filteredLines.join('\n'), 'utf8');
+              res.writeHead(200, {
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Content-Length': payload.length,
+              });
+              res.end(payload);
+              return;
+            }
+
             const stat = await fs.stat(targetFilePath);
             if (stat.isFile()) {
               res.writeHead(200, {
@@ -1697,6 +1782,39 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           } catch (addError) {
             console.error(`[IPC Main] Failed to write additional format ${addFormat}:`, addError);
           }
+        }
+
+        // Automatically write segregated endpoint files for System Daemon (dns.txt) and Browser Extension (browser.txt)
+        try {
+          const dnsRules = filterDNSRules(uniqueRules);
+          const dnsMeta: FilterListMetadata = {
+            ...metadata,
+            stats: {
+              ...metadata.stats,
+              totalRules: dnsRules.length,
+              uniqueRules: dnsRules.length,
+            },
+          };
+          const dnsContent = generateFilterList(dnsRules, dnsMeta, 'adguard');
+          await fs.writeFile(join(outputDir, 'dns.txt'), dnsContent, 'utf8');
+          await fs.writeFile(join(outputDir, 'adguardDns.txt'), dnsContent, 'utf8');
+          console.log(`[IPC Main] Segregated DNS endpoints saved: dns.txt (${dnsRules.length} rules)`);
+
+          const browserRules = filterBrowserRules(uniqueRules);
+          const browserMeta: FilterListMetadata = {
+            ...metadata,
+            stats: {
+              ...metadata.stats,
+              totalRules: browserRules.length,
+              uniqueRules: browserRules.length,
+            },
+          };
+          const browserContent = generateFilterList(browserRules, browserMeta, 'adguard');
+          await fs.writeFile(join(outputDir, 'browser.txt'), browserContent, 'utf8');
+          await fs.writeFile(join(outputDir, 'adguardBrowser.txt'), browserContent, 'utf8');
+          console.log(`[IPC Main] Segregated Browser endpoints saved: browser.txt (${browserRules.length} rules)`);
+        } catch (segErr) {
+          console.error('[IPC Main] Failed to write segregated dns/browser endpoints:', segErr);
         }
 
         const timestampStr = new Date().toLocaleString();

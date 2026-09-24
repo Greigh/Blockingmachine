@@ -30,6 +30,55 @@ const BROWSER_ONLY_MODIFIERS = new Set([
   'other'
 ]);
 
+// Reserved infrastructure domains that must never be sinkholed
+const RESERVED_INFRASTRUCTURE_DOMAINS = new Set([
+  'localhost',
+  'local',
+  'broadcasthost',
+  'home.arpa',
+  'ip6-localhost',
+  'ip6-loopback',
+  'invalid',
+  'test',
+  'example',
+  'onion'
+]);
+
+// Bare public suffixes that must never be wildcard blocked to avoid collateral damage
+const BARE_PUBLIC_SUFFIXES = new Set([
+  'co.uk',
+  'org.uk',
+  'gov.uk',
+  'ac.uk',
+  'me.uk',
+  'com.au',
+  'net.au',
+  'org.au',
+  'edu.au',
+  'gov.au',
+  'co.nz',
+  'org.nz',
+  'net.nz',
+  'co.jp',
+  'ne.jp',
+  'or.jp',
+  'com.br',
+  'org.br',
+  'net.br',
+  'com.cn',
+  'net.cn',
+  'org.cn',
+  'co.in',
+  'net.in',
+  'org.in',
+  'github.io',
+  'pages.dev',
+  'vercel.app',
+  'cloudfront.net',
+  'azurewebsites.net',
+  'amazonaws.com'
+]);
+
 /**
  * Domain Suffix Trie
  * Reverses domain labels (e.g. ['net', 'doubleclick', 'ad']) to enable
@@ -111,6 +160,16 @@ export class DomainTrie {
 
     // Validate domain syntax (RFC 1123)
     if (!/^[a-z0-9](?:[a-z0-9-_]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-_]{0,61}[a-z0-9])?)+$/.test(pattern)) {
+      return;
+    }
+
+    // 5. Never sinkhole reserved infrastructure or reverse DNS
+    if (RESERVED_INFRASTRUCTURE_DOMAINS.has(pattern) || pattern.endsWith('.arpa')) {
+      return;
+    }
+
+    // 6. Never wildcard-block bare public suffixes or cloud roots (e.g. ||co.uk^ or ||github.io^)
+    if (isWildcard && BARE_PUBLIC_SUFFIXES.has(pattern)) {
       return;
     }
 
