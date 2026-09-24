@@ -112,20 +112,21 @@ async function updateFilters() {
 
 async function copyAndRenameFiles() {
   // First, copy the main filter file. Prefer the root export path (where the CLI writes),
+  // When running in repo context, the generated file is placed in database/filters/output/filter-list.txt,
   // but fall back to the sources path if necessary.
-  let adguardSrcPath = path.join(databaseRoot, 'filters', 'output', 'filter-list.txt');
-  try {
-    await fs.access(adguardSrcPath);
-  } catch (err) {
-    adguardSrcPath = path.join(databaseRoot, 'sources', 'filters', 'output', 'filter-list.txt');
-  }
+  const adguardPrimaryPath = path.join(databaseRoot, 'filters', 'output', 'filter-list.txt');
+  const adguardFallbackPath = path.join(databaseRoot, 'sources', 'filters', 'output', 'filter-list.txt');
   const adguardDestPath = path.join(databaseRoot, 'filters', 'adguardBrowser.txt');
   
   try {
-    await fs.access(adguardSrcPath);
+    let content;
+    try {
+      content = await fs.readFile(adguardPrimaryPath, 'utf-8');
+    } catch {
+      content = await fs.readFile(adguardFallbackPath, 'utf-8');
+    }
     
     // Read the source file and update headers
-    const content = await fs.readFile(adguardSrcPath, 'utf-8');
     const lines = content.split('\n');
     
     // Count actual blocking rules (excluding metadata)

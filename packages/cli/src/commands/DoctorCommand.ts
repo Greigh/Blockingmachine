@@ -51,7 +51,7 @@ export class DoctorCommand extends BaseCommand<DoctorOptions> {
     this.logger.info(chalk.dim(`  OS:       ${platform}`));
 
     // 2. Database check
-    let mongoStatus: "connected" | "offline" | "failed" = "offline";
+    let mongoStatus: "connected" | "offline" | "failed";
     const mongoUri = this.config.mongodb?.uri || "mongodb://localhost:27017/blockingmachine";
     try {
       const connected = await connectDB(this.config.mongodb, true);

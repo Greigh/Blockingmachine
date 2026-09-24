@@ -4,10 +4,12 @@ import path from "path";
 import os from "os";
 
 describe("fetchWithConditionalCache", () => {
+  let tempDir: string;
   let tempFilePath: string;
 
   beforeAll(async () => {
-    tempFilePath = path.join(os.tmpdir(), `bm-test-fetch-${Date.now()}.txt`);
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bm-test-fetch-"));
+    tempFilePath = path.join(tempDir, "fetch-test.txt");
     await fs.writeFile(
       tempFilePath,
       "||adserver.example.com^\n0.0.0.0 tracking.com",
@@ -17,7 +19,7 @@ describe("fetchWithConditionalCache", () => {
 
   afterAll(async () => {
     try {
-      await fs.unlink(tempFilePath);
+      await fs.rm(tempDir, { recursive: true, force: true });
     } catch {
       // ignore
     }

@@ -110,12 +110,18 @@ export class RuleDeduplicator {
         // Modifiers only exist on network rules, never on cosmetic rules
         modifiers: isCosmeticOrScriptlet
           ? ""
-          : (stripped.match(/\$([^#]*?)$/)?.[1] || "")
-              .split(",")
-              .map((m) => m.split("=")[0].toLowerCase().trim())
-              .filter((m) => m && m !== "domain") // Ensure 'domain' modifier itself isn't included here
-              .sort()
-              .join(","),
+          : (() => {
+              const lastDollar = stripped.lastIndexOf("$");
+              if (lastDollar === -1) return "";
+              const after = stripped.slice(lastDollar + 1);
+              if (after.includes("#")) return "";
+              return after
+                .split(",")
+                .map((m) => m.split("=")[0].toLowerCase().trim())
+                .filter((m) => m && m !== "domain") // Ensure 'domain' modifier itself isn't included here
+                .sort()
+                .join(",");
+            })(),
         selector: !isScriptletRule
           ? (stripped.match(/(?:##|#@#)(.+)/)?.[1] || "")
               .toLowerCase()
@@ -127,7 +133,7 @@ export class RuleDeduplicator {
           .replace(/\s+/g, " ")
           .trim(),
         scriptlet: (
-          stripped.match(/(?:##|#@#)(\+js\(.+\))/)?.[1] ||
+          stripped.match(/(?:##|#@#)(\+js\([^)]+\))/)?.[1] ||
           stripped.match(
             /(?:#\$#|#\$\?#|#%#|#@%#|#@\$#)(.+)/,
           )?.[1] || ""
@@ -143,17 +149,47 @@ export class RuleDeduplicator {
 
       // 2. Remove all modifiers, selectors, options from the core rule string
       if (isCosmeticOrScriptlet) {
-        stripped = stripped
-          .replace(/\$\$.*$/, "") // Remove HTML filtering section
-          .replace(
-            /(?:##\+js\(|#@#\+js\(|##|#@#|#\?#|#\$#|#\$\?#|#%#|#@%#|#@\$#).*$/,
-            "",
-          ) // Remove cosmetic/extended/scriptlet selectors
-          .replace(/\s+#.*$/, ""); // Remove trailing comments
+        const htmlIdx = stripped.indexOf("$$");
+        if (htmlIdx !== -1) {
+          stripped = stripped.slice(0, htmlIdx);
+        }
+
+        const cosmeticMarkers = [
+          "##+js(",
+          "#@#+js(",
+          "##",
+          "#@#",
+          "#?#",
+          "#$#",
+          "#$?#",
+          "#%#",
+          "#@%#",
+          "#@$#",
+        ];
+        let earliestCosmetic = -1;
+        for (const marker of cosmeticMarkers) {
+          const idx = stripped.indexOf(marker);
+          if (idx !== -1 && (earliestCosmetic === -1 || idx < earliestCosmetic)) {
+            earliestCosmetic = idx;
+          }
+        }
+        if (earliestCosmetic !== -1) {
+          stripped = stripped.slice(0, earliestCosmetic);
+        }
+
+        const commentMatch = stripped.search(/\s+#/);
+        if (commentMatch !== -1) {
+          stripped = stripped.slice(0, commentMatch);
+        }
       } else {
-        stripped = stripped
-          .replace(/\$.*$/, "") // Remove modifiers section
-          .replace(/\s+#.*$/, ""); // Remove trailing comments
+        const dollarIdx = stripped.indexOf("$");
+        if (dollarIdx !== -1) {
+          stripped = stripped.slice(0, dollarIdx);
+        }
+        const commentMatch = stripped.search(/\s+#/);
+        if (commentMatch !== -1) {
+          stripped = stripped.slice(0, commentMatch);
+        }
       }
 
       // 3. Refined Normalization of the Core Target String
@@ -165,13 +201,18 @@ export class RuleDeduplicator {
       // Strip ABP network rule prefixes (|| or |)
       stripped = stripped.replace(/^(?:\|\||\|)/, "");
 
-      stripped = stripped
-        .replace(/^(?:https?:\/\/)?(?:www\.)?/, "") // Remove http/https, www.
-        .replace(/[?#].*$/, "") // Remove Query String and Anchor
-        .replace(/[\^/]+$/, "") // Remove one or MORE trailing ^ or /
-        .replace(/\.+$/, "") // Remove trailing dots
-        .toLowerCase() // Lowercase the result
-        .trim(); // Final trim
+      stripped = stripped.replace(/^(?:https?:\/\/)?(?:www\.)?/, ""); // Remove http/https, www.
+      const queryOrHash = stripped.search(/[?#]/);
+      if (queryOrHash !== -1) {
+        stripped = stripped.slice(0, queryOrHash); // Remove Query String and Anchor
+      }
+      while (stripped.endsWith("^") || stripped.endsWith("/")) {
+        stripped = stripped.slice(0, -1); // Remove trailing ^ or /
+      }
+      while (stripped.endsWith(".")) {
+        stripped = stripped.slice(0, -1); // Remove trailing dots
+      }
+      stripped = stripped.toLowerCase().trim();
 
       // Handle cases where stripping leaves nothing
       if (

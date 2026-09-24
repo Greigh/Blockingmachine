@@ -44,7 +44,7 @@ function isMobileRule(rule: string, source: FilterSource): boolean {
     /mobile|android|ios|app|tablet/i,
     /com\.(google|android|huawei|xiaomi|oppo|vivo|samsung)/,
     /\.(apk|ipa|app)$/,
-    /play\.google\.com|apps\.apple\.com/,
+    /(?:^|[./|])(?:play\.google\.com|apps\.apple\.com)(?:$|[/?#^$])/,
   ];
 
   return (

@@ -7,7 +7,6 @@ import { TabTelemetry, ExtensionMessage } from '../shared/types.js';
 import {
   STORAGE_KEY_COSMETICS,
   STORAGE_KEY_COSMETICS_ENABLED,
-  STORAGE_KEY_USER_COSMETICS,
 } from '../shared/constants.js';
 
 const dnr = new DnrManager();

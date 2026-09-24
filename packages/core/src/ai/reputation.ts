@@ -517,8 +517,8 @@ export function normalizeHostname(input: string): string {
   clean = clean.replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|\S+@)\s+/, '');
   // Strip ABP / AdGuard rule prefixes and modifiers (e.g. "||domain.com^$third-party" -> "domain.com")
   clean = clean.replace(/^\|\|/, '');
-  clean = clean.replace(/\^.*$/, '');
-  clean = clean.replace(/\$.*$/, '');
+  clean = clean.split('^')[0];
+  clean = clean.split('$')[0];
   // Strip wildcards (e.g. "*.domain.com" -> "domain.com")
   clean = clean.replace(/^\*\.?/, '');
   // Strip protocol scheme (http://, https://, etc.)
@@ -530,8 +530,8 @@ export function normalizeHostname(input: string): string {
     clean = clean.split(':')[0] ?? clean;
   }
   // Strip leading and trailing dots
-  clean = clean.replace(/^\.+|\.+$/g, '');
-  if (clean.endsWith('.')) clean = clean.slice(0, -1);
+  while (clean.startsWith('.')) clean = clean.slice(1);
+  while (clean.endsWith('.')) clean = clean.slice(0, -1);
   return clean;
 }
 

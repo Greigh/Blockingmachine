@@ -1,5 +1,3 @@
-const path = require('path');
-
 /** @type {import('@electron-forge/shared-types').ForgeConfig} */
 const config = {
   packagerConfig: {

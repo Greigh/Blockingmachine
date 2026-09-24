@@ -384,7 +384,8 @@ export class AiDetectorService {
     clean = clean.replace(/^[a-z]+:\/\//i, '');
     clean = clean.split('/')[0];
     clean = clean.split(':')[0];
-    clean = clean.replace(/^\.+|\.+$/g, '');
+    while (clean.startsWith('.')) clean = clean.slice(1);
+    while (clean.endsWith('.')) clean = clean.slice(0, -1);
     return clean;
   }
 

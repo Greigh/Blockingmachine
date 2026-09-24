@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from typing import Any
-import logging
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -11,8 +10,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import BlockingmachineDataUpdateCoordinator
-
-_LOGGER = logging.getLogger(__name__)
 
 SWITCH_DESCRIPTIONS: tuple[SwitchEntityDescription, ...] = (
     SwitchEntityDescription(

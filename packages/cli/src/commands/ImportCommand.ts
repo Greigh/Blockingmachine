@@ -10,6 +10,8 @@ import {
   parseFilterList,
 } from "@blockingmachine/core";
 import fs from "fs/promises";
+import { createWriteStream } from "fs";
+import { once } from "events";
 import path from "path";
 
 interface CacheRecord {
@@ -119,7 +121,12 @@ export class ImportCommand extends BaseCommand<ImportOptions> {
       // Save all rules to a combined file
       if (allRules.length > 0) {
         const outputFile = path.join(paths.output.dir, "imported-rules.txt");
-        await fs.writeFile(outputFile, allRules.join("\n"));
+        const writeStream = createWriteStream(outputFile, { encoding: "utf8" });
+        for (const rule of allRules) {
+          writeStream.write(rule + "\n");
+        }
+        writeStream.end();
+        await once(writeStream, "finish");
         this.logger.info(
           `Saved ${allRules.length} unique rules to: ${outputFile}`,
         );

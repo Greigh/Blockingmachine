@@ -137,11 +137,13 @@ export class DnrManager {
     // 3: $important block (...$important)
     // 2: standard exception (@@)
     // 1: standard block
-    let priority = 1;
-    if (isException && isImportant) priority = 4;
-    else if (isImportant) priority = 3;
-    else if (isException) priority = 2;
-    else priority = 1;
+    const priority = (isException && isImportant)
+      ? 4
+      : isImportant
+      ? 3
+      : isException
+      ? 2
+      : 1;
 
     return {
       rawRule: line.trim(),
