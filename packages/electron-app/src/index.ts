@@ -2048,12 +2048,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       try {
         const val = Boolean(enabled);
         store.set('launchOnStartup', val);
-        try {
-          app.setLoginItemSettings({
-            openAtLogin: val,
-          });
-        } catch (loginErr) {
-          console.warn('app.setLoginItemSettings notice (expected in unpacked development):', loginErr);
+        if (app.isPackaged) {
+          try {
+            app.setLoginItemSettings({
+              openAtLogin: val,
+            });
+          } catch (loginErr) {
+            console.warn('app.setLoginItemSettings notice:', loginErr);
+          }
         }
         return { success: true };
       } catch (err: any) {
@@ -2869,15 +2871,15 @@ async function initialize() {
         .catch((err) => console.error('[Feed Server] Failed to auto-start feed server:', err));
     }
 
-    // Sync launchOnStartup settings if configured
+    // Sync launchOnStartup settings if configured and packaged
     const launchOnStartupSetting = store.get('launchOnStartup');
-    if (typeof launchOnStartupSetting === 'boolean') {
+    if (app.isPackaged && typeof launchOnStartupSetting === 'boolean') {
       try {
         app.setLoginItemSettings({
           openAtLogin: launchOnStartupSetting,
         });
       } catch {
-        // Ignored in unpackaged dev environment
+        // Ignored if OS permissions restrict login items
       }
     }
 
