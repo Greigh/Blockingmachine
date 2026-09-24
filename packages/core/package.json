@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/core",
-  "version": "1.0.0-rc.3",
+  "version": "1.0.0-rc.4",
   "description": "Core rule parsing, deduplication, format export, and embedded Mini-AI classification engine for Blockingmachine.",
   "type": "module",
   "author": {
