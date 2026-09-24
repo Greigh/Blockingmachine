@@ -5,20 +5,6 @@ import { fileURLToPath } from "url";
 
 import { isSafePublicWebUrl } from "./utils/urlSafety.js";
 
-// --- Determine Base Directory ---
-const getBaseDir = (): string => {
-  try {
-    if (typeof __dirname !== "undefined") {
-      return path.resolve(__dirname, "..");
-    }
-    if (typeof import.meta !== "undefined" && import.meta.url) {
-      return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-    }
-  } catch {
-    // fallback
-  }
-  return process.cwd();
-};
 
 const MAX_RETRIES = 3;
 const INITIAL_DELAY = 2000;
@@ -188,28 +174,15 @@ export async function fetchWithConditionalCache(
 
   // --- Check if it's a local file path ---
   if (!url.startsWith("http:") && !url.startsWith("https:")) {
-    let handle: fs.FileHandle | null = null;
     try {
       let filePath = url;
       if (url.startsWith("file://")) {
         filePath = fileURLToPath(url);
       } else if (!path.isAbsolute(url)) {
-        const baseCandidate = path.resolve(getBaseDir(), url);
-        const cwdCandidate = path.resolve(process.cwd(), url);
-        try {
-          handle = await fs.open(baseCandidate, "r");
-          filePath = baseCandidate;
-        } catch {
-          handle = await fs.open(cwdCandidate, "r");
-          filePath = cwdCandidate;
-        }
+        filePath = path.resolve(process.cwd(), url);
       }
 
-      if (!handle) {
-        handle = await fs.open(filePath, "r");
-      }
-
-      const stat = await handle.stat();
+      const stat = await fs.stat(filePath);
       if (!stat.isFile()) {
         console.error(`❌ Local path is not a file: ${filePath}`);
         return { content: null, notModified: false, status: 404 };
@@ -234,7 +207,7 @@ export async function fetchWithConditionalCache(
         };
       }
 
-      const content = await handle.readFile("utf8");
+      const content = await fs.readFile(filePath, "utf8");
       return {
         content,
         notModified: false,
@@ -242,14 +215,13 @@ export async function fetchWithConditionalCache(
         status: 200,
       };
     } catch (error: any) {
+      if (error?.code === "EISDIR") {
+        return { content: null, notModified: false, status: 404 };
+      }
       console.error(
         `❌ Error reading local file ${url}: ${error?.message || error}`,
       );
       return { content: null, notModified: false, status: 500 };
-    } finally {
-      if (handle) {
-        await handle.close();
-      }
     }
   } else {
     if (!cacheOptions?.allowPrivateNetworks) {
