@@ -15,15 +15,17 @@ gantt
     title Blockingmachine Roadmap Phases
     dateFormat  YYYY-MM-DD
     section Phase 1: Local Defense
-    Initiative 1: System DNS Daemon Desktop Hub       :active, 2026-09-24, 2d
+    Initiative 1: System DNS Daemon Desktop Hub       :done, 2026-09-24, 1d
     section Phase 2: Home Assistant
-    Initiative 4: Home Assistant Integration & Tests  :2026-09-26, 2d
+    Initiative 4: Home Assistant Integration & Tests  :done, 2026-09-24, 1d
     section Phase 3: Browser Extension
-    Initiative 2: Browser Extension Live Push & Picker:2026-09-28, 2d
-    section Phase 4: Autonomous AI
-    Initiative 3: AI Threat Quarantine Dynamic Feeds  :2026-09-30, 2d
-    section Phase 5: Distribution
-    Initiative 5: Multi-Platform Release Automation   :2026-10-02, 2d
+    Initiative 2: Browser Real-Time Push & Picker     :active, 2026-09-25, 2d
+    section Phase 4: HA & Browser Bridge
+    Initiative 6: HA <-> Browser Communication Mesh   :2026-09-27, 2d
+    section Phase 5: Autonomous AI
+    Initiative 3: AI Threat Quarantine Dynamic Feeds  :2026-09-29, 2d
+    section Phase 6: Distribution
+    Initiative 5: Multi-Platform Release Automation   :2026-10-01, 2d
 ```
 
 ---
@@ -101,7 +103,28 @@ gantt
 
 ---
 
-### 🛡️ Phase 4: Initiative 3 — AI Threat Quarantine Dynamic Feeds
+### 🔗 Phase 4: Initiative 6 — Bidirectional Home Assistant <-> Browser Communication Bridge
+> **Goal:** Connect browser extensions directly to Home Assistant for centralized home privacy automation, remote blocking toggles, and live telemetry reporting.
+
+- [ ] **Home Assistant Ingress / LAN Feed Discovery:**
+  - [ ] Add option in Browser Extension Popup: "Connect to Home Assistant" (`http://homeassistant.local:8123` or Add-on `:9191`).
+  - [ ] Support Long-Lived Access Token authentication for secure remote Home Assistant instances.
+  - [ ] Resilient fallback chain: Desktop App (:9191) -> Home Assistant Add-on (:9191) -> GitHub / CDN static backup.
+- [ ] **HA Remote Control Plane (Home Assistant -> Browser):**
+  - [ ] WebSocket / webhook push from Home Assistant: `blockingmachine.reload_browser_rules` triggers instant rule reload across all active browser extension instances on the network.
+  - [ ] `switch.blockingmachine_browser_cosmetics`: Toggle element-hiding cosmetic shield remotely via HA dashboard or automations.
+  - [ ] Smart Home Scenes: Integrate with HA modes (e.g. "Work / Deep Focus" activates strict scriptlet defusers and social tracker blocking; "Guest Mode" applies relaxed policies).
+- [ ] **Browser Telemetry Reporting (Browser -> Home Assistant):**
+  - [ ] Browser extension periodically aggregates blocked trackers and POSTs telemetry to Home Assistant (`/api/webhook/blockingmachine_browser_telemetry` or `/v1/telemetry`).
+  - [ ] New Home Assistant entities:
+    - [ ] `sensor.blockingmachine_browser_trackers_blocked`: Count of network requests intercepted in browser.
+    - [ ] `sensor.blockingmachine_browser_cosmetic_elements_hidden`: Count of DOM ad containers hidden.
+    - [ ] `binary_sensor.blockingmachine_browser_threat_detected`: Turns ON when procedural scriptlet defusers block hostile fingerprinting/cryptomining.
+  - [ ] Native Home Assistant notifications when a browser client visits a quarantined high-risk domain.
+
+---
+
+### 🛡️ Phase 5: Initiative 3 — AI Threat Quarantine Dynamic Feeds
 > **Goal:** Materialize AI Radar detections into live, auto-updating blocklists for all network devices.
 
 - [ ] **Dynamic Threat Feed Endpoints:**
@@ -113,7 +136,7 @@ gantt
 
 ---
 
-### 📦 Phase 5: Initiative 5 — Cross-Platform Release Packaging
+### 📦 Phase 6: Initiative 5 — Cross-Platform Release Packaging
 > **Goal:** Automate release binaries for macOS (DMG/Zip), Windows (NSIS/exe), and Linux (deb/AppImage).
 
 - [ ] **Electron Forge Configuration:**
