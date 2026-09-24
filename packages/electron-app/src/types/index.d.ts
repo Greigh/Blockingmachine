@@ -317,6 +317,23 @@ export interface StoreSchema {
   launchOnStartup?: boolean;
 }
 
+export interface DaemonStatusInfo {
+  status: 'running' | 'paused' | 'stopped';
+  port: number;
+  controlPort: number;
+  upstream: string;
+  rulesLoaded: number;
+  protectionEnabled: boolean;
+  uptimeSeconds: number;
+  managedByApp: boolean;
+  stats?: {
+    totalQueries: number;
+    blockedQueries: number;
+    allowedQueries: number;
+    blockRatePercent: number;
+  };
+}
+
 // Electron API interface
 export interface ElectronAPI {
   getTheme: () => Promise<ThemeType>;
@@ -415,6 +432,18 @@ export interface ElectronAPI {
   setAutoStartFeedServer?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   getLaunchOnStartup?: () => Promise<boolean>;
   setLaunchOnStartup?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+
+  // Local System DNS Daemon Integration
+  getDaemonStatus?: () => Promise<DaemonStatusInfo>;
+  startDaemonProcess?: () => Promise<{ success: boolean; message: string }>;
+  stopDaemonProcess?: () => Promise<{ success: boolean; message: string }>;
+  reloadDaemonRules?: () => Promise<{ success: boolean; rulesLoaded: number; message: string }>;
+  toggleDaemonProtection?: (enabled?: boolean) => Promise<{ success: boolean; protectionEnabled: boolean }>;
+  setSystemDns?: (serviceName?: string) => Promise<{ success: boolean; message: string }>;
+  restoreSystemDns?: (serviceName?: string) => Promise<{ success: boolean; message: string }>;
+  flushDnsCache?: () => Promise<{ success: boolean; message: string }>;
+  getServiceInstallScript?: () => Promise<{ mac: string; linux: string }>;
+  getNetworkServices?: () => Promise<string[]>;
 }
 
 // Global declarations

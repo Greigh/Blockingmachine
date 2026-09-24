@@ -2,13 +2,20 @@ import dgram from 'node:dgram';
 import dnsPacket from 'dns-packet';
 import { DomainTrie } from '../engine/domainTrie.js';
 import { DohForwarder } from './dohForwarder.js';
-import { DaemonConfig } from '../types.js';
+import { DaemonConfig, DaemonStats, EvaluationResult, QueryTelemetryEntry } from '../types.js';
 
 export class DnsServer {
   private socket: dgram.Socket;
   private trie: DomainTrie;
   private forwarder: DohForwarder;
   private config: DaemonConfig;
+  private protectionEnabled = true;
+  private totalQueries = 0;
+  private blockedQueries = 0;
+  private allowedQueries = 0;
+  private recentQueries: QueryTelemetryEntry[] = [];
+  private readonly maxRecentQueries = 50;
+  private startTime = Date.now();
 
   constructor(trie: DomainTrie, config: DaemonConfig) {
     this.trie = trie;
@@ -17,8 +24,52 @@ export class DnsServer {
     this.socket = dgram.createSocket('udp4');
   }
 
+  setProtection(enabled: boolean): void {
+    this.protectionEnabled = enabled;
+  }
+
+  isProtectionEnabled(): boolean {
+    return this.protectionEnabled;
+  }
+
+  getTrie(): DomainTrie {
+    return this.trie;
+  }
+
+  getStats(): DaemonStats {
+    return {
+      totalQueries: this.totalQueries,
+      blockedQueries: this.blockedQueries,
+      allowedQueries: this.allowedQueries,
+      rulesLoaded: this.trie.getRuleCount(),
+      uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1000),
+      recentQueries: [...this.recentQueries],
+    };
+  }
+
+  private recordQuery(domain: string, verdict: 'BLOCKED' | 'ALLOWED' | 'EXCEPTION', clientIp?: string, matchingRule?: string) {
+    this.totalQueries++;
+    if (verdict === 'BLOCKED') {
+      this.blockedQueries++;
+    } else {
+      this.allowedQueries++;
+    }
+
+    this.recentQueries.unshift({
+      domain,
+      verdict,
+      timestamp: new Date().toISOString(),
+      clientIp,
+      matchingRule,
+    });
+
+    if (this.recentQueries.length > this.maxRecentQueries) {
+      this.recentQueries.pop();
+    }
+  }
+
   start(): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       this.socket.on('error', (err) => {
         console.error('[DnsServer] Socket error:', err);
       });
@@ -30,7 +81,11 @@ export class DnsServer {
 
           if (!question || !question.name) return;
 
-          const evaluation = this.trie.evaluate(question.name);
+          const evaluation: EvaluationResult = this.protectionEnabled
+            ? this.trie.evaluate(question.name)
+            : { domain: question.name, verdict: 'ALLOWED' };
+
+          this.recordQuery(question.name, evaluation.verdict, rinfo.address, evaluation.matchingRule);
 
           if (evaluation.verdict === 'BLOCKED') {
             // Sinkhole response (0.0.0.0 for A, :: for AAAA)
