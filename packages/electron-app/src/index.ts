@@ -1,5 +1,5 @@
 import { join, dirname, isAbsolute, basename, resolve as pathResolve, sep } from 'path';
-import { createServer, Server as HttpServer } from 'http';
+import { createServer, Server as HttpServer, ServerResponse } from 'http';
 import { networkInterfaces } from 'os';
 import {
   app,
@@ -1247,6 +1247,35 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
 
 let feedHttpServer: HttpServer | null = null;
 let feedServerPort = 9191;
+const sseClients = new Set<ServerResponse>();
+let sseHeartbeatTimer: NodeJS.Timeout | null = null;
+
+export interface BrowserTelemetryData {
+  lastUpdated: string;
+  trackersBlocked: number;
+  elementsHidden: number;
+  threatsDetected: number;
+  recentTrackers: Array<{ domain: string; count: number }>;
+}
+
+const browserTelemetryAggregator: BrowserTelemetryData = {
+  lastUpdated: new Date().toISOString(),
+  trackersBlocked: 0,
+  elementsHidden: 0,
+  threatsDetected: 0,
+  recentTrackers: [],
+};
+
+function broadcastSseEvent(eventName: string, data: any) {
+  const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(payload);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
 
 function getLocalLanIp(): string {
   try {
@@ -1354,10 +1383,123 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
               enabled: storeRef.get('aiWatchdogConfig')?.enabled ?? false,
               sessionActive: currentLiveRadarSession.active,
             },
+            browserTelemetry: browserTelemetryAggregator,
+            activeSseClients: sseClients.size,
           };
 
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify(statusPayload, null, 2));
+          return;
+        }
+
+        if (lowerPath === '/v1/events' || lowerPath === '/api/events') {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+          });
+          res.write(
+            `event: connected\ndata: ${JSON.stringify({
+              status: 'connected',
+              version: app.getVersion(),
+              timestamp: new Date().toISOString(),
+              ruleCount: latestCompiledRules.length,
+            })}\n\n`
+          );
+          sseClients.add(res);
+
+          if (!sseHeartbeatTimer) {
+            sseHeartbeatTimer = setInterval(() => {
+              for (const client of sseClients) {
+                try {
+                  client.write(': ping\n\n');
+                } catch {
+                  sseClients.delete(client);
+                }
+              }
+            }, 20000);
+          }
+
+          req.on('close', () => {
+            sseClients.delete(res);
+          });
+          return;
+        }
+
+        if ((lowerPath === '/v1/telemetry/browser' || lowerPath === '/api/telemetry/browser') && req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => {
+            body += chunk;
+            if (body.length > 1e6) req.destroy();
+          });
+          req.on('end', () => {
+            try {
+              const data = JSON.parse(body || '{}');
+              if (typeof data.trackersBlocked === 'number') {
+                browserTelemetryAggregator.trackersBlocked += data.trackersBlocked;
+              }
+              if (typeof data.elementsHidden === 'number') {
+                browserTelemetryAggregator.elementsHidden += data.elementsHidden;
+              }
+              if (typeof data.threatsDetected === 'number') {
+                browserTelemetryAggregator.threatsDetected += data.threatsDetected;
+              }
+              if (Array.isArray(data.trackers)) {
+                for (const t of data.trackers) {
+                  if (!t.domain) continue;
+                  const exist = browserTelemetryAggregator.recentTrackers.find((x) => x.domain === t.domain);
+                  if (exist) {
+                    exist.count += (t.count || 1);
+                  } else {
+                    browserTelemetryAggregator.recentTrackers.unshift({ domain: t.domain, count: t.count || 1 });
+                  }
+                }
+                browserTelemetryAggregator.recentTrackers = browserTelemetryAggregator.recentTrackers.slice(0, 50);
+              }
+              browserTelemetryAggregator.lastUpdated = new Date().toISOString();
+
+              res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: true, aggregated: browserTelemetryAggregator }));
+            } catch (err: any) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: false, error: err?.message || 'Invalid JSON' }));
+            }
+          });
+          return;
+        }
+
+        if ((lowerPath === '/v1/control/cosmetics' || lowerPath === '/api/control/cosmetics') && (req.method === 'POST' || req.method === 'GET')) {
+          let enabled = true;
+          if (req.method === 'GET') {
+            const p = reqUrl.searchParams.get('enabled');
+            enabled = p !== 'false' && p !== '0';
+            broadcastSseEvent('remote_control', { action: 'toggle_cosmetics', enabled });
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: true, action: 'toggle_cosmetics', enabled }));
+            return;
+          }
+          let body = '';
+          req.on('data', (chunk) => { body += chunk; });
+          req.on('end', () => {
+            try {
+              const data = JSON.parse(body || '{}');
+              if (typeof data.enabled === 'boolean') enabled = data.enabled;
+              broadcastSseEvent('remote_control', { action: 'toggle_cosmetics', enabled });
+              res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: true, action: 'toggle_cosmetics', enabled }));
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
+            }
+          });
+          return;
+        }
+
+        if ((lowerPath === '/v1/control/reload' || lowerPath === '/api/control/reload') && (req.method === 'POST' || req.method === 'GET')) {
+          broadcastSseEvent('remote_control', { action: 'reload_rules' });
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ success: true, action: 'reload_rules', message: 'Reload signal broadcast to connected browsers' }));
           return;
         }
 
@@ -1384,7 +1526,11 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           const quarantine = (storeRef.get('aiThreatQuarantine') || []) as ThreatQuarantineItem[];
           const history = storeRef.get('compilationHistory') || [];
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ threats: quarantine.slice(0, 50), history: history.slice(0, 5) }));
+          res.end(JSON.stringify({
+            threats: quarantine.slice(0, 50),
+            history: history.slice(0, 5),
+            browser: browserTelemetryAggregator,
+          }));
           return;
         }
 
@@ -1553,6 +1699,19 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
 }
 
 function stopFeedServer() {
+  if (sseHeartbeatTimer) {
+    clearInterval(sseHeartbeatTimer);
+    sseHeartbeatTimer = null;
+  }
+  for (const client of sseClients) {
+    try {
+      client.end();
+    } catch {
+      // ignore
+    }
+  }
+  sseClients.clear();
+
   if (feedHttpServer) {
     try {
       if (typeof (feedHttpServer as any).closeAllConnections === 'function') {
@@ -1905,6 +2064,21 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           await fs.writeFile(join(outputDir, 'browser.txt'), browserContent, 'utf8');
           await fs.writeFile(join(outputDir, 'adguardBrowser.txt'), browserContent, 'utf8');
           console.log(`[IPC Main] Segregated Browser endpoints saved: browser.txt (${browserRules.length} rules)`);
+
+          // Broadcast real-time SSE event to connected browser extensions & LAN clients
+          broadcastSseEvent('compile_completed', {
+            timestamp: timestampStr,
+            uniqueRuleCount,
+            processedRuleCount: totalProcessedCount,
+            dnsRuleCount: dnsRules.length,
+            browserRuleCount: browserRules.length,
+          });
+          broadcastSseEvent('rules_updated', {
+            timestamp: timestampStr,
+            ruleCount: uniqueRuleCount,
+            dnsRuleCount: dnsRules.length,
+            browserRuleCount: browserRules.length,
+          });
         } catch (segErr) {
           console.error('[IPC Main] Failed to write segregated dns/browser endpoints:', segErr);
         }

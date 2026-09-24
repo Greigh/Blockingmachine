@@ -24,6 +24,11 @@ BUTTON_DESCRIPTIONS: tuple[ButtonEntityDescription, ...] = (
         name="Refresh Hub Status",
         icon="mdi:sync",
     ),
+    ButtonEntityDescription(
+        key="reload_browser_rules",
+        name="Reload Browser Rules",
+        icon="mdi:web-refresh",
+    ),
 )
 
 
@@ -69,3 +74,6 @@ class BlockingmachineButton(CoordinatorEntity[BlockingmachineDataUpdateCoordinat
             await self.coordinator.async_compile_rules()
         elif self.entity_description.key == "refresh_status":
             await self.coordinator.async_request_refresh()
+        elif self.entity_description.key == "reload_browser_rules":
+            _LOGGER.info("Signaling connected browsers to reload rules")
+            await self.coordinator.async_reload_browser_rules()

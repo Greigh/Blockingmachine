@@ -146,5 +146,38 @@ class TestCoordinatorLogic(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_async_set_browser_cosmetics(self):
+        async def run_test():
+            mock_response = AsyncMock()
+            mock_response.status = 200
+
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__.return_value = mock_response
+
+            self.coordinator.session = MagicMock()
+            self.coordinator.session.post.return_value = mock_cm
+
+            res = await self.coordinator.async_set_browser_cosmetics(True)
+            self.assertTrue(res)
+
+        asyncio.run(run_test())
+
+    def test_async_reload_browser_rules(self):
+        async def run_test():
+            mock_response = AsyncMock()
+            mock_response.status = 200
+
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__.return_value = mock_response
+
+            self.coordinator.session = MagicMock()
+            self.coordinator.session.post.return_value = mock_cm
+
+            res = await self.coordinator.async_reload_browser_rules()
+            self.assertTrue(res)
+
+        asyncio.run(run_test())
+
 if __name__ == "__main__":
     unittest.main()
+

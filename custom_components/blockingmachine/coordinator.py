@@ -69,3 +69,26 @@ class BlockingmachineDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]
         except (ClientError, asyncio.TimeoutError) as err:
             _LOGGER.error("Failed to check domain %s: %s", domain, err)
         return {"domain": domain, "blocked": False, "error": True}
+
+    async def async_set_browser_cosmetics(self, enabled: bool) -> bool:
+        """Remotely toggle browser cosmetic element shields."""
+        url = f"{self.base_url}/v1/control/cosmetics"
+        try:
+            async with self.session.post(
+                url, json={"enabled": enabled}, timeout=ClientTimeout(total=5)
+            ) as response:
+                return response.status == 200
+        except (ClientError, asyncio.TimeoutError) as err:
+            _LOGGER.error("Failed to toggle browser cosmetics: %s", err)
+            return False
+
+    async def async_reload_browser_rules(self) -> bool:
+        """Signal connected browser extensions to reload rules."""
+        url = f"{self.base_url}/v1/control/reload"
+        try:
+            async with self.session.post(url, timeout=ClientTimeout(total=5)) as response:
+                return response.status == 200
+        except (ClientError, asyncio.TimeoutError) as err:
+            _LOGGER.error("Failed to broadcast reload to browsers: %s", err)
+            return False
+

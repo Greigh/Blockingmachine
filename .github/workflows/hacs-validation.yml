@@ -18,4 +18,4 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
-          path: packages/homeassistant-integration/custom_components/blockingmachine
+          ignore: "brands"

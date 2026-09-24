@@ -25,6 +25,11 @@ SWITCH_DESCRIPTIONS: tuple[SwitchEntityDescription, ...] = (
         name="AI Radar Sentinel",
         icon="mdi:radar",
     ),
+    SwitchEntityDescription(
+        key="browser_cosmetics",
+        name="Browser Cosmetic Shield",
+        icon="mdi:eye-off-outline",
+    ),
 )
 
 
@@ -75,15 +80,21 @@ class BlockingmachineSwitch(CoordinatorEntity[BlockingmachineDataUpdateCoordinat
             return data.get("protection", {}).get("enabled", True)
         if self.entity_description.key == "ai_radar_enabled":
             return data.get("aiRadar", {}).get("enabled", False)
+        if self.entity_description.key == "browser_cosmetics":
+            return self._is_on
 
         return self._is_on
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn switch on."""
         self._is_on = True
+        if self.entity_description.key == "browser_cosmetics":
+            await self.coordinator.async_set_browser_cosmetics(True)
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn switch off."""
         self._is_on = False
+        if self.entity_description.key == "browser_cosmetics":
+            await self.coordinator.async_set_browser_cosmetics(False)
         self.async_write_ha_state()

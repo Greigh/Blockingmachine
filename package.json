@@ -20,7 +20,8 @@
     "package": "npm run --prefix packages/electron-app package",
     "make": "npm run --prefix packages/electron-app make",
     "version:bump": "node scripts/bump-version.mjs",
-    "verify:mv3": "node scripts/verify-mv3-compliance.mjs"
+    "verify:mv3": "node scripts/verify-mv3-compliance.mjs",
+    "package:extension": "node scripts/package-extension.mjs"
   },
   "author": {
     "name": "Daniel Hipskind",
