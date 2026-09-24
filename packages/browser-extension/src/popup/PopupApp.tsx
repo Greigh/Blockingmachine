@@ -1,35 +1,55 @@
 import React, { useEffect, useState } from 'react';
-import { TabTelemetry, TrackerDetection } from '../shared/types';
+import { TabTelemetry, TrackerDetection } from '../shared/types.js';
+
+function extractDomain(rawUrl?: string): string {
+  if (!rawUrl) return 'Current Page';
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol.startsWith('http')) return u.hostname;
+    return `${u.protocol.replace(':', '')} internal`;
+  } catch {
+    return 'Active Tab';
+  }
+}
 
 export const PopupApp: React.FC = () => {
   const [telemetry, setTelemetry] = useState<TabTelemetry | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    // Query active tab
+    let isMounted = true;
+
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const activeTab = tabs[0];
-      if (activeTab?.id) {
-        chrome.runtime.sendMessage(
-          { type: 'GET_TAB_TELEMETRY', payload: { tabId: activeTab.id } },
-          (response) => {
-            if (response?.data) {
-              setTelemetry(response.data);
-            } else {
-              setTelemetry({
-                tabId: activeTab.id!,
-                url: activeTab.url || '',
-                domain: activeTab.url ? new URL(activeTab.url).hostname : 'localhost',
-                totalRequests: 0,
-                blockedRequests: 0,
-                trackers: [],
-                scriptletsApplied: ['google-funding-choices', 'generic-defusers']
-              });
-            }
+      if (!activeTab?.id || !isMounted) return;
+
+      const domain = extractDomain(activeTab.url);
+
+      chrome.runtime.sendMessage(
+        { type: 'GET_TAB_TELEMETRY', payload: { tabId: activeTab.id } },
+        (response) => {
+          if (!isMounted) return;
+          if (response?.data) {
+            setTelemetry(response.data);
+          } else {
+            setTelemetry({
+              tabId: activeTab.id!,
+              url: activeTab.url || '',
+              domain,
+              totalRequests: 0,
+              blockedRequests: 0,
+              trackers: [],
+              scriptletsApplied: ['google-funding-choices', 'generic-defusers']
+            });
           }
-        );
-      }
+        }
+      );
     });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const handleSyncNow = () => {
@@ -37,6 +57,18 @@ export const PopupApp: React.FC = () => {
     chrome.runtime.sendMessage({ type: 'SYNC_RULES_NOW' }, () => {
       setSyncing(false);
     });
+  };
+
+  const handleWhitelistSite = async () => {
+    if (!telemetry?.domain || telemetry.domain.includes('internal')) return;
+    const rule = `@@||${telemetry.domain}^`;
+    try {
+      await navigator.clipboard.writeText(rule);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback
+    }
   };
 
   return (
@@ -90,19 +122,15 @@ export const PopupApp: React.FC = () => {
       <div className="popup-footer">
         <button
           className="action-btn"
-          onClick={() => {
-            if (telemetry?.domain) {
-              navigator.clipboard.writeText(`@@||${telemetry.domain}^`);
-              alert(`Copied whitelist exception @@||${telemetry.domain}^ to clipboard`);
-            }
-          }}
+          onClick={handleWhitelistSite}
+          disabled={!telemetry?.domain || telemetry.domain.includes('internal')}
         >
-          Whitelist Site
+          {copied ? 'Copied Rule!' : 'Whitelist Site'}
         </button>
         <button
           className="action-btn"
           onClick={() => {
-            chrome.tabs.create({ url: 'http://localhost:9191' });
+            chrome.tabs.create({ url: 'http://127.0.0.1:9191' });
           }}
         >
           Open Hub

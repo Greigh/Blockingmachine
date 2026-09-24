@@ -5,6 +5,8 @@ import { TabTelemetry, ExtensionMessage } from '../shared/types.js';
 const dnr = new DnrManager();
 const sync = new SyncClient();
 
+const MAX_TRACKERS_PER_TAB = 100;
+
 // Helper to interact with session storage across Service Worker sleeps
 async function getTabTelemetry(tabId: number): Promise<TabTelemetry | null> {
   const key = `bm_tab_${tabId}`;
@@ -25,6 +27,12 @@ async function getTabTelemetry(tabId: number): Promise<TabTelemetry | null> {
 async function setTabTelemetry(tabId: number, data: TabTelemetry): Promise<void> {
   const key = `bm_tab_${tabId}`;
   try {
+    // Memory leak prevention: bound the tracker list size per tab
+    if (data.trackers.length > MAX_TRACKERS_PER_TAB) {
+      data.trackers.sort((a, b) => b.blockedCount - a.blockedCount);
+      data.trackers = data.trackers.slice(0, MAX_TRACKERS_PER_TAB);
+    }
+
     if (chrome.storage?.session) {
       await chrome.storage.session.set({ [key]: data });
     } else if (chrome.storage?.local) {
@@ -48,6 +56,38 @@ async function removeTabTelemetry(tabId: number): Promise<void> {
   }
 }
 
+/**
+ * Prunes orphaned session telemetry for tabs that closed while the Service Worker was sleeping.
+ */
+async function pruneOrphanedTabTelemetry(): Promise<void> {
+  try {
+    const tabs = await chrome.tabs.query({});
+    const activeTabIds = new Set(tabs.map((t) => t.id).filter((id): id is number => typeof id === 'number'));
+
+    const storageArea = chrome.storage?.session || chrome.storage?.local;
+    if (!storageArea) return;
+
+    const allData = await storageArea.get(null);
+    const keysToRemove: string[] = [];
+
+    for (const key of Object.keys(allData)) {
+      if (key.startsWith('bm_tab_')) {
+        const tabId = parseInt(key.replace('bm_tab_', ''), 10);
+        if (!isNaN(tabId) && !activeTabIds.has(tabId)) {
+          keysToRemove.push(key);
+        }
+      }
+    }
+
+    if (keysToRemove.length > 0) {
+      await storageArea.remove(keysToRemove);
+      console.log(`[Blockingmachine] Pruned ${keysToRemove.length} orphaned tab storage entries.`);
+    }
+  } catch (err) {
+    console.warn('[Storage] Prune orphaned tabs error:', err);
+  }
+}
+
 async function syncAndApplyRules(): Promise<number> {
   try {
     console.log('[Blockingmachine] Fetching latest compiled rules from hub...');
@@ -55,6 +95,7 @@ async function syncAndApplyRules(): Promise<number> {
     if (rules.length > 0) {
       const count = await dnr.updateDynamicRules(rules);
       console.log(`[Blockingmachine] Successfully applied ${count} dynamic DNR rules.`);
+      await pruneOrphanedTabTelemetry();
       return count;
     }
   } catch (err) {
@@ -66,7 +107,6 @@ async function syncAndApplyRules(): Promise<number> {
 // Lifecycle: Install & update
 chrome.runtime.onInstalled.addListener(async () => {
   console.log('[Blockingmachine Extension] Installed. Initializing alarm and rules...');
-  // Configure alarms for persistent rule updates across service worker sleeps
   chrome.alarms.create('bm-periodic-sync', { periodInMinutes: 60 });
   await syncAndApplyRules();
 });
@@ -86,7 +126,9 @@ if (chrome.declarativeNetRequest && chrome.declarativeNetRequest.onRuleMatchedDe
 
     let host = '';
     try {
-      host = new URL(info.request.url).hostname;
+      const parsedUrl = new URL(info.request.url);
+      if (!parsedUrl.protocol.startsWith('http')) return;
+      host = parsedUrl.hostname;
     } catch {
       return;
     }
@@ -126,11 +168,21 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   removeTabTelemetry(tabId);
 });
 
-// Handle messages from popup UI
-chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
+// Handle messages from popup UI with origin security checks
+chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
+  // Security: only accept messages from our own extension contexts (popup / content script)
+  if (sender.id !== chrome.runtime.id) {
+    return false;
+  }
+
+  if (!message || typeof message !== 'object') {
+    sendResponse({ success: false, error: 'Invalid message payload' });
+    return false;
+  }
+
   if (message.type === 'GET_TAB_TELEMETRY') {
     const tabId = message.payload?.tabId;
-    if (tabId) {
+    if (typeof tabId === 'number' && tabId > 0) {
       getTabTelemetry(tabId).then((data) => {
         sendResponse({ success: true, data });
       });

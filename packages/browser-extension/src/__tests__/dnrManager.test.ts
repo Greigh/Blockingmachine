@@ -121,4 +121,17 @@ describe('DnrManager', () => {
       priority: 3
     });
   });
+
+  test('parses hosts format and plain domains while rejecting invalid domains', () => {
+    const dnr = new DnrManager();
+
+    expect(dnr.parseRule('0.0.0.0 telemetry.ads.com')?.pattern).toBe('telemetry.ads.com');
+    expect(dnr.parseRule('127.0.0.1 tracker.io')?.pattern).toBe('tracker.io');
+    expect(dnr.parseRule('plain-adserver.com')?.pattern).toBe('plain-adserver.com');
+
+    // Reject malformed domains with invalid characters
+    expect(dnr.parseRule('||invalid domain.com^')).toBeNull();
+    expect(dnr.parseRule('||<script>.com^')).toBeNull();
+    expect(dnr.parseRule('||not-a-domain^')).toBeNull();
+  });
 });

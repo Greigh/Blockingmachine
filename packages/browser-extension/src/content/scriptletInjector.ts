@@ -77,20 +77,36 @@ export function applyMainWorldDefusers(): void {
     }
 
     // 5. Generic bait element bypass
-    // Many anti-adblockers check if an element with class .ad-zone has height === 0
-    // We override offsetHeight/clientHeight for bait elements if inspected
+    // Traps getComputedStyle() on bait elements (#ad-detector, .ad-zone)
+    // and correctly overrides both direct property access and .getPropertyValue()
     const origGetComputedStyle = win.getComputedStyle;
     if (origGetComputedStyle) {
       win.getComputedStyle = function (elt: Element, pseudoElt?: string | null) {
         const style = origGetComputedStyle.call(win, elt, pseudoElt);
-        if (elt && (elt.classList?.contains('ad-zone') || elt.id === 'ad-detector')) {
-          return new Proxy(style, {
-            get(target, prop) {
-              if (prop === 'display') return 'block';
-              if (prop === 'visibility') return 'visible';
-              return (target as any)[prop];
-            }
-          });
+        if (style && elt && elt.nodeType === 1) {
+          const el = elt as HTMLElement;
+          const isBait =
+            el.id === 'ad-detector' ||
+            el.id === 'ad-banner' ||
+            (el.classList && (el.classList.contains('ad-zone') || el.classList.contains('adsbox')));
+
+          if (isBait) {
+            return new Proxy(style, {
+              get(target, prop) {
+                if (prop === 'display') return 'block';
+                if (prop === 'visibility') return 'visible';
+                if (prop === 'getPropertyValue') {
+                  return (propName: string) => {
+                    if (propName === 'display') return 'block';
+                    if (propName === 'visibility') return 'visible';
+                    return target.getPropertyValue(propName);
+                  };
+                }
+                const val = (target as any)[prop];
+                return typeof val === 'function' ? val.bind(target) : val;
+              }
+            });
+          }
         }
         return style;
       };

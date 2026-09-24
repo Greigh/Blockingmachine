@@ -133,7 +133,7 @@ declare namespace chrome {
       active?: boolean;
     }
 
-    export function query(queryInfo: QueryInfo, callback: (result: Tab[]) => void): Promise<Tab[]>;
+    export function query(queryInfo: QueryInfo, callback?: (result: Tab[]) => void): Promise<Tab[]>;
     export function create(createProperties: CreateProperties, callback?: (tab: Tab) => void): Promise<Tab>;
 
     export interface TabRemovedEvent {
@@ -144,6 +144,8 @@ declare namespace chrome {
   }
 
   export namespace runtime {
+    export const id: string;
+
     export interface InstalledDetails {
       reason: 'install' | 'update' | 'chrome_update' | 'shared_module_update';
       previousVersion?: string;
