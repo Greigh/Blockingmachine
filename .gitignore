@@ -42,6 +42,7 @@ build/
 *.AppImage
 *.snap
 *.tgz
+SHA256SUMS*.txt
 
 # Debug logs
 debug.log
