@@ -4,11 +4,13 @@
 # Blockingmachine
 
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.0.0--rc.3-orange.svg)](https://github.com/greigh/Blockingmachine/releases)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--rc.3-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0-rc.3)
+[![GitHub Packages](https://img.shields.io/badge/GitHub_Packages-v1.0.0--rc.3-2ea44f.svg)](https://github.com/users/Greigh/packages?repo_name=Blockingmachine)
+[![Forgejo](https://img.shields.io/badge/Forgejo-git.greighstudios.com-ff6600.svg)](https://git.greighstudios.com/greighstudios/Blockingmachine)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/)
 [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/)
 [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/Tests-357%20Passing%20(100%25)-brightgreen.svg)](https://github.com/greigh/Blockingmachine/actions)
+[![Tests](https://img.shields.io/badge/Tests-352%20Passing%20(100%25)-brightgreen.svg)](https://github.com/greigh/Blockingmachine/actions)
 [![Code Quality](https://img.shields.io/badge/ESLint-0%20Warnings-blueviolet.svg)]()
 
 _High-performance adblock compiler, DNS rule deduplicator, and AI-powered network defense suite for Pi-hole, AdGuard Home, and modern desktops._
@@ -32,12 +34,60 @@ Designed for network administrators, homelab enthusiasts, and privacy advocates,
 
 ---
 
+## 📦 Downloads & Installation
+
+### Desktop Application (macOS Apple Silicon)
+
+The latest pre-release desktop application is cryptographically signed with an Apple Developer ID (`Daniel Hipskind (365KR8NF53)`):
+
+| Package / Installer | Architecture | Download |
+|---|---|---|
+| **Apple Silicon Disk Image (`.dmg`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.dmg`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.3/Blockingmachine-1.0.0-rc.3-arm64.dmg) |
+| **Standalone Application Bundle (`.zip`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.3/Blockingmachine-darwin-arm64-1.0.0-rc.3.zip) |
+| **SHA-256 Checksums** | All Platforms | [Download `SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.3/SHA256SUMS.txt) |
+
+#### Checksum Verification
+```bash
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+---
+
+### NPM Packages
+
+Blockingmachine distributes its core parsing engine and command-line interface as standalone packages on **GitHub Packages** and **Forgejo Packages**:
+
+#### From GitHub Packages
+```bash
+# Core Library
+npm install @greigh/blockingmachine-core@1.0.0-rc.3 --registry=https://npm.pkg.github.com
+
+# CLI Tool
+npm install -g @greigh/blockingmachine-cli@1.0.0-rc.3 --registry=https://npm.pkg.github.com
+```
+
+#### From Forgejo Package Registry (`git.greighstudios.com`)
+```bash
+# Core Library
+npm install @blockingmachine/core@1.0.0-rc.3 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
+
+# CLI Tool
+npm install -g @blockingmachine/cli@1.0.0-rc.3 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
+```
+
+Direct tarballs are also attached to [Release v1.0.0-rc.3](https://github.com/Greigh/Blockingmachine/releases/tag/v1.0.0-rc.3):
+- `blockingmachine-core-1.0.0-rc.3.tgz`
+- `blockingmachine-cli-1.0.0-rc.3.tgz`
+
+---
+
 ## Key Features
 
 ### 🔍 Unified Rule & AI Inspector (`⌘5`)
 - **Simultaneous Static & AI Evaluation**: Instantly assesses any domain or URL against your active compiled filter lists while simultaneously running live AI threat heuristics.
 - **Heuristic Threat Profiling**: Measures lexical Shannon entropy ($H(X)$), detects algorithmic Domain Generation Algorithms (DGA), resolves multi-hop CNAME cloaking aliases, and breaks down mathematical feature weights.
 - **Multi-Format Rule Synthesizer**: Generates syntax-perfect blocking rules in Universal (`||domain^`), AdGuard (`||domain^$important`), Pi-hole regex, uBlock Origin, Unbound, or Hosts format.
+- **$badfilter Neutralization**: Automatically generates `$badfilter` exception syntax to neutralize upstream false positives and erroneous filter rules without altering third-party feeds.
 - **1-Click Actions**: One-click **Add to Custom Rules**, **Whitelist (`@@`)**, rule clipboard copying, and Mini-AI feedback tuning (*Confirm Threat* / *Mark Safe*).
 
 ### 📡 AI Defense Radar Hub (`⌘9`)
@@ -47,7 +97,8 @@ Designed for network administrators, homelab enthusiasts, and privacy advocates,
 - **Threat Quarantine Ledger**: Centralized persistent ledger tracking intercepted threats with category filtering, batch exports (ABP, Hosts, JSON), and one-click firewall blocking.
 
 ### 🧠 Centralized AI Engine & Sentinel Watchdog (Preferences `⌘,`)
-- **Built-in Mini-AI Classifier (Recommended)**: Embedded 25-feature mathematical neural network running completely on-device in **<0.05ms** with zero daemons, zero cloud telemetry, and zero network overhead.
+- **Built-in Mini-AI Classifier (Default & Recommended)**: Embedded 25-feature mathematical neural classifier executing on-device in **<0.05ms** with zero daemons, zero cloud telemetry, and zero network overhead.
+- **Calibrated Entropy Engine**: Multi-tiered Shannon entropy scoring with base64 anomaly detection, segment decomposition, and bigram transition scoring.
 - **Flexible Provider Support**:
   - **Local Heuristics**: Pure offline Shannon entropy, token decomposition, and CNAME uncloaking.
   - **Ollama Local LLM**: Air-gapped on-device neural models (`llama3.2`, `mistral`, `qwen2.5`, `deepseek-r1`).
@@ -104,6 +155,8 @@ Blockingmachine/
 │   ├── cli/            # @blockingmachine/cli (CLI binary, local feed server, diffing, doctor)
 │   ├── electron-app/   # @blockingmachine/electron-app (Desktop suite, Deploy Hub, AI Radar)
 │   └── database/       # Snapshot rollback engine and audit logging schemas
+├── .github/workflows/  # GitHub Actions CI and GitHub Packages publishing
+├── .forgejo/workflows/ # Forgejo Actions CI and Forgejo Packages publishing
 ├── package.json        # Root npm workspaces configuration (Node.js >= 24.0.0)
 └── README.md
 ```
@@ -179,8 +232,8 @@ The `@blockingmachine/cli` binary provides full command-line access for headless
 # Run CLI directly via npm workspace
 npx --workspace=@blockingmachine/cli blockingmachine --help
 
-# Or link globally for system-wide access
-cd packages/cli && npm link
+# Or install globally from GitHub Packages
+npm install -g @greigh/blockingmachine-cli --registry=https://npm.pkg.github.com
 
 # Scan a suspect domain using the built-in Mini-AI classifier
 blockingmachine ai-scan doubleclick.net
@@ -211,7 +264,7 @@ blockingmachine doctor
 Blockingmachine maintains a strict **100% test pass rate** with **0 ESLint errors and 0 warnings** across all monorepo packages:
 
 ```bash
-# Run all 185 automated tests across the monorepo
+# Run all 352 automated tests across the monorepo
 npm test
 
 # Run tests with open handle leak detection
@@ -223,6 +276,16 @@ npm run lint
 # Validate TypeScript typing across all packages
 npm run build
 ```
+
+---
+
+## Remotes & CI/CD Pipelines
+
+Blockingmachine is concurrently mirrored and continuously tested across:
+- **GitHub Repository**: [github.com/Greigh/Blockingmachine](https://github.com/Greigh/Blockingmachine)
+- **Forgejo Repository**: [git.greighstudios.com/greighstudios/Blockingmachine](https://git.greighstudios.com/greighstudios/Blockingmachine)
+- **GitHub Actions**: `.github/workflows/ci.yml` and `.github/workflows/publish.yml`
+- **Forgejo Actions**: `.forgejo/workflows/ci.yml` and `.forgejo/workflows/publish.yml`
 
 ---
 
