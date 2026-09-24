@@ -52,4 +52,28 @@ describe('DomainTrie engine', () => {
     expect(trie.evaluate('ANALYTICS.IO.').verdict).toBe('BLOCKED');
     expect(trie.evaluate('telemetry.analytics.io').verdict).toBe('BLOCKED');
   });
+
+  test('strictly rejects browser-only rules to prevent DNS breakage', () => {
+    // 1. Cosmetic rules should NOT block the website at DNS level
+    trie.addRule('example.com##.ad-banner');
+    trie.addRule('##div[id^="google_ad"]');
+    trie.addRule('example.com#@#.whitelist-banner');
+    expect(trie.evaluate('example.com').verdict).toBe('ALLOWED');
+
+    // 2. Path-specific rules must NOT block the parent domain at DNS level
+    trie.addRule('||news-portal.com/ads/tracker.js^');
+    expect(trie.evaluate('news-portal.com').verdict).toBe('ALLOWED');
+
+    // 3. Resource modifier rules ($image, $script) must NOT block at DNS level
+    trie.addRule('||content-site.org^$image');
+    trie.addRule('||media-site.net^$script,stylesheet');
+    expect(trie.evaluate('content-site.org').verdict).toBe('ALLOWED');
+    expect(trie.evaluate('media-site.net').verdict).toBe('ALLOWED');
+
+    // 4. Pure domain and hosts rules should be blocked
+    trie.addRule('0.0.0.0 tele-tracker.com');
+    trie.addRule('||pure-adserver.com^');
+    expect(trie.evaluate('tele-tracker.com').verdict).toBe('BLOCKED');
+    expect(trie.evaluate('pure-adserver.com').verdict).toBe('BLOCKED');
+  });
 });

@@ -1,5 +1,6 @@
 import { DnrManager } from './dnrManager.js';
 import { SyncClient } from './syncClient.js';
+import { Mv3Guard } from './mv3Guard.js';
 import { TabTelemetry, ExtensionMessage } from '../shared/types.js';
 
 const dnr = new DnrManager();
@@ -192,6 +193,11 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
   } else if (message.type === 'SYNC_RULES_NOW') {
     syncAndApplyRules().then((count) => {
       sendResponse({ success: true, count });
+    });
+    return true; // asynchronous response
+  } else if (message.type === 'GET_MV3_STATUS') {
+    Mv3Guard.getQuotaStatus().then((data) => {
+      sendResponse({ success: true, data });
     });
     return true; // asynchronous response
   }

@@ -1,6 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { TabTelemetry, TrackerDetection } from '../shared/types.js';
 
+interface Mv3QuotaInfo {
+  dynamicRulesCount: number;
+  maxDynamicRules: number;
+  isWithinQuota: boolean;
+  utilizationPercent: number;
+}
+
 function extractDomain(rawUrl?: string): string {
   if (!rawUrl) return 'Current Page';
   try {
@@ -14,12 +21,21 @@ function extractDomain(rawUrl?: string): string {
 
 export const PopupApp: React.FC = () => {
   const [telemetry, setTelemetry] = useState<TabTelemetry | null>(null);
+  const [mv3Status, setMv3Status] = useState<Mv3QuotaInfo | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
 
+    // Fetch MV3 compliance quota status
+    chrome.runtime.sendMessage({ type: 'GET_MV3_STATUS' }, (res) => {
+      if (res?.data && isMounted) {
+        setMv3Status(res.data);
+      }
+    });
+
+    // Query active tab telemetry
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const activeTab = tabs[0];
       if (!activeTab?.id || !isMounted) return;
@@ -56,6 +72,10 @@ export const PopupApp: React.FC = () => {
     setSyncing(true);
     chrome.runtime.sendMessage({ type: 'SYNC_RULES_NOW' }, () => {
       setSyncing(false);
+      // Refresh MV3 quota after sync
+      chrome.runtime.sendMessage({ type: 'GET_MV3_STATUS' }, (res) => {
+        if (res?.data) setMv3Status(res.data);
+      });
     });
   };
 
@@ -86,6 +106,32 @@ export const PopupApp: React.FC = () => {
         >
           {syncing ? 'Syncing...' : 'Sync Rules'}
         </button>
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '6px 10px',
+          background: 'rgba(255, 255, 255, 0.04)',
+          borderRadius: '6px',
+          margin: '4px 0 10px 0',
+          fontSize: '10px',
+          border: '1px solid rgba(255, 255, 255, 0.06)'
+        }}
+      >
+        <span style={{ color: 'var(--text-secondary)' }}>MV3 DNR Quota</span>
+        <span
+          style={{
+            color: mv3Status?.isWithinQuota !== false ? '#10b981' : '#f59e0b',
+            fontWeight: 600
+          }}
+        >
+          {mv3Status
+            ? `${mv3Status.dynamicRulesCount.toLocaleString()} / ${mv3Status.maxDynamicRules.toLocaleString()} (${mv3Status.utilizationPercent}%)`
+            : 'Compliant'}
+        </span>
       </div>
 
       <div className="metrics-grid">

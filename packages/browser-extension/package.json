@@ -7,7 +7,7 @@
   "scripts": {
     "build": "webpack --mode production",
     "dev": "webpack --mode development --watch",
-    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js && node ../../scripts/verify-mv3-compliance.mjs",
     "clean": "rimraf dist"
   },
   "dependencies": {
