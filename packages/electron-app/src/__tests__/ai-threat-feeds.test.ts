@@ -11,6 +11,8 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
       riskLevel: 'high',
       confidence: 95,
       reasons: ['High entropy score', 'Algorithmic domain name'],
+      generatedRules: ['||track-high-conf.com^'],
+      source: 'watchdog',
       timestamp: '2026-09-24T12:00:00.000Z',
     },
     {
@@ -21,6 +23,8 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
       riskLevel: 'critical',
       confidence: 0.92, // Fractional 0-1 scale test
       reasons: ['Zero-day DGA detected'],
+      generatedRules: ['||malware-dga.org^'],
+      source: 'sinkhole',
       timestamp: '2026-09-24T12:05:00.000Z',
     },
     {
@@ -31,6 +35,8 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
       riskLevel: 'medium',
       confidence: 65, // Below 85% threshold
       reasons: ['Uncertain pattern'],
+      generatedRules: ['||low-conf-suspicious.net^'],
+      source: 'inspector',
       timestamp: '2026-09-24T12:10:00.000Z',
     },
     {
@@ -41,6 +47,8 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
       riskLevel: 'high',
       confidence: 90,
       reasons: ['Duplicate scout sighting'],
+      generatedRules: ['||track-high-conf.com^'],
+      source: 'crawler',
       timestamp: '2026-09-24T12:15:00.000Z',
     },
   ];
@@ -116,6 +124,11 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
         reasons: ['High Shannon entropy', 'Zero-day DGA generation detected'],
         entropy: 4.85,
         isLikelyDga: true,
+        cnames: [],
+        resolvedIps: ['198.51.100.1'],
+        generatedRules: ['||xkcd8934jkl23mno98.biz^'],
+        provider: 'local-heuristics',
+        timestamp: '2026-09-24T12:00:00.000Z',
       },
       {
         target: 'standard-site.org',
@@ -127,6 +140,11 @@ describe('AI Threat Quarantine Dynamic Feeds', () => {
         reasons: ['Known reputable domain'],
         entropy: 2.1,
         isLikelyDga: false,
+        cnames: [],
+        resolvedIps: ['93.184.216.34'],
+        generatedRules: [],
+        provider: 'local-heuristics',
+        timestamp: '2026-09-24T12:00:00.000Z',
       },
     ];
 
