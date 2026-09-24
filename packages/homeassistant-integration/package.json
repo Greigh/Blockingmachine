@@ -2,5 +2,8 @@
   "name": "@blockingmachine/homeassistant-integration",
   "version": "1.0.0-rc.3",
   "description": "Home Assistant Custom Integration for Blockingmachine Hub",
-  "private": true
+  "private": true,
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests"
+  }
 }

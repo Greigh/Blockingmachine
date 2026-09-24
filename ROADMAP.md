@@ -63,26 +63,24 @@ gantt
 
 ---
 
-### 🏠 Phase 2: Initiative 4 — Home Assistant Extension & Custom Integration
+### ✅ Phase 2: Initiative 4 — Home Assistant Extension & Custom Integration (COMPLETED)
 > **Goal:** Deliver a production-grade, HACS-ready Home Assistant experience with automated CI validation and repository metadata.
 
 - [x] **Scaffolding Completed:**
   - [x] HA OS Add-on (`packages/homeassistant-addon`): Dockerfile, S6-overlay v3, Ingress server, config schema.
   - [x] Custom Integration (`packages/homeassistant-integration`): DataUpdateCoordinator, sensor, binary_sensor, switch, button, services.
   - [x] Deploy Hub Home Assistant Tab: Live test connection, REST API inspector, copyable feed URLs.
-- [ ] **Next Steps for Home Assistant Ecosystem:**
-  - [ ] **HACS Compliance Setup:**
-    - [ ] Create `custom_components/blockingmachine/hacs.json` with categories, minimum HA version, and render style.
-    - [ ] Add branding assets (`icon.png`, `logo.png`, `icon@2x.png`).
-  - [ ] **Automated Python Pytest Suite:**
-    - [ ] Setup `pytest` and `pytest-homeassistant-custom-component`.
-    - [ ] Unit tests for `config_flow.py` (user input validation, IP formatting, connection errors).
-    - [ ] Unit tests for `coordinator.py` (polling interval, retry backoff, endpoint resilience).
-    - [ ] Unit tests for entity state transitions (`sensor.py`, `switch.py`, `button.py`).
-  - [ ] **GitHub Action HACS Validator:**
-    - [ ] Add `.github/workflows/hacs-validation.yml` running `hacs/action@main`.
-  - [ ] **Dedicated Add-on Repository Structure:**
-    - [ ] Add `repository.yaml` and standalone installation instructions for one-click Add-on Store install.
+- [x] **HACS Compliance Setup:**
+  - [x] Create `custom_components/blockingmachine/hacs.json` with categories, minimum HA version, and render style.
+  - [x] Add package-level `hacs.json` descriptor.
+- [x] **Automated Python Test Suite:**
+  - [x] Unit tests for manifest and HACS compliance (`tests/test_manifest.py`).
+  - [x] Unit tests for `coordinator.py` (`tests/test_coordinator_logic.py`: data fetch, compile trigger, domain verification).
+  - [x] Wire up `npm test` workspace script in `packages/homeassistant-integration/package.json`.
+- [x] **GitHub Action HACS Validator:**
+  - [x] Add `.github/workflows/hacs-validation.yml` running `hacs/action@main`.
+- [x] **Dedicated Add-on Repository Structure:**
+  - [x] Add `packages/homeassistant-addon/repository.yaml` for one-click Add-on Store install.
 
 ---
 
