@@ -2032,6 +2032,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           }
         }
 
+        const timestampStr = new Date().toLocaleString();
+        store.set('lastProcessTime', timestampStr);
+
         // Automatically write segregated endpoint files for System Daemon (dns.txt) and Browser Extension (browser.txt)
         try {
           const dnsRules = filterDNSRules(uniqueRules);
@@ -2082,9 +2085,6 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         } catch (segErr) {
           console.error('[IPC Main] Failed to write segregated dns/browser endpoints:', segErr);
         }
-
-        const timestampStr = new Date().toLocaleString();
-        store.set('lastProcessTime', timestampStr);
 
         // Record in compilation history
         const prevHistory = (store.get('compilationHistory') || []) as CompilationSnapshot[];
