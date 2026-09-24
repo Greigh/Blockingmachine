@@ -4,16 +4,19 @@
 # Blockingmachine
 
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.0.0--rc.4-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0-rc.3)
-[![GitHub Packages](https://img.shields.io/badge/GitHub_Packages-v1.0.0--rc.3-2ea44f.svg)](https://github.com/users/Greigh/packages?repo_name=Blockingmachine)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--rc.4-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0-rc.4)
+[![GitHub Packages](https://img.shields.io/badge/GitHub_Packages-v1.0.0--rc.4-2ea44f.svg)](https://github.com/users/Greigh/packages?repo_name=Blockingmachine)
 [![Forgejo](https://img.shields.io/badge/Forgejo-git.greighstudios.com-ff6600.svg)](https://git.greighstudios.com/greighstudios/Blockingmachine)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/)
 [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/)
 [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/Tests-359%20Passing%20(100%25)-brightgreen.svg)](https://github.com/greigh/Blockingmachine/actions)
-[![Code Quality](https://img.shields.io/badge/ESLint-0%20Warnings-blueviolet.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-398%20Passing%20(100%25)-brightgreen.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml)
+[![CI](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml)
+[![CodeQL Analysis](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml)
+[![HACS Validation](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml)
+[![Security Policy](https://img.shields.io/badge/Security_Policy-Active-green.svg)](SECURITY.md)
 
-_High-performance adblock compiler, DNS rule deduplicator, and AI-powered network defense suite for Pi-hole, AdGuard Home, and modern desktops._
+_A modern network defense suite and filter list compiler for AdGuard, uBlock Origin & EasyList. Features an Electron desktop app, MV3 extension, loopback DNS daemon, Home Assistant hub, and embedded Mini-AI classification with intelligent rule deduplication, multi-format exports, and 100% local processing._
 
 </div>
 
@@ -21,19 +24,19 @@ _High-performance adblock compiler, DNS rule deduplicator, and AI-powered networ
 
 ## Overview
 
-**Blockingmachine** is an advanced, production-grade monorepo engineered to unify high-speed adblock and DNS filter list compilation, homelab sinkhole synchronization, and machine-learning threat intelligence into a coherent, privacy-first desktop and CLI ecosystem.
+**Blockingmachine** is a unified, privacy-first network defense ecosystem engineered to compile high-speed adblock and DNS filter lists, synchronize homelab sinkholes, detect zero-day ad trackers with on-device machine intelligence, and enforce system-wide and in-browser blocking with sub-microsecond latency.
 
-Designed for network administrators, homelab enthusiasts, and privacy advocates, Blockingmachine processes millions of filter rules in milliseconds, eliminates redundant subdomains, detects zero-day algorithmic ad trackers through an embedded on-device neural classifier, and automatically deploys compiled blocklists directly to local DNS appliances.
+Designed for network engineers, homelab operators, and privacy advocates, Blockingmachine processes millions of filter rules in milliseconds, eliminates redundant subdomains via hierarchical suffix trees, runs procedural anti-circumvention scriptlets, and integrates natively with Home Assistant.
 
 ### Monorepo Workspaces
 
-- **Desktop Application (`@blockingmachine/electron-app`)**: Native macOS/Linux/Windows Electron application featuring the **Unified Rule & AI Inspector**, **AI Defense Radar**, **Deploy & Sync Hub**, **Defense Modules**, and **Compiled Rule Browser**.
-- **Browser Extension (`@blockingmachine/browser-extension`)**: Modern Manifest V3 WebExtension with dynamic `declarativeNetRequest` (DNR) compilation, procedural anti-adblock scriptlet defusers (Admiral, Google Funding Choices), cosmetic styling injection, and live AI Threat Radar popup UI.
-- **System Plugin / Native DNS Daemon (`@blockingmachine/system-daemon`)**: High-throughput loopback UDP/TCP DNS proxy on port 53/5353, powered by an in-memory reversed-label suffix trie for sub-microsecond $O(k)$ rule lookups, `$important` precedence resolution, upstream DNS-over-HTTPS (Quad9 default), and a local HTTP control API (`127.0.0.1:9292`).
-- **Core Engine (`@blockingmachine/core`)**: High-performance, zero-dependency filter rule parser, hierarchy-aware subdomain deduplicator, multi-format export compiler, Shannon entropy analyzer, CNAME uncloaking resolver, and embedded Mini-AI classification engine.
-- **Command Line Interface (`@blockingmachine/cli`)**: Autonomous CLI binary (`blockingmachine`) for CI/CD compilation pipelines, automated homelab cron tasks, local feed serving, diffing, and DNS diagnostics.
+- **Desktop Application (`@blockingmachine/electron-app`)**: Native macOS/Linux/Windows Electron suite featuring the **Unified Rule & AI Inspector**, **AI Defense Radar**, **Deploy & Sync Hub**, **Curated Defense Modules**, and **Compiled Rule Browser**.
+- **Browser Extension (`@blockingmachine/browser-extension`)**: High-performance Manifest V3 extension featuring dynamic `declarativeNetRequest` (DNR) compilation, procedural anti-adblock scriptlet defusers (Admiral, Google Funding Choices), in-page visual **ElementPicker**, and live AI Radar inspection.
+- **System DNS Daemon (`@blockingmachine/system-daemon`)**: High-throughput loopback UDP/TCP DNS proxy on port 53/5353, powered by an in-memory reversed-label suffix trie for sub-microsecond $O(k)$ rule lookups, `$important` precedence resolution, upstream DNS-over-HTTPS (Quad9 default), and a local HTTP control API (`127.0.0.1:9292`).
+- **Core Engine (`@blockingmachine/core`)**: Zero-dependency rule parsing engine, hierarchy-aware subdomain deduplicator, multi-format export compiler, Shannon entropy analyzer, CNAME uncloaking resolver, and embedded Mini-AI classification neural model.
+- **Command Line Interface (`@blockingmachine/cli`)**: Autonomous CLI binary (`blockingmachine`) for CI/CD pipelines, automated homelab cron tasks, local feed serving, diffing, and DNS diagnostics.
+- **Home Assistant Hub (`@blockingmachine/homeassistant-addon` & integration)**: HACS-compliant Home Assistant integration and local Add-on container providing a bidirectional telemetry mesh (`sensor.blockingmachine_browser_*`), live rule distribution via Server-Sent Events (`/v1/events`), and remote cosmetic shield toggles.
 - **Audit & Database Layer (`blockingmachine-database`)**: Offline JSONL and MongoDB audit logging and rule snapshot rollback engine.
-
 
 ---
 
@@ -45,9 +48,9 @@ The latest pre-release desktop application is cryptographically signed with an A
 
 | Package / Installer | Architecture | Download |
 |---|---|---|
-| **Apple Silicon Disk Image (`.dmg`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.dmg`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.3/Blockingmachine-1.0.0-rc.3-arm64.dmg) |
-| **Standalone Application Bundle (`.zip`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.3/Blockingmachine-darwin-arm64-1.0.0-rc.3.zip) |
-| **SHA-256 Checksums** | All Platforms | [Download `SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.3/SHA256SUMS.txt) |
+| **Apple Silicon Disk Image (`.dmg`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.dmg`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.4/Blockingmachine-1.0.0-rc.4-arm64.dmg) |
+| **Standalone Application Bundle (`.zip`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.4/Blockingmachine-darwin-arm64-1.0.0-rc.4.zip) |
+| **SHA-256 Checksums** | All Platforms | [Download `SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.4/SHA256SUMS.txt) |
 
 #### Checksum Verification
 ```bash
@@ -63,24 +66,24 @@ Blockingmachine distributes its core parsing engine and command-line interface a
 #### From GitHub Packages
 ```bash
 # Core Library
-npm install @greigh/blockingmachine-core@1.0.0-rc.3 --registry=https://npm.pkg.github.com
+npm install @greigh/blockingmachine-core@1.0.0-rc.4 --registry=https://npm.pkg.github.com
 
 # CLI Tool
-npm install -g @greigh/blockingmachine-cli@1.0.0-rc.3 --registry=https://npm.pkg.github.com
+npm install -g @greigh/blockingmachine-cli@1.0.0-rc.4 --registry=https://npm.pkg.github.com
 ```
 
 #### From Forgejo Package Registry (`git.greighstudios.com`)
 ```bash
 # Core Library
-npm install @blockingmachine/core@1.0.0-rc.3 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
+npm install @blockingmachine/core@1.0.0-rc.4 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
 
 # CLI Tool
-npm install -g @blockingmachine/cli@1.0.0-rc.3 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
+npm install -g @blockingmachine/cli@1.0.0-rc.4 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
 ```
 
-Direct tarballs are also attached to [Release v1.0.0-rc.3](https://github.com/Greigh/Blockingmachine/releases/tag/v1.0.0-rc.3):
-- `blockingmachine-core-1.0.0-rc.3.tgz`
-- `blockingmachine-cli-1.0.0-rc.3.tgz`
+Direct tarballs are also attached to [Release v1.0.0-rc.4](https://github.com/Greigh/Blockingmachine/releases/tag/v1.0.0-rc.4):
+- `blockingmachine-core-1.0.0-rc.4.tgz`
+- `blockingmachine-cli-1.0.0-rc.4.tgz`
 
 ---
 
@@ -110,8 +113,27 @@ Direct tarballs are also attached to [Release v1.0.0-rc.3](https://github.com/Gr
 - **Sentinel Watchdog Automation**: Automated background threat hunting that periodically sweeps homelab DNS logs at customizable intervals (15m to 24h) and populates the Quarantine Ledger.
 - **Active Feedback Memory**: Tracks user corrections to refine heuristic weights over time, with one-click memory reset.
 
+### 🌐 Manifest V3 Browser Extension (`@blockingmachine/browser-extension`)
+- **DeclarativeNetRequest Rulesets**: Translates network blocking rules into native browser DNR rulesets for zero-latency network interception.
+- **Procedural Scriptlet Defusers**: Defuses hostile anti-adblock detection walls (e.g. Admiral, Google Funding Choices CMP) without breaking legitimate page layouts.
+- **Interactive Element Picker**: Visual element isolation tool allowing users to click and eliminate cosmetic annoyances directly in the browser DOM.
+- **Real-Time SSE Sync**: Connects to the local Blockingmachine Hub via Server-Sent Events (`/v1/events`) to instantly hot-reload rules upon compilation without browser restarts.
+
+### ⚙️ System Loopback DNS Proxy (`@blockingmachine/system-daemon`)
+- **In-Memory Reversed-Label Trie**: Ultra-fast $O(k)$ suffix lookup trie matching DNS queries in nanoseconds regardless of list size (100k+ rules).
+- **Service Configuration Generators**: One-click generation and installation of macOS `launchd` plist daemons and Linux `systemd` services with `CAP_NET_BIND_SERVICE`.
+- **Precedence & Wildcards**: Full resolution of `$important` flags, whitelist exceptions (`@@`), and multi-level subdomain wildcards (`*.telemetry.example.com`).
+
+### 🏠 Home Assistant Integration & HACS Hub
+- **HACS Compliant Integration**: Native Home Assistant integration with standard configuration flow and automatic hub discovery.
+- **Telemetry Mesh Sensors**: Publishes real-time browser and network protection metrics:
+  - `sensor.blockingmachine_browser_blocked_today`
+  - `sensor.blockingmachine_browser_cosmetic_hidden`
+  - `sensor.blockingmachine_browser_active_defusers`
+  - `binary_sensor.blockingmachine_browser_connected`
+- **Remote Cosmetic Shield Toggles**: Enable or disable cosmetic hiding and scriptlet defusers directly from Home Assistant automations or Lovelace dashboards.
+
 ### 🛡️ First-Party Curated Defense Modules (`⌘3`)
-Pre-packaged, modular filter list engine modeled after modern ad-blocking architecture:
 1. **Base Ad Shield**: Network-level blocking for major ad exchanges, programmatic bidding, and banner injection.
 2. **Privacy Engine**: Web beacons, browser fingerprinting, and analytics telemetry neutralizer.
 3. **Smart TV & IoT Shield**: Automatic Content Recognition (ACR) telemetry and ad blocker for Roku, Samsung Tizen, LG webOS, Fire TV, and smart appliances.
@@ -125,13 +147,11 @@ Pre-packaged, modular filter list engine modeled after modern ad-blocking archit
 - **Pi-hole Integration**: Syncs compiled blocklists directly into Pi-hole gravity databases via API with instant connection testing.
 - **AdGuard Home Integration**: Native integration supporting Direct (Port 3000), Home Assistant API (Port 8123), HA Webhooks, and Nabu Casa Cloud tunnels.
 - **Custom Automation Webhooks**: Emits HTTP POST event payloads to Technitium DNS, pfSense, OPNsense, Blocky, or Node-RED upon every compilation.
-- **Built-in Local Feed Server**: Serves compiled blocklists on your local network (e.g. `http://localhost:9191/rules.txt`) for automatic appliance polling.
+- **Built-in Local Feed Server**: Serves compiled blocklists on your local network (e.g. `http://localhost:9191/rules.txt`, `/dns.txt`, `/browser.txt`) for automatic appliance polling.
 
 ---
 
 ## Keyboard Shortcuts Matrix
-
-Blockingmachine provides seamless native navigation via macOS menu accelerators and sidebar shortcuts:
 
 | Shortcut | View | Purpose |
 | :---: | :--- | :--- |
@@ -154,13 +174,20 @@ Blockingmachine provides seamless native navigation via macOS menu accelerators 
 ```
 Blockingmachine/
 ├── packages/
-│   ├── core/           # @blockingmachine/core (Compiler, deduplicator, parsers, Mini-AI engine)
-│   ├── cli/            # @blockingmachine/cli (CLI binary, local feed server, diffing, doctor)
-│   ├── electron-app/   # @blockingmachine/electron-app (Desktop suite, Deploy Hub, AI Radar)
-│   └── database/       # Snapshot rollback engine and audit logging schemas
-├── .github/workflows/  # GitHub Actions CI and GitHub Packages publishing
-├── .forgejo/workflows/ # Forgejo Actions CI and Forgejo Packages publishing
-├── package.json        # Root npm workspaces configuration (Node.js >= 24.0.0)
+│   ├── core/                    # @blockingmachine/core (Compiler, deduplicator, parsers, Mini-AI engine)
+│   ├── cli/                     # @blockingmachine/cli (CLI binary, local feed server, diffing, doctor)
+│   ├── electron-app/            # @blockingmachine/electron-app (Desktop suite, Deploy Hub, AI Radar)
+│   ├── browser-extension/       # @blockingmachine/browser-extension (Manifest V3 WebExtension)
+│   ├── system-daemon/           # @blockingmachine/system-daemon (Loopback DNS filtering proxy)
+│   ├── homeassistant-addon/     # @blockingmachine/homeassistant-addon (Home Assistant Supervisor Add-on)
+│   ├── homeassistant-integration/# HACS-compliant Home Assistant integration & Python tests
+│   └── database/                # Snapshot rollback engine and audit logging schemas
+├── custom_components/           # Root HACS custom component distribution directory
+├── .github/workflows/           # GitHub Actions CI, CodeQL Analysis, and HACS Validation
+├── .forgejo/workflows/          # Forgejo Actions CI and Forgejo Packages publishing
+├── hacs.json                    # HACS repository metadata and compliance definition
+├── SECURITY.md                  # Comprehensive vulnerability disclosure and security policy
+├── package.json                 # Root npm workspaces configuration (Node.js >= 24.0.0)
 └── README.md
 ```
 
@@ -181,12 +208,11 @@ Blockingmachine/
 
 ## Prerequisites
 
-To build and run Blockingmachine from source, ensure your environment meets the following requirements:
-
 - **Node.js**: `v24.0.0` or higher
 - **npm**: `v10.0.0` or higher
+- **Python**: `v3.10` or higher (for Home Assistant integration testing)
 - **Git**: Installed and available in your system `PATH`
-- **Build Tools**: Standard C/C++ compilation tools for native modules:
+- **Build Tools**:
   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
   - **Linux (Ubuntu/Debian)**: `sudo apt-get install build-essential python3`
   - **Windows**: Visual Studio C++ Build Tools
@@ -204,11 +230,11 @@ cd Blockingmachine
 ### 2. Install Dependencies
 Install all workspace dependencies from the root directory:
 ```bash
-npm install
+npm ci
 ```
 
 ### 3. Build All Workspaces
-Compile the core TypeScript engine, CLI binaries, and Electron Webpack bundles:
+Compile the core TypeScript engine, CLI binaries, browser extension, and Electron bundles:
 ```bash
 npm run build
 ```
@@ -267,7 +293,7 @@ blockingmachine doctor
 Blockingmachine maintains a strict **100% test pass rate** with **0 ESLint errors and 0 warnings** across all monorepo packages:
 
 ```bash
-# Run all 352 automated tests across the monorepo
+# Run all 398 automated tests across 31 suites in the monorepo
 npm test
 
 # Run tests with open handle leak detection
@@ -277,8 +303,17 @@ npm test --workspace=@blockingmachine/core -- --detectOpenHandles
 npm run lint
 
 # Validate TypeScript typing across all packages
-npm run build
+npm run type-check
+
+# Verify Manifest V3 Chrome Web Store compliance
+npm run verify:mv3
 ```
+
+---
+
+## Security Policy
+
+We treat security as a first-class feature across all network proxies and extensions. For vulnerability disclosure procedures, supported versions, and architectural isolation guarantees, see our [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -287,7 +322,7 @@ npm run build
 Blockingmachine is concurrently mirrored and continuously tested across:
 - **GitHub Repository**: [github.com/Greigh/Blockingmachine](https://github.com/Greigh/Blockingmachine)
 - **Forgejo Repository**: [git.greighstudios.com/greighstudios/Blockingmachine](https://git.greighstudios.com/greighstudios/Blockingmachine)
-- **GitHub Actions**: `.github/workflows/ci.yml` and `.github/workflows/publish.yml`
+- **GitHub Actions**: `.github/workflows/ci.yml`, `.github/workflows/codeql.yml`, `.github/workflows/hacs-validation.yml`
 - **Forgejo Actions**: `.forgejo/workflows/ci.yml` and `.forgejo/workflows/publish.yml`
 
 ---
