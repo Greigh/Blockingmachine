@@ -10,7 +10,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/)
 [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/)
 [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/Tests-352%20Passing%20(100%25)-brightgreen.svg)](https://github.com/greigh/Blockingmachine/actions)
+[![Tests](https://img.shields.io/badge/Tests-359%20Passing%20(100%25)-brightgreen.svg)](https://github.com/greigh/Blockingmachine/actions)
 [![Code Quality](https://img.shields.io/badge/ESLint-0%20Warnings-blueviolet.svg)]()
 
 _High-performance adblock compiler, DNS rule deduplicator, and AI-powered network defense suite for Pi-hole, AdGuard Home, and modern desktops._
@@ -28,9 +28,12 @@ Designed for network administrators, homelab enthusiasts, and privacy advocates,
 ### Monorepo Workspaces
 
 - **Desktop Application (`@blockingmachine/electron-app`)**: Native macOS/Linux/Windows Electron application featuring the **Unified Rule & AI Inspector**, **AI Defense Radar**, **Deploy & Sync Hub**, **Defense Modules**, and **Compiled Rule Browser**.
+- **Browser Extension (`@blockingmachine/browser-extension`)**: Modern Manifest V3 WebExtension with dynamic `declarativeNetRequest` (DNR) compilation, procedural anti-adblock scriptlet defusers (Admiral, Google Funding Choices), cosmetic styling injection, and live AI Threat Radar popup UI.
+- **System Plugin / Native DNS Daemon (`@blockingmachine/system-daemon`)**: High-throughput loopback UDP/TCP DNS proxy on port 53/5353, powered by an in-memory reversed-label suffix trie for sub-microsecond $O(k)$ rule lookups, `$important` precedence resolution, upstream DNS-over-HTTPS (Quad9 default), and a local HTTP control API (`127.0.0.1:9292`).
 - **Core Engine (`@blockingmachine/core`)**: High-performance, zero-dependency filter rule parser, hierarchy-aware subdomain deduplicator, multi-format export compiler, Shannon entropy analyzer, CNAME uncloaking resolver, and embedded Mini-AI classification engine.
 - **Command Line Interface (`@blockingmachine/cli`)**: Autonomous CLI binary (`blockingmachine`) for CI/CD compilation pipelines, automated homelab cron tasks, local feed serving, diffing, and DNS diagnostics.
 - **Audit & Database Layer (`blockingmachine-database`)**: Offline JSONL and MongoDB audit logging and rule snapshot rollback engine.
+
 
 ---
 
