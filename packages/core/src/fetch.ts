@@ -188,6 +188,7 @@ export async function fetchWithConditionalCache(
 
   // --- Check if it's a local file path ---
   if (!url.startsWith("http:") && !url.startsWith("https:")) {
+    let handle: fs.FileHandle | null = null;
     try {
       let filePath = url;
       if (url.startsWith("file://")) {
@@ -195,15 +196,20 @@ export async function fetchWithConditionalCache(
       } else if (!path.isAbsolute(url)) {
         const baseCandidate = path.resolve(getBaseDir(), url);
         const cwdCandidate = path.resolve(process.cwd(), url);
-        filePath = baseCandidate;
         try {
-          await fs.access(filePath);
+          handle = await fs.open(baseCandidate, "r");
+          filePath = baseCandidate;
         } catch {
+          handle = await fs.open(cwdCandidate, "r");
           filePath = cwdCandidate;
         }
       }
 
-      const stat = await fs.stat(filePath);
+      if (!handle) {
+        handle = await fs.open(filePath, "r");
+      }
+
+      const stat = await handle.stat();
       if (!stat.isFile()) {
         console.error(`❌ Local path is not a file: ${filePath}`);
         return { content: null, notModified: false, status: 404 };
@@ -228,7 +234,7 @@ export async function fetchWithConditionalCache(
         };
       }
 
-      const content = await fs.readFile(filePath, "utf8");
+      const content = await handle.readFile("utf8");
       return {
         content,
         notModified: false,
@@ -240,6 +246,10 @@ export async function fetchWithConditionalCache(
         `❌ Error reading local file ${url}: ${error?.message || error}`,
       );
       return { content: null, notModified: false, status: 500 };
+    } finally {
+      if (handle) {
+        await handle.close();
+      }
     }
   } else {
     if (!cacheOptions?.allowPrivateNetworks) {

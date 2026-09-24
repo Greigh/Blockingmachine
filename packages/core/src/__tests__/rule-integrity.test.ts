@@ -112,9 +112,7 @@ describe('Rule Engine Integrity & Ordering Suite', () => {
       );
       expect(
         precedence.activeBlocks.some(
-          (r) =>
-            r.raw.includes('analytics.tracking.com') ||
-            r.domain === 'analytics.tracking.com',
+          (r) => r.domain === 'analytics.tracking.com',
         ),
       ).toBe(false);
 
@@ -159,7 +157,7 @@ describe('Rule Engine Integrity & Ordering Suite', () => {
       // Because block has $important and exception does not, block WINS
       expect(
         precedence.activeBlocks.some((r) =>
-          r.raw.includes('critical-malware.com'),
+          r.domain === 'critical-malware.com',
         ),
       ).toBe(true);
 
@@ -183,7 +181,7 @@ describe('Rule Engine Integrity & Ordering Suite', () => {
       // $important exception overrides $important block
       expect(
         precedence.activeBlocks.some((r) =>
-          r.raw.includes('important-site.com'),
+          r.domain === 'important-site.com',
         ),
       ).toBe(false);
 

@@ -38,7 +38,11 @@ export function cleanDomainPattern(originalRule: string): string | null {
 
   try {
     // Strip trailing comments (e.g. in hosts files "127.0.0.1 example.com # comment")
-    trimmedRule = trimmedRule.replace(/\s+#.*$/, "").trim();
+    const commentMatch = trimmedRule.search(/\s+#/);
+    if (commentMatch !== -1) {
+      trimmedRule = trimmedRule.slice(0, commentMatch);
+    }
+    trimmedRule = trimmedRule.trim();
 
     // Strip hosts file IP prefix if present (e.g. 0.0.0.0, 127.0.0.1, ::1)
     trimmedRule = trimmedRule
@@ -47,8 +51,16 @@ export function cleanDomainPattern(originalRule: string): string | null {
 
     // Remove AdGuard/uBO specific options starting with $
     const parts = trimmedRule.split("$", 1);
-    let pattern = parts[0].replace(/^(@@)?(\|+)*/, ""); // Remove @@ or || prefixes
-    pattern = pattern.replace(/[\^/]+$/, ""); // Remove trailing ^ or / separator
+    let pattern = parts[0];
+    if (pattern.startsWith("@@")) {
+      pattern = pattern.slice(2);
+    }
+    while (pattern.startsWith("|")) {
+      pattern = pattern.slice(1);
+    }
+    while (pattern.endsWith("^") || pattern.endsWith("/")) {
+      pattern = pattern.slice(0, -1);
+    }
     pattern = pattern.replace(/^(?:https?:\/\/)?(?:www\.)?/, "");
     pattern = pattern.trim();
 

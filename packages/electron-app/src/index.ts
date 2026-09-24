@@ -979,9 +979,8 @@ async function getOrLoadCompiledRules(storeRef: ElectronStore<StoreSchema>): Pro
 
   for (const candidate of candidates) {
     try {
-      const stat = await fs.stat(candidate);
-      if (stat.isFile() && stat.size > 0) {
-        const content = await fs.readFile(candidate, 'utf8');
+      const content = await fs.readFile(candidate, 'utf8');
+      if (content.length > 0) {
         latestCompiledRules = parseFilterList(content);
         if (latestCompiledRules.length > 0) {
           console.log(`[IPC Main] Loaded ${latestCompiledRules.length} compiled rules from ${candidate}`);

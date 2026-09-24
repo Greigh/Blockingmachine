@@ -155,7 +155,7 @@ for (const pkgPath of packagePaths) {
 
 // 4. Update README.md badge if present
 const readmePath = path.join(rootDir, 'README.md');
-if (fs.existsSync(readmePath)) {
+try {
   let readme = fs.readFileSync(readmePath, 'utf8');
   // Shields.io uses double dashes for hyphens in tags: 1.0.0-rc.3 -> 1.0.0--rc.3
   const shieldsTag = targetVersion.replace(/-/g, '--');
@@ -168,6 +168,8 @@ if (fs.existsSync(readmePath)) {
     console.log(`✅ [README.md] Release badge updated to v${shieldsTag}`);
     updatedFiles.push('README.md');
   }
+} catch {
+  // README.md does not exist or is not accessible
 }
 
 // 5. Sync package-lock.json

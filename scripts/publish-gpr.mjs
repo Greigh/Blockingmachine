@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -48,10 +48,15 @@ for (const pkg of packages) {
       fs.writeFileSync(pkgJsonPath, JSON.stringify(modifiedPkg, null, 2) + '\n');
 
       const tag = pkgData.version.includes('-') ? 'rc' : 'latest';
-      const cmd = `npm publish ${isDryRun ? '--dry-run' : ''} --tag ${tag} --registry=https://npm.pkg.github.com`;
-      console.log(`[publish-gpr] Executing: ${cmd} in ${pkg.dir}`);
+      const args = ['publish'];
+      if (isDryRun) {
+        args.push('--dry-run');
+      }
+      args.push('--tag', tag);
+      args.push('--registry', 'https://npm.pkg.github.com');
+      console.log(`[publish-gpr] Executing: npm ${args.join(' ')} in ${pkg.dir}`);
 
-      execSync(cmd, {
+      execFileSync('npm', args, {
         cwd: pkg.dir,
         stdio: 'inherit',
         env: {

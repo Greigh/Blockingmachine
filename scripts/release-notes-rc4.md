@@ -44,8 +44,8 @@ Fourth release candidate for Blockingmachine 1.0 featuring full resolution of al
 ```text
 5f19fdbe9eb4886b4dbc1000328807cfe29c25df9d275afcc0ea6c6314f2ce75  Blockingmachine-1.0.0-rc.4-arm64.dmg
 52816238cbde1308a159bd3a8436e492f63b322fa84bd65c73af566c4f578159  Blockingmachine-darwin-arm64-1.0.0-rc.4.zip
-2824b39a008ad13c54a558fed6c1d9bde7681945505569e2d81fc674218e356e  blockingmachine-core-1.0.0-rc.4.tgz
-846dd828c29a638f884de0559e362b4d9b96d0605a83d58b661ed042d0d66319  blockingmachine-cli-1.0.0-rc.4.tgz
-e845fb6ac1a2e8fff6235bbb22e11c0e1d2e589d63e4c74643ef2e8a535aeeb2  blockingmachine-chrome-mv3-v1.0.0.zip
-82e9c584cc4788f2af9666a651b14efecc0df221eca8540e3e67df3f83c0aa21  blockingmachine-firefox-mv3-v1.0.0.zip
+5973849b9347362906099cf8f500a4493586bc32217cbf680ee6c860729fdeb8  blockingmachine-core-1.0.0-rc.4.tgz
+9f83fc5371e281d4ddc49d9f81f7f29ce0b35ddd12ee80c4e0aaf5d6bc0266e9  blockingmachine-cli-1.0.0-rc.4.tgz
+6a848889044541572203bec02d7edf2961dd91ea24de65cc756ac3776ddd7604  blockingmachine-chrome-mv3-v1.0.0.zip
+47d5fd48908586c6fc9ba991d1f78d50a1f203c0b55cb4eeaaf740062feb224b  blockingmachine-firefox-mv3-v1.0.0.zip
 ```

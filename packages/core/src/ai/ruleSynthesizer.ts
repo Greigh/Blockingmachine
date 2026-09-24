@@ -35,7 +35,8 @@ export function sanitizeDomain(input: string): string | null {
   clean = clean.split(':')[0];
 
   // 3. Remove leading and trailing dots
-  clean = clean.replace(/^\.+|\.+$/g, '');
+  while (clean.startsWith('.')) clean = clean.slice(1);
+  while (clean.endsWith('.')) clean = clean.slice(0, -1);
 
   if (clean.length === 0 || clean.length > 253) {
     return null;

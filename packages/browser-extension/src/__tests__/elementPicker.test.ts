@@ -5,7 +5,7 @@ describe('ElementPicker', () => {
   beforeEach(() => {
     if (!globalThis.CSS) {
       (globalThis as any).CSS = {
-        escape: (s: string) => s.replace(/([ #;?%&,.+*~\':"!^$[\]()=>|\/@])/g, '\\$1'),
+        escape: (s: string) => s.replace(/[^\w-]/g, (ch) => '\\' + ch),
       };
     }
   });

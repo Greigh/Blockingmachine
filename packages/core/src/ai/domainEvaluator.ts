@@ -57,8 +57,31 @@ export function evaluateDomainRules(
         return cleanTarget === base || cleanTarget.endsWith('.' + base);
       }
       if (p.includes('*')) {
-        const regexStr = '^' + p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$';
-        return new RegExp(regexStr, 'i').test(cleanTarget);
+        const parts = p.split('*');
+        if (parts.length === 2) {
+          const [prefix, suffix] = parts;
+          return (
+            cleanTarget.startsWith(prefix) &&
+            cleanTarget.endsWith(suffix) &&
+            cleanTarget.length >= prefix.length + suffix.length
+          );
+        }
+        let targetIdx = 0;
+        for (let i = 0; i < parts.length; i++) {
+          const seg = parts[i];
+          if (!seg) continue;
+          if (i === 0) {
+            if (!cleanTarget.startsWith(seg)) return false;
+            targetIdx = seg.length;
+          } else if (i === parts.length - 1) {
+            return cleanTarget.endsWith(seg) && cleanTarget.length >= targetIdx + seg.length;
+          } else {
+            const nextIdx = cleanTarget.indexOf(seg, targetIdx);
+            if (nextIdx === -1) return false;
+            targetIdx = nextIdx + seg.length;
+          }
+        }
+        return true;
       }
       return false;
     };

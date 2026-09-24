@@ -6,9 +6,9 @@
  * .zip archives for Chrome Web Store and Firefox Add-ons (AMO).
  */
 
-import { execSync } from 'child_process';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
-import { resolve, join, basename } from 'path';
+import { execSync, execFileSync } from 'child_process';
+import { readFileSync, writeFileSync, mkdirSync, statSync, cpSync, rmSync } from 'fs';
+import { resolve, basename } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 
@@ -37,17 +37,16 @@ execSync('node scripts/verify-mv3-compliance.mjs', {
 
 // 3. Read manifest and version
 const manifestPath = resolve(DIST_DIR, 'manifest.json');
-if (!existsSync(manifestPath)) {
+let manifest;
+try {
+  manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+} catch {
   console.error('❌ [Error] manifest.json missing from dist directory.');
   process.exit(1);
 }
-
-const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 const version = manifest.version || '1.0.0';
 
-if (!existsSync(OUT_DIR)) {
-  mkdirSync(OUT_DIR, { recursive: true });
-}
+mkdirSync(OUT_DIR, { recursive: true });
 
 // Helper to compute sha256
 function sha256(filePath) {
@@ -55,12 +54,10 @@ function sha256(filePath) {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
-// Helper to zip a directory
+// Helper to zip a directory safely without shell injection
 function createZip(sourceDir, targetZipPath) {
-  if (existsSync(targetZipPath)) {
-    execSync(`rm -f "${targetZipPath}"`);
-  }
-  execSync(`cd "${sourceDir}" && zip -q -r "${targetZipPath}" . -x "*.DS_Store" -x "__MACOSX*"`);
+  rmSync(targetZipPath, { force: true });
+  execFileSync('zip', ['-q', '-r', targetZipPath, '.', '-x', '*.DS_Store', '-x', '__MACOSX*'], { cwd: sourceDir });
 }
 
 // 4. Chrome Web Store package
@@ -74,11 +71,9 @@ console.log(`✅ [Chrome] ${basename(chromeZip)} (${chromeSizeKb} KB, SHA-256: $
 // 5. Firefox AMO package
 console.log('🦊 [4/5] Packaging Firefox AMO bundle with gecko manifest extension...');
 const firefoxDistDir = resolve(OUT_DIR, 'firefox-stage');
-if (existsSync(firefoxDistDir)) {
-  execSync(`rm -rf "${firefoxDistDir}"`);
-}
+rmSync(firefoxDistDir, { recursive: true, force: true });
 mkdirSync(firefoxDistDir, { recursive: true });
-execSync(`cp -R "${DIST_DIR}/"* "${firefoxDistDir}/"`);
+cpSync(DIST_DIR, firefoxDistDir, { recursive: true });
 
 // Inject Firefox AMO gecko ID
 const firefoxManifest = {
@@ -103,7 +98,7 @@ const firefoxSizeKb = (statSync(firefoxZip).size / 1024).toFixed(1);
 console.log(`✅ [Firefox] ${basename(firefoxZip)} (${firefoxSizeKb} KB, SHA-256: ${firefoxSha.slice(0, 16)}...)`);
 
 // Clean up staging directory
-execSync(`rm -rf "${firefoxDistDir}"`);
+rmSync(firefoxDistDir, { recursive: true, force: true });
 
 // 6. Summary Table
 console.log('\n📊 [5/5] Multi-Store Release Artifacts Ready:');

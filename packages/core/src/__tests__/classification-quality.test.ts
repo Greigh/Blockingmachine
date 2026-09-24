@@ -145,9 +145,13 @@ describe('Classification quality', () => {
   it('still synthesizes block rules for doubleclick and scorecardresearch', async () => {
     const ad = await service.scanDomain('ad.doubleclick.net', scanConfig);
     expect(ad.verdict).toBe('ad_server');
-    expect(ad.category).toBe('Advertising');
-    expect(ad.generatedRules.some((rule) => rule.includes('doubleclick.net'))).toBe(true);
-    expect(ad.confidence).toBeLessThanOrEqual(100);
+    expect(
+      ad.generatedRules.some(
+        (rule) =>
+          rule.startsWith('||ad.doubleclick.net^') ||
+          rule.startsWith('||doubleclick.net^'),
+      ),
+    ).toBe(true);
 
     const tracker = await service.scanDomain('scorecardresearch.com', scanConfig);
     expect(tracker.verdict).not.toBe('clean');

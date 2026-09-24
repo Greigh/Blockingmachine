@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -49,13 +49,19 @@ for (const pkgDir of packages) {
     const authConfigKey = `//${registryHost}${registryPath}:_authToken`;
 
     const tag = pkgData.version.includes('-') ? 'rc' : 'latest';
-    const dryRunFlag = isDryRun ? '--dry-run' : '';
-    const tokenFlag = token ? `--${authConfigKey}="${token}"` : '';
+    const args = ['publish'];
+    if (isDryRun) {
+      args.push('--dry-run');
+    }
+    args.push('--tag', tag);
+    args.push('--registry', registryUrl);
+    if (token) {
+      args.push(`--${authConfigKey}=${token}`);
+    }
 
-    const cmd = `npm publish ${dryRunFlag} --tag ${tag} --registry="${registryUrl}" ${tokenFlag}`;
     console.log(`[publish-forgejo] Executing: npm publish in ${path.basename(pkgDir)}`);
 
-    execSync(cmd, {
+    execFileSync('npm', args, {
       cwd: pkgDir,
       stdio: 'inherit',
       env: {
