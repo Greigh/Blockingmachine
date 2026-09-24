@@ -15,13 +15,14 @@ permissions:
 jobs:
   build-packages:
     name: Build NPM Packages & Extensions
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
+    if: github.server_url == 'https://github.com'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: 24.x
           registry-url: 'https://npm.pkg.github.com'
@@ -58,6 +59,7 @@ jobs:
   build-electron:
     name: Build Desktop App (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    if: github.server_url == 'https://github.com'
     strategy:
       fail-fast: false
       matrix:
@@ -66,15 +68,15 @@ jobs:
             platform: darwin
           - os: windows-latest
             platform: win32
-          - os: ubuntu-26.04
+          - os: ubuntu-latest
             platform: linux
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: 24.x
           cache: "npm"
@@ -111,10 +113,11 @@ jobs:
   create-release:
     name: Draft / Update GitHub Release
     needs: [build-packages, build-electron]
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
+    if: github.server_url == 'https://github.com'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Download all release artifacts
         uses: actions/download-artifact@v4

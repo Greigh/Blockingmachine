@@ -9,7 +9,7 @@ on:
 jobs:
   build:
     name: Build & Test (Node 24.x)
-    runs-on: [ubuntu-latest]
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository

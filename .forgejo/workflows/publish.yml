@@ -9,7 +9,7 @@ on:
 jobs:
   publish:
     name: Publish Packages to Forgejo
-    runs-on: [ubuntu-latest]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,5 +29,5 @@ jobs:
         run: node scripts/publish-forgejo.mjs
         env:
           FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SERVER_URL: ${{ gitea.server_url }}
-          OWNER: ${{ gitea.repository_owner }}
+          SERVER_URL: ${{ github.server_url }}
+          OWNER: ${{ github.repository_owner }}
