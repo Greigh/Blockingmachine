@@ -65,7 +65,7 @@
     "./export": "./dist/lib/export.js"
   },
   "bin": {
-    "blockingmachine": "./dist/cli.js"
+    "blockingmachine": "dist/cli.js"
   },
   "publishConfig": {
     "access": "public",
