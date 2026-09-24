@@ -42,7 +42,10 @@
     "fast-uri": "^3.1.6",
     "qs": "^6.16.0",
     "uuid": "^11.1.1",
-    "@electron/packager": "^20.3.0"
+    "@electron/packager": "^20.3.0",
+    "@electron-forge/plugin-webpack": {
+      "webpack-dev-server": "^5.2.6"
+    }
   },
   "allowScripts": {
     "core-js-pure@3.50.0": true,
