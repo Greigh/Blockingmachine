@@ -1,8 +1,4 @@
-/**
- * DeclarativeNetRequest (DNR) Ruleset Manager
- * Translates Blockingmachine filter rules into native browser declarative rules,
- * strictly adhering to Manifest V3 rule quotas, strict syntax validation, and precedence hierarchy.
- */
+import { Mv3Guard, MV3_LIMITS } from './mv3Guard.js';
 
 export interface ParsedDnrCandidate {
   rawRule: string;
@@ -86,11 +82,6 @@ export class DnrManager {
   async updateDynamicRules(ruleLines: string[]): Promise<number> {
     const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
     const removeRuleIds = existingRules.map((r) => r.id);
-
-    // Dynamic rule limit (standard 30,000 in modern Chrome)
-    const maxQuota = chrome.declarativeNetRequest.MAX_NUMBER_OF_DYNAMIC_AND_MATCHED_RULES || 30000;
-    const quotaCap = Math.max(1000, maxQuota - 500);
-
     const candidates: ParsedDnrCandidate[] = [];
     const seenPatterns = new Set<string>();
 
@@ -108,11 +99,23 @@ export class DnrManager {
     // Sort by priority descending so high-priority rules & exceptions fit first
     candidates.sort((a, b) => b.priority - a.priority);
 
+    // Enforce Manifest V3 safe watermark and syntax bounds
+    const maxQuota =
+      chrome.declarativeNetRequest?.MAX_NUMBER_OF_DYNAMIC_AND_MATCHED_RULES ||
+      MV3_LIMITS.DEFAULT_MAX_DYNAMIC_RULES;
+    const quotaCap = Math.min(MV3_LIMITS.SAFE_DYNAMIC_WATERMARK, Math.max(1000, maxQuota - 500));
+
+    const { compliant, overflowCount } = Mv3Guard.boundCandidates(candidates, quotaCap);
+    if (overflowCount > 0) {
+      console.warn(
+        `[Mv3Guard] Rule list exceeds safe MV3 dynamic limit (${quotaCap}). Bound ${compliant.length} rules, ${overflowCount} overflow rules pruned. Use @blockingmachine/system-daemon for unlimited network-level filtering.`
+      );
+    }
+
     const addRules: chrome.declarativeNetRequest.Rule[] = [];
     this.nextRuleId = 1;
 
-    for (const candidate of candidates) {
-      if (addRules.length >= quotaCap) break;
+    for (const candidate of compliant) {
 
       const actionType = candidate.isException
         ? chrome.declarativeNetRequest.RuleActionType.ALLOW

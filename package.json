@@ -19,7 +19,8 @@
     "dev": "npm start",
     "package": "npm run --prefix packages/electron-app package",
     "make": "npm run --prefix packages/electron-app make",
-    "version:bump": "node scripts/bump-version.mjs"
+    "version:bump": "node scripts/bump-version.mjs",
+    "verify:mv3": "node scripts/verify-mv3-compliance.mjs"
   },
   "author": {
     "name": "Daniel Hipskind",

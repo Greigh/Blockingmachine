@@ -12,20 +12,53 @@ interface TrieNode {
   exception?: RuleEntry;
 }
 
+// Browser-specific resource modifiers that should NEVER be blocked at the DNS layer
+const BROWSER_ONLY_MODIFIERS = new Set([
+  'image',
+  'script',
+  'stylesheet',
+  'subdocument',
+  'xmlhttprequest',
+  'websocket',
+  'media',
+  'popup',
+  'csp',
+  'redirect',
+  'elemhide',
+  'font',
+  'ping',
+  'other'
+]);
+
 /**
  * Domain Suffix Trie
  * Reverses domain labels (e.g. ['net', 'doubleclick', 'ad']) to enable
  * O(k) sub-microsecond longest-suffix match against wildcards and exact rules.
+ * Strictly separates DNS domain rules from browser-only rules (cosmetics, scriptlets, URL paths).
  */
 export class DomainTrie {
   private root: TrieNode = { children: new Map() };
 
   /**
    * Adds an adblock or hosts rule to the index.
+   * Rejects browser-specific rules (cosmetic hiding, scriptlets, path filters, resource modifiers)
+   * to ensure DNS resolution never breaks legitimate sites.
    */
   addRule(rawRule: string): void {
     const trimmed = rawRule.trim();
     if (!trimmed || trimmed.startsWith('!') || trimmed.startsWith('#')) return;
+
+    // 1. Reject Browser Cosmetic & Scriptlet Filters
+    if (
+      trimmed.includes('##') ||
+      trimmed.includes('#@#') ||
+      trimmed.includes('#?#') ||
+      trimmed.includes('#$#') ||
+      trimmed.includes('$$') ||
+      trimmed.includes('+js(')
+    ) {
+      return;
+    }
 
     let isException = false;
     let isImportant = false;
@@ -41,15 +74,45 @@ export class DomainTrie {
       pattern = pattern.replace(/\$important/g, '');
     }
 
+    // 2. Reject rules with browser-specific modifiers ($image, $script, etc.)
+    // DNS operates purely on domain resolution and cannot filter by HTTP request type
+    if (pattern.includes('$')) {
+      const parts = pattern.split('$');
+      const modifiers = parts[1].split(',');
+      const hasBrowserModifier = modifiers.some((mod) => {
+        const name = mod.split('=')[0].trim().toLowerCase();
+        return BROWSER_ONLY_MODIFIERS.has(name);
+      });
+      if (hasBrowserModifier) {
+        return; // Skip browser-specific resource rule
+      }
+      pattern = parts[0];
+    }
+
     let isWildcard = false;
     if (pattern.startsWith('||')) {
       isWildcard = true;
       pattern = pattern.substring(2);
     }
 
-    // Strip trailing carat or path specifiers
-    pattern = pattern.replace(/\^.*$/, '').replace(/[/^].*$/, '').toLowerCase();
+    // 3. Strip hosts file IP prefixes (0.0.0.0, 127.0.0.1)
+    pattern = pattern.replace(/^(?:0\.0\.0\.0|127\.0\.0\.1)\s+/, '');
+
+    // 4. Reject rules with URL paths (e.g. ||news.com/ads/*)
+    // Blocking a path rule at DNS level would sinkhole the entire parent domain!
+    pattern = pattern.replace(/\^.*$/, '');
+    if (pattern.includes('/')) {
+      return; // Skip path-specific rule
+    }
+
+    pattern = pattern.replace(/[/^].*$/, '').toLowerCase().trim();
+    pattern = pattern.replace(/\.+$/, '');
     if (!pattern) return;
+
+    // Validate domain syntax (RFC 1123)
+    if (!/^[a-z0-9](?:[a-z0-9-_]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-_]{0,61}[a-z0-9])?)+$/.test(pattern)) {
+      return;
+    }
 
     const labels = pattern.split('.').reverse();
     let current = this.root;
