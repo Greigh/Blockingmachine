@@ -1,34 +1,113 @@
 /**
  * DeclarativeNetRequest (DNR) Ruleset Manager
- * Translates Blockingmachine network rules into native browser declarative rules.
+ * Translates Blockingmachine filter rules into native browser declarative rules,
+ * strictly adhering to Manifest V3 rule quotas and precedence hierarchy.
  */
 
+export interface ParsedDnrCandidate {
+  rawRule: string;
+  pattern: string;
+  isException: boolean;
+  isImportant: boolean;
+  priority: number;
+}
+
 export class DnrManager {
-  private nextRuleId = 1000;
+  private nextRuleId = 1;
 
   /**
-   * Updates dynamic DNR rules from a set of domain strings.
+   * Translates rule lines into prioritized candidate objects.
    */
-  async updateDynamicRules(blockedDomains: string[]): Promise<number> {
+  parseRule(line: string): ParsedDnrCandidate | null {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('!')) return null;
+
+    let isException = false;
+    let isImportant = false;
+    let clean = trimmed;
+
+    if (clean.startsWith('@@')) {
+      isException = true;
+      clean = clean.substring(2);
+    }
+
+    if (clean.includes('$important')) {
+      isImportant = true;
+      clean = clean.replace(/\$important/g, '');
+    }
+
+    // Extract domain pattern
+    const match = clean.match(/^\|\|([^/^$]+)/);
+    if (!match) return null;
+
+    const domain = match[1].toLowerCase().replace(/\^.*$/, '').trim();
+    if (!domain) return null;
+
+    // Precedence:
+    // 4: $important exception
+    // 3: $important block
+    // 2: standard exception (@@)
+    // 1: standard block
+    let priority = 1;
+    if (isException && isImportant) priority = 4;
+    else if (isImportant) priority = 3;
+    else if (isException) priority = 2;
+    else priority = 1;
+
+    return {
+      rawRule: trimmed,
+      pattern: domain,
+      isException,
+      isImportant,
+      priority
+    };
+  }
+
+  /**
+   * Updates dynamic DNR rules from a set of domain/adblock strings.
+   * Respects browser dynamic rule quotas and prioritizes exceptions and high-priority rules.
+   */
+  async updateDynamicRules(ruleLines: string[]): Promise<number> {
     const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
     const removeRuleIds = existingRules.map((r) => r.id);
 
+    // Dynamic rule limit (standard 30,000 in modern Chrome)
+    const maxQuota = chrome.declarativeNetRequest.MAX_NUMBER_OF_DYNAMIC_AND_MATCHED_RULES || 30000;
+    const quotaCap = Math.max(1000, maxQuota - 500);
+
+    const candidates: ParsedDnrCandidate[] = [];
+    const seenPatterns = new Set<string>();
+
+    for (const line of ruleLines) {
+      const parsed = this.parseRule(line);
+      if (!parsed) continue;
+
+      const dedupeKey = `${parsed.isException ? 'EX:' : 'BL:'}${parsed.pattern}`;
+      if (seenPatterns.has(dedupeKey)) continue;
+      seenPatterns.add(dedupeKey);
+
+      candidates.push(parsed);
+    }
+
+    // Sort by priority descending so high-priority rules & exceptions fit first
+    candidates.sort((a, b) => b.priority - a.priority);
+
     const addRules: chrome.declarativeNetRequest.Rule[] = [];
+    this.nextRuleId = 1;
 
-    for (const domain of blockedDomains) {
-      const clean = domain.trim().toLowerCase();
-      if (!clean || clean.startsWith('#') || clean.startsWith('!')) continue;
+    for (const candidate of candidates) {
+      if (addRules.length >= quotaCap) break;
 
-      // Extract raw domain if in ||domain^ format
-      const host = clean.replace(/^\|\|/, '').replace(/\^.*$/, '');
-      if (!host) continue;
+      const actionType = candidate.isException
+        ? chrome.declarativeNetRequest.RuleActionType.ALLOW
+        : chrome.declarativeNetRequest.RuleActionType.BLOCK;
 
       addRules.push({
         id: this.nextRuleId++,
-        priority: 1,
-        action: { type: chrome.declarativeNetRequest.RuleActionType.BLOCK },
+        priority: candidate.priority,
+        action: { type: actionType },
         condition: {
-          urlFilter: `||${host}^`,
+          urlFilter: `||${candidate.pattern}^`,
           resourceTypes: [
             chrome.declarativeNetRequest.ResourceType.SCRIPT,
             chrome.declarativeNetRequest.ResourceType.IMAGE,
@@ -39,9 +118,6 @@ export class DnrManager {
           ]
         }
       });
-
-      // Browser DNR has dynamic rule quotas (typically 30,000 rules)
-      if (addRules.length >= 25000) break;
     }
 
     await chrome.declarativeNetRequest.updateDynamicRules({

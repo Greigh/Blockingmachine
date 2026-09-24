@@ -10,8 +10,7 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "outDir": "./dist",
-    "types": ["chrome"]
+    "outDir": "./dist"
   },
   "include": ["src/**/*"]
 }
