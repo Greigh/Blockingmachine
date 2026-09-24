@@ -9,7 +9,7 @@ on:
 jobs:
   build:
     name: Build & Test (Node ${{ matrix.node-version }})
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     strategy:
       matrix:
@@ -17,10 +17,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: "npm"
