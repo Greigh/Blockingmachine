@@ -1299,6 +1299,92 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         const reqUrl = new URL(req.url || '/', 'http://localhost');
         const pathname = decodeURIComponent(reqUrl.pathname);
         const lowerPath = pathname.toLowerCase();
+
+        // ====================================================================
+        // REST API Endpoints for Home Assistant Integration & Browser Extension
+        // ====================================================================
+        if (lowerPath === '/v1/status' || lowerPath === '/api/status') {
+          const currentSavePath = storeRef.get('savePath');
+          const currentOutputDir = dirname(currentSavePath);
+          const history = storeRef.get('compilationHistory') || [];
+          const lastSnapshot = history[0];
+          const quarantine = (storeRef.get('aiThreatQuarantine') || []) as ThreatQuarantineItem[];
+
+          let dnsRuleCount = 0;
+          let browserRuleCount = 0;
+          try {
+            if (existsSync(join(currentOutputDir, 'dns.txt'))) {
+              const dnsText = await fs.readFile(join(currentOutputDir, 'dns.txt'), 'utf8');
+              dnsRuleCount = dnsText.split('\n').filter((l) => l.trim() && !l.startsWith('!') && !l.startsWith('#')).length;
+            }
+            if (existsSync(join(currentOutputDir, 'browser.txt'))) {
+              const browserText = await fs.readFile(join(currentOutputDir, 'browser.txt'), 'utf8');
+              browserRuleCount = browserText.split('\n').filter((l) => l.trim() && !l.startsWith('!') && !l.startsWith('#')).length;
+            }
+          } catch {
+            // fallback
+          }
+
+          const statusPayload = {
+            status: 'online',
+            service: 'Blockingmachine Hub',
+            version: app.getVersion(),
+            uptimeSeconds: Math.floor(process.uptime()),
+            rules: {
+              total: lastSnapshot?.uniqueRuleCount || latestCompiledRules.length || 0,
+              dns: dnsRuleCount || lastSnapshot?.uniqueRuleCount || 0,
+              browser: browserRuleCount || lastSnapshot?.uniqueRuleCount || 0,
+              quarantinedThreats: quarantine.length,
+            },
+            lastCompile: storeRef.get('lastProcessTime') || lastSnapshot?.timestamp || null,
+            feedServer: {
+              port: feedServerPort,
+              lanIp: getLocalLanIp(),
+              dnsFeedUrl: `http://${getLocalLanIp()}:${feedServerPort}/dns.txt`,
+              browserFeedUrl: `http://${getLocalLanIp()}:${feedServerPort}/browser.txt`,
+            },
+            protection: {
+              enabled: true,
+              pausedUntil: null,
+            },
+            aiRadar: {
+              enabled: storeRef.get('aiWatchdogConfig')?.enabled ?? false,
+              sessionActive: currentLiveRadarSession.active,
+            },
+          };
+
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify(statusPayload, null, 2));
+          return;
+        }
+
+        if ((lowerPath === '/v1/compile' || lowerPath === '/api/compile') && (req.method === 'POST' || req.method === 'GET')) {
+          console.log('[Feed Server API] Received trigger: compile rules');
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('trigger-compile');
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ success: true, message: 'Compilation triggered in Blockingmachine hub' }));
+          return;
+        }
+
+        if (lowerPath === '/v1/check') {
+          const domainToCheck = reqUrl.searchParams.get('domain') || '';
+          const clean = domainToCheck.trim().toLowerCase();
+          const isCovered = clean ? isDomainCoveredByRules(clean, latestCompiledRules) : false;
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ domain: clean, blocked: isCovered, timestamp: new Date().toISOString() }));
+          return;
+        }
+
+        if (lowerPath === '/v1/telemetry') {
+          const quarantine = (storeRef.get('aiThreatQuarantine') || []) as ThreatQuarantineItem[];
+          const history = storeRef.get('compilationHistory') || [];
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ threats: quarantine.slice(0, 50), history: history.slice(0, 5) }));
+          return;
+        }
+
         const isDnsEndpoint =
           lowerPath === '/dns.txt' ||
           lowerPath === '/dns-rules.txt' ||

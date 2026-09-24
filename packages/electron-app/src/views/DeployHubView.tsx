@@ -18,7 +18,7 @@ interface DeployHubViewProps {
   onTriggerCompile?: () => void;
 }
 
-type PlatformTab = 'adguard-home' | 'pihole' | 'adguard-desktop' | 'hosts' | 'dnsmasq';
+type PlatformTab = 'adguard-home' | 'pihole' | 'home-assistant' | 'adguard-desktop' | 'hosts' | 'dnsmasq';
 
 export const DeployHubView: React.FC<DeployHubViewProps> = ({
   savePath,
@@ -46,6 +46,30 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [lastProcessTime, setLastProcessTime] = useState<string | null>(null);
   const [uniqueRulesCount, setUniqueRulesCount] = useState<number | null>(null);
+
+  // Home Assistant Live API inspector
+  const [haApiPreview, setHaApiPreview] = useState<string | null>(null);
+  const [isTestingHaApi, setIsTestingHaApi] = useState(false);
+
+  const handleInspectHaApi = async () => {
+    setIsTestingHaApi(true);
+    try {
+      const port = serverStatus?.port || 9191;
+      const res = await fetch(`http://127.0.0.1:${port}/v1/status`);
+      const data = await res.json();
+      if (isMountedRef.current) {
+        setHaApiPreview(JSON.stringify(data, null, 2));
+      }
+    } catch (err: any) {
+      if (isMountedRef.current) {
+        setHaApiPreview(`Error querying local /v1/status: ${err?.message || err}`);
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsTestingHaApi(false);
+      }
+    }
+  };
 
   // Connection tester states
   const [testingService, setTestingService] = useState<'pihole' | 'adguard' | 'webhook' | null>(null);
@@ -525,6 +549,22 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
             </svg>
           </span>
           <span className="platform-tab-label">Pi-hole</span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'home-assistant'}
+          className={`platform-tab-btn ${activeTab === 'home-assistant' ? 'active' : ''}`}
+          onClick={() => setActiveTab('home-assistant')}
+        >
+          <span className="platform-tab-icon">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <polyline points="9 22 9 12 15 12 15 22" />
+            </svg>
+          </span>
+          <span className="platform-tab-label">Home Assistant</span>
         </button>
 
         <button
@@ -1265,6 +1305,286 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          3. PLATFORM WORKSPACE: HOME ASSISTANT (ADD-ON & INTEGRATION)
+         ========================================================================= */}
+      {activeTab === 'home-assistant' && (
+        <div className="deploy-dual-pane">
+          {/* Left Column: Home Assistant Automation & Live Sync */}
+          <div className="deploy-pane-column">
+            <div className="deploy-pane-header">
+              <div className="deploy-pane-title-group">
+                <span className="deploy-pane-icon-badge">🏠</span>
+                <div>
+                  <h3 className="deploy-pane-title">Home Assistant Hub Connection</h3>
+                  <p className="deploy-pane-subtitle">
+                    Control AdGuard & Pi-hole Add-ons via Home Assistant REST or Webhook
+                  </p>
+                </div>
+              </div>
+              <div className="deploy-pane-status-pill">
+                <span className={`status-indicator-dot ${sinkholeConfig.haToken || sinkholeConfig.haWebhookUrl ? 'active' : 'idle'}`} />
+                <span>{sinkholeConfig.haToken || sinkholeConfig.haWebhookUrl ? 'Configured' : 'Not Connected'}</span>
+              </div>
+            </div>
+
+            <div className="deploy-pane-body">
+              <div className="deploy-field-group">
+                <label className="deploy-field-label">Home Assistant Mode</label>
+                <div className="deploy-mode-selector">
+                  <button
+                    type="button"
+                    className={`deploy-mode-pill ${sinkholeConfig.adguardMode === 'ha-rest' ? 'active' : ''}`}
+                    onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'ha-rest' })}
+                  >
+                    REST Service API
+                  </button>
+                  <button
+                    type="button"
+                    className={`deploy-mode-pill ${sinkholeConfig.adguardMode === 'webhook' ? 'active' : ''}`}
+                    onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'webhook' })}
+                  >
+                    Webhook
+                  </button>
+                </div>
+              </div>
+
+              {sinkholeConfig.adguardMode === 'ha-rest' && (
+                <>
+                  <div className="deploy-field-group">
+                    <label className="deploy-field-label">Home Assistant Instance URL</label>
+                    <input
+                      type="url"
+                      className="deploy-text-input"
+                      placeholder="http://homeassistant.local:8123 or Nabu Casa Cloud URL"
+                      value={sinkholeConfig.adguardHomeUrl || ''}
+                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
+                    />
+                    <span className="deploy-field-hint">
+                      Connects directly to your Home Assistant instance (Local or Nabu Casa Cloud)
+                    </span>
+                  </div>
+
+                  <div className="deploy-field-group">
+                    <label className="deploy-field-label">Long-Lived Access Token</label>
+                    <div className="deploy-input-with-action">
+                      <input
+                        type={showHaToken ? 'text' : 'password'}
+                        className="deploy-text-input"
+                        placeholder="Bearer token from your Home Assistant profile"
+                        value={sinkholeConfig.haToken || ''}
+                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haToken: e.target.value })}
+                      />
+                      <button
+                        type="button"
+                        className="deploy-input-icon-btn"
+                        onClick={() => setShowHaToken(!showHaToken)}
+                        title={showHaToken ? 'Hide token' : 'Show token'}
+                      >
+                        {showHaToken ? '👁️' : '🔒'}
+                      </button>
+                    </div>
+                    <span className="deploy-field-hint">
+                      Generate in Home Assistant: Profile &gt; Long-Lived Access Tokens
+                    </span>
+                  </div>
+                </>
+              )}
+
+              {sinkholeConfig.adguardMode === 'webhook' && (
+                <div className="deploy-field-group">
+                  <label className="deploy-field-label">Home Assistant Webhook URL</label>
+                  <input
+                    type="url"
+                    className="deploy-text-input"
+                    placeholder="https://hooks.nabu.casa/... or http://homeassistant.local:8123/api/webhook/..."
+                    value={sinkholeConfig.haWebhookUrl || ''}
+                    onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: e.target.value })}
+                  />
+                  <span className="deploy-field-hint">
+                    Triggers your Home Assistant automation to reload AdGuard or Pi-hole
+                  </span>
+                </div>
+              )}
+
+              <div className="deploy-field-group">
+                <label className="deploy-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={sinkholeConfig.syncOnCompile}
+                    onChange={(e) => handleToggleSyncOnCompile(e.target.checked)}
+                  />
+                  <span>Automatically push & reload Home Assistant when compiling filters</span>
+                </label>
+              </div>
+
+              <div className="deploy-btn-row">
+                <button
+                  type="button"
+                  className="deploy-primary-btn"
+                  onClick={() => handleSaveSinkholeConfig('adguard')}
+                  disabled={isSavingSinkhole}
+                >
+                  {isSavingSinkhole ? 'Saving...' : 'Save Connection'}
+                </button>
+                <button
+                  type="button"
+                  className="deploy-secondary-btn"
+                  onClick={() => handleTestConnection('adguard')}
+                  disabled={testingService !== null}
+                >
+                  {testingService === 'adguard' ? 'Testing...' : 'Test Connection'}
+                </button>
+                <button
+                  type="button"
+                  className="deploy-secondary-btn"
+                  onClick={() => handleTriggerLiveSync('adguard')}
+                  disabled={isSyncingSinkhole}
+                >
+                  {isSyncingSinkhole ? 'Reloading...' : 'Reload Home Assistant'}
+                </button>
+              </div>
+
+              {sinkholeMessage && (
+                <div className="deploy-message-banner success">{sinkholeMessage}</div>
+              )}
+
+              {testResult && testResult.service === 'adguard' && (
+                <div className={`deploy-test-result-box ${testResult.success ? 'success' : 'error'}`}>
+                  <strong>{testResult.success ? '✓ Connection Verified' : '✕ Connection Error'}:</strong>{' '}
+                  {testResult.message}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right Column: Home Assistant Integration & Add-on Hub */}
+          <div className="deploy-pane-column">
+            <div className="deploy-pane-header">
+              <div className="deploy-pane-title-group">
+                <span className="deploy-pane-icon-badge">🧩</span>
+                <div>
+                  <h3 className="deploy-pane-title">Integration & Add-on Endpoints</h3>
+                  <p className="deploy-pane-subtitle">
+                    Expose live metrics, sensors, and controls into your Home Assistant dashboards
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="deploy-pane-body">
+              {/* Endpoint 1: REST API /v1/status */}
+              <div className="deploy-feed-box">
+                <div className="deploy-feed-box-top">
+                  <span className="deploy-feed-box-label">📡 Home Assistant Integration API</span>
+                  <span className="deploy-feed-box-tag">HACS / Custom Component</span>
+                </div>
+                <p className="deploy-feed-box-desc">
+                  Point the Home Assistant <code>blockingmachine</code> integration at this desktop app:
+                </p>
+                <div className="deploy-feed-input-row">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/v1/status`}
+                    className="deploy-feed-input"
+                  />
+                  <button
+                    type="button"
+                    className={`deploy-copy-feed-btn ${copiedKey === 'ha-status-url' ? 'copied' : ''}`}
+                    onClick={() => handleCopy(`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/v1/status`, 'ha-status-url')}
+                  >
+                    {copiedKey === 'ha-status-url' ? '✓ Copied' : 'Copy API URL'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Endpoint 2: DNS Feed for AdGuard Home in HA */}
+              <div className="deploy-feed-box">
+                <div className="deploy-feed-box-top">
+                  <span className="deploy-feed-box-label">🛡️ Pure DNS Feed (AdGuard Home in HA)</span>
+                  <span className="deploy-feed-box-tag">Zero Browser Modifiers</span>
+                </div>
+                <div className="deploy-feed-input-row">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/dns.txt`}
+                    className="deploy-feed-input"
+                  />
+                  <button
+                    type="button"
+                    className={`deploy-copy-feed-btn ${copiedKey === 'ha-dns-feed' ? 'copied' : ''}`}
+                    onClick={() => handleCopy(`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/dns.txt`, 'ha-dns-feed')}
+                  >
+                    {copiedKey === 'ha-dns-feed' ? '✓ Copied' : 'Copy DNS Feed'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Endpoint 3: Browser Feed */}
+              <div className="deploy-feed-box">
+                <div className="deploy-feed-box-top">
+                  <span className="deploy-feed-box-label">🌐 Browser Extension Feed</span>
+                  <span className="deploy-feed-box-tag">Network + Cosmetics</span>
+                </div>
+                <div className="deploy-feed-input-row">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/browser.txt`}
+                    className="deploy-feed-input"
+                  />
+                  <button
+                    type="button"
+                    className={`deploy-copy-feed-btn ${copiedKey === 'ha-browser-feed' ? 'copied' : ''}`}
+                    onClick={() => handleCopy(`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/browser.txt`, 'ha-browser-feed')}
+                  >
+                    {copiedKey === 'ha-browser-feed' ? '✓ Copied' : 'Copy Browser Feed'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Live Status Inspector */}
+              <div className="deploy-tool-box">
+                <div className="deploy-tool-box-header">
+                  <strong>Inspect Live /v1/status Output</strong>
+                  <button
+                    type="button"
+                    className="deploy-tool-btn"
+                    onClick={handleInspectHaApi}
+                    disabled={isTestingHaApi}
+                  >
+                    {isTestingHaApi ? 'Querying...' : 'Fetch Live JSON'}
+                  </button>
+                </div>
+                {haApiPreview && (
+                  <pre className="deploy-json-preview">{haApiPreview}</pre>
+                )}
+              </div>
+
+              {/* Setup Guide */}
+              <div className="deploy-instructions-box">
+                <h4 className="deploy-instructions-title">Quick Setup in Home Assistant:</h4>
+                <ol className="deploy-instructions-list">
+                  <li>
+                    Copy <code>packages/homeassistant-integration/custom_components/blockingmachine</code> into your HA <code>config/custom_components/</code> folder (or install via HACS).
+                  </li>
+                  <li>Restart Home Assistant.</li>
+                  <li>
+                    Go to <strong>Settings</strong> &gt; <strong>Devices &amp; Services</strong> &gt; <strong>Add Integration</strong> &gt; search <strong>Blockingmachine</strong>.
+                  </li>
+                  <li>
+                    Enter Host <code>{serverStatus?.lanIp || '127.0.0.1'}</code> and Port <code>{serverStatus?.port || 9191}</code>.
+                  </li>
+                  <li>Your Home Assistant dashboard will automatically gain live sensors, compile buttons, and protection switches!</li>
+                </ol>
               </div>
             </div>
           </div>
