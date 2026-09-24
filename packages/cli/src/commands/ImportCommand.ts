@@ -10,8 +10,6 @@ import {
   parseFilterList,
 } from "@blockingmachine/core";
 import fs from "fs/promises";
-import { createWriteStream } from "fs";
-import { once } from "events";
 import path from "path";
 
 interface CacheRecord {
@@ -121,15 +119,29 @@ export class ImportCommand extends BaseCommand<ImportOptions> {
       // Save all rules to a combined file
       if (allRules.length > 0) {
         const outputFile = path.join(paths.output.dir, "imported-rules.txt");
-        const writeStream = createWriteStream(outputFile, { encoding: "utf8" });
-        for (const rule of allRules) {
-          writeStream.write(rule + "\n");
+        try {
+          const raw = await fs.readFile(cacheFile, "utf-8");
+          const cachedJson = JSON.parse(raw) as Record<string, CacheRecord>;
+          const loadedRules: string[] = [];
+          const seen = new Set<string>();
+          for (const key of Object.keys(cachedJson)) {
+            const entry = cachedJson[key];
+            if (entry && Array.isArray(entry.rules)) {
+              for (const r of entry.rules) {
+                if (typeof r === "string" && !seen.has(r)) {
+                  seen.add(r);
+                  loadedRules.push(r);
+                }
+              }
+            }
+          }
+          await fs.writeFile(outputFile, loadedRules.join("\n") + "\n", "utf-8");
+          this.logger.info(
+            `Saved ${loadedRules.length} unique rules to: ${outputFile}`,
+          );
+        } catch (writeErr) {
+          this.logger.error("Failed to write imported rules:", writeErr);
         }
-        writeStream.end();
-        await once(writeStream, "finish");
-        this.logger.info(
-          `Saved ${allRules.length} unique rules to: ${outputFile}`,
-        );
       }
 
       this.logger.info(

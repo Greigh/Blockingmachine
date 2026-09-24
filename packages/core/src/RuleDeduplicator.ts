@@ -38,6 +38,19 @@ export interface MergedRuleMetadata extends ExtendedRuleMetadata {
   alternatives?: string[];
 }
 
+function stripTrailingInlineComment(input: string): string {
+  for (let i = 0; i < input.length - 1; i++) {
+    const code = input.charCodeAt(i);
+    if (
+      (code === 32 || (code >= 9 && code <= 13)) &&
+      input.charCodeAt(i + 1) === 35
+    ) {
+      return input.slice(0, i);
+    }
+  }
+  return input;
+}
+
 export class RuleDeduplicator {
   // --- Properties with Types ---
   private filteredRules: Map<string, StoredRule>;
@@ -132,15 +145,32 @@ export class RuleDeduplicator {
           .toLowerCase()
           .replace(/\s+/g, " ")
           .trim(),
-        scriptlet: (
-          stripped.match(/(?:##|#@#)(\+js\([^)]+\))/)?.[1] ||
-          stripped.match(
-            /(?:#\$#|#\$\?#|#%#|#@%#|#@\$#)(.+)/,
-          )?.[1] || ""
-        )
-          .toLowerCase()
-          .replace(/\s+/g, " ")
-          .trim(),
+        scriptlet: (() => {
+          let s = "";
+          const jsIdx = stripped.indexOf("##+js(");
+          const jsExIdx = stripped.indexOf("#@#+js(");
+          if (jsIdx !== -1) {
+            const end = stripped.indexOf(")", jsIdx + 6);
+            if (end !== -1) {
+              s = stripped.slice(jsIdx + 2, end + 1);
+            }
+          } else if (jsExIdx !== -1) {
+            const end = stripped.indexOf(")", jsExIdx + 7);
+            if (end !== -1) {
+              s = stripped.slice(jsExIdx + 3, end + 1);
+            }
+          } else {
+            const markers = ["#$#", "#$?#", "#%#", "#@%#", "#@$#"];
+            for (const marker of markers) {
+              const mIdx = stripped.indexOf(marker);
+              if (mIdx !== -1) {
+                s = stripped.slice(mIdx + marker.length);
+                break;
+              }
+            }
+          }
+          return s.toLowerCase().replace(/\s+/g, " ").trim();
+        })(),
         htmlFiltering: (stripped.match(/\$\$(.+)/)?.[1] || "")
           .toLowerCase()
           .replace(/\s+/g, " ")
@@ -177,19 +207,13 @@ export class RuleDeduplicator {
           stripped = stripped.slice(0, earliestCosmetic);
         }
 
-        const commentMatch = stripped.search(/\s+#/);
-        if (commentMatch !== -1) {
-          stripped = stripped.slice(0, commentMatch);
-        }
+        stripped = stripTrailingInlineComment(stripped);
       } else {
         const dollarIdx = stripped.indexOf("$");
         if (dollarIdx !== -1) {
           stripped = stripped.slice(0, dollarIdx);
         }
-        const commentMatch = stripped.search(/\s+#/);
-        if (commentMatch !== -1) {
-          stripped = stripped.slice(0, commentMatch);
-        }
+        stripped = stripTrailingInlineComment(stripped);
       }
 
       // 3. Refined Normalization of the Core Target String

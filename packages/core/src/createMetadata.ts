@@ -38,9 +38,15 @@ export function cleanDomainPattern(originalRule: string): string | null {
 
   try {
     // Strip trailing comments (e.g. in hosts files "127.0.0.1 example.com # comment")
-    const commentMatch = trimmedRule.search(/\s+#/);
-    if (commentMatch !== -1) {
-      trimmedRule = trimmedRule.slice(0, commentMatch);
+    for (let i = 0; i < trimmedRule.length - 1; i++) {
+      const code = trimmedRule.charCodeAt(i);
+      if (
+        (code === 32 || (code >= 9 && code <= 13)) &&
+        trimmedRule.charCodeAt(i + 1) === 35
+      ) {
+        trimmedRule = trimmedRule.slice(0, i);
+        break;
+      }
     }
     trimmedRule = trimmedRule.trim();
 
