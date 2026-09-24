@@ -1,7 +1,7 @@
 /**
  * DeclarativeNetRequest (DNR) Ruleset Manager
  * Translates Blockingmachine filter rules into native browser declarative rules,
- * strictly adhering to Manifest V3 rule quotas and precedence hierarchy.
+ * strictly adhering to Manifest V3 rule quotas, strict syntax validation, and precedence hierarchy.
  */
 
 export interface ParsedDnrCandidate {
@@ -12,40 +12,56 @@ export interface ParsedDnrCandidate {
   priority: number;
 }
 
+// Regex to validate syntactically compliant domain hostnames (RFC 1123)
+const DOMAIN_REGEX = /^[a-z0-9](?:[a-z0-9-_]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-_]{0,61}[a-z0-9])?)+$/;
+
 export class DnrManager {
   private nextRuleId = 1;
 
   /**
    * Translates rule lines into prioritized candidate objects.
+   * Supports ABP wildcards (||domain^), exceptions (@@), hosts entries, and plain domains.
    */
   parseRule(line: string): ParsedDnrCandidate | null {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('!')) return null;
+    let clean = line.trim();
+    if (!clean || clean.startsWith('#') || clean.startsWith('!')) return null;
 
     let isException = false;
     let isImportant = false;
-    let clean = trimmed;
 
     if (clean.startsWith('@@')) {
       isException = true;
-      clean = clean.substring(2);
+      clean = clean.substring(2).trim();
     }
 
     if (clean.includes('$important')) {
       isImportant = true;
-      clean = clean.replace(/\$important/g, '');
+      clean = clean.replace(/\$important/g, '').trim();
     }
 
-    // Extract domain pattern
-    const match = clean.match(/^\|\|([^/^$]+)/);
-    if (!match) return null;
+    // Strip hosts file IP prefixes (0.0.0.0, 127.0.0.1)
+    clean = clean.replace(/^(?:0\.0\.0\.0|127\.0\.0\.1)\s+/, '');
 
-    const domain = match[1].toLowerCase().replace(/\^.*$/, '').trim();
-    if (!domain) return null;
+    // Strip leading adblock wildcard ||
+    if (clean.startsWith('||')) {
+      clean = clean.substring(2);
+    }
+
+    // Strip trailing ^ or modifiers ($third-party, /path, ^$doc)
+    clean = clean.replace(/\^.*$/, '').replace(/[$^/].*$/, '').trim().toLowerCase();
+
+    // Strip trailing period if present
+    clean = clean.replace(/\.+$/, '');
+
+    // Validate that the remaining string is a syntactically valid domain name
+    // to prevent Chrome DNR from throwing "Invalid urlFilter" on the entire batch
+    if (!clean || !DOMAIN_REGEX.test(clean)) {
+      return null;
+    }
 
     // Precedence:
-    // 4: $important exception
-    // 3: $important block
+    // 4: $important exception (@@...$important)
+    // 3: $important block (...$important)
     // 2: standard exception (@@)
     // 1: standard block
     let priority = 1;
@@ -55,8 +71,8 @@ export class DnrManager {
     else priority = 1;
 
     return {
-      rawRule: trimmed,
-      pattern: domain,
+      rawRule: line.trim(),
+      pattern: clean,
       isException,
       isImportant,
       priority
@@ -120,10 +136,15 @@ export class DnrManager {
       });
     }
 
-    await chrome.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds,
-      addRules
-    });
+    try {
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds,
+        addRules
+      });
+    } catch (err) {
+      console.error('[DNR] Failed to apply dynamic rules batch:', err);
+      throw err;
+    }
 
     return addRules.length;
   }
