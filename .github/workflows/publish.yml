@@ -94,10 +94,6 @@ jobs:
       - name: Package and Make Electron App
         run: npm run make
         working-directory: packages/electron-app
-        env:
-          APPLE_ID: ${{ secrets[format('{0}_{1}', 'APPLE', 'ID')] }}
-          APPLE_PASSWORD: ${{ secrets[format('{0}_{1}', 'APPLE', 'PASSWORD')] }}
-          APPLE_TEAM_ID: ${{ secrets[format('{0}_{1}_{2}', 'APPLE', 'TEAM', 'ID')] }}
 
       - name: Collect desktop release installers
         shell: bash
