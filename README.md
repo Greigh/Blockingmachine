@@ -62,7 +62,17 @@ shasum -a 256 -c SHA256SUMS.txt
 
 ### NPM Packages
 
-Blockingmachine distributes its core parsing engine and command-line interface as standalone packages on **GitHub Packages** and **Forgejo Packages**:
+Blockingmachine distributes its core parsing engine and command-line interface as standalone packages on **npmjs.com**, **GitHub Packages**, and **Forgejo Packages**:
+
+#### From npmjs.com (Public)
+
+```bash
+# Core Library
+npm install @blockingmachine/core
+
+# CLI Tool
+npm install -g @blockingmachine/cli
+```
 
 #### From GitHub Packages
 
