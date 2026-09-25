@@ -43,3 +43,15 @@ Fifth release candidate for Blockingmachine 1.0 featuring a comprehensive Princi
 | [`blockingmachine-chrome-mv3-v1.0.0.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.5/blockingmachine-chrome-mv3-v1.0.0.zip) | Chrome Web Store Manifest V3 browser extension bundle |
 | [`blockingmachine-firefox-mv3-v1.0.0.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.5/blockingmachine-firefox-mv3-v1.0.0.zip) | Firefox Add-ons Manifest V3 browser extension bundle |
 | [`SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.5/SHA256SUMS.txt) | SHA-256 verification checksums |
+
+### Verification Checksums (SHA-256)
+
+```text
+e24edeed66a633ef0d76d837686e3ed905ba9cc422c10490532ceb1ad2dd2226  Blockingmachine-1.0.0-rc.5-arm64.dmg
+52aed82895e0e277cdb52908609417f8972c5d8cd32530c15fa7b515ff54a1bb  Blockingmachine-darwin-arm64-1.0.0-rc.5.zip
+8c38142fb6322e967fdb960184a4b8a474c414ecf7cdea46b25cdcba80b4e529  blockingmachine-core-1.0.0-rc.5.tgz
+9ed980dd563f62a2e5376a23dedff48c52b588a6d5faf359d5e9a5306a2ef9de  blockingmachine-cli-1.0.0-rc.5.tgz
+052543d515e70bd490ca9a15020ce75598e2f050d5e586404c11642fd2d3fcb1  blockingmachine-chrome-mv3-v1.0.0.zip
+b67db0e90e1002215adf17fc463a7016a0041cf55da8af4443bd318a73b8769f  blockingmachine-firefox-mv3-v1.0.0.zip
+```
+

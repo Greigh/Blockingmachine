@@ -47,7 +47,7 @@
     "uuid": "^11.1.1",
     "junk": "^3.1.0",
     "extract-zip": "npm:@electron-internal/extract-zip@^1.0.5",
-    "image-size": "^2.0.4",
+    "image-size": "^1.2.1",
     "@electron-forge/plugin-webpack": {
       "webpack-dev-server": "^5.2.6"
     }
@@ -63,6 +63,6 @@
     "electron-winstaller@5.4.4": true
   },
   "dependencies": {
-    "image-size": "^2.0.4"
+    "image-size": "^1.2.1"
   }
 }
