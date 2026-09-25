@@ -59,6 +59,16 @@ const skipBuild = args.includes('--skip-build');
 const skipMake = args.includes('--skip-make');
 const skipPublish = args.includes('--skip-publish');
 
+// Parse explicit --tag / dist-tag (e.g. --tag beta, --tag=rc, --tag custom)
+const tagArgIdx = args.indexOf('--tag');
+let customDistTag = null;
+if (tagArgIdx !== -1 && args[tagArgIdx + 1] && !args[tagArgIdx + 1].startsWith('-')) {
+  customDistTag = args[tagArgIdx + 1];
+} else {
+  const tagEq = args.find((a) => a.startsWith('--tag='));
+  if (tagEq) customDistTag = tagEq.split('=')[1];
+}
+
 if (isHelp) {
   console.log(`
 Blockingmachine Release Tool
@@ -71,9 +81,11 @@ Arguments:
   <version>       Target version (e.g., 1.0.0-rc.6, 1.0.0)
 
 Options:
+  --tag <tag>     Explicit NPM dist-tag / label (e.g. rc, beta, next, latest)
   --skip-tests    Skip npm test execution
   --skip-build    Skip pre-flight npm run build
   --skip-make     Skip desktop Electron Forge DMG/ZIP generation
+  --skip-publish  Skip publishing to npmjs / Forgejo registries
   --dry-run       Run pre-flight checks and packaging without committing or pushing
   --help, -h      Show this help text
 `);
@@ -131,8 +143,21 @@ function getTagClean(v) {
   return v.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 }
 
+function resolveDistTag(v) {
+  if (customDistTag) return customDistTag;
+  const dashIndex = v.indexOf('-');
+  if (dashIndex !== -1) {
+    const prerelease = v.slice(dashIndex + 1);
+    const match = prerelease.match(/^([a-zA-Z0-9_-]+?)(?:\.|\d|$)/);
+    if (match && match[1]) return match[1].toLowerCase();
+    return prerelease.toLowerCase();
+  }
+  return 'latest';
+}
+
 const isPrerelease = targetVersion.includes('-');
 const tagClean = getTagClean(targetVersion);
+const distTag = resolveDistTag(targetVersion);
 const releaseNotesFile = resolve(ROOT_DIR, `scripts/release-notes-${tagClean}.md`);
 
 console.log(`
@@ -142,6 +167,7 @@ console.log(`
   Target Version:     v${targetVersion}
   Current Version:    v${currentVersion}
   Type:               ${isPrerelease ? 'Pre-release' : 'Production Release'}
+  NPM Dist-Tag:       ${distTag}
   Target Folder:      ${MAKE_DIR}
   Dry Run Mode:       ${isDryRun ? 'YES (No Git/GitHub mutations)' : 'NO (Live release)'}
 =============================================================
@@ -317,9 +343,9 @@ To publish release assets manually:
 // 7. Publish to Package Registries (npmjs.com and Forgejo)
 if (!skipPublish) {
   if (process.env.NPMJS_TOKEN) {
-    console.log('\n📦 [Publish] Publishing packages to npmjs.com using NPMJS_TOKEN...');
+    console.log(`\n📦 [Publish] Publishing packages to npmjs.com with tag "${distTag}"...`);
     try {
-      execSync('node scripts/publish-npmjs.mjs', { cwd: ROOT_DIR, stdio: 'inherit' });
+      execSync(`node scripts/publish-npmjs.mjs --tag ${distTag}`, { cwd: ROOT_DIR, stdio: 'inherit' });
     } catch (err) {
       console.warn(`⚠️ npmjs publication error: ${err.message}`);
     }
@@ -328,9 +354,9 @@ if (!skipPublish) {
   }
 
   if (process.env.FORGEJO_TOKEN) {
-    console.log('\n📦 [Publish] Publishing packages to Forgejo npm registry using FORGEJO_TOKEN...');
+    console.log(`\n📦 [Publish] Publishing packages to Forgejo npm registry with tag "${distTag}"...`);
     try {
-      execSync('node scripts/publish-forgejo.mjs', { cwd: ROOT_DIR, stdio: 'inherit' });
+      execSync(`node scripts/publish-forgejo.mjs --tag ${distTag}`, { cwd: ROOT_DIR, stdio: 'inherit' });
     } catch (err) {
       console.warn(`⚠️ Forgejo publication error: ${err.message}`);
     }

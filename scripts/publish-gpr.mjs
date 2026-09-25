@@ -47,12 +47,33 @@ for (const pkg of packages) {
 
       fs.writeFileSync(pkgJsonPath, JSON.stringify(modifiedPkg, null, 2) + '\n');
 
-      const tag = pkgData.version.includes('-') ? 'rc' : 'latest';
+function resolveDistTag(version) {
+  const tagIdx = process.argv.indexOf('--tag');
+  if (tagIdx !== -1 && process.argv[tagIdx + 1] && !process.argv[tagIdx + 1].startsWith('-')) {
+    return process.argv[tagIdx + 1];
+  }
+  const tagArg = process.argv.find((a) => a.startsWith('--tag='));
+  if (tagArg) {
+    return tagArg.split('=')[1];
+  }
+  if (process.env.NPM_TAG) return process.env.NPM_TAG;
+  if (process.env.DIST_TAG) return process.env.DIST_TAG;
+  const dashIndex = version.indexOf('-');
+  if (dashIndex !== -1) {
+    const prerelease = version.slice(dashIndex + 1);
+    const match = prerelease.match(/^([a-zA-Z0-9_-]+?)(?:\.|\d|$)/);
+    if (match && match[1]) return match[1].toLowerCase();
+    return prerelease.toLowerCase();
+  }
+  return 'latest';
+}
+
+      const distTag = resolveDistTag(pkgData.version);
       const args = ['publish'];
       if (isDryRun) {
         args.push('--dry-run');
       }
-      args.push('--tag', tag);
+      args.push('--tag', distTag);
       args.push('--registry', 'https://npm.pkg.github.com');
       console.log(`[publish-gpr] Executing: npm ${args.join(' ')} in ${pkg.dir}`);
 
