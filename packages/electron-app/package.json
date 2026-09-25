@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/electron-app",
-  "version": "1.0.0-rc.4",
+  "version": "1.0.0-rc.5",
   "description": "Cross-platform desktop application for high-performance adblock compilation, unified rule & AI inspection, sinkhole synchronization, and AI threat hunting.",
   "license": "BSD-3-Clause",
   "main": ".webpack/main",
@@ -55,7 +55,7 @@
     "webpack-cli": "^7.2.3"
   },
   "dependencies": {
-    "@blockingmachine/core": "^1.0.0-rc.4",
+    "@blockingmachine/core": "^1.0.0-rc.5",
     "electron-is-dev": "^3.0.1",
     "electron-store": "^11.0.2",
     "react": "^19.3.0",

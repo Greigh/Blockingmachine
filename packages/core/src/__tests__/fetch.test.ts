@@ -123,5 +123,48 @@ describe("fetchWithConditionalCache", () => {
     expect(resMappedMetadata.status).toBe(403);
     expect(resMappedMetadata.content).toBeNull();
   });
+
+  test("rejects access to sensitive local system paths with 403", async () => {
+    const resPasswd = await fetchWithConditionalCache("/etc/passwd");
+    expect(resPasswd.status).toBe(403);
+    expect(resPasswd.content).toBeNull();
+
+    const resShadow = await fetchWithConditionalCache("/etc/shadow");
+    expect(resShadow.status).toBe(403);
+    expect(resShadow.content).toBeNull();
+
+    const resSsh = await fetchWithConditionalCache("~/.ssh/id_rsa");
+    expect(resSsh.status).toBe(403);
+    expect(resSsh.content).toBeNull();
+
+    const resEnv = await fetchWithConditionalCache("/some/path/.env");
+    expect(resEnv.status).toBe(403);
+    expect(resEnv.content).toBeNull();
+  });
+
+  test("calculates and verifies SHA-256 checksums correctly", async () => {
+    // 1. Check valid hash matches
+    const firstRes = await fetchWithConditionalCache(tempFilePath);
+    expect(firstRes.status).toBe(200);
+    expect(firstRes.sha256).toBeDefined();
+    expect(typeof firstRes.sha256).toBe("string");
+    expect(firstRes.sha256?.length).toBe(64);
+
+    // 2. Fetch with matching expectedSha256
+    const matchingRes = await fetchWithConditionalCache(tempFilePath, {
+      expectedSha256: firstRes.sha256!,
+    });
+    expect(matchingRes.status).toBe(200);
+    expect(matchingRes.content).toContain("||adserver.example.com^");
+    expect(matchingRes.sha256).toBe(firstRes.sha256);
+
+    // 3. Fetch with mismatched expectedSha256
+    const badHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"; // Empty hash
+    const mismatchRes = await fetchWithConditionalCache(tempFilePath, {
+      expectedSha256: badHash,
+    });
+    expect(mismatchRes.status).toBe(422);
+    expect(mismatchRes.content).toBeNull();
+  });
 });
 

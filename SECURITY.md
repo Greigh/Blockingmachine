@@ -11,7 +11,7 @@ We actively provide security updates, vulnerability patches, and dependency over
 | Version                    | Supported | Security Maintenance Status                    |
 | :------------------------- | :-------: | :--------------------------------------------- |
 | **`1.0.x` / `1.0.0-rc.*`** |    ✅     | **Actively Supported** (Latest release line)   |
-| `< 1.0.0`                  |    ❌     | End of Life (Upgrade to `1.0.0-rc.4` or later) |
+| `< 1.0.0`                  |    ❌     | End of Life (Upgrade to `1.0.0-rc.5` or later) |
 
 Security patches will be backported to active release branches and tagged immediately upon verification.
 

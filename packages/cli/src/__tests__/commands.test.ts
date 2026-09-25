@@ -390,6 +390,15 @@ describe("CLI Commands", () => {
       expect(rulesRes.status).toBe(200);
       const rulesData = (await rulesRes.json()) as any;
       expect(rulesData.totalRules).toBe(2);
+
+      // 5. Check /v1/check rejects domain > 253 chars with 400
+      const longDomain = "a".repeat(254) + ".com";
+      const longDomainRes = await fetch(`http://127.0.0.1:${port}/v1/check?domain=${longDomain}`);
+      expect(longDomainRes.status).toBe(400);
+
+      // 6. Check unsupported POST method returns 405
+      const postRes = await fetch(`http://127.0.0.1:${port}/health`, { method: "POST" });
+      expect(postRes.status).toBe(405);
     } finally {
       if (holder.server) {
         await new Promise((r) => holder.server!.close(r));

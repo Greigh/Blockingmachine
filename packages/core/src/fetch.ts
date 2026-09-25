@@ -2,6 +2,7 @@ import fetch, { RequestInfo, RequestInit, Response } from "node-fetch";
 import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import crypto from "crypto";
 
 import { isSafePublicWebUrl } from "./utils/urlSafety.js";
 
@@ -10,11 +11,13 @@ const MAX_RETRIES = 3;
 const INITIAL_DELAY = 2000;
 const FETCH_TIMEOUT = 30000; // Define timeout duration
 const MAX_PAYLOAD_SIZE = 100 * 1024 * 1024; // 100MB max payload limit
+const MAX_REDIRECTS = 5;
 
 export interface FetchOptions {
   etag?: string;
   lastModified?: string;
   allowPrivateNetworks?: boolean;
+  expectedSha256?: string;
 }
 
 export interface FetchResult {
@@ -22,6 +25,7 @@ export interface FetchResult {
   notModified: boolean;
   etag?: string | null;
   lastModified?: string | null;
+  sha256?: string | null;
   status: number;
 }
 
@@ -29,13 +33,16 @@ async function fetchWithRetry(
   url: RequestInfo,
   options: RequestInit,
   attempt = 1,
+  redirectCount = 0,
+  allowPrivateNetworks = false,
 ): Promise<FetchResult> {
   // --- Timeout Controller ---
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
-  // Add the signal to the fetch options
+  // Add the signal to the fetch options with manual redirect inspection
   const fetchOptions: RequestInit = {
     ...options,
+    redirect: "manual",
     signal: controller.signal,
   };
   // ---
@@ -52,6 +59,27 @@ async function fetchWithRetry(
         lastModified: response.headers.get("last-modified") || undefined,
         status: 304,
       };
+    }
+
+    // Inspect redirects for SSRF
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      if (redirectCount >= MAX_REDIRECTS) {
+        throw new Error(`Too many redirects (limit ${MAX_REDIRECTS}) for ${url}`);
+      }
+      const location = response.headers.get("location");
+      if (!location) {
+        throw new Error(`Redirect status ${response.status} missing Location header for ${url}`);
+      }
+      const nextUrl = new URL(location, String(url)).toString();
+      if (!allowPrivateNetworks) {
+        const redirectSafety = isSafePublicWebUrl(nextUrl);
+        if (!redirectSafety.isSafe) {
+          throw new Error(
+            `SSRF Guard blocked redirect from ${url} to ${nextUrl}: ${redirectSafety.reason}`,
+          );
+        }
+      }
+      return fetchWithRetry(nextUrl, options, attempt, redirectCount + 1, allowPrivateNetworks);
     }
 
     if (!response.ok) {
@@ -95,14 +123,22 @@ async function fetchWithRetry(
       textContent = await response.text();
     }
 
+    const computedSha256 = crypto
+      .createHash("sha256")
+      .update(textContent, "utf8")
+      .digest("hex");
+
     return {
       content: textContent,
       notModified: false,
       etag: response.headers.get("etag") || undefined,
       lastModified: response.headers.get("last-modified") || undefined,
+      sha256: computedSha256,
       status: response.status,
     };
   } catch (error: any) {
+    const isSsrfBlock = typeof error?.message === "string" && error.message.includes("SSRF Guard blocked");
+
     // Check if the error was due to the abort signal (timeout)
     if (error.name === "AbortError") {
       console.warn(
@@ -111,6 +147,9 @@ async function fetchWithRetry(
     } else if (error?.code === "ERR_INVALID_URL") {
       console.error(`❌ Invalid URL encountered: ${url}`);
       return { content: null, notModified: false, status: 400 };
+    } else if (isSsrfBlock) {
+      console.error(`❌ ${error.message}`);
+      return { content: null, notModified: false, status: 403 };
     } else {
       console.warn(
         `⚠️ Attempt ${attempt}/${MAX_RETRIES} failed for ${url}: ${error?.message || error}`,
@@ -124,6 +163,7 @@ async function fetchWithRetry(
     const isNonRetryable =
       error?.code === "ERR_INVALID_URL" ||
       isPayloadOverflow ||
+      isSsrfBlock ||
       error?.status === 413;
 
     // Retry logic (only if not a permanent non-retryable error)
@@ -132,9 +172,9 @@ async function fetchWithRetry(
       console.log(`⏳ Retrying in ${delay / 1000}s...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
       // Pass original options (without signal) to recursive call, it will create a new controller
-      return fetchWithRetry(url, options, attempt + 1);
+      return fetchWithRetry(url, options, attempt + 1, redirectCount, allowPrivateNetworks);
     } else {
-      if (error?.code !== "ERR_INVALID_URL") {
+      if (error?.code !== "ERR_INVALID_URL" && !isSsrfBlock) {
         console.error(
           `❌ Max retries reached or non-retryable error for ${url}. Last error: ${error?.message || error}`,
         );
@@ -142,7 +182,7 @@ async function fetchWithRetry(
       return {
         content: null,
         notModified: false,
-        status: isPayloadOverflow ? 413 : error?.code === "ERR_INVALID_URL" ? 400 : 0,
+        status: isPayloadOverflow ? 413 : isSsrfBlock ? 403 : error?.code === "ERR_INVALID_URL" ? 400 : 0,
       };
     }
   } finally {
@@ -182,6 +222,23 @@ export async function fetchWithConditionalCache(
         filePath = path.resolve(process.cwd(), url);
       }
 
+      // Security Guard: Block path traversal and access to sensitive system directories/credentials
+      const normalized = path.normalize(filePath);
+      const isSensitiveSystemPath =
+        normalized.startsWith('/etc/') ||
+        normalized === '/etc' ||
+        normalized.startsWith('/proc/') ||
+        normalized.startsWith('/sys/') ||
+        normalized.includes('/.ssh/') ||
+        normalized.endsWith('/.ssh') ||
+        normalized.includes('/.aws/') ||
+        normalized.endsWith('/.env');
+
+      if (isSensitiveSystemPath) {
+        console.error(`❌ Access denied to restricted system path: ${url}`);
+        return { content: null, notModified: false, status: 403 };
+      }
+
       // Read file content directly to prevent check-before-use race condition
       const content = await fs.readFile(filePath, "utf8");
 
@@ -190,6 +247,28 @@ export async function fetchWithConditionalCache(
           `❌ Local file exceeds 100MB limit: ${filePath}`,
         );
         return { content: null, notModified: false, status: 413 };
+      }
+
+      const computedSha256 = crypto
+        .createHash("sha256")
+        .update(content, "utf8")
+        .digest("hex");
+
+      if (cacheOptions?.expectedSha256) {
+        if (
+          computedSha256.toLowerCase() !==
+          cacheOptions.expectedSha256.trim().toLowerCase()
+        ) {
+          console.error(
+            `❌ Checksum mismatch for local file ${url}: expected ${cacheOptions.expectedSha256} but got ${computedSha256}`,
+          );
+          return {
+            content: null,
+            notModified: false,
+            sha256: computedSha256,
+            status: 422,
+          };
+        }
       }
 
       // Query metadata after reading for conditional cache inspection
@@ -203,6 +282,7 @@ export async function fetchWithConditionalCache(
           content: null,
           notModified: true,
           lastModified: fileLastModified,
+          sha256: computedSha256,
           status: 304,
         };
       }
@@ -211,6 +291,7 @@ export async function fetchWithConditionalCache(
         content,
         notModified: false,
         lastModified: fileLastModified,
+        sha256: computedSha256,
         status: 200,
       };
     } catch (error: any) {
@@ -223,7 +304,8 @@ export async function fetchWithConditionalCache(
       return { content: null, notModified: false, status: 500 };
     }
   } else {
-    if (!cacheOptions?.allowPrivateNetworks) {
+    const allowPrivate = cacheOptions?.allowPrivateNetworks ?? false;
+    if (!allowPrivate) {
       const safety = isSafePublicWebUrl(url);
       if (!safety.isSafe) {
         if (safety.reason === 'Malformed or invalid URL') {
@@ -236,11 +318,34 @@ export async function fetchWithConditionalCache(
         return { content: null, notModified: false, status: 403 };
       }
     }
-    return await fetchWithRetry(url, options);
+    const result = await fetchWithRetry(url, options, 1, 0, allowPrivate);
+    if (result.content && cacheOptions?.expectedSha256) {
+      const computedSha256 =
+        result.sha256 ||
+        crypto.createHash("sha256").update(result.content, "utf8").digest("hex");
+      if (
+        computedSha256.toLowerCase() !==
+        cacheOptions.expectedSha256.trim().toLowerCase()
+      ) {
+        console.error(
+          `❌ Checksum mismatch for ${url}: expected ${cacheOptions.expectedSha256} but got ${computedSha256}`,
+        );
+        return {
+          content: null,
+          notModified: false,
+          sha256: computedSha256,
+          status: 422,
+        };
+      }
+    }
+    return result;
   }
 }
 
-export async function fetchContent(url: string): Promise<string | null> {
-  const result = await fetchWithConditionalCache(url);
+export async function fetchContent(
+  url: string,
+  options?: FetchOptions,
+): Promise<string | null> {
+  const result = await fetchWithConditionalCache(url, options);
   return result.content;
 }

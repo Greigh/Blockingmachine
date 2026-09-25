@@ -101,11 +101,11 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
 
         if (pathname === "/v1/check") {
           const domain = parsedUrl.searchParams.get("domain")?.trim().toLowerCase();
-          if (!domain) {
+          if (!domain || domain.length > 253) {
             res.statusCode = 400;
             res.end(
               JSON.stringify({
-                error: "Missing 'domain' query parameter. Example: /v1/check?domain=tracker.example.com",
+                error: "Missing or invalid 'domain' query parameter (1-253 characters). Example: /v1/check?domain=tracker.example.com",
               }),
             );
             return;
@@ -163,13 +163,13 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
             availableEndpoints: ["/health", "/v1/check?domain=<name>", "/v1/rules"],
           }),
         );
-      } catch (handlerErr: any) {
+      } catch {
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");
         res.end(
           JSON.stringify({
             error: "Internal Server Error",
-            message: handlerErr?.message || "An unexpected error occurred",
+            message: "An unexpected error occurred while processing the request",
           }),
         );
       }

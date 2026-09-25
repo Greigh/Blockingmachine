@@ -1,6 +1,6 @@
 {
   "name": "blockingmachine-database",
-  "version": "1.0.0-rc.4",
+  "version": "1.0.0-rc.5",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
@@ -21,7 +21,7 @@
     "start": "node scripts/update.js"
   },
   "dependencies": {
-    "@blockingmachine/cli": "^1.0.0-rc.4",
-    "@blockingmachine/core": "^1.0.0-rc.4"
+    "@blockingmachine/cli": "^1.0.0-rc.5",
+    "@blockingmachine/core": "^1.0.0-rc.5"
   }
 }
