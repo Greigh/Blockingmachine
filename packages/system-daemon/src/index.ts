@@ -93,8 +93,16 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
       return;
     }
 
-    const url = new URL(req.url || '/', `http://${config.bindHost}:${config.controlPort}`);
-    const pathname = url.pathname;
+    let url: URL;
+    let pathname: string;
+    try {
+      url = new URL(req.url || '/', `http://${config.bindHost}:${config.controlPort}`);
+      pathname = url.pathname;
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Bad Request: Malformed URL' }));
+      return;
+    }
 
     if (pathname === '/v1/status' || pathname === '/status') {
       const stats = dnsServer.getStats();
@@ -128,7 +136,29 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
       return;
     }
 
+    const originHeader = req.headers.origin || (typeof req.headers.referer === 'string' ? req.headers.referer : undefined);
+    const isSafeOrigin = (): boolean => {
+      if (!originHeader) return true;
+      try {
+        const u = new URL(originHeader);
+        return (
+          u.hostname === 'localhost' ||
+          u.hostname === '127.0.0.1' ||
+          u.hostname.endsWith('.local') ||
+          u.protocol === 'chrome-extension:' ||
+          u.protocol === 'moz-extension:'
+        );
+      } catch {
+        return false;
+      }
+    };
+
     if ((pathname === '/v1/reload' || pathname === '/reload') && req.method === 'POST') {
+      if (!isSafeOrigin()) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
+        return;
+      }
       console.log('[Daemon] Reload triggered via Control API...');
       const loadedCount = await loadRulesFromFeeds(trie, config);
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -137,8 +167,16 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
     }
 
     if ((pathname === '/v1/toggle' || pathname === '/toggle') && req.method === 'POST') {
+      if (!isSafeOrigin()) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
+        return;
+      }
       let body = '';
-      req.on('data', (chunk) => { body += chunk; });
+      req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 1e6) req.destroy();
+      });
       req.on('end', () => {
         let enable = !dnsServer.isProtectionEnabled();
         try {
@@ -161,8 +199,16 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
     }
 
     if ((pathname === '/v1/quarantine' || pathname === '/quarantine') && req.method === 'POST') {
+      if (!isSafeOrigin()) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
+        return;
+      }
       let body = '';
-      req.on('data', (chunk) => { body += chunk; });
+      req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 1e6) req.destroy();
+      });
       req.on('end', () => {
         try {
           const payload = JSON.parse(body || '{}');

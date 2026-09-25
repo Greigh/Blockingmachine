@@ -1,9 +1,13 @@
-import { spawn, exec, ChildProcess } from 'node:child_process';
+import { spawn, execFile, ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+export function isValidServiceName(name: string): boolean {
+  return typeof name === 'string' && name.trim().length > 0 && /^[a-zA-Z0-9_\- ]+$/.test(name);
+}
 
 export interface DaemonStatus {
   status: 'running' | 'paused' | 'stopped';
@@ -37,14 +41,13 @@ export class DaemonManager {
    * Probes the HTTP Control API on port 9292 to determine if the daemon is running.
    */
   async getStatus(): Promise<DaemonStatus> {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 1500);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1500);
 
+    try {
       const res = await fetch(`http://${this.bindHost}:${this.controlPort}/v1/status`, {
         signal: controller.signal,
       });
-      clearTimeout(timeout);
 
       if (res.ok) {
         const data = await res.json();
@@ -62,6 +65,8 @@ export class DaemonManager {
       }
     } catch {
       // Control API is unreachable
+    } finally {
+      clearTimeout(timeout);
     }
 
     return {
@@ -201,7 +206,7 @@ export class DaemonManager {
   async getNetworkServices(): Promise<string[]> {
     if (process.platform === 'darwin') {
       try {
-        const { stdout } = await execAsync('networksetup -listallnetworkservices');
+        const { stdout } = await execFileAsync('networksetup', ['-listallnetworkservices']);
         const lines = stdout
           .split('\n')
           .map((l) => l.trim())
@@ -219,8 +224,11 @@ export class DaemonManager {
    */
   async setSystemDns(serviceName = 'Wi-Fi'): Promise<{ success: boolean; message: string }> {
     if (process.platform === 'darwin') {
+      if (!isValidServiceName(serviceName)) {
+        return { success: false, message: `Invalid network service name: "${serviceName}"` };
+      }
       try {
-        await execAsync(`networksetup -setdnsservers "${serviceName}" 127.0.0.1`);
+        await execFileAsync('networksetup', ['-setdnsservers', serviceName.trim(), '127.0.0.1']);
         await this.flushCache();
         return { success: true, message: `System DNS on "${serviceName}" set to 127.0.0.1.` };
       } catch (err: any) {
@@ -238,8 +246,11 @@ export class DaemonManager {
    */
   async restoreSystemDns(serviceName = 'Wi-Fi'): Promise<{ success: boolean; message: string }> {
     if (process.platform === 'darwin') {
+      if (!isValidServiceName(serviceName)) {
+        return { success: false, message: `Invalid network service name: "${serviceName}"` };
+      }
       try {
-        await execAsync(`networksetup -setdnsservers "${serviceName}" "Empty"`);
+        await execFileAsync('networksetup', ['-setdnsservers', serviceName.trim(), 'Empty']);
         await this.flushCache();
         return { success: true, message: `System DNS on "${serviceName}" restored to DHCP default.` };
       } catch (err: any) {
@@ -255,14 +266,14 @@ export class DaemonManager {
   async flushCache(): Promise<{ success: boolean; message: string }> {
     if (process.platform === 'darwin') {
       try {
-        await execAsync('dscacheutil -flushcache');
+        await execFileAsync('dscacheutil', ['-flushcache']);
         return { success: true, message: 'macOS DNS resolver cache flushed successfully.' };
       } catch (err: any) {
         return { success: false, message: `Cache flush failed: ${err?.message || err}` };
       }
     } else if (process.platform === 'win32') {
       try {
-        await execAsync('ipconfig /flushdns');
+        await execFileAsync('ipconfig', ['/flushdns']);
         return { success: true, message: 'Windows DNS resolver cache flushed.' };
       } catch (err: any) {
         return { success: false, message: `Cache flush failed: ${err?.message || err}` };
@@ -275,17 +286,16 @@ export class DaemonManager {
    * Injects one or more quarantined domains directly into the running DNS memory trie
    */
   async quarantineDomain(domainOrDomains: string | string[]): Promise<{ success: boolean; injected?: number; message?: string }> {
+    const domains = Array.isArray(domainOrDomains) ? domainOrDomains : [domainOrDomains];
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
     try {
-      const domains = Array.isArray(domainOrDomains) ? domainOrDomains : [domainOrDomains];
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2000);
       const res = await fetch(`http://${this.bindHost}:${this.controlPort}/v1/quarantine`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domains }),
         signal: controller.signal,
       });
-      clearTimeout(timeout);
       if (res.ok) {
         const data = await res.json();
         return { success: true, injected: data.injected || domains.length, message: `Injected ${domains.length} domain(s) into DNS memory trie` };
@@ -293,6 +303,8 @@ export class DaemonManager {
       return { success: false, message: `Daemon returned status ${res.status}` };
     } catch (err: any) {
       return { success: false, message: `Could not inject into daemon: ${err?.message || err}` };
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

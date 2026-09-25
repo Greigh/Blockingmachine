@@ -135,6 +135,48 @@ function isSafeExternalUrl(url: string): boolean {
   }
 }
 
+// ============================================================================
+// Crash Reporter & Uncaught Error Boundary
+// ============================================================================
+function setupCrashBoundary() {
+  const logCrash = async (type: string, error: unknown) => {
+    try {
+      const errObj = error instanceof Error ? error : new Error(String(error));
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const crashInfo =
+        `[${new Date().toISOString()}] ${type}: ${errObj.message}\n` +
+        `Stack: ${errObj.stack || 'No stack trace'}\n` +
+        `Node: ${process.version}, Platform: ${process.platform}, Arch: ${process.arch}\n` +
+        `App Version: ${typeof app?.getVersion === 'function' ? app.getVersion() : '1.0.0'}\n\n`;
+
+      console.error(`❌ [CRASH BOUNDARY] ${type}:`, errObj);
+
+      try {
+        if (typeof app?.getPath === 'function') {
+          const userDataPath = app.getPath('userData');
+          const crashDir = join(userDataPath, 'crash-logs');
+          await fs.mkdir(crashDir, { recursive: true });
+          await fs.appendFile(join(crashDir, `crash-${timestamp}.log`), crashInfo, 'utf8');
+        }
+      } catch (writeErr) {
+        console.error('Failed to persist crash log to disk:', writeErr);
+      }
+    } catch {
+      // Safe fallback
+    }
+  };
+
+  process.on('uncaughtException', (err) => {
+    logCrash('Uncaught Exception', err);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    logCrash('Unhandled Rejection', reason);
+  });
+}
+
+setupCrashBoundary();
+
 // Set official application name for native macOS application menu
 app.name = 'Blockingmachine';
 
@@ -1350,8 +1392,16 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
 
         const savePath = storeRef.get('savePath');
         const outputDir = dirname(savePath);
-        const reqUrl = new URL(req.url || '/', 'http://localhost');
-        const pathname = decodeURIComponent(reqUrl.pathname);
+        let pathname: string;
+        let reqUrl: URL;
+        try {
+          reqUrl = new URL(req.url || '/', 'http://localhost');
+          pathname = decodeURIComponent(reqUrl.pathname);
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'Bad Request: Malformed URI' }));
+          return;
+        }
         const lowerPath = pathname.toLowerCase();
 
         // ====================================================================
@@ -1416,7 +1466,30 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           return;
         }
 
+        // Origin guard for control and telemetry mutations
+        const originHeader = req.headers.origin || (typeof req.headers.referer === 'string' ? req.headers.referer : undefined);
+        const isSafeClientOrigin = (): boolean => {
+          if (!originHeader) return true;
+          try {
+            const parsedOrigin = new URL(originHeader);
+            return (
+              parsedOrigin.hostname === 'localhost' ||
+              parsedOrigin.hostname === '127.0.0.1' ||
+              parsedOrigin.hostname.endsWith('.local') ||
+              parsedOrigin.protocol === 'chrome-extension:' ||
+              parsedOrigin.protocol === 'moz-extension:'
+            );
+          } catch {
+            return false;
+          }
+        };
+
         if (lowerPath === '/v1/events' || lowerPath === '/api/events') {
+          if (sseClients.size >= 64) {
+            res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Too Many Connections', message: 'Maximum SSE subscribers reached' }));
+            return;
+          }
           res.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache, no-transform',
@@ -1426,7 +1499,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           res.write(
             `event: connected\ndata: ${JSON.stringify({
               status: 'connected',
-              version: app.getVersion(),
+              version: typeof app?.getVersion === 'function' ? app.getVersion() : '1.0.0',
               timestamp: new Date().toISOString(),
               ruleCount: latestCompiledRules.length,
             })}\n\n`
@@ -1447,11 +1520,25 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
 
           req.on('close', () => {
             sseClients.delete(res);
+            if (sseClients.size === 0 && sseHeartbeatTimer) {
+              clearInterval(sseHeartbeatTimer);
+              sseHeartbeatTimer = null;
+            }
           });
           return;
         }
 
-        if ((lowerPath === '/v1/telemetry/browser' || lowerPath === '/api/telemetry/browser') && req.method === 'POST') {
+        if (lowerPath === '/v1/telemetry/browser' || lowerPath === '/api/telemetry/browser') {
+          if (!isSafeClientOrigin()) {
+            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Cross-origin telemetry forbidden' }));
+            return;
+          }
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use POST.' }));
+            return;
+          }
           let body = '';
           req.on('data', (chunk) => {
             body += chunk;
@@ -1460,23 +1547,25 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           req.on('end', () => {
             try {
               const data = JSON.parse(body || '{}');
-              if (typeof data.trackersBlocked === 'number') {
-                browserTelemetryAggregator.trackersBlocked += data.trackersBlocked;
+              if (typeof data.trackersBlocked === 'number' && Number.isFinite(data.trackersBlocked)) {
+                browserTelemetryAggregator.trackersBlocked += Math.max(0, Math.floor(data.trackersBlocked));
               }
-              if (typeof data.elementsHidden === 'number') {
-                browserTelemetryAggregator.elementsHidden += data.elementsHidden;
+              if (typeof data.elementsHidden === 'number' && Number.isFinite(data.elementsHidden)) {
+                browserTelemetryAggregator.elementsHidden += Math.max(0, Math.floor(data.elementsHidden));
               }
-              if (typeof data.threatsDetected === 'number') {
-                browserTelemetryAggregator.threatsDetected += data.threatsDetected;
+              if (typeof data.threatsDetected === 'number' && Number.isFinite(data.threatsDetected)) {
+                browserTelemetryAggregator.threatsDetected += Math.max(0, Math.floor(data.threatsDetected));
               }
               if (Array.isArray(data.trackers)) {
                 for (const t of data.trackers) {
-                  if (!t.domain) continue;
-                  const exist = browserTelemetryAggregator.recentTrackers.find((x) => x.domain === t.domain);
+                  if (typeof t?.domain !== 'string' || !t.domain.trim() || t.domain.length > 253) continue;
+                  const domain = t.domain.trim().toLowerCase();
+                  const count = typeof t.count === 'number' && Number.isFinite(t.count) && t.count > 0 ? Math.floor(t.count) : 1;
+                  const exist = browserTelemetryAggregator.recentTrackers.find((x) => x.domain === domain);
                   if (exist) {
-                    exist.count += (t.count || 1);
+                    exist.count += count;
                   } else {
-                    browserTelemetryAggregator.recentTrackers.unshift({ domain: t.domain, count: t.count || 1 });
+                    browserTelemetryAggregator.recentTrackers.unshift({ domain, count });
                   }
                 }
                 browserTelemetryAggregator.recentTrackers = browserTelemetryAggregator.recentTrackers.slice(0, 50);
@@ -1493,18 +1582,33 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           return;
         }
 
-        if ((lowerPath === '/v1/control/cosmetics' || lowerPath === '/api/control/cosmetics') && (req.method === 'POST' || req.method === 'GET')) {
-          let enabled = true;
-          if (req.method === 'GET') {
-            const p = reqUrl.searchParams.get('enabled');
-            enabled = p !== 'false' && p !== '0';
-            broadcastSseEvent('remote_control', { action: 'toggle_cosmetics', enabled });
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ success: true, action: 'toggle_cosmetics', enabled }));
+        if (lowerPath === '/v1/control/cosmetics' || lowerPath === '/api/control/cosmetics') {
+          if (!isSafeClientOrigin()) {
+            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Cross-origin control forbidden' }));
             return;
           }
+
+          if (req.method === 'GET') {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: true, message: 'Cosmetics status query' }));
+            return;
+          }
+
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed' }));
+            return;
+          }
+
+          let enabled = true;
           let body = '';
-          req.on('data', (chunk) => { body += chunk; });
+          req.on('data', (chunk) => {
+            body += chunk;
+            if (body.length > 1e6) {
+              req.destroy();
+            }
+          });
           req.on('end', () => {
             try {
               const data = JSON.parse(body || '{}');
@@ -1520,14 +1624,34 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           return;
         }
 
-        if ((lowerPath === '/v1/control/reload' || lowerPath === '/api/control/reload') && (req.method === 'POST' || req.method === 'GET')) {
+        if (lowerPath === '/v1/control/reload' || lowerPath === '/api/control/reload') {
+          if (!isSafeClientOrigin()) {
+            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Cross-origin control forbidden' }));
+            return;
+          }
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed' }));
+            return;
+          }
           broadcastSseEvent('remote_control', { action: 'reload_rules' });
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ success: true, action: 'reload_rules', message: 'Reload signal broadcast to connected browsers' }));
           return;
         }
 
-        if ((lowerPath === '/v1/compile' || lowerPath === '/api/compile') && (req.method === 'POST' || req.method === 'GET')) {
+        if (lowerPath === '/v1/compile' || lowerPath === '/api/compile') {
+          if (!isSafeClientOrigin()) {
+            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Cross-origin compilation forbidden' }));
+            return;
+          }
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use POST.' }));
+            return;
+          }
           console.log('[Feed Server API] Received trigger: compile rules');
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('trigger-compile');
@@ -1540,6 +1664,11 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         if (lowerPath === '/v1/check') {
           const domainToCheck = reqUrl.searchParams.get('domain') || '';
           const clean = domainToCheck.trim().toLowerCase();
+          if (clean.length > 253) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Domain exceeds maximum length of 253 characters' }));
+            return;
+          }
           const isCovered = clean ? isDomainCoveredByRules(clean, latestCompiledRules.map((r) => r.raw)) : false;
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ domain: clean, blocked: isCovered, timestamp: new Date().toISOString() }));
@@ -3291,7 +3420,7 @@ const createWindow = async () => {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       preload: preloadPath,
       backgroundThrottling: false,
     },
@@ -3364,6 +3493,18 @@ async function initialize() {
           'Content-Security-Policy': [csp],
         },
       });
+    });
+
+    // Enforce least privilege for device permissions (block camera, microphone, geolocation)
+    session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+      if (permission === 'notifications') {
+        return callback(true);
+      }
+      return callback(false);
+    });
+
+    session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+      return permission === 'notifications';
     });
 
     await installExtensions();

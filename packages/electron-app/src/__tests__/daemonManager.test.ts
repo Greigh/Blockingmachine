@@ -32,4 +32,25 @@ describe('DaemonManager', () => {
     expect(Array.isArray(services)).toBe(true);
     expect(services.length).toBeGreaterThan(0);
   });
+
+  test('rejects command injection attempts in service names for setSystemDns', async () => {
+    const manager = new DaemonManager();
+    const maliciousNames = [
+      'Wi-Fi; rm -rf /',
+      'Wi-Fi && cat /etc/passwd',
+      'Wi-Fi | whoami',
+      'Wi-Fi`touch /tmp/pwned`',
+      'Wi-Fi$(id)',
+    ];
+
+    for (const name of maliciousNames) {
+      const setResult = await manager.setSystemDns(name);
+      expect(setResult.success).toBe(false);
+      expect(setResult.message).toContain('Invalid network service name');
+
+      const restoreResult = await manager.restoreSystemDns(name);
+      expect(restoreResult.success).toBe(false);
+      expect(restoreResult.message).toContain('Invalid network service name');
+    }
+  });
 });

@@ -46,8 +46,15 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  const reqUrl = new URL(req.url || '/', 'http://localhost');
-  const pathname = decodeURIComponent(reqUrl.pathname).toLowerCase();
+  let pathname;
+  try {
+    const reqUrl = new URL(req.url || '/', 'http://localhost');
+    pathname = decodeURIComponent(reqUrl.pathname).toLowerCase();
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'Bad Request: Malformed URI' }));
+    return;
+  }
 
   // 1. Ingress UI / Dashboard (when accessed from Home Assistant sidebar)
   if (pathname === '/' || pathname === '/index.html') {
@@ -129,10 +136,24 @@ const server = createServer(async (req, res) => {
 
   // 3. REST API: /v1/compile
   if (pathname === '/v1/compile' || pathname === '/api/compile') {
-    compileStats.lastCompile = new Date().toISOString();
-    console.log('[Add-on Hub] Compilation triggered via Home Assistant REST API');
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ success: true, message: 'Compilation completed in Blockingmachine Add-on' }));
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+      return;
+    }
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 1e6) {
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      compileStats.lastCompile = new Date().toISOString();
+      console.log('[Add-on Hub] Compilation triggered via Home Assistant REST API');
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: true, message: 'Compilation completed in Blockingmachine Add-on' }));
+    });
     return;
   }
 
