@@ -40,6 +40,16 @@ const __dirname = dirname(__filename);
 const ROOT_DIR = resolve(__dirname, '..');
 const MAKE_DIR = resolve(ROOT_DIR, 'make');
 
+// Load environment variables from root .env if present
+const envPath = resolve(ROOT_DIR, '.env');
+if (existsSync(envPath) && process.loadEnvFile) {
+  try {
+    process.loadEnvFile(envPath);
+  } catch {
+    // Ignore .env parse errors
+  }
+}
+
 // Parse arguments
 const args = process.argv.slice(2);
 const isHelp = args.includes('-h') || args.includes('--help');
@@ -47,6 +57,7 @@ const isDryRun = args.includes('--dry-run');
 const skipTests = args.includes('--skip-tests');
 const skipBuild = args.includes('--skip-build');
 const skipMake = args.includes('--skip-make');
+const skipPublish = args.includes('--skip-publish');
 
 if (isHelp) {
   console.log(`
@@ -301,6 +312,31 @@ if (ghAvailable) {
 To publish release assets manually:
   gh release create v${targetVersion} make/* --title "Blockingmachine v${targetVersion}" --notes-file ${releaseNotesFile} ${isPrerelease ? '--prerelease' : ''}
 `);
+}
+
+// 7. Publish to Package Registries (npmjs.com and Forgejo)
+if (!skipPublish) {
+  if (process.env.NPMJS_TOKEN) {
+    console.log('\n📦 [Publish] Publishing packages to npmjs.com using NPMJS_TOKEN...');
+    try {
+      execSync('node scripts/publish-npmjs.mjs', { cwd: ROOT_DIR, stdio: 'inherit' });
+    } catch (err) {
+      console.warn(`⚠️ npmjs publication error: ${err.message}`);
+    }
+  } else {
+    console.log('\nℹ️ No NPMJS_TOKEN found in environment. Skipping npmjs.com publication.');
+  }
+
+  if (process.env.FORGEJO_TOKEN) {
+    console.log('\n📦 [Publish] Publishing packages to Forgejo npm registry using FORGEJO_TOKEN...');
+    try {
+      execSync('node scripts/publish-forgejo.mjs', { cwd: ROOT_DIR, stdio: 'inherit' });
+    } catch (err) {
+      console.warn(`⚠️ Forgejo publication error: ${err.message}`);
+    }
+  }
+} else {
+  console.log('⏩ Skipping package registry publishing (--skip-publish)');
 }
 
 console.log(`
