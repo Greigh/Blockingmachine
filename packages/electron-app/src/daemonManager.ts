@@ -223,10 +223,10 @@ export class DaemonManager {
    * Points the OS resolver to loopback (127.0.0.1)
    */
   async setSystemDns(serviceName = 'Wi-Fi'): Promise<{ success: boolean; message: string }> {
+    if (!isValidServiceName(serviceName)) {
+      return { success: false, message: `Invalid network service name: "${serviceName}"` };
+    }
     if (process.platform === 'darwin') {
-      if (!isValidServiceName(serviceName)) {
-        return { success: false, message: `Invalid network service name: "${serviceName}"` };
-      }
       try {
         await execFileAsync('networksetup', ['-setdnsservers', serviceName.trim(), '127.0.0.1']);
         await this.flushCache();
@@ -245,10 +245,10 @@ export class DaemonManager {
    * Reverts the OS resolver to DHCP
    */
   async restoreSystemDns(serviceName = 'Wi-Fi'): Promise<{ success: boolean; message: string }> {
+    if (!isValidServiceName(serviceName)) {
+      return { success: false, message: `Invalid network service name: "${serviceName}"` };
+    }
     if (process.platform === 'darwin') {
-      if (!isValidServiceName(serviceName)) {
-        return { success: false, message: `Invalid network service name: "${serviceName}"` };
-      }
       try {
         await execFileAsync('networksetup', ['-setdnsservers', serviceName.trim(), 'Empty']);
         await this.flushCache();
