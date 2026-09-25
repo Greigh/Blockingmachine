@@ -144,8 +144,13 @@ jobs:
 
           # Determine release notes file if available
           NOTES_FLAG=""
-          if [[ -f "scripts/release-notes-rc4.md" ]]; then
-            NOTES_FLAG="--notes-file scripts/release-notes-rc4.md"
+          TAG_CLEAN="${TAG#v1.0.0-}"
+          TAG_CLEAN="${TAG_CLEAN//./}"
+          CANDIDATE_NOTES="scripts/release-notes-${TAG_CLEAN}.md"
+          if [[ -f "$CANDIDATE_NOTES" ]]; then
+            NOTES_FLAG="--notes-file $CANDIDATE_NOTES"
+          elif [[ -f "scripts/release-notes-rc5.md" ]]; then
+            NOTES_FLAG="--notes-file scripts/release-notes-rc5.md"
           fi
 
           if gh release view "$TAG" >/dev/null 2>&1; then
