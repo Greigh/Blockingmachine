@@ -22,6 +22,7 @@
     "version:bump": "node scripts/bump-version.mjs",
     "verify:mv3": "node scripts/verify-mv3-compliance.mjs",
     "package:extension": "node scripts/package-extension.mjs",
+    "package:all": "node scripts/package-all.mjs",
     "publish:npmjs": "node scripts/publish-npmjs.mjs",
     "publish:forgejo": "node scripts/publish-forgejo.mjs",
     "publish:gpr": "node scripts/publish-gpr.mjs"
