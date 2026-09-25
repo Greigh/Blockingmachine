@@ -7,6 +7,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
+// Load environment variables from root .env if present
+const envPath = path.resolve(rootDir, '.env');
+if (fs.existsSync(envPath) && process.loadEnvFile) {
+  try {
+    process.loadEnvFile(envPath);
+  } catch {
+    // Ignore .env parse errors
+  }
+}
+
 const isDryRun = process.argv.includes('--dry-run');
 const token = process.env.FORGEJO_TOKEN || process.env.GITEA_TOKEN || process.env.NODE_AUTH_TOKEN;
 const serverUrl = (process.env.SERVER_URL || 'https://git.greighstudios.com').replace(/\/+$/, '');
@@ -72,7 +82,8 @@ for (const pkgDir of packages) {
 
     console.log(`[publish-forgejo] Successfully published ${pkgData.name}@${pkgData.version}`);
   } catch (err) {
-    console.error(`[publish-forgejo] Failed publishing ${pkgData.name}: ${err.message}`);
+    const sanitizedMsg = (err?.message || String(err)).replace(/_authToken=[^\s]+/g, '_authToken=***');
+    console.error(`[publish-forgejo] Failed publishing ${pkgData.name}: ${sanitizedMsg}`);
   } finally {
     fs.writeFileSync(pkgJsonPath, originalRaw);
   }
