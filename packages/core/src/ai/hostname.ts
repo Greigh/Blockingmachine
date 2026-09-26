@@ -26,7 +26,21 @@ export function normalizeHostname(input: string): string {
     if (!/^\d+$/.test(clean.slice(colon + 1))) return '';
     clean = clean.slice(0, colon);
   }
-  return clean.replace(/^\.+|\.+$/g, '');
+  return trimDots(clean);
+}
+
+/** Strip leading and trailing dots in linear time (no regex backtracking on long dot runs). */
+export function trimDots(value: string): string {
+  let start = 0;
+  while (start < value.length && value.charCodeAt(start) === 46) start++;
+  return trimTrailingDots(value.slice(start));
+}
+
+/** Strip trailing dots (e.g. an FQDN root) in linear time. */
+export function trimTrailingDots(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 46) end--;
+  return value.slice(0, end);
 }
 
 /**
