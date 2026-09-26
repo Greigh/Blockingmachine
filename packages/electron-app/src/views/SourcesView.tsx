@@ -548,6 +548,28 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
         </button>
       </div>
 
+      {/* Filter Sources vs Modules explainer */}
+      <div style={{
+        display: 'flex',
+        gap: 10,
+        padding: '10px 14px',
+        background: 'rgba(99,102,241,0.07)',
+        border: '1px solid rgba(99,102,241,0.2)',
+        borderRadius: 10,
+        alignItems: 'flex-start',
+      }}>
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="16" x2="12" y2="12" />
+          <line x1="12" y1="8" x2="12.01" y2="8" />
+        </svg>
+        <div style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--text-color)', flex: 1 }}>
+          <span style={{ fontWeight: 700, color: '#818cf8' }}>Filter Sources</span> are remote blocklist subscriptions from the community (EasyList, AdGuard, uBlock Origin, etc.) — you subscribe by URL and they sync automatically on a schedule.&nbsp;
+          <span style={{ fontWeight: 700, color: '#a78bfa' }}>Defense Modules</span> are Blockingmachine's own first-party curated filter lists (Base Ad Shield, Privacy Engine, etc.) — pre-loaded, version-controlled, and always current with the compiled output.&nbsp;
+          <span style={{ color: 'var(--secondary-color)' }}>You can use both together for maximum coverage.</span>
+        </div>
+      </div>
+
       {/* Add New Source Card */}
       <div className="desktop-card add-source-card">
         <div className="add-source-header-row">

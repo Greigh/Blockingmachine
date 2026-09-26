@@ -1,3 +1,4 @@
+import { isValidDomainName } from "./utils/ruleSyntax.js";
 import { sourceCategories, type SourceInfo } from "./sources.js";
 import { type RuleType, type RuleMetadata } from "./RuleStore.js";
 
@@ -52,7 +53,7 @@ export function cleanDomainPattern(originalRule: string): string | null {
 
     // Strip hosts file IP prefix if present (e.g. 0.0.0.0, 127.0.0.1, ::1)
     trimmedRule = trimmedRule
-      .replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+/, "")
+      .replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+/, "")
       .trim();
 
     // Remove AdGuard/uBO specific options starting with $
@@ -67,7 +68,7 @@ export function cleanDomainPattern(originalRule: string): string | null {
     while (pattern.endsWith("^") || pattern.endsWith("/")) {
       pattern = pattern.slice(0, -1);
     }
-    pattern = pattern.replace(/^(?:https?:\/\/)?(?:www\.)?/, "");
+    pattern = pattern.replace(/^https?:\/\//i, "").replace(/\.$/, "");
     pattern = pattern.trim();
 
     // Avoid cosmetic selectors, regex, or rules containing paths/query
@@ -84,7 +85,7 @@ export function cleanDomainPattern(originalRule: string): string | null {
     }
 
     // Must have at least one dot and valid domain-like characters
-    if (/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+$/.test(pattern)) {
+    if (isValidDomainName(pattern)) {
       return pattern.toLowerCase();
     }
 

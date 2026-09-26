@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/homeassistant-integration",
-  "version": "1.0.0-rc.5",
+  "version": "1.0.0-rc.6",
   "description": "Home Assistant Custom Integration for Blockingmachine Hub",
   "private": true,
   "scripts": {

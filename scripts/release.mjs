@@ -18,9 +18,11 @@
  *   node scripts/release.mjs <version> [options]
  *
  * Options:
+ *   --tag <tag>     Explicit NPM dist-tag / label (e.g. rc, beta, next, latest)
  *   --skip-tests    Skip test suite execution
  *   --skip-build    Skip build verification before packaging
  *   --skip-make     Skip desktop app compiling (DMG/ZIP)
+ *   --skip-publish  Skip publishing to npmjs / Forgejo registries
  *   --dry-run       Perform validation and packaging without git commit/push/release
  *   --help, -h      Show help message
  *
@@ -30,8 +32,8 @@
  *   npm run release 1.0.0-rc.6 --skip-tests
  */
 
-import { execSync } from 'child_process';
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { resolve, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -173,35 +175,37 @@ console.log(`
 =============================================================
 `);
 
-function runCommand(command, description, cwd = ROOT_DIR) {
-  console.log(`\n🔹 [Step] ${description}...`);
+function runExec(file, cmdArgs = [], description = '', cwd = ROOT_DIR) {
+  if (description) {
+    console.log(`\n🔹 [Step] ${description}...`);
+  }
   try {
-    execSync(command, { cwd, stdio: 'inherit' });
+    execFileSync(file, cmdArgs, { cwd, stdio: 'inherit' });
   } catch (error) {
-    console.error(`❌ Error during step: ${description}`);
+    console.error(`❌ Error during step: ${description || file}`);
     process.exit(1);
   }
 }
 
 // 1. Pre-flight Quality Checks
 if (!skipTests) {
-  runCommand('npm test', 'Running full test suite across all workspaces');
+  runExec('npm', ['test'], 'Running full test suite across all workspaces');
 } else {
   console.log('⏩ Skipping test suite (--skip-tests)');
 }
 
-runCommand('npm run lint', 'Verifying ESLint compliance across all workspaces');
+runExec('npm', ['run', 'lint'], 'Verifying ESLint compliance across all workspaces');
 
 if (!skipBuild) {
-  runCommand('npm run build', 'Verifying monorepo clean compilation');
+  runExec('npm', ['run', 'build'], 'Verifying monorepo clean compilation');
 }
 
 // 2. Synchronize Version across monorepo
-runCommand(`node scripts/bump-version.mjs ${targetVersion}`, `Synchronizing monorepo version to ${targetVersion}`);
+runExec('node', ['scripts/bump-version.mjs', targetVersion], `Synchronizing monorepo version to ${targetVersion}`);
 
 // Update README download links and install snippets
 const readmePath = resolve(ROOT_DIR, 'README.md');
-if (existsSync(readmePath)) {
+try {
   let readme = readFileSync(readmePath, 'utf8');
   readme = readme.replace(new RegExp(currentVersion, 'g'), targetVersion);
   const currentTagClean = currentVersion.replace(/-/g, '--');
@@ -209,21 +213,23 @@ if (existsSync(readmePath)) {
   readme = readme.replace(new RegExp(currentTagClean, 'g'), targetTagClean);
   writeFileSync(readmePath, readme, 'utf8');
   console.log(`✅ [README.md] Updated references to ${targetVersion}`);
+} catch (err) {
+  if (err.code !== 'ENOENT') throw err;
 }
 
 // Update SECURITY.md supported version
 const securityPath = resolve(ROOT_DIR, 'SECURITY.md');
-if (existsSync(securityPath)) {
+try {
   let sec = readFileSync(securityPath, 'utf8');
   sec = sec.replace(new RegExp(currentVersion, 'g'), targetVersion);
   writeFileSync(securityPath, sec, 'utf8');
   console.log(`✅ [SECURITY.md] Updated references to ${targetVersion}`);
+} catch (err) {
+  if (err.code !== 'ENOENT') throw err;
 }
 
-// 3. Ensure Release Notes & CHANGELOG.md exist
-if (!existsSync(releaseNotesFile)) {
-  console.log(`📝 Creating template release notes: ${basename(releaseNotesFile)}`);
-  const templateNotes = `## Blockingmachine v${targetVersion}
+// 3. Ensure Release Notes exist (atomic write with 'wx' prevents file system race)
+const templateNotes = `## Blockingmachine v${targetVersion}
 
 Release candidate featuring automated security remediations, performance enhancements, and monorepo updates.
 
@@ -245,23 +251,34 @@ Release candidate featuring automated security remediations, performance enhance
 | [\`blockingmachine-firefox-mv3-v1.0.0.zip\`](https://github.com/Greigh/Blockingmachine/releases/download/v${targetVersion}/blockingmachine-firefox-mv3-v1.0.0.zip) | Firefox Add-ons Manifest V3 browser extension bundle |
 | [\`SHA256SUMS.txt\`](https://github.com/Greigh/Blockingmachine/releases/download/v${targetVersion}/SHA256SUMS.txt) | SHA-256 verification checksums |
 `;
-  writeFileSync(releaseNotesFile, templateNotes, 'utf8');
+
+try {
+  writeFileSync(releaseNotesFile, templateNotes, { encoding: 'utf8', flag: 'wx' });
+  console.log(`📝 Created template release notes: ${basename(releaseNotesFile)}`);
+} catch (err) {
+  if (err.code !== 'EEXIST') throw err;
 }
 
 // 4. Package Artifacts into ./make/
 if (!skipMake) {
-  runCommand('node scripts/package-all.mjs', 'Compiling and packaging all release assets into ./make/');
+  runExec('node', ['scripts/package-all.mjs'], 'Compiling and packaging all release assets into ./make/');
 
   // Append generated SHA-256 checksums to release notes if present
   const checksumFile = resolve(MAKE_DIR, 'SHA256SUMS.txt');
-  if (existsSync(checksumFile)) {
+  try {
     const checksums = readFileSync(checksumFile, 'utf8');
-    let notes = readFileSync(releaseNotesFile, 'utf8');
-    if (!notes.includes('### Verification Checksums (SHA-256)')) {
-      notes += `\n### Verification Checksums (SHA-256)\n\n\`\`\`text\n${checksums}\`\`\`\n`;
-      writeFileSync(releaseNotesFile, notes, 'utf8');
-      console.log(`✅ [${basename(releaseNotesFile)}] Injected SHA-256 verification checksums`);
+    try {
+      let notes = readFileSync(releaseNotesFile, 'utf8');
+      if (!notes.includes('### Verification Checksums (SHA-256)')) {
+        notes += `\n### Verification Checksums (SHA-256)\n\n\`\`\`text\n${checksums}\`\`\`\n`;
+        writeFileSync(releaseNotesFile, notes, 'utf8');
+        console.log(`✅ [${basename(releaseNotesFile)}] Injected SHA-256 verification checksums`);
+      }
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
     }
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
   }
 } else {
   console.log('⏩ Skipping artifact packaging (--skip-make)');
@@ -273,29 +290,30 @@ if (isDryRun) {
   process.exit(0);
 }
 
-runCommand(
-  `git add .gitignore README.md SECURITY.md CHANGELOG.md package.json package-lock.json packages/ scripts/`,
+runExec(
+  'git',
+  ['add', '.gitignore', 'README.md', 'SECURITY.md', 'CHANGELOG.md', 'package.json', 'package-lock.json', 'packages/', 'scripts/'],
   'Staging release modifications'
 );
 
 try {
-  runCommand(
-    `git commit -m "chore(release): v${targetVersion} - release preparation and artifacts"`,
-    `Creating release commit for v${targetVersion}`
-  );
+  execFileSync('git', ['commit', '-m', `chore(release): v${targetVersion} - release preparation and artifacts`], {
+    cwd: ROOT_DIR,
+    stdio: 'inherit'
+  });
 } catch {
   console.log('ℹ️  No changes to commit or working tree clean.');
 }
 
-runCommand(`git tag -fa v${targetVersion} -m "Release v${targetVersion}"`, `Creating annotated tag v${targetVersion}`);
+runExec('git', ['tag', '-fa', `v${targetVersion}`, '-m', `Release v${targetVersion}`], `Creating annotated tag v${targetVersion}`);
 
 // Push to remotes
-runCommand(`git push origin main --tags -f`, 'Pushing main branch and tags to GitHub (origin)');
+runExec('git', ['push', 'origin', 'main', '--tags', '-f'], 'Pushing main branch and tags to GitHub (origin)');
 
 try {
-  const remotes = execSync('git remote', { encoding: 'utf8' });
+  const remotes = execFileSync('git', ['remote'], { encoding: 'utf8' });
   if (remotes.includes('forgejo')) {
-    runCommand(`git push forgejo main --tags -f`, 'Pushing main branch and tags to Forgejo (forgejo)');
+    runExec('git', ['push', 'forgejo', 'main', '--tags', '-f'], 'Pushing main branch and tags to Forgejo (forgejo)');
   }
 } catch {
   console.warn('⚠️ Could not push to Forgejo remote.');
@@ -304,7 +322,7 @@ try {
 // 6. GitHub Release via gh CLI
 let ghAvailable = false;
 try {
-  execSync('gh --version', { stdio: 'ignore' });
+  execFileSync('gh', ['--version'], { stdio: 'ignore' });
   ghAvailable = true;
 } catch {
   ghAvailable = false;
@@ -312,25 +330,54 @@ try {
 
 if (ghAvailable) {
   console.log('\n📦 Publishing GitHub Release with assets via "gh"...');
-  const prereleaseFlag = isPrerelease ? '--prerelease' : '';
-  const makeAssets = existsSync(MAKE_DIR)
-    ? readdirSync(MAKE_DIR)
-        .filter((f) => statSync(resolve(MAKE_DIR, f)).isFile())
-        .map((f) => `make/${f}`)
-        .join(' ')
-    : '';
-
+  let makeFiles = [];
   try {
-    // Check if release already exists
-    execSync(`gh release view v${targetVersion}`, { stdio: 'ignore' });
-    console.log(`Updating existing release v${targetVersion}...`);
-    execSync(`gh release upload v${targetVersion} ${makeAssets} --clobber`, { cwd: ROOT_DIR, stdio: 'inherit' });
+    makeFiles = readdirSync(MAKE_DIR)
+      .map((f) => resolve(MAKE_DIR, f))
+      .filter((filePath) => {
+        try {
+          return statSync(filePath).isFile();
+        } catch {
+          return false;
+        }
+      });
   } catch {
-    console.log(`Creating new release v${targetVersion}...`);
-    execSync(
-      `gh release create v${targetVersion} ${makeAssets} --title "Blockingmachine v${targetVersion}" --notes-file "${releaseNotesFile}" ${prereleaseFlag}`,
-      { cwd: ROOT_DIR, stdio: 'inherit' }
-    );
+    // MAKE_DIR might not exist
+  }
+
+  const tagName = `v${targetVersion}`;
+  let releaseExists = false;
+  try {
+    execFileSync('gh', ['release', 'view', tagName], { stdio: 'ignore' });
+    releaseExists = true;
+  } catch {
+    releaseExists = false;
+  }
+
+  if (releaseExists) {
+    console.log(`Updating existing release ${tagName}...`);
+    if (makeFiles.length > 0) {
+      execFileSync('gh', ['release', 'upload', tagName, ...makeFiles, '--clobber'], {
+        cwd: ROOT_DIR,
+        stdio: 'inherit'
+      });
+    }
+  } else {
+    console.log(`Creating new release ${tagName}...`);
+    const createArgs = [
+      'release',
+      'create',
+      tagName,
+      ...makeFiles,
+      '--title',
+      `Blockingmachine v${targetVersion}`,
+      '--notes-file',
+      releaseNotesFile
+    ];
+    if (isPrerelease) {
+      createArgs.push('--prerelease');
+    }
+    execFileSync('gh', createArgs, { cwd: ROOT_DIR, stdio: 'inherit' });
   }
 } else {
   console.log(`
@@ -345,7 +392,10 @@ if (!skipPublish) {
   if (process.env.NPMJS_TOKEN) {
     console.log(`\n📦 [Publish] Publishing packages to npmjs.com with tag "${distTag}"...`);
     try {
-      execSync(`node scripts/publish-npmjs.mjs --tag ${distTag}`, { cwd: ROOT_DIR, stdio: 'inherit' });
+      execFileSync('node', ['scripts/publish-npmjs.mjs', '--tag', distTag], {
+        cwd: ROOT_DIR,
+        stdio: 'inherit'
+      });
     } catch (err) {
       console.warn(`⚠️ npmjs publication error: ${err.message}`);
     }
@@ -356,7 +406,10 @@ if (!skipPublish) {
   if (process.env.FORGEJO_TOKEN) {
     console.log(`\n📦 [Publish] Publishing packages to Forgejo npm registry with tag "${distTag}"...`);
     try {
-      execSync(`node scripts/publish-forgejo.mjs --tag ${distTag}`, { cwd: ROOT_DIR, stdio: 'inherit' });
+      execFileSync('node', ['scripts/publish-forgejo.mjs', '--tag', distTag], {
+        cwd: ROOT_DIR,
+        stdio: 'inherit'
+      });
     } catch (err) {
       console.warn(`⚠️ Forgejo publication error: ${err.message}`);
     }

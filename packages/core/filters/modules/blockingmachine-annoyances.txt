@@ -1,25 +1,22 @@
 ! Title: Web Annoyances & Cookie Banners [Beta]
 ! Description: Blocks GDPR cookie overlays, newsletter popups, floating prompts, and anti-adblock nags.
-! Version: 1.0.0-beta.2
+! Version: 1.0.0-beta.3
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
+! Compatibility: Browser filter engine required for cosmetic and URL-path rules; DNS exports retain only domain rules.
 
 ! --- Cookie Consent Managers & CMPs ---
 ||onetrust.com^
 ||cdn.cookielaw.org^
 ||cookiebot.com^
-||consent.cookiebot.com^
 ||trustarc.com^
-||consent.trustarc.com^
 ||consent.cmp.oath.com^
 ||quantcast.mgr.consensu.org^
 ||usercentrics.eu^
-||app.usercentrics.eu^
 ||cmp.inmobi.com^
 ||civicuk.com/cookie-control^
 ||osano.com^
-||cmp.osano.com^
 ||ketch.com^
 ||global.ketchcdn.com^
 ||didomi.io^
@@ -32,14 +29,10 @@
 
 ! --- Push Notification & Survey Nags ---
 ||onesignal.com^
-||api.onesignal.com^
 ||pushwoosh.com^
-||webpush.pushwoosh.com^
 ||wonderpush.com^
-||cdn.wonderpush.com^
 ||survicate.com^
 ||qualtrics.com^
-||siteintercept.qualtrics.com^
 
 ! --- Generic Cosmetic Annoyance Suppressions ---
 ##.cookie-banner

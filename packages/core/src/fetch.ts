@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
+import { Readable } from "stream";
 
 import { isSafePublicWebUrl } from "./utils/urlSafety.js";
 
@@ -12,6 +13,12 @@ const INITIAL_DELAY = 2000;
 const FETCH_TIMEOUT = 30000; // Define timeout duration
 const MAX_PAYLOAD_SIZE = 100 * 1024 * 1024; // 100MB max payload limit
 const MAX_REDIRECTS = 5;
+
+class NonRetryableFetchError extends Error {
+  constructor(message: string, readonly status = 0) {
+    super(message);
+  }
+}
 
 export interface FetchOptions {
   etag?: string;
@@ -39,6 +46,13 @@ async function fetchWithRetry(
   // --- Timeout Controller ---
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+  let response: Response | undefined;
+  const cleanup = () => {
+    clearTimeout(timeoutId);
+    // Every early return must release the unread body and the underlying request.
+    if (response?.body instanceof Readable) response.body.destroy();
+    controller.abort();
+  };
   // Add the signal to the fetch options with manual redirect inspection
   const fetchOptions: RequestInit = {
     ...options,
@@ -49,7 +63,7 @@ async function fetchWithRetry(
 
   try {
     // Use the options with the AbortSignal
-    const response: Response = await fetch(url, fetchOptions);
+    response = await fetch(url, fetchOptions);
 
     if (response.status === 304) {
       return {
@@ -61,24 +75,33 @@ async function fetchWithRetry(
       };
     }
 
-    // Inspect redirects for SSRF
+    // Check redirect URLs using the same lexical policy as the original URL.
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       if (redirectCount >= MAX_REDIRECTS) {
-        throw new Error(`Too many redirects (limit ${MAX_REDIRECTS}) for ${url}`);
+        throw new NonRetryableFetchError(`Too many redirects (limit ${MAX_REDIRECTS}) for ${url}`);
       }
       const location = response.headers.get("location");
       if (!location) {
-        throw new Error(`Redirect status ${response.status} missing Location header for ${url}`);
+        throw new NonRetryableFetchError(`Redirect status ${response.status} missing Location header for ${url}`);
       }
-      const nextUrl = new URL(location, String(url)).toString();
+      const parsedRedirect = new URL(location, String(url));
+      const nextUrl = parsedRedirect.toString();
+      if (parsedRedirect.protocol !== "http:" && parsedRedirect.protocol !== "https:") {
+        throw new NonRetryableFetchError(
+          `URL guard blocked redirect from ${url} to non-HTTP(S) URL ${nextUrl}`,
+          403,
+        );
+      }
       if (!allowPrivateNetworks) {
         const redirectSafety = isSafePublicWebUrl(nextUrl);
         if (!redirectSafety.isSafe) {
-          throw new Error(
-            `SSRF Guard blocked redirect from ${url} to ${nextUrl}: ${redirectSafety.reason}`,
+          throw new NonRetryableFetchError(
+            `URL guard blocked redirect from ${url} to ${nextUrl}: ${redirectSafety.reason}`,
+            403,
           );
         }
       }
+      cleanup();
       return fetchWithRetry(nextUrl, options, attempt, redirectCount + 1, allowPrivateNetworks);
     }
 
@@ -95,8 +118,9 @@ async function fetchWithRetry(
 
     const contentLength = response.headers.get("content-length");
     if (contentLength && parseInt(contentLength, 10) > MAX_PAYLOAD_SIZE) {
-      throw new Error(
+      throw new NonRetryableFetchError(
         `Response payload exceeds limit of 100MB: ${contentLength} bytes`,
+        413,
       );
     }
 
@@ -112,8 +136,9 @@ async function fetchWithRetry(
         totalBytes += buf.length;
         if (totalBytes > MAX_PAYLOAD_SIZE) {
           controller.abort();
-          throw new Error(
+          throw new NonRetryableFetchError(
             `Response payload exceeded limit of 100MB: >${totalBytes} bytes`,
+            413,
           );
         }
         chunks.push(buf);
@@ -137,7 +162,7 @@ async function fetchWithRetry(
       status: response.status,
     };
   } catch (error: any) {
-    const isSsrfBlock = typeof error?.message === "string" && error.message.includes("SSRF Guard blocked");
+    cleanup();
 
     // Check if the error was due to the abort signal (timeout)
     if (error.name === "AbortError") {
@@ -147,46 +172,34 @@ async function fetchWithRetry(
     } else if (error?.code === "ERR_INVALID_URL") {
       console.error(`❌ Invalid URL encountered: ${url}`);
       return { content: null, notModified: false, status: 400 };
-    } else if (isSsrfBlock) {
+    } else if (error instanceof NonRetryableFetchError) {
       console.error(`❌ ${error.message}`);
-      return { content: null, notModified: false, status: 403 };
+      return { content: null, notModified: false, status: error.status };
     } else {
       console.warn(
         `⚠️ Attempt ${attempt}/${MAX_RETRIES} failed for ${url}: ${error?.message || error}`,
       );
     }
 
-    const isPayloadOverflow =
-      typeof error?.message === "string" &&
-      error.message.includes("exceed") &&
-      error.message.includes("100MB");
-    const isNonRetryable =
-      error?.code === "ERR_INVALID_URL" ||
-      isPayloadOverflow ||
-      isSsrfBlock ||
-      error?.status === 413;
-
-    // Retry logic (only if not a permanent non-retryable error)
-    if (!isNonRetryable && attempt < MAX_RETRIES) {
+    // Retry only failures that can be transient, after closing the previous response.
+    if (attempt < MAX_RETRIES) {
       const delay = INITIAL_DELAY * Math.pow(2, attempt - 1);
       console.log(`⏳ Retrying in ${delay / 1000}s...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
       // Pass original options (without signal) to recursive call, it will create a new controller
       return fetchWithRetry(url, options, attempt + 1, redirectCount, allowPrivateNetworks);
     } else {
-      if (error?.code !== "ERR_INVALID_URL" && !isSsrfBlock) {
-        console.error(
-          `❌ Max retries reached or non-retryable error for ${url}. Last error: ${error?.message || error}`,
-        );
-      }
+      console.error(
+        `❌ Max retries reached for ${url}. Last error: ${error?.message || error}`,
+      );
       return {
         content: null,
         notModified: false,
-        status: isPayloadOverflow ? 413 : isSsrfBlock ? 403 : error?.code === "ERR_INVALID_URL" ? 400 : 0,
+        status: 0,
       };
     }
   } finally {
-    clearTimeout(timeoutId);
+    cleanup();
   }
 }
 
@@ -213,7 +226,7 @@ export async function fetchWithConditionalCache(
   const options: RequestInit = { headers };
 
   // --- Check if it's a local file path ---
-  if (!url.startsWith("http:") && !url.startsWith("https:")) {
+  if (!/^https?:/i.test(url.trim())) {
     try {
       let filePath = url;
       if (url.startsWith("file://")) {
@@ -304,6 +317,7 @@ export async function fetchWithConditionalCache(
       return { content: null, notModified: false, status: 500 };
     }
   } else {
+    url = url.trim();
     const allowPrivate = cacheOptions?.allowPrivateNetworks ?? false;
     if (!allowPrivate) {
       const safety = isSafePublicWebUrl(url);
@@ -313,13 +327,17 @@ export async function fetchWithConditionalCache(
           return { content: null, notModified: false, status: 400 };
         }
         console.error(
-          `❌ SSRF Guard blocked fetch request to ${url}: ${safety.reason}`,
+          `❌ URL guard blocked fetch request to ${url}: ${safety.reason}`,
         );
         return { content: null, notModified: false, status: 403 };
       }
     }
     const result = await fetchWithRetry(url, options, 1, 0, allowPrivate);
-    if (result.content && cacheOptions?.expectedSha256) {
+    if (result.notModified) {
+      result.etag ??= cacheOptions?.etag;
+      result.lastModified ??= cacheOptions?.lastModified;
+    }
+    if (result.content !== null && cacheOptions?.expectedSha256) {
       const computedSha256 =
         result.sha256 ||
         crypto.createHash("sha256").update(result.content, "utf8").digest("hex");

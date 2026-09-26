@@ -48,7 +48,7 @@ describe("advanced-formatter", () => {
 
     expect(output).toContain("127.0.0.1 localhost");
     expect(output).toContain("0.0.0.0 analytics.google.com");
-    expect(output).toContain("0.0.0.0 ads.facebook.com");
+    expect(output).not.toContain("ads.facebook.com");
     expect(output).toContain("0.0.0.0 telemetry.microsoft.com");
     expect(output).toContain("# EXCEPTION: @@||allowed-cdn.com^");
   });
@@ -57,7 +57,7 @@ describe("advanced-formatter", () => {
     const output = generateFilterList(rules, metadata, "dnsmasq");
 
     expect(output).toContain("address=/analytics.google.com/0.0.0.0");
-    expect(output).toContain("address=/ads.facebook.com/0.0.0.0");
+    expect(output).not.toContain("ads.facebook.com");
     expect(output).toContain("address=/telemetry.microsoft.com/0.0.0.0");
     expect(output).toContain("# EXCEPTION: @@||allowed-cdn.com^");
   });
@@ -68,7 +68,7 @@ describe("advanced-formatter", () => {
     expect(output).toContain(
       'local-zone: "analytics.google.com" always_nxdomain',
     );
-    expect(output).toContain('local-zone: "ads.facebook.com" always_nxdomain');
+    expect(output).not.toContain("ads.facebook.com");
     expect(output).toContain(
       'local-zone: "telemetry.microsoft.com" always_nxdomain',
     );
@@ -79,7 +79,7 @@ describe("advanced-formatter", () => {
     const output = generateFilterList(rules, metadata, "domains");
 
     expect(output).toContain("analytics.google.com");
-    expect(output).toContain("ads.facebook.com");
+    expect(output).not.toContain("ads.facebook.com");
     expect(output).toContain("telemetry.microsoft.com");
     expect(output).toContain("# EXCEPTION: @@||allowed-cdn.com^");
   });

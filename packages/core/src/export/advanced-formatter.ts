@@ -2,11 +2,11 @@ import type { StoredRule } from "../RuleStore.js";
 import type { FilterListMetadata } from "../types.js";
 import {
   isException,
-  isBrowserOnlyRule,
-  getDnsDomain,
-  formatAdguardRule,
+  formatRuleForType,
+  isExportableRule,
 } from "./formatters.js";
-import { resolveDnsPrecedence } from "./ruleFilters.js";
+import { filterBrowserRules, resolveDnsPrecedence } from "./ruleFilters.js";
+import { sanitizeHeaderMetadata } from "./headers.js";
 
 export type FilterFormat =
   "adguard" | "abp" | "hosts" | "dnsmasq" | "unbound" | "domains" | "plain";
@@ -17,6 +17,7 @@ export function generateHeader(
   metadata: FilterMetadata,
   format: FilterFormat,
 ): string {
+  metadata = sanitizeHeaderMetadata(metadata);
   // Common header for all filter list formats
   const lines: string[] = [];
 
@@ -148,51 +149,7 @@ export function generateHeader(
 }
 
 export function formatRule(rule: StoredRule, format: FilterFormat): string {
-  // Return early if rule isn't valid
-  if (!rule || !rule.raw) return "";
-
-  const isExcept = isException(rule);
-
-  switch (format) {
-    case "hosts": {
-      if (isExcept) {
-        if (isBrowserOnlyRule(rule)) return "";
-        return `# EXCEPTION: ${rule.raw}`;
-      }
-      const domain = getDnsDomain(rule);
-      return domain ? `0.0.0.0 ${domain}` : "";
-    }
-    case "dnsmasq": {
-      if (isExcept) {
-        if (isBrowserOnlyRule(rule)) return "";
-        return `# EXCEPTION: ${rule.raw}`;
-      }
-      const domain = getDnsDomain(rule);
-      return domain ? `address=/${domain}/0.0.0.0` : "";
-    }
-    case "unbound": {
-      if (isExcept) {
-        if (isBrowserOnlyRule(rule)) return "";
-        return `# EXCEPTION: ${rule.raw}`;
-      }
-      const domain = getDnsDomain(rule);
-      return domain ? `  local-zone: "${domain}" always_nxdomain` : "";
-    }
-    case "domains": {
-      if (isExcept) {
-        if (isBrowserOnlyRule(rule)) return "";
-        return `# EXCEPTION: ${rule.raw}`;
-      }
-      const domain = getDnsDomain(rule);
-      return domain || "";
-    }
-    case "adguard":
-    case "abp":
-      return formatAdguardRule(rule);
-    case "plain":
-    default:
-      return rule.raw;
-  }
+  return formatRuleForType(rule, format);
 }
 
 export function generateFilterList(
@@ -264,7 +221,7 @@ export function generateFilterList(
     const cosmeticRules: string[] = [];
     const networkRules: string[] = [];
 
-    for (const rule of rules) {
+    for (const rule of filterBrowserRules(rules)) {
       const formatted = formatRule(rule, format);
       if (!formatted) continue;
 
@@ -350,6 +307,7 @@ export function generateFilterList(
 
   // Plain / custom formats
   const formattedRulesList = rules
+    .filter(isExportableRule)
     .map((rule) => formatRule(rule, format))
     .filter(Boolean);
 

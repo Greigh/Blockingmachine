@@ -1,9 +1,10 @@
 ! Title: Unbreak & Safe Exceptions [Beta]
 ! Description: Hand-crafted exception allowlist rules for banking portals, SSO authentication, delivery tracking, streaming playback, and essential smart home integrations to prevent site breakage.
-! Version: 1.0.0-beta.2
+! Version: 1.0.0-beta.3
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
+! Compatibility: Exceptions retain $important precedence; browser and DNS engine support varies by export format.
 
 ! --- Banking, Checkout & Payment Gateways ---
 @@||brave.com^$important
@@ -18,7 +19,6 @@
 @@||paypal.com^$important
 @@||paypalobjects.com^$important
 @@||stripe.com^$important
-@@||js.stripe.com^$important
 @@||apple-pay-gateway.apple.com^$important
 
 ! --- Authentication, SSO & Identity Services ---
@@ -35,7 +35,6 @@
 
 ! --- Streaming Media, DRM & Playback Licenses ---
 @@||widevine.com^$important
-@@||license.uat.widevine.com^$important
 @@||fps.apple.com^$important
 @@||playready.microsoft.com^$important
 @@||nflxvideo.net^$important

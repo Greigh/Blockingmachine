@@ -138,19 +138,18 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME:-v1.0.0}"
           if [[ "$GITHUB_REF" != refs/tags/* ]]; then
-            TAG="v1.0.0-rc.4"
+            TAG="v1.0.0-rc.6"
           fi
           echo "Target Release Tag: $TAG"
 
-          # Determine release notes file if available
+          # Determine release notes file: tag v1.0.0-rc.6 → scripts/release-notes-rc6.md
           NOTES_FLAG=""
-          TAG_CLEAN="${TAG#v1.0.0-}"
-          TAG_CLEAN="${TAG_CLEAN//./}"
-          CANDIDATE_NOTES="scripts/release-notes-${TAG_CLEAN}.md"
+          RC_LABEL=$(echo "$TAG" | grep -oP 'rc\.?\d+' | tr -d '.' )
+          CANDIDATE_NOTES="scripts/release-notes-${RC_LABEL}.md"
           if [[ -f "$CANDIDATE_NOTES" ]]; then
             NOTES_FLAG="--notes-file $CANDIDATE_NOTES"
-          elif [[ -f "scripts/release-notes-rc5.md" ]]; then
-            NOTES_FLAG="--notes-file scripts/release-notes-rc5.md"
+          elif [[ -f "scripts/release-notes-rc6.md" ]]; then
+            NOTES_FLAG="--notes-file scripts/release-notes-rc6.md"
           fi
 
           if gh release view "$TAG" >/dev/null 2>&1; then

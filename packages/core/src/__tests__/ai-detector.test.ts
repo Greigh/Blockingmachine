@@ -15,6 +15,11 @@ import {
   KNOWN_CLOAKED_TARGETS,
   isDomainBlocked,
   findWinningRule,
+  isActiveDirectoryOrLocalDomain,
+  detectAntiAdblock,
+  isSameBrandEcosystem,
+  UNTRUSTED_HOSTING_PLATFORMS,
+  compileRuleSet,
 } from '../index.js';
 
 describe('AI Ad & Tracker Discovery Engine', () => {
@@ -247,6 +252,32 @@ describe('AI Ad & Tracker Discovery Engine', () => {
       expect(sanitizeDomain('a'.repeat(64) + '.com')).toBeNull();
     });
 
+    it('sanitizes and validates IPv6 addresses', () => {
+      expect(sanitizeDomain('::1')).toBe('::1');
+      expect(sanitizeDomain('[::1]')).toBe('::1');
+      expect(sanitizeDomain('[::1]:8080')).toBe('::1');
+      expect(sanitizeDomain('2001:0db8:85a3:0000:0000:8a2e:0370:7334')).toBe('2001:0db8:85a3:0000:0000:8a2e:0370:7334');
+      expect(sanitizeDomain('[2001:db8::1]:443')).toBe('2001:db8::1');
+    });
+
+    it('rejects prototype pollution attempts', () => {
+      expect(sanitizeDomain('__proto__')).toBeNull();
+      expect(sanitizeDomain('constructor')).toBeNull();
+      expect(sanitizeDomain('prototype')).toBeNull();
+    });
+
+    it('rejects zero-width and bidirectional control characters', () => {
+      expect(sanitizeDomain('evil\u200Bdomain.com')).toBeNull();
+      expect(sanitizeDomain('evil\u202Ereversed.com')).toBeNull();
+      expect(sanitizeDomain('evil\uFEFFbom.com')).toBeNull();
+    });
+
+    it('rejects purely numeric domains and numeric TLDs', () => {
+      expect(sanitizeDomain('123.456.789')).toBeNull();
+      expect(sanitizeDomain('1.2.3.4.5')).toBeNull();
+      expect(sanitizeDomain('malware.123')).toBeNull();
+    });
+
     it('prevents rule synthesizer from creating rules for poisoned inputs', () => {
       const poisonedRules = synthesizeRules({
         domain: 'evil.com\n0.0.0.0 bypass.com',
@@ -476,6 +507,24 @@ describe('AI Ad & Tracker Discovery Engine', () => {
       const res = compactSubdomainRules(bbcDomains, 3);
       expect(res.compactedRules).toContain('||bbc.co.uk^');
       expect(res.collapsedGroups[0].parentDomain).toBe('bbc.co.uk');
+    });
+
+    it('prevents over-compaction onto multi-tenant and serverless platforms (supabase.co, github.io, vercel.app)', () => {
+      const multiTenantSubdomains = [
+        'proj1.supabase.co',
+        'proj2.supabase.co',
+        'proj3.supabase.co',
+        'user1.github.io',
+        'user2.github.io',
+        'user3.github.io',
+      ];
+      const res = compactSubdomainRules(multiTenantSubdomains, 3);
+      // Must NOT compact to ||supabase.co^ or ||github.io^ !
+      expect(res.compactedRules).not.toContain('||supabase.co^');
+      expect(res.compactedRules).not.toContain('||github.io^');
+      expect(res.collapsedGroups.some((g) => g.parentDomain === 'supabase.co')).toBe(false);
+      expect(res.collapsedGroups.some((g) => g.parentDomain === 'github.io')).toBe(false);
+      expect(res.compactedRules).toHaveLength(6);
     });
   });
 
@@ -733,7 +782,118 @@ describe('AI Ad & Tracker Discovery Engine', () => {
       expect(findWinningRule('clean-portal.org', rules)).toBeUndefined();
     });
   });
+
+  describe('Hardened AiDetectorService Guardrails & Resilience', () => {
+    const service = new AiDetectorService({ provider: 'mini-ai' });
+
+    it('normalizes URLs with HTTP credentials, port, path, and query params', async () => {
+      const res = await service.scanDomain('https://admin:secret@ads.doubleclick.net:8080/ad.js?tag=123');
+      expect(res.domain).toBe('ads.doubleclick.net');
+      expect(res.verdict).not.toBe('clean');
+    });
+
+    it('populates coveredByRule when domain matches existing compiled rules', async () => {
+      const res = await service.scanDomain('ad.doubleclick.net', {
+        existingRules: ['||doubleclick.net^'],
+      });
+      expect(res.coveredByRule).toBe('||doubleclick.net^');
+      expect(res.reasons.some((r) => r.includes('Already covered by existing rule'))).toBe(true);
+    });
+
+    it('protects institutional government and educational domains from false alarms', async () => {
+      const resGov = await service.scanDomain('weather.noaa.gov');
+      expect(resGov.verdict).toBe('clean');
+      expect(resGov.confidence).toBe(99);
+      expect(resGov.reasons[0]).toContain('False Positive Guard');
+
+      const resEdu = await service.scanDomain('cs.mit.edu');
+      expect(resEdu.verdict).toBe('clean');
+      expect(resEdu.confidence).toBe(99);
+      expect(resEdu.reasons[0]).toContain('False Positive Guard');
+    });
+
+    it('ensures brand spoofing with login labels is never falsely exonerated', async () => {
+      const resSpoof = await service.scanDomain('login.paypal-verification.com');
+      expect(resSpoof.verdict).not.toBe('clean');
+      expect(resSpoof.reasons[0]).not.toContain('False Positive Guard');
+    });
+
+    it('detects anti-adblock evasion providers in local-heuristics mode', async () => {
+      const heuristicService = new AiDetectorService({ provider: 'local-heuristics' });
+      const res = await heuristicService.scanDomain('carter-carrier.com');
+      expect(['ad_server', 'suspicious']).toContain(res.verdict);
+      expect(res.reasons.some((r) => r.toLowerCase().includes('anti-adblock'))).toBe(true);
+    });
+
+    it('identifies brand phishing lures on untrusted serverless hosting platforms while keeping legitimate SaaS clean', async () => {
+      const serverlessPhish = [
+        'paypal.workers.dev',
+        'chase.firebaseapp.com',
+        'apple.pages.dev',
+        'metamask.glitch.me',
+      ];
+      for (const d of serverlessPhish) {
+        const res = await service.scanDomain(d);
+        expect(res.verdict).toBe('malicious');
+        expect(res.category).toBe('Malware/Phishing');
+      }
+
+      expect(UNTRUSTED_HOSTING_PLATFORMS.has('workers.dev')).toBe(true);
+
+      // Authentic brand platforms owned by the brand itself remain clean
+      const platformOwners = ['vercel.app', 'workers.dev', 'fly.io'];
+      for (const d of platformOwners) {
+        const res = await service.scanDomain(d);
+        expect(res.verdict).toBe('clean');
+      }
+    });
+
+    it('distinguishes Active Directory controllers from public ad subdomains with high precision', () => {
+      // Standalone "ad." on public TLDs must NOT be classified as Active Directory
+      expect(isActiveDirectoryOrLocalDomain('ad.example.com')).toBe(false);
+      expect(isActiveDirectoryOrLocalDomain('ad.newspaper.org')).toBe(false);
+
+      // Genuine Active Directory infrastructure
+      expect(isActiveDirectoryOrLocalDomain('dc01.ad.company.com')).toBe(true);
+      expect(isActiveDirectoryOrLocalDomain('ad.corp.local')).toBe(true);
+      expect(isActiveDirectoryOrLocalDomain('ldap.company.com')).toBe(true);
+      expect(isActiveDirectoryOrLocalDomain('kdc.corp.internal')).toBe(true);
+      expect(isActiveDirectoryOrLocalDomain('adfs.school.edu')).toBe(true);
+    });
+
+    it('detects newly added anti-adblock and ad-recovery networks', () => {
+      expect(detectAntiAdblock('uponit.com').detected).toBe(true);
+      expect(detectAntiAdblock('instartlogic.com').detected).toBe(true);
+      expect(detectAntiAdblock('sp-prod.net').detected).toBe(true);
+      expect(detectAntiAdblock('poisedpancake.com').detected).toBe(true);
+      expect(detectAntiAdblock('superficialsubstance.com').detected).toBe(true);
+    });
+
+    it('verifies expanded brand ecosystems', () => {
+      expect(isSameBrandEcosystem('instagram.com', 'facebook.com')).toBe(true);
+      expect(isSameBrandEcosystem('threads.net', 'meta.com')).toBe(true);
+      expect(isSameBrandEcosystem('oktacdn.com', 'okta.com')).toBe(true);
+      expect(isSameBrandEcosystem('wf.com', 'wellsfargo.com')).toBe(true);
+      expect(isSameBrandEcosystem('informeddelivery.com', 'usps.com')).toBe(true);
+      expect(isSameBrandEcosystem('redditstatic.com', 'reddit.com')).toBe(true);
+    });
+
+    it('handles full URLs, ports, and modern IPv6 :: entries in Domain Evaluator', () => {
+      const rules = [
+        '||ads.doubleclick.net^',
+        ':: tracker.telemetry.io',
+      ];
+      expect(isDomainBlocked('https://ads.doubleclick.net:8080/ad.js?v=1', rules)).toBe(true);
+      expect(findWinningRule('http://ads.doubleclick.net/banner', rules)).toBe('||ads.doubleclick.net^');
+      expect(isDomainBlocked('tracker.telemetry.io', rules)).toBe(true);
+      expect(isDomainBlocked('https://clean-site.org/page', rules)).toBe(false);
+
+      const compiled = compileRuleSet(rules);
+      expect(compiled.isBlocked('tracker.telemetry.io')).toBe(true);
+    });
+  });
 });
+
 
 
 

@@ -1,3 +1,4 @@
+import { expandHostsLine, isRuleException } from "./utils/ruleSyntax.js";
 import { fetchContent } from "./fetch.js";
 import { sourceNames } from "./sources.js";
 import { performance } from "perf_hooks";
@@ -124,167 +125,41 @@ interface FilterMetadata {
 // --- Type sourceNames explicitly ---
 const typedSourceNames: Record<string, string> = sourceNames;
 
-export function parseFilterList(
-  content: string,
-  sourceUrl?: string,
-): StoredRule[] {
+function parseRuleLine(line: string, source: string, processor: RuleProcessor): StoredRule[] {
+  const trimmed = line.replace(/^\uFEFF/, "").trim();
+  if (!trimmed) return [];
   const rules: StoredRule[] = [];
-  const cleanContent = content.replace(/^\uFEFF/, "");
-  const lines = cleanContent.split(/\r?\n/);
-  const source = sourceUrl || "unknown";
-  const tempProcessor = new RuleProcessor();
-
-  for (const line of lines) {
-    const trimmedLine = line.trim();
-    if (!trimmedLine) continue;
-
-    // Expand multi-domain hosts file lines (e.g. "0.0.0.0 ad1.com ad2.com # comment")
-    const hostsMatch = trimmedLine.match(
-      /^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+([^#]+)/,
-    );
-    if (hostsMatch) {
-      const ip = trimmedLine.split(/\s+/)[0];
-      const domainTokens = hostsMatch[1].trim().split(/\s+/).filter(Boolean);
-      if (domainTokens.length > 1) {
-        for (const dom of domainTokens) {
-          const subRule = `${ip} ${dom}`;
-          const ruleType = tempProcessor.classifyRule(subRule);
-          if (
-            ruleType &&
-            ruleType !== "comment" &&
-            ruleType !== "preprocessor" &&
-            ruleType !== "hint"
-          ) {
-            const metadata = createRuleMetadata(
-              source,
-              ruleType as RuleType,
-              subRule,
-            );
-            rules.push({
-              raw: subRule,
-              originalRule: subRule,
-              hash: "",
-              type: ruleType as RuleType,
-              isException: false,
-              domain: metadata.domain || dom.toLowerCase(),
-              metadata,
-            });
-          }
-        }
-        continue;
-      }
-    }
-
-    const ruleType = tempProcessor.classifyRule(trimmedLine);
-
-    if (
-      ruleType &&
-      ruleType !== "comment" &&
-      ruleType !== "preprocessor" &&
-      ruleType !== "hint"
-    ) {
-      const metadata = createRuleMetadata(
-        source,
-        ruleType as RuleType,
-        trimmedLine,
-      );
-
-      rules.push({
-        raw: trimmedLine,
-        originalRule: trimmedLine,
-        hash: "",
-        type: ruleType as RuleType,
-        isException:
-          trimmedLine.startsWith("@@") ||
-          trimmedLine.includes("#@#") ||
-          ruleType === "unblocking",
-        domain: metadata.domain || undefined,
-        metadata,
-      });
-    }
+  for (const raw of expandHostsLine(trimmed)) {
+    const type = processor.classifyRule(raw);
+    if (!type || type === "comment" || type === "preprocessor" || type === "hint") continue;
+    const metadata = createRuleMetadata(source, type, raw);
+    rules.push({
+      raw, originalRule: raw, hash: "", type,
+      isException: isRuleException(raw) || type === "unblocking",
+      domain: metadata.domain, metadata,
+    });
   }
   return rules;
+}
+
+export function parseFilterList(content: string, sourceUrl?: string): StoredRule[] {
+  const processor = new RuleProcessor();
+  return content.split(/\r\n|\n|\r/).flatMap((line) => parseRuleLine(line, sourceUrl || "unknown", processor));
 }
 
 export async function* parseFilterListStream(
   stream: NodeJS.ReadableStream,
   sourceUrl?: string,
 ): AsyncGenerator<StoredRule, void, unknown> {
-  const rl = readline.createInterface({
-    input: stream,
-    crlfDelay: Infinity,
-  });
-
-  const source = sourceUrl || "unknown";
-  const tempProcessor = new RuleProcessor();
-
-  for await (const line of rl) {
-    const trimmedLine = line.replace(/^\uFEFF/, "").trim();
-    if (!trimmedLine) continue;
-
-    // Expand multi-domain hosts file lines (e.g. "0.0.0.0 ad1.com ad2.com # comment")
-    const hostsMatch = trimmedLine.match(
-      /^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+([^#]+)/,
-    );
-    if (hostsMatch) {
-      const ip = trimmedLine.split(/\s+/)[0];
-      const domainTokens = hostsMatch[1].trim().split(/\s+/).filter(Boolean);
-      if (domainTokens.length > 1) {
-        for (const dom of domainTokens) {
-          const subRule = `${ip} ${dom}`;
-          const ruleType = tempProcessor.classifyRule(subRule);
-          if (
-            ruleType &&
-            ruleType !== "comment" &&
-            ruleType !== "preprocessor" &&
-            ruleType !== "hint"
-          ) {
-            const metadata = createRuleMetadata(
-              source,
-              ruleType as RuleType,
-              subRule,
-            );
-            yield {
-              raw: subRule,
-              originalRule: subRule,
-              hash: "",
-              type: ruleType as RuleType,
-              isException: false,
-              domain: metadata.domain || dom.toLowerCase(),
-              metadata,
-            };
-          }
-        }
-        continue;
-      }
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const processor = new RuleProcessor();
+  try {
+    for await (const line of rl) {
+      yield* parseRuleLine(line, sourceUrl || "unknown", processor);
     }
-
-    const ruleType = tempProcessor.classifyRule(trimmedLine);
-    if (
-      ruleType &&
-      ruleType !== "comment" &&
-      ruleType !== "preprocessor" &&
-      ruleType !== "hint"
-    ) {
-      const metadata = createRuleMetadata(
-        source,
-        ruleType as RuleType,
-        trimmedLine,
-      );
-
-      yield {
-        raw: trimmedLine,
-        originalRule: trimmedLine,
-        hash: "",
-        type: ruleType as RuleType,
-        isException:
-          trimmedLine.startsWith("@@") ||
-          trimmedLine.includes("#@#") ||
-          ruleType === "unblocking",
-        domain: metadata.domain || undefined,
-        metadata,
-      };
-    }
+  } finally {
+    // Closing the iterator releases readline listeners even when its consumer stops early.
+    rl.close();
   }
 }
 
@@ -323,6 +198,7 @@ export class RuleProcessor {
 
   // --- Rule Classification ---
   classifyRule(rule: string): RuleClassificationType | null {
+    if (typeof rule !== "string" || /[\r\n\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(rule)) return null;
     const trimmedRule = rule.trim();
 
     // 1. Empty or Whitespace Only
@@ -637,10 +513,10 @@ export class RuleProcessor {
 
   getErrors(): ProcessorErrors {
     return {
-      unrecognizedRules: [...this.errors.unrecognizedRules],
-      processingErrors: [...this.errors.processingErrors],
-      failedUrls: [...this.errors.failedUrls],
-      lintingErrors: [...this.errors.lintingErrors],
+      unrecognizedRules: this.errors.unrecognizedRules.map((entry) => ({ ...entry })),
+      processingErrors: this.errors.processingErrors.map((entry) => ({ ...entry })),
+      failedUrls: this.errors.failedUrls.map((entry) => ({ ...entry })),
+      lintingErrors: this.errors.lintingErrors.map((entry) => ({ ...entry, errors: [...entry.errors] })),
     };
   }
 

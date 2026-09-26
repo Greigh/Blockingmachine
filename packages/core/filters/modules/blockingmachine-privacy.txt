@@ -1,75 +1,54 @@
 ! Title: Privacy Engine [Beta]
 ! Description: High-precision network-level and browser telemetry, tracking, fingerprinting, and analytics blocker.
-! Version: 1.0.0-beta.2
+! Version: 1.0.0-beta.3
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
+! Compatibility: Browser filter engine required for path and request modifiers; DNS exports retain only domain rules.
 
 ! --- General Analytics & Web Beacons ---
 ||google-analytics.com^
 ||analytics.google.com^
 ||googletagmanager.com/gtm.js
 ||hotjar.com^
-||static.hotjar.com^
 ||fullstory.com^
-||edge.fullstory.com^
-||rs.fullstory.com^
 ||segment.io^
-||api.segment.io^
 ||cdn.segment.com^
 ||mixpanel.com^
-||api.mixpanel.com^
 ||statcounter.com^
 ||mouseflow.com^
 ||crazyegg.com^
-||script.crazyegg.com^
 ||clarity.ms^
 ||c.bing.com^
 ||heap.io^
 ||heapanalytics.com^
-||cdn.heapanalytics.com^
 ||posthog.com^
-||app.posthog.com^
-||eu.posthog.com^
 ||luckyorange.com^
-||api.luckyorange.com^
 ||smartlook.com^
-||rec.smartlook.com^
 
 ! --- Product Engagement & Push Marketing Trackers ---
 ||braze.com^
-||sdk.iad-01.braze.com^
-||sdk.iad-03.braze.com^
 ||clevertap.com^
 ||wzrkt.com^
 ||iterable.com^
-||api.iterable.com^
 ||klaviyo.com^
-||static.klaviyo.com^
 ||fast.fonts.net/jsapi/*$script,third-party
 
 ! --- Mobile & App Analytics Beacons ---
 ||appsflyer.com^
-||api.appsflyer.com^
-||app.adjust.com^
 ||adjust.com^
 ||branch.io^
-||api2.branch.io^
 ||amplitude.com^
-||api.amplitude.com^
 ||kochava.com^
-||control.kochava.com^
 ||singular.net^
 ||localytics.com^
 ||flurry.com^
-||data.flurry.com^
 ||countly.com^
 
 ! --- Operating System & Desktop Telemetry ---
 ||telemetry.microsoft.com^
 ||v10.events.data.microsoft.com^
 ||v20.events.data.microsoft.com^
-||watson.telemetry.microsoft.com^
 ||activity.windows.com^
 ||diagnostics.apple.com^
 ||metrics.icloud.com^
@@ -84,6 +63,4 @@
 ||bam.nr-data.net^
 ||js-agent.newrelic.com^
 ||bugsnag.com^
-||notify.bugsnag.com^
-||sessions.bugsnag.com^
 ||browser.sentry-cdn.com^

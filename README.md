@@ -4,7 +4,7 @@
 # Blockingmachine
 
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.0.0--rc.5-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0-rc.5)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--rc.6-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0-rc.5)
 [![GitHub Packages](https://img.shields.io/badge/GitHub_Packages-v1.0.0--rc.5-2ea44f.svg)](https://github.com/users/Greigh/packages?repo_name=Blockingmachine)
 [![Forgejo](https://img.shields.io/badge/Forgejo-git.greighstudios.com-ff6600.svg)](https://git.greighstudios.com/greighstudios/Blockingmachine)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/)

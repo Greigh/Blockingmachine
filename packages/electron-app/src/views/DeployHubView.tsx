@@ -914,7 +914,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   </div>
                   <div className="deploy-field-row">
                     <div className="deploy-field-group">
-                      <label className="deploy-field-label">AdGuard Username (Radar query logs)</label>
+                      <label className="deploy-field-label">AdGuard Username</label>
                       <input
                         type="text"
                         className="deploy-field-input"
@@ -925,15 +925,28 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                     </div>
                     <div className="deploy-field-group">
                       <label className="deploy-field-label">AdGuard Password</label>
-                      <input
-                        type={showAdguardPass ? 'text' : 'password'}
-                        className="deploy-field-input"
-                        placeholder="••••••••"
-                        value={sinkholeConfig.adguardHomePassword || ''}
-                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
-                      />
+                      <div className="deploy-input-with-eye">
+                        <input
+                          type={showAdguardPass ? 'text' : 'password'}
+                          className="deploy-field-input"
+                          placeholder="••••••••"
+                          value={sinkholeConfig.adguardHomePassword || ''}
+                          onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
+                        />
+                        <button
+                          type="button"
+                          className="deploy-eye-btn"
+                          onClick={() => setShowAdguardPass(!showAdguardPass)}
+                          title={showAdguardPass ? 'Hide password' : 'Show password'}
+                        >
+                          {showAdguardPass ? '👁' : '🔒'}
+                        </button>
+                      </div>
                     </div>
                   </div>
+                  <p style={{ fontSize: 10.5, color: 'var(--secondary-color)', margin: '2px 0 0', lineHeight: 1.4 }}>
+                    Used for the AI Radar live query log feed. Requires AdGuard Home admin credentials.
+                  </p>
                 </>
               ) : sinkholeConfig.adguardMode === 'webhook' ? (
                 <>

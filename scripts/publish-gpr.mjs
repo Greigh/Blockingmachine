@@ -9,16 +9,34 @@ const rootDir = path.resolve(__dirname, '..');
 
 const isDryRun = process.argv.includes('--dry-run');
 
+// Only publish under the canonical @blockingmachine/* scoped names.
+// Previously this script published each package under 3 aliases
+// (@greigh/blockingmachine-core, @greigh/core, @blockingmachine/core)
+// which created duplicate listings on GitHub Packages. Now we publish
+// only the single authoritative name that matches the package.json.
 const packages = [
-  {
-    dir: path.join(rootDir, 'packages', 'core'),
-    targetNames: ['@greigh/blockingmachine-core', '@greigh/core', '@blockingmachine/core']
-  },
-  {
-    dir: path.join(rootDir, 'packages', 'cli'),
-    targetNames: ['@greigh/blockingmachine-cli', '@greigh/cli', '@blockingmachine/cli']
-  }
+  { dir: path.join(rootDir, 'packages', 'core') },
+  { dir: path.join(rootDir, 'packages', 'cli') },
 ];
+
+function resolveDistTag(version) {
+  const tagIdx = process.argv.indexOf('--tag');
+  if (tagIdx !== -1 && process.argv[tagIdx + 1] && !process.argv[tagIdx + 1].startsWith('-')) {
+    return process.argv[tagIdx + 1];
+  }
+  const tagArg = process.argv.find((a) => a.startsWith('--tag='));
+  if (tagArg) return tagArg.split('=')[1];
+  if (process.env.NPM_TAG) return process.env.NPM_TAG;
+  if (process.env.DIST_TAG) return process.env.DIST_TAG;
+  const dashIndex = version.indexOf('-');
+  if (dashIndex !== -1) {
+    const prerelease = version.slice(dashIndex + 1);
+    const match = prerelease.match(/^([a-zA-Z0-9_-]+?)(?:\.|$)/);
+    if (match && match[1]) return match[1].toLowerCase();
+    return prerelease.toLowerCase();
+  }
+  return 'latest';
+}
 
 console.log(`[publish-gpr] Starting GitHub Packages publication (${isDryRun ? 'DRY-RUN' : 'LIVE'})...`);
 
@@ -27,74 +45,47 @@ for (const pkg of packages) {
   const originalRaw = fs.readFileSync(pkgJsonPath, 'utf8');
   const pkgData = JSON.parse(originalRaw);
 
-  for (const targetName of pkg.targetNames) {
-    console.log(`\n[publish-gpr] Preparing publication for ${targetName}...`);
-    try {
-      const modifiedPkg = {
-        ...pkgData,
-        name: targetName,
-        publishConfig: {
-          access: 'public',
-          registry: 'https://npm.pkg.github.com/',
-          scope: targetName.split('/')[0]
-        },
-        repository: {
-          type: 'git',
-          url: 'git+https://github.com/greigh/Blockingmachine.git',
-          directory: path.relative(rootDir, pkg.dir)
-        }
-      };
+  const distTag = resolveDistTag(pkgData.version);
+  console.log(`\n[publish-gpr] Publishing ${pkgData.name}@${pkgData.version} → tag "${distTag}"...`);
 
-      fs.writeFileSync(pkgJsonPath, JSON.stringify(modifiedPkg, null, 2) + '\n');
+  try {
+    const modifiedPkg = {
+      ...pkgData,
+      publishConfig: {
+        access: 'public',
+        registry: 'https://npm.pkg.github.com/',
+        scope: pkgData.name.split('/')[0],
+      },
+      repository: {
+        type: 'git',
+        url: 'git+https://github.com/greigh/Blockingmachine.git',
+        directory: path.relative(rootDir, pkg.dir),
+      },
+    };
 
-function resolveDistTag(version) {
-  const tagIdx = process.argv.indexOf('--tag');
-  if (tagIdx !== -1 && process.argv[tagIdx + 1] && !process.argv[tagIdx + 1].startsWith('-')) {
-    return process.argv[tagIdx + 1];
-  }
-  const tagArg = process.argv.find((a) => a.startsWith('--tag='));
-  if (tagArg) {
-    return tagArg.split('=')[1];
-  }
-  if (process.env.NPM_TAG) return process.env.NPM_TAG;
-  if (process.env.DIST_TAG) return process.env.DIST_TAG;
-  const dashIndex = version.indexOf('-');
-  if (dashIndex !== -1) {
-    const prerelease = version.slice(dashIndex + 1);
-    const match = prerelease.match(/^([a-zA-Z0-9_-]+?)(?:\.|\d|$)/);
-    if (match && match[1]) return match[1].toLowerCase();
-    return prerelease.toLowerCase();
-  }
-  return 'latest';
-}
+    fs.writeFileSync(pkgJsonPath, JSON.stringify(modifiedPkg, null, 2) + '\n');
 
-      const distTag = resolveDistTag(pkgData.version);
-      const args = ['publish'];
-      if (isDryRun) {
-        args.push('--dry-run');
-      }
-      args.push('--tag', distTag);
-      args.push('--registry', 'https://npm.pkg.github.com');
-      console.log(`[publish-gpr] Executing: npm ${args.join(' ')} in ${pkg.dir}`);
+    const args = ['publish'];
+    if (isDryRun) args.push('--dry-run');
+    args.push('--tag', distTag);
+    args.push('--registry', 'https://npm.pkg.github.com');
 
-      execFileSync('npm', args, {
-        cwd: pkg.dir,
-        stdio: 'inherit',
-        env: {
-          ...process.env,
-          npm_config_registry: 'https://npm.pkg.github.com/'
-        }
-      });
-      console.log(`[publish-gpr] Successfully published ${targetName}@${pkgData.version}`);
-      // Once the primary name succeeds, break to avoid duplicate variants unless intended
-      if (!isDryRun) {
-        break;
-      }
-    } catch (err) {
-      console.warn(`[publish-gpr] Failed publishing ${targetName}: ${err.message}`);
-    } finally {
-      fs.writeFileSync(pkgJsonPath, originalRaw);
-    }
+    console.log(`[publish-gpr] Executing: npm ${args.join(' ')} in ${path.basename(pkg.dir)}`);
+
+    execFileSync('npm', args, {
+      cwd: pkg.dir,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        npm_config_registry: 'https://npm.pkg.github.com/',
+      },
+    });
+
+    console.log(`[publish-gpr] ✅ Successfully published ${pkgData.name}@${pkgData.version}`);
+  } catch (err) {
+    console.warn(`[publish-gpr] ⚠️  Failed publishing ${pkgData.name}: ${err.message}`);
+  } finally {
+    fs.writeFileSync(pkgJsonPath, originalRaw);
   }
 }
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type {
   AiProviderConfig,
   AiScanResult,
@@ -76,8 +76,16 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
   const [now, setNow] = useState<number>(Date.now());
   const [queryListFilter, setQueryListFilter] = useState<'all' | 'flagged' | 'clean'>('all');
 
+  // Dedicated Uncluttered Search Stream View & Filtering
+  const [isSearchingView, setIsSearchingView] = useState<boolean>(false);
+  const [streamSearchText, setStreamSearchText] = useState<string>('');
+  const [streamCategoryFilter, setStreamCategoryFilter] = useState<'all' | 'flagged' | 'clean' | 'ad_server' | 'tracker' | 'malicious' | 'entropy'>('all');
+  const [streamStatusFilter, setStreamStatusFilter] = useState<'all' | 'unblocked' | 'blocked'>('all');
+  const [streamSortBy, setStreamSortBy] = useState<'newest' | 'entropy-desc' | 'entropy-asc' | 'domain-asc'>('newest');
+
   useEffect(() => {
     if (!liveRadarSession?.active) return;
+    setIsSearchingView(true);
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, [liveRadarSession?.active]);
@@ -186,13 +194,28 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     };
   }, [loadQuarantine, loadWatchdog, loadFeedbackStats]);
 
-  const handleCopy = useCallback((text: string, key: string) => {
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(text);
+  const handleCopy = useCallback(async (text: string, key: string) => {
+    try {
+      if (window.electron?.copyToClipboard) {
+        await window.electron.copyToClipboard(text);
+      } else if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else if (typeof document !== 'undefined') {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
       if (isMountedRef.current) {
         setCopiedKey(key);
         safeSetTimeout(() => setCopiedKey(null), 2200);
       }
+    } catch (err) {
+      console.error('Failed to copy to clipboard:', err);
     }
   }, [safeSetTimeout]);
 
@@ -268,6 +291,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
         durationMinutes: chosenDuration,
         pollIntervalSeconds,
       });
+      setIsSearchingView(true);
       setSuccessMessage?.(`Started background Live Radar (${chosenDuration === 0 ? 'Continuous' : `${chosenDuration} minutes`}). Scanning continues in background even if you leave this screen.`);
     } catch (err: any) {
       setError?.(`Failed to start Live Radar: ${err?.message || err}`);
@@ -309,6 +333,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       const res = await window.electron.aiScanQueryLog({ service: scoutService, limit: 60 });
       if (isMountedRef.current) {
         setScoutResult(res);
+        setIsSearchingView(true);
 
         // Auto-quarantine newly flagged domains
         if (res.flaggedCount > 0 && window.electron?.addThreatQuarantine) {
@@ -630,14 +655,76 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     return true;
   });
 
+  // Stream results computation & filtering
+  const hasLiveResults = Boolean(liveRadarSession && (liveRadarSession.results.length > 0 || liveRadarSession.totalQueriesAnalyzed > 0));
+  const allResults = hasLiveResults ? liveRadarSession!.results : (scoutResult?.results || []);
+  const totalQueries = hasLiveResults ? liveRadarSession!.totalQueriesAnalyzed : (scoutResult?.totalQueriesAnalyzed || 0);
+  const flaggedCount = hasLiveResults ? liveRadarSession!.flaggedCount : (scoutResult?.flaggedCount || 0);
+  const cleanCount = hasLiveResults ? liveRadarSession!.cleanCount : (scoutResult?.cleanCount || 0);
+  const isVisible = hasLiveResults || Boolean(scoutResult) || Boolean(liveRadarSession?.active);
+
+  const adCount = allResults.filter((r) => r.verdict === 'ad_server' || r.category === 'Advertising').length;
+  const trackerCount = allResults.filter((r) => r.verdict === 'tracker' || r.category === 'Telemetry/Analytics' || r.category === 'CNAME Cloaking').length;
+  const malwareCount = allResults.filter((r) => r.verdict === 'malicious' || r.verdict === 'suspicious' || r.category === 'Malware/Phishing').length;
+  const highEntropyCount = allResults.filter((r) => (r.entropy || 0) >= 3.4).length;
+  const blockedCount = allResults.filter((r) => blockedItemsMap.has(r.domain) || Boolean(r.coveredByRule)).length;
+  const unblockedCount = allResults.length - blockedCount;
+
+  const streamFilteredResults = useMemo(() => {
+    let list = [...allResults];
+
+    if (streamSearchText.trim()) {
+      const q = streamSearchText.trim().toLowerCase();
+      list = list.filter((item) =>
+        item.domain.toLowerCase().includes(q) ||
+        (item.category && item.category.toLowerCase().includes(q)) ||
+        (item.verdict && item.verdict.toLowerCase().includes(q)) ||
+        (item.reasons && item.reasons.some((r) => r.toLowerCase().includes(q))) ||
+        (item.cnames && item.cnames.some((c) => c.toLowerCase().includes(q)))
+      );
+    }
+
+    if (streamCategoryFilter === 'flagged') {
+      list = list.filter((item) => item.verdict !== 'clean');
+    } else if (streamCategoryFilter === 'clean') {
+      list = list.filter((item) => item.verdict === 'clean');
+    } else if (streamCategoryFilter === 'ad_server') {
+      list = list.filter((item) => item.verdict === 'ad_server' || item.category === 'Advertising');
+    } else if (streamCategoryFilter === 'tracker') {
+      list = list.filter((item) => item.verdict === 'tracker' || item.category === 'Telemetry/Analytics' || item.category === 'CNAME Cloaking');
+    } else if (streamCategoryFilter === 'malicious') {
+      list = list.filter((item) => item.verdict === 'malicious' || item.verdict === 'suspicious' || item.category === 'Malware/Phishing');
+    } else if (streamCategoryFilter === 'entropy') {
+      list = list.filter((item) => (item.entropy || 0) >= 3.4);
+    }
+
+    if (streamStatusFilter === 'blocked') {
+      list = list.filter((item) => blockedItemsMap.has(item.domain) || Boolean(item.coveredByRule));
+    } else if (streamStatusFilter === 'unblocked') {
+      list = list.filter((item) => !blockedItemsMap.has(item.domain) && !item.coveredByRule);
+    }
+
+    if (streamSortBy === 'entropy-desc') {
+      list.sort((a, b) => (b.entropy || 0) - (a.entropy || 0));
+    } else if (streamSortBy === 'entropy-asc') {
+      list.sort((a, b) => (a.entropy || 0) - (b.entropy || 0));
+    } else if (streamSortBy === 'domain-asc') {
+      list.sort((a, b) => a.domain.localeCompare(b.domain));
+    }
+
+    return list;
+  }, [allResults, streamSearchText, streamCategoryFilter, streamStatusFilter, streamSortBy, blockedItemsMap]);
+
   return (
     <div className="ai-radar-container">
       {/* =========================================================================
-          1. UNIFIED COMPACT TOP CONTROL BAR (Matching Deploy & Sync layout)
+          1. UNIFIED COMPACT TOP CONTROL BAR (Hidden during dedicated full-page search stream)
          ========================================================================= */}
-      <div className="radar-top-bar">
-        {/* Left: AI Discovery Engine Info */}
-        <div className="radar-top-info">
+      {(!isSearchingView || activeTab !== 'sinkhole-scout') && (
+        <>
+          <div className="radar-top-bar">
+            {/* Left: AI Discovery Engine Info */}
+            <div className="radar-top-info">
           <div className="radar-info-main-col">
             <div className="radar-title-row">
               <span className="radar-live-badge-mini">
@@ -811,13 +898,492 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           )}
         </button>
       </div>
+      </>
+      )}
 
       {/* ========================================================================= */}
       {/* TAB 1: SINKHOLE QUERY SCOUT */}
       {/* ========================================================================= */}
       {activeTab === 'sinkhole-scout' && (
         <div className="radar-tab-content">
-          <div className="radar-card">
+          {isSearchingView ? (
+            <div className="radar-search-page">
+              {/* Sticky Top Status & Action Bar */}
+              <div className="radar-search-header">
+                <div className="radar-search-header-left">
+                  <button
+                    type="button"
+                    className="secondary-button back-to-setup-btn"
+                    onClick={() => setIsSearchingView(false)}
+                    title="Return to Scout & Target Sinkhole configuration"
+                  >
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="19" y1="12" x2="5" y2="12" />
+                      <polyline points="12 19 5 12 12 5" />
+                    </svg>
+                    <span>Scout Setup</span>
+                  </button>
+
+                  <div className="radar-search-status-badge">
+                    {liveRadarSession?.active ? (
+                      <>
+                        <span className="live-radar-ping-dot active" />
+                        <span className="search-status-text">LIVE RADAR STREAM</span>
+                        <span className="search-countdown-badge">⏱ {formatSessionRemaining()}</span>
+                        <span className="search-poll-badge">Poll #{liveRadarSession.pollCount || 1} ({totalQueries} analyzed)</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="live-radar-ping-dot" />
+                        <span className="search-status-text">SCOUT AUDIT RESULTS</span>
+                        <span className="search-poll-badge">{totalQueries || allResults.length} Queries</span>
+                      </>
+                    )}
+                  </div>
+
+                  <span className="sinkhole-name-badge">
+                    {scoutService === 'adguard' ? 'AdGuard Home' : 'Pi-hole'}
+                  </span>
+                </div>
+
+                <div className="radar-search-header-right">
+                  {liveRadarSession?.active ? (
+                    <button
+                      type="button"
+                      className="danger-button stop-live-btn-compact"
+                      onClick={handleStopLiveScan}
+                      title="Stop background scanning session"
+                    >
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                        <rect x="5" y="5" width="14" height="14" rx="2" />
+                      </svg>
+                      <span>Stop Live Scan</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleRunScout}
+                      disabled={isScouting}
+                      title="Re-scan latest DNS queries"
+                    >
+                      <span>{isScouting ? 'Scanning...' : 'Scout Again'}</span>
+                    </button>
+                  )}
+
+                  {flaggedCount > 0 && (
+                    <button
+                      type="button"
+                      className="primary-button block-all-flagged-btn"
+                      onClick={handleBlockAllFlagged}
+                    >
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                      </svg>
+                      <span>Block All Flagged ({flaggedCount})</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    className="entropy-guide-badge-btn"
+                    onClick={() => setIsEntropyModalOpen(true)}
+                    title="Understand Shannon Entropy and the 0.0 – 5.0 randomness scale"
+                  >
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                    <span>Entropy Guide</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Search & Advanced Multi-Filter Toolbar */}
+              <div className="radar-search-toolbar">
+                <div className="search-input-wrapper">
+                  <svg className="search-input-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <input
+                    type="text"
+                    className="stream-search-input"
+                    placeholder="Filter by domain, category, keyword..."
+                    value={streamSearchText}
+                    onChange={(e) => setStreamSearchText(e.target.value)}
+                  />
+                  {streamSearchText && (
+                    <button
+                      type="button"
+                      className="clear-search-btn"
+                      onClick={() => setStreamSearchText('')}
+                      title="Clear search"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* Metric Filter Tabs */}
+                <div className="stream-filter-pills">
+                  <button
+                    type="button"
+                    className={`stream-pill ${streamCategoryFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => setStreamCategoryFilter('all')}
+                  >
+                    <span>All Queries</span>
+                    <span className="pill-count">{allResults.length}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`stream-pill warning ${streamCategoryFilter === 'flagged' ? 'active' : ''}`}
+                    onClick={() => setStreamCategoryFilter('flagged')}
+                  >
+                    <span className="pill-dot warning" />
+                    <span>Flagged</span>
+                    <span className="pill-count warning">{flaggedCount}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`stream-pill success ${streamCategoryFilter === 'clean' ? 'active' : ''}`}
+                    onClick={() => setStreamCategoryFilter('clean')}
+                  >
+                    <span className="pill-dot success" />
+                    <span>Clean</span>
+                    <span className="pill-count success">{cleanCount}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`stream-pill ${streamCategoryFilter === 'ad_server' ? 'active' : ''}`}
+                    onClick={() => setStreamCategoryFilter('ad_server')}
+                  >
+                    <span>Ads</span>
+                    <span className="pill-count">{adCount}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`stream-pill ${streamCategoryFilter === 'tracker' ? 'active' : ''}`}
+                    onClick={() => setStreamCategoryFilter('tracker')}
+                  >
+                    <span>Trackers</span>
+                    <span className="pill-count">{trackerCount}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`stream-pill ${streamCategoryFilter === 'malicious' ? 'active' : ''}`}
+                    onClick={() => setStreamCategoryFilter('malicious')}
+                  >
+                    <span>Threats</span>
+                    <span className="pill-count">{malwareCount}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`stream-pill ${streamCategoryFilter === 'entropy' ? 'active' : ''}`}
+                    onClick={() => setStreamCategoryFilter('entropy')}
+                    title="High Entropy (≥ 3.4 / 5.0) queries"
+                  >
+                    <span>High Entropy</span>
+                    <span className="pill-count">{highEntropyCount}</span>
+                  </button>
+                </div>
+
+                {/* Status & Sort Controls */}
+                <div className="stream-aux-controls">
+                  <select
+                    className="stream-select status-select"
+                    value={streamStatusFilter}
+                    onChange={(e) => setStreamStatusFilter(e.target.value as any)}
+                    title="Filter by block status"
+                  >
+                    <option value="all">Status: All ({allResults.length})</option>
+                    <option value="unblocked">Unblocked ({unblockedCount})</option>
+                    <option value="blocked">Blocked in Rules ({blockedCount})</option>
+                  </select>
+
+                  <select
+                    className="stream-select sort-select"
+                    value={streamSortBy}
+                    onChange={(e) => setStreamSortBy(e.target.value as any)}
+                    title="Sort order"
+                  >
+                    <option value="newest">Sort: Stream Order</option>
+                    <option value="entropy-desc">Highest Entropy</option>
+                    <option value="entropy-asc">Lowest Entropy</option>
+                    <option value="domain-asc">Domain (A-Z)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Subdomain Compaction Banner if available */}
+              {compactionSummary && compactionSummary.savingsPercent > 0 && (
+                <div style={{
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  background: 'rgba(99, 102, 241, 0.08)',
+                  border: '1px solid rgba(99, 102, 241, 0.25)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: 10,
+                }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-color)' }}>
+                    <span style={{ fontWeight: 600, color: '#6366f1' }}>Subdomain Compaction: </span>
+                    Collapsed {compactionSummary.originalCount} subdomains into {compactionSummary.compactedCount} parent zone rules ({compactionSummary.savingsPercent}% reduction).
+                  </div>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    style={{ fontSize: 11.5, padding: '4px 10px', fontWeight: 600 }}
+                    onClick={() => handleAddRulesToCustom(compactionSummary.compactedRules, 'compacted-subdomains')}
+                  >
+                    ＋ Add Compacted Rules ({compactionSummary.compactedCount})
+                  </button>
+                </div>
+              )}
+
+              {/* Spacious Results List */}
+              {streamFilteredResults.length === 0 ? (
+                <div className="radar-empty-query-box">
+                  {streamStatusFilter === 'blocked' && blockedCount === 0 ? (
+                    <div className="radar-empty-blocked-state">
+                      <div className="empty-state-shield-icon">
+                        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                        </svg>
+                      </div>
+                      <h4 className="empty-state-title">No Queries Currently Blocked in Rules</h4>
+                      <p className="empty-state-description">
+                        All {allResults.length} captured live queries passed through unblocked.
+                        {flaggedCount > 0 ? (
+                          <> AI Radar flagged <strong>{flaggedCount} potential threat{flaggedCount > 1 ? 's' : ''}</strong> (ad servers, trackers, or high entropy hostnames) that are not yet blocked.</>
+                        ) : (
+                          <> No ad servers or malicious hostnames have been flagged or blocked in this session yet.</>
+                        )}
+                      </p>
+                      <div className="empty-state-actions">
+                        {flaggedCount > 0 && (
+                          <button
+                            type="button"
+                            className="primary-button"
+                            style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)', border: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                            onClick={handleBlockAllFlagged}
+                          >
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                            </svg>
+                            <span>Block All Flagged ({flaggedCount})</span>
+                          </button>
+                        )}
+                        {flaggedCount > 0 && (
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => {
+                              setStreamStatusFilter('all');
+                              setStreamCategoryFilter('flagged');
+                            }}
+                          >
+                            <span>View Flagged Threats ({flaggedCount})</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => {
+                            setStreamStatusFilter('all');
+                            setStreamCategoryFilter('all');
+                            setStreamSearchText('');
+                          }}
+                        >
+                          <span>Show All Queries ({allResults.length})</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p>
+                        {streamSearchText
+                          ? `No queries matched "${streamSearchText}".`
+                          : streamCategoryFilter !== 'all'
+                          ? `No queries match the "${streamCategoryFilter}" filter.`
+                          : streamStatusFilter === 'blocked'
+                          ? 'No blocked queries match current search or category filters.'
+                          : streamStatusFilter === 'unblocked'
+                          ? 'No unblocked queries match current search or category filters.'
+                          : allResults.length === 0
+                          ? 'Waiting for unblocked DNS queries to arrive... Keep browsing or testing on your network.'
+                          : 'No queries match current filters.'}
+                      </p>
+                      {(streamSearchText || streamCategoryFilter !== 'all' || streamStatusFilter !== 'all') && (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          style={{ marginTop: 8 }}
+                          onClick={() => {
+                            setStreamSearchText('');
+                            setStreamCategoryFilter('all');
+                            setStreamStatusFilter('all');
+                          }}
+                        >
+                          Clear All Filters
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="radar-search-results-list">
+                  {streamFilteredResults.map((item, idx) => {
+                    const isBlocked = blockedItemsMap.has(item.domain) || Boolean(item.coveredByRule);
+                    const isClean = item.verdict === 'clean';
+
+                    return (
+                      <div
+                        key={`${item.domain}-${idx}`}
+                        className={`radar-search-card ${isClean ? 'clean-query-card' : 'flagged-threat'}`}
+                      >
+                        <div className="search-card-main-row">
+                          <div className="search-card-identity">
+                            <span className="search-card-domain" title={item.domain}>{item.domain}</span>
+
+                            <button
+                              type="button"
+                              className={`search-card-copy-btn ${copiedKey === `domain-${idx}` ? 'copied' : ''}`}
+                              onClick={() => handleCopy(item.domain, `domain-${idx}`)}
+                              title={copiedKey === `domain-${idx}` ? 'Domain copied to clipboard!' : 'Copy domain name'}
+                              aria-label="Copy domain name"
+                            >
+                              {copiedKey === `domain-${idx}` ? (
+                                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                              ) : (
+                                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                </svg>
+                              )}
+                            </button>
+
+                            <span className={`verdict-chip ${item.verdict}`}>
+                              {verdictBadgeLabel(item.verdict)}
+                            </span>
+
+                            {item.category && item.category.toLowerCase() !== item.verdict.toLowerCase() && item.category.toLowerCase() !== 'clean' && (
+                              <span className="category-chip">{item.category}</span>
+                            )}
+
+                            <div
+                              className="entropy-score-badge compact"
+                              onClick={() => setIsEntropyModalOpen(true)}
+                              title="Shannon Entropy: Measures character randomness on a 0.0 to 5.0 scale."
+                              role="button"
+                              tabIndex={0}
+                            >
+                              <span className="entropy-label">Entropy:</span>
+                              <strong className="entropy-val">{Number(item.entropy).toFixed(2)}</strong>
+                              <span className={`entropy-badge-tag ${item.entropy >= 3.8 ? 'high' : item.entropy >= 3.4 ? 'elevated' : 'normal'}`}>
+                                {item.entropy >= 3.8 ? 'High' : item.entropy >= 3.4 ? 'Elevated' : 'Normal'}
+                              </span>
+                            </div>
+
+                            {item.cnames && item.cnames.length > 0 && (
+                              <span className="cname-chain-pill" title={`CNAME chain: ${item.cnames.join(' → ')}`}>
+                                CNAME → {item.cnames[item.cnames.length - 1]}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="search-card-actions">
+                            {isBlocked ? (
+                              <span className="blocked-status-pill" title={item.coveredByRule ? `Covered by existing rule: ${item.coveredByRule}` : 'Added to Custom Rules'}>
+                                ✓ {item.coveredByRule ? 'Covered in Rules' : 'Blocked'}
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="secondary-button block-threat-btn"
+                                onClick={() => handleAddRulesToCustom([item.generatedRules[0] || `||${item.domain}^`], item.domain)}
+                                title="Add blocking rule to Custom Rules"
+                              >
+                                ＋ Add Rule
+                              </button>
+                            )}
+
+                            {!isClean && (
+                              <button
+                                type="button"
+                                className="secondary-button whitelist-threat-btn"
+                                onClick={() => handleWhitelistDomain(item.domain)}
+                                title="Report as false positive and add whitelist rule (@@||...)"
+                              >
+                                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                                <span>Whitelist</span>
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              className={`threat-icon-action-btn ${copiedKey === `scout-${idx}` ? 'copied' : ''}`}
+                              onClick={() => handleCopy(item.generatedRules[0] || `||${item.domain}^`, `scout-${idx}`)}
+                              title={copiedKey === `scout-${idx}` ? 'Rule copied to clipboard!' : 'Copy Rule (||domain^)'}
+                              aria-label="Copy Rule"
+                            >
+                              {copiedKey === `scout-${idx}` ? (
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                              ) : (
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                </svg>
+                              )}
+                            </button>
+
+                            {onNavigateInspector && (
+                              <button
+                                type="button"
+                                className="threat-icon-action-btn"
+                                onClick={() => onNavigateInspector(item.domain)}
+                                title="Inspect domain in Rule & AI Inspector (⌘5)"
+                                aria-label="Inspect domain"
+                              >
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <circle cx="11" cy="11" r="8" />
+                                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                                </svg>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {item.reasons && item.reasons.length > 0 && (
+                          <div className="search-card-reasons">
+                            {item.reasons.map((r, rIdx) => (
+                              <span key={rIdx} className="reason-pill">• {r}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="radar-card">
             <div className="radar-card-header">
               <div>
                 <h3 className="radar-card-title">
@@ -828,7 +1394,45 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   Inspect unblocked DNS queries passing through your AdGuard Home or Pi-hole to identify stealthy ad exchanges and telemetry endpoints.
                 </p>
               </div>
+              {isVisible && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setIsSearchingView(true)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600 }}
+                  title="Switch to dedicated uncluttered full-page view"
+                >
+                  <span>Full-Page View ({allResults.length})</span>
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </button>
+              )}
             </div>
+
+            {/* Quick Banner to switch to full-page search stream */}
+            {isVisible && (
+              <div className="radar-search-mode-banner">
+                <div className="search-banner-left">
+                  <span className={`live-radar-ping-dot ${liveRadarSession?.active ? 'active' : ''}`} />
+                  <div>
+                    <strong>{liveRadarSession?.active ? 'Live Radar session active in background:' : 'Scout query audit completed:'}</strong>{' '}
+                    <span>{allResults.length} queries scanned • {flaggedCount} threat(s) flagged {liveRadarSession?.active && `(${formatSessionRemaining()})`}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="primary-button open-stream-btn"
+                  onClick={() => setIsSearchingView(true)}
+                  title="Open dedicated uncluttered search page with advanced filters"
+                >
+                  <span>Open Full-Page Search View</span>
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </button>
+              </div>
+            )}
 
             {/* SINKHOLE TARGET, DURATION & INTERVAL CONFIGURATION BAR */}
             <div className="radar-session-config-bar">
@@ -1186,7 +1790,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
               return (
                 <div className="scout-results-list">
                   {filtered.map((item, idx) => {
-                    const isBlocked = blockedItemsMap.has(item.domain);
+                    const isBlocked = blockedItemsMap.has(item.domain) || Boolean(item.coveredByRule);
                     const isClean = item.verdict === 'clean';
 
                     return (
@@ -1229,7 +1833,9 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
 
                           <div className="threat-actions">
                             {isBlocked ? (
-                              <span className="blocked-status-pill">✓ Blocked</span>
+                              <span className="blocked-status-pill" title={item.coveredByRule ? `Covered by existing rule: ${item.coveredByRule}` : 'Added to Custom Rules'}>
+                                ✓ {item.coveredByRule ? 'Covered in Rules' : 'Blocked'}
+                              </span>
                             ) : (
                               <button
                                 type="button"
@@ -1301,6 +1907,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
               );
             })()}
           </div>
+          )}
         </div>
       )}
 
@@ -1910,7 +2517,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   className="secondary-button"
                   style={{ fontSize: '0.75rem', padding: '4px 10px' }}
                   onClick={() => {
-                    navigator.clipboard.writeText('http://127.0.0.1:9191/threats.txt');
+                    handleCopy('http://127.0.0.1:9191/threats.txt', 'threat-feed-url');
                     setSuccessMessage?.('Copied ABP threat feed URL to clipboard');
                   }}
                   title="Copy http://127.0.0.1:9191/threats.txt"
@@ -1922,7 +2529,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   className="secondary-button"
                   style={{ fontSize: '0.75rem', padding: '4px 10px' }}
                   onClick={() => {
-                    navigator.clipboard.writeText('http://127.0.0.1:9191/ai-threats.txt');
+                    handleCopy('http://127.0.0.1:9191/ai-threats.txt', 'ai-threat-feed-url');
                     setSuccessMessage?.('Copied domain threat feed URL to clipboard');
                   }}
                   title="Copy http://127.0.0.1:9191/ai-threats.txt"
