@@ -30,7 +30,7 @@ export function createPaths(baseDir: string): PathsConfig {
   return {
     input: {
       dir: join(filtersDir, "input"),
-      Blockingmachine: join(filtersDir, "input", "Blockingmachine-rules.txt"),
+      Blockingmachine: join(filtersDir, "input", "blockingmachine-rules.txt"),
       thirdPartyFilters: join(filtersDir, "input", "thirdPartyFilters.txt"),
     },
     logs: {

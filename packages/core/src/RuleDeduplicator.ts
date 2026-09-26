@@ -1,3 +1,4 @@
+import { isRuleException } from "./utils/ruleSyntax.js";
 import type { RuleMetadata, StoredRule } from "./RuleStore.js";
 
 // Reuse RuleMetadata and StoredRule from RuleStore to avoid duplicated/ diverging type definitions.
@@ -38,19 +39,6 @@ export interface MergedRuleMetadata extends ExtendedRuleMetadata {
   alternatives?: string[];
 }
 
-function stripTrailingInlineComment(input: string): string {
-  for (let i = 0; i < input.length - 1; i++) {
-    const code = input.charCodeAt(i);
-    if (
-      (code === 32 || (code >= 9 && code <= 13)) &&
-      input.charCodeAt(i + 1) === 35
-    ) {
-      return input.slice(0, i);
-    }
-  }
-  return input;
-}
-
 export class RuleDeduplicator {
   // --- Properties with Types ---
   private filteredRules: Map<string, StoredRule>;
@@ -88,191 +76,52 @@ export class RuleDeduplicator {
    * @returns A normalized string key, or an empty string if the rule is invalid/empty.
    */
   stripRule(rule: string | null | undefined): string {
-    if (!rule) return "";
-    try {
-      let stripped = rule;
-      const isException =
-        stripped.startsWith("@@") ||
-        stripped.includes("#@#") ||
-        stripped.includes("#@%") ||
-        stripped.includes("#@$") ||
-        stripped.includes("#$?#");
-      if (stripped.startsWith("@@")) {
-        stripped = stripped.slice(2); // Remove the @@ prefix
-      }
-
-      const isCosmeticOrScriptlet =
-        stripped.includes("##") ||
-        stripped.includes("#@#") ||
-        stripped.includes("#?#") ||
-        stripped.includes("#$#") ||
-        stripped.includes("#$?#") ||
-        stripped.includes("#%#") ||
-        stripped.includes("#@%#") ||
-        stripped.includes("#@$#") ||
-        stripped.includes("$$");
-
-      const isScriptletRule =
-        /(?:##\+js\(|#@#\+js\(|#\$#|#\$\?#|#%#|#@%#|#@\$#)/.test(stripped);
-
-      // 1. Extract and Normalize Key Modifiers/Selectors
-      const parts = {
-        domain: (stripped.match(/\$domain=([^,$/]+)/)?.[1] || "")
-          .toLowerCase()
-          .trim(),
-        // Modifiers only exist on network rules, never on cosmetic rules
-        modifiers: isCosmeticOrScriptlet
-          ? ""
-          : (() => {
-              const lastDollar = stripped.lastIndexOf("$");
-              if (lastDollar === -1) return "";
-              const after = stripped.slice(lastDollar + 1);
-              if (after.includes("#")) return "";
-              return after
-                .split(",")
-                .map((m) => m.split("=")[0].toLowerCase().trim())
-                .filter((m) => m && m !== "domain") // Ensure 'domain' modifier itself isn't included here
-                .sort()
-                .join(",");
-            })(),
-        selector: !isScriptletRule
-          ? (stripped.match(/(?:##|#@#)(.+)/)?.[1] || "")
-              .toLowerCase()
-              .replace(/\s+/g, " ")
-              .trim()
-          : "",
-        extendedSelector: (stripped.match(/#\?#(.+)/)?.[1] || "")
-          .toLowerCase()
-          .replace(/\s+/g, " ")
-          .trim(),
-        scriptlet: (() => {
-          let s = "";
-          const jsIdx = stripped.indexOf("##+js(");
-          const jsExIdx = stripped.indexOf("#@#+js(");
-          if (jsIdx !== -1) {
-            const end = stripped.indexOf(")", jsIdx + 6);
-            if (end !== -1) {
-              s = stripped.slice(jsIdx + 2, end + 1);
-            }
-          } else if (jsExIdx !== -1) {
-            const end = stripped.indexOf(")", jsExIdx + 7);
-            if (end !== -1) {
-              s = stripped.slice(jsExIdx + 3, end + 1);
-            }
-          } else {
-            const markers = ["#$#", "#$?#", "#%#", "#@%#", "#@$#"];
-            for (const marker of markers) {
-              const mIdx = stripped.indexOf(marker);
-              if (mIdx !== -1) {
-                s = stripped.slice(mIdx + marker.length);
-                break;
-              }
-            }
-          }
-          return s.toLowerCase().replace(/\s+/g, " ").trim();
-        })(),
-        htmlFiltering: (stripped.match(/\$\$(.+)/)?.[1] || "")
-          .toLowerCase()
-          .replace(/\s+/g, " ")
-          .trim(),
-      };
-
-      // 2. Remove all modifiers, selectors, options from the core rule string
-      if (isCosmeticOrScriptlet) {
-        const htmlIdx = stripped.indexOf("$$");
-        if (htmlIdx !== -1) {
-          stripped = stripped.slice(0, htmlIdx);
-        }
-
-        const cosmeticMarkers = [
-          "##+js(",
-          "#@#+js(",
-          "##",
-          "#@#",
-          "#?#",
-          "#$#",
-          "#$?#",
-          "#%#",
-          "#@%#",
-          "#@$#",
-        ];
-        let earliestCosmetic = -1;
-        for (const marker of cosmeticMarkers) {
-          const idx = stripped.indexOf(marker);
-          if (idx !== -1 && (earliestCosmetic === -1 || idx < earliestCosmetic)) {
-            earliestCosmetic = idx;
-          }
-        }
-        if (earliestCosmetic !== -1) {
-          stripped = stripped.slice(0, earliestCosmetic);
-        }
-
-        stripped = stripTrailingInlineComment(stripped);
-      } else {
-        const dollarIdx = stripped.indexOf("$");
-        if (dollarIdx !== -1) {
-          stripped = stripped.slice(0, dollarIdx);
-        }
-        stripped = stripTrailingInlineComment(stripped);
-      }
-
-      // 3. Refined Normalization of the Core Target String
-      // Strip hosts file IP prefix if present (e.g. 0.0.0.0, 127.0.0.1, ::1)
-      stripped = stripped
-        .replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+/, "")
-        .trim();
-
-      // Strip ABP network rule prefixes (|| or |)
-      stripped = stripped.replace(/^(?:\|\||\|)/, "");
-
-      stripped = stripped.replace(/^(?:https?:\/\/)?(?:www\.)?/, ""); // Remove http/https, www.
-      const queryOrHash = stripped.search(/[?#]/);
-      if (queryOrHash !== -1) {
-        stripped = stripped.slice(0, queryOrHash); // Remove Query String and Anchor
-      }
-      while (stripped.endsWith("^") || stripped.endsWith("/")) {
-        stripped = stripped.slice(0, -1); // Remove trailing ^ or /
-      }
-      while (stripped.endsWith(".")) {
-        stripped = stripped.slice(0, -1); // Remove trailing dots
-      }
-      stripped = stripped.toLowerCase().trim();
-
-      // Handle cases where stripping leaves nothing
-      if (
-        !stripped &&
-        (parts.modifiers ||
-          parts.selector ||
-          parts.extendedSelector ||
-          parts.scriptlet ||
-          parts.htmlFiltering)
-      ) {
-        stripped = "modifier_or_selector_rule"; // Use a placeholder key
-      } else if (!stripped) {
-        // console.warn(`[stripRule] Stripping resulted in empty key for: ${originalRule}`);
-        return ""; // Return empty string if truly empty after stripping
-      }
-
-      // 4. Build the Normalized Key
-      const components = [
-        stripped,
-        parts.domain && `domain=${parts.domain}`,
-        parts.modifiers && `mods=${parts.modifiers}`, // Keep mods= prefix for clarity
-        parts.selector && `sel=${parts.selector}`,
-        parts.extendedSelector && `extsel=${parts.extendedSelector}`,
-        parts.scriptlet && `scriptlet=${parts.scriptlet}`,
-        parts.htmlFiltering && `html=${parts.htmlFiltering}`,
-      ].filter(Boolean); // Filter out empty strings
-
-      // The prefix is added back only at the very end
-      let normalized = components.join("|");
-      if (isException) normalized = "@@" + normalized;
-
-      return normalized;
-    } catch (error: any) {
-      console.warn(`Failed to strip rule: ${rule}`, error.message);
-      return rule;
+    if (typeof rule !== "string" || !rule.trim()) return "";
+    const raw = rule.trim();
+    const exception = isRuleException(raw);
+    const input = raw.replace(/^@@/, "");
+    const cosmetic = input.match(/(#@\$\?#|#\$\?#|#@\?#|#@%#|#@\$#|#@#|#\?#|#\$#|#%#|##|\$\$)/);
+    if (cosmetic && cosmetic.index !== undefined) {
+      const marker = cosmetic[0];
+      const scope = input.slice(0, cosmetic.index).toLowerCase();
+      const payload = input.slice(cosmetic.index + marker.length);
+      const kind = marker === "$$" ? "html"
+        : /%|\$/.test(marker) || payload.startsWith("+js(") ? "scriptlet"
+        : marker.includes("?") ? "extsel" : "sel";
+      // Normalize whitespace for scriptlet payloads to ensure canonical keys ignore spacing differences
+      const normalizedPayload = kind === "scriptlet" ? payload.replace(/\s+/g, " ").trim() : payload;
+      return `${exception ? "@@" : ""}${scope || "modifier_or_selector_rule"}|${kind}=${normalizedPayload}`;
     }
+
+    // A dollar sign inside a regex is part of the pattern. Only a suffix after
+    // the closing slash can contain network modifiers.
+    const regexEnd = input.startsWith("/") ? input.lastIndexOf("/") : -1;
+    const isRegex = regexEnd > 0 && (regexEnd === input.length - 1 || input[regexEnd + 1] === "$");
+    const dollar = isRegex ? (input[regexEnd + 1] === "$" ? regexEnd + 1 : -1) : input.indexOf("$");
+    let target = dollar < 0 ? input : input.slice(0, dollar);
+    const options = dollar < 0 ? "" : input.slice(dollar + 1);
+    const hosts = target.match(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+([^#]+)(?:#.*)?$/);
+    if (hosts) target = hosts[1].trim();
+
+    // Canonicalize only whole-host patterns. Never strip URL schemes, query
+    // strings, path case, regex anchors, or a hostname's www label.
+    const suffix = target.match(/^\|\|([a-z0-9.-]+)\^$/i);
+    if (suffix) target = suffix[1].toLowerCase().replace(/\.$/, "");
+    else if (/^[a-z0-9.-]+$/i.test(target)) target = target.toLowerCase().replace(/\.$/, "");
+    if (!target) target = "modifier_or_selector_rule";
+
+    // Complex modifier values can contain commas; retain them verbatim rather
+    // than pretending that split(',') is a complete filter-language parser.
+    if (/[\\/"']/.test(options)) return `${exception ? "@@" : ""}${target}|options=${options}`;
+    let domain = "";
+    const modifiers = options.split(",").filter(Boolean).map((modifier) => {
+      const equal = modifier.indexOf("=");
+      const name = (equal < 0 ? modifier : modifier.slice(0, equal)).trim().toLowerCase();
+      const value = equal < 0 ? "" : modifier.slice(equal + 1);
+      if (name === "domain") { domain = value.toLowerCase(); return ""; }
+      return equal < 0 ? name : `${name}=${value}`;
+    }).filter(Boolean).sort();
+    return `${exception ? "@@" : ""}${target}${domain ? `|domain=${domain}` : ""}${modifiers.length ? `|mods=${modifiers.join(",")}` : ""}`;
   }
 
   /**
@@ -281,6 +130,7 @@ export class RuleDeduplicator {
    * @returns A Promise resolving to an array of unique StoredRule objects with merged metadata.
    */
   async processRules(rules: StoredRule[]): Promise<StoredRule[]> {
+    this.clear();
     // Add parameter type and return type
     if (!Array.isArray(rules) || rules.length === 0) {
       console.warn("No rules to process");
@@ -347,8 +197,7 @@ export class RuleDeduplicator {
           this.stats.duplicates += group.length - 1;
           const bestRule = this.selectBestRule(group);
           // Ensure metadata exists before merging, provide default if not
-          bestRule.metadata = this.mergeMetadata(group, bestRule);
-          this.filteredRules.set(stripped, bestRule);
+          this.filteredRules.set(stripped, { ...bestRule, metadata: this.mergeMetadata(group, bestRule) });
           this.stats.merged++;
         } else if (group.length === 1) {
           // Handle single rule group explicitly
@@ -374,7 +223,7 @@ export class RuleDeduplicator {
     const finalStats: DeduplicatorStats = {
       ...this.stats,
       uniqueRules: optimizedList.length,
-      duplicateGroups: ruleGroups.size - this.filteredRules.size, // Groups that had > 1 rule
+      duplicateGroups: [...ruleGroups.values()].filter((group) => group.length > 1).length, // Groups that had > 1 rule
       duplicatePercent:
         this.stats.total > 0
           ? ((this.stats.duplicates / this.stats.total) * 100).toFixed(2) + "%"
@@ -396,12 +245,15 @@ export class RuleDeduplicator {
    */
   public pruneRedundantSubdomains(rules: StoredRule[]): StoredRule[] {
     const parentWildcards = new Set<string>();
+    const disabledParents = new Set(rules.filter((rule) => rule.metadata?.enabled !== false)
+      .map((rule) => rule.originalRule.match(/^\|\|([a-z0-9.-]+)\^\$badfilter$/i)?.[1]?.toLowerCase())
+      .filter((domain): domain is string => !!domain));
 
     // 1. Collect all root/parent wildcard domains without restricting modifiers
     for (const rule of rules) {
-      if (rule.type === "blocking" && !rule.originalRule.startsWith("@@")) {
+      if (rule.type === "blocking" && rule.metadata?.enabled !== false && !rule.originalRule.startsWith("@@")) {
         const match = rule.originalRule.match(/^\|\|([a-z0-9.-]+)\^$/i);
-        if (match) {
+        if (match && !disabledParents.has(match[1].toLowerCase())) {
           parentWildcards.add(match[1].toLowerCase());
         }
       }
@@ -533,6 +385,19 @@ export class RuleDeduplicator {
     }
 
     return validRules.reduce((best, current) => {
+      if ((current.metadata?.enabled !== false) !== (best.metadata?.enabled !== false)) {
+        return current.metadata?.enabled !== false ? current : best;
+      }
+      // Prefer $important rule over non-important when scores are equal or lower
+      const bestImportant = best.originalRule.includes('$important');
+      const currentImportant = current.originalRule.includes('$important');
+      if (currentImportant && !bestImportant) return current;
+      if (!currentImportant && bestImportant) return best;
+      // When merging a suffix block with exact hosts entries, retain coverage
+      // of its subdomains regardless of provenance scoring.
+      const currentSuffix = /^\|\|[a-z0-9.-]+\^$/i.test(current.originalRule);
+      const bestSuffix = /^\|\|[a-z0-9.-]+\^$/i.test(best.originalRule);
+      if (currentSuffix !== bestSuffix) return currentSuffix ? current : best;
       const currentScore = this.getRuleScore(current);
       const bestScore = this.getRuleScore(best);
 
@@ -581,7 +446,7 @@ export class RuleDeduplicator {
         .map((rule) => rule?.metadata?.dateAdded)
         .filter(
           (date): date is Date =>
-            date instanceof Date ||
+            (date instanceof Date && Number.isFinite(date.getTime())) ||
             (typeof date === "string" && !isNaN(Date.parse(date))),
         )
         .map((date) => (date instanceof Date ? date : new Date(date)))
@@ -622,7 +487,10 @@ export class RuleDeduplicator {
           priority: 0,
         };
       }
-      if (!merged.tags) merged.tags = [];
+      merged.tags = [...new Set(group.flatMap((rule) => rule.metadata?.tags || []))];
+      merged.sourceInfo = { ...merged.sourceInfo };
+      merged.dateAdded = new Date(merged.dateAdded);
+      merged.lastUpdated = new Date(merged.lastUpdated);
 
       return merged;
     } catch (error: any) {

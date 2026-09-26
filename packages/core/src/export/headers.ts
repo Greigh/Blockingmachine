@@ -1,9 +1,20 @@
 import type { SupportedFormat, FilterListMetadata } from "../types.js";
 
+/** Prevent metadata from terminating a comment and adding active filter rules. */
+export function sanitizeHeaderMetadata(meta: FilterListMetadata): FilterListMetadata {
+  const result = { ...meta };
+  for (const key of ["title", "description", "homepage", "version", "lastUpdated", "expires", "author", "license", "generatorVersion"] as const) {
+    const value = result[key];
+    if (typeof value === "string") result[key] = value.replace(/[\x00-\x1f\x7f\u0085\u2028\u2029]+/g, " ");
+  }
+  return result;
+}
+
 export function generateHeader(
   meta: FilterListMetadata,
   format: SupportedFormat,
 ): string {
+  meta = sanitizeHeaderMetadata(meta);
   const isBangComment =
     format === "adguard" || format === "abp" || format === "all";
   const c = isBangComment ? "! " : "# ";
@@ -81,9 +92,9 @@ export function generateHeader(
   // Add statistics if available
   if (meta.stats) {
     additionalLines.push(
-      c + "Total Rules: " + (meta.stats.totalRules || "N/A"),
-      c + "Blocking Rules: " + (meta.stats.blockingRules || "N/A"),
-      c + "Exception Rules: " + (meta.stats.exceptionRules || "N/A"),
+      c + "Total Rules: " + (meta.stats.totalRules ?? "N/A"),
+      c + "Blocking Rules: " + (meta.stats.blockingRules ?? "N/A"),
+      c + "Exception Rules: " + (meta.stats.exceptionRules ?? "N/A"),
     );
   }
 
@@ -94,5 +105,6 @@ export function generateHeader(
     "", // Empty line at the end
   );
 
+  if (format === "unbound") additionalLines.push("server:");
   return [...commonHeader, ...additionalLines].join("\n");
 }

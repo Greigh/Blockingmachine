@@ -1,3 +1,4 @@
+import { expandHostsLine, isRuleException } from "./utils/ruleSyntax.js";
 import { createRuleMetadata, cleanDomainPattern, extractSelector } from "./createMetadata.js";
 import { RuleProcessor } from "./RuleProcessor.js";
 import crypto from "crypto";
@@ -232,7 +233,7 @@ export class RuleStore {
       type: type as RuleType,
       domain: metadata.domain || undefined,
       isException:
-        originalRule.startsWith("@@") || originalRule.includes("#@#"),
+        isRuleException(originalRule),
       metadata: {
         sources: metadata.sources || [],
         dateAdded: metadata.dateAdded || new Date(),
@@ -258,7 +259,22 @@ export class RuleStore {
   // Main method to add a rule string
   addRule(originalRule: string, sourceName: string = "unknown"): void {
     this.stats.totalProcessed++;
+    if (typeof originalRule !== "string" || /[\r\n\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(originalRule)) {
+      this.stats.invalid++;
+      return;
+    }
     const trimmedRule = originalRule.trim();
+    const expanded = expandHostsLine(trimmedRule);
+    if (expanded.length !== 1 || expanded[0] !== trimmedRule) {
+      // Count stored aliases individually, just as buffered and streamed parsers do.
+      this.stats.totalProcessed--;
+      for (const entry of expanded) this.addRule(entry, sourceName);
+      if (expanded.length === 0) {
+        this.stats.totalProcessed++;
+        this.stats.invalid++;
+      }
+      return;
+    }
 
     // Skip empty lines immediately
     if (!trimmedRule) {
@@ -407,13 +423,7 @@ export class RuleStore {
       return;
     }
 
-    const isException =
-      type === "unblocking" ||
-      originalRule.startsWith("@@") ||
-      originalRule.includes("#@#") ||
-      originalRule.includes("#@%") ||
-      originalRule.includes("#@$") ||
-      originalRule.includes("#$?#");
+    const isException = type === "unblocking" || isRuleException(originalRule);
     const ruleHash = this.generateHash(originalRule);
 
     const ruleData: StoredRule = {
@@ -475,7 +485,7 @@ export class RuleStore {
       return;
     }
 
-    const isException = originalRule.includes("#@#");
+    const isException = isRuleException(originalRule);
     const ruleHash = this.generateHash(originalRule);
 
     const ruleData: StoredRule = {

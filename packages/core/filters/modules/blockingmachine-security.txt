@@ -1,9 +1,10 @@
 ! Title: Threat & Malicious Domain Defense [Beta]
 ! Description: Proactive network-level and DNS blocking of phishing gateways, rogue redirects, drive-by malware, and in-browser cryptominers.
-! Version: 1.0.0-beta.2
+! Version: 1.0.0-beta.3
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
+! Compatibility: Domain rules for DNS filtering; matching domains also cover their subdomains.
 
 ! --- In-Browser Cryptomining Scripts & Mining Pools ---
 ||coinhive.com^
@@ -14,7 +15,6 @@
 ||miner.pr0gramm.com^
 ||monerominer.rocks^
 ||authedmine.com^
-||coinhive.min.js^
 ||minr.pw^
 ||crypto-loot.com^
 ||cloudcoins.co^

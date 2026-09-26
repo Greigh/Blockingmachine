@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.0-rc.6] - 2026-09-25
+
+### Fixed
+- **`selectBestRule` `$important` Priority (`@blockingmachine/core`)**:
+  - `RuleDeduplicator.selectBestRule` incorrectly selected a non-`$important` rule over an equivalent `$important` variant when their provenance scores were equal. Added an explicit priority check so `$important`-flagged rules always win their merge group.
+- **Scriptlet Canonical Key Whitespace Normalization (`@blockingmachine/core`)**:
+  - `RuleDeduplicator.stripRule` generated different canonical keys for functionally-identical scriptlet rules that only differed in internal whitespace (e.g. extra spaces inside `##+js(...)`). Scriptlet payloads are now whitespace-collapsed before key generation, correctly deduplicating all equivalent variants.
+
+### Changed
+- **Duplicate Package Publishing Fix**:
+  - `scripts/publish-gpr.mjs` previously published `core` and `cli` under three name aliases each (`@greigh/blockingmachine-*`, `@greigh/*`, `@blockingmachine/*`), creating four GitHub Package listings instead of two. Simplified to publish only under the canonical `@blockingmachine/*` scoped names.
+- **CI Publish Workflow (`publish.yml`)**:
+  - Fixed release notes filename resolution for arbitrary RC tags using `grep -oP` instead of fragile string substitution.
+  - Updated the manual-dispatch fallback tag from `v1.0.0-rc.4` to `v1.0.0-rc.6`.
+
+### Tests
+- 565 automated tests passing across 23 suites (100% pass rate). Zero TypeScript or ESLint errors.
+
+---
+
 ## [1.0.0-rc.5] - 2026-09-24
+
 
 ### Security & Hardening
 - **OS Command Injection Defense (`@blockingmachine/electron-app`)**:

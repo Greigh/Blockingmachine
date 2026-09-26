@@ -85,11 +85,16 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     category: "ads",
     description:
       "Native primary advertising network, video ad injection, banner exchange, and sponsored recommendation blocker.",
-    features: ["Cross-web ad blocking", "Video ad suppression", "Programmatic bidding filter"],
+    features: [
+      "Cross-web ad blocking",
+      "Video ad suppression",
+      "Programmatic bidding filter",
+    ],
     targets: ["dns", "browser"],
     trusted: true,
     priority: 0,
-    recommendedFor: "Essential ad-blocking foundation for browsers and network-level sinkholes",
+    recommendedFor:
+      "Essential ad-blocking foundation for browsers and network-level sinkholes",
   },
   {
     name: "Privacy Engine [Beta]",
@@ -98,7 +103,11 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     category: "privacy",
     description:
       "Native high-precision telemetry, fingerprinting, diagnostic beacon, and analytics blocker.",
-    features: ["Zero telemetry", "OS diagnostic shielding", "Analytics suppression"],
+    features: [
+      "Zero telemetry",
+      "OS diagnostic shielding",
+      "Analytics suppression",
+    ],
     targets: ["dns", "browser"],
     trusted: true,
     priority: 0,
@@ -107,15 +116,22 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
   {
     name: "Smart TV & IoT Shield [Beta]",
     url: "./filters/modules/blockingmachine-smarttv.txt",
-    scope: "dns",
+    scope: "hybrid",
     category: "privacy",
     description:
       "Targets aggressive smart TV tracking, ACR, telemetry pings, and in-app ads on Roku, Samsung Tizen, LG webOS, and FireTV.",
-    features: ["Smart TV ACR blocking", "IoT telemetry shield", "Pure DNS rules"],
-    targets: ["dns"],
+    features: [
+      "Smart TV ACR blocking",
+      "IoT telemetry shield",
+      "Domain and browser URL-path rules",
+    ],
+    targets: ["dns", "browser"],
     trusted: true,
     priority: 0,
     recommendedFor: "Home network DNS sinkholes, AdGuard Home, and Pi-hole",
+
+    warning:
+      "URL-path and request-scoped rules require a browser filter engine and are omitted from DNS exports.",
   },
   {
     name: "Web Annoyances & Cookie Banners [Beta]",
@@ -124,12 +140,17 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     category: "annoyances",
     description:
       "Eliminates intrusive GDPR cookie banners, CMP modals, newsletter popups, and floating nag screens.",
-    features: ["Cookie banner removal", "GDPR overlay suppression", "Element hiding"],
+    features: [
+      "Cookie banner removal",
+      "GDPR overlay suppression",
+      "Element hiding",
+    ],
     targets: ["browser"],
     trusted: true,
     priority: 0,
     recommendedFor: "Browser extensions and content blockers",
-    warning: "Contains cosmetic rules (##) that require DOM inspection; ineffective on pure DNS sinkholes",
+    warning:
+      "Contains cosmetic rules (##) that require DOM inspection; ineffective on pure DNS sinkholes",
   },
   {
     name: "Social Tracker Neutralizer [Beta]",
@@ -138,11 +159,16 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     category: "social",
     description:
       "Neutralizes cross-site tracking beacons, embedded share widgets, and Meta/TikTok/X pixels across third-party websites.",
-    features: ["Cross-site pixel blocking", "Third-party beacon neutralization", "Social widget hiding"],
+    features: [
+      "Cross-site pixel blocking",
+      "Third-party beacon neutralization",
+      "Social widget hiding",
+    ],
     targets: ["browser", "dns"],
     trusted: true,
     priority: 0,
-    recommendedFor: "Browser extensions, DNS sinkholes, and desktop ad-blockers",
+    recommendedFor:
+      "Browser extensions, DNS sinkholes, and desktop ad-blockers",
   },
   {
     name: "Threat & Malicious Domain Defense [Beta]",
@@ -151,7 +177,11 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     category: "security",
     description:
       "Proactive network-level blocking of phishing gateways, rogue redirects, drive-by malware, and in-browser cryptominers.",
-    features: ["Anti-cryptomining", "Malicious redirect shield", "Phishing defense"],
+    features: [
+      "Anti-cryptomining",
+      "Malicious redirect shield",
+      "Phishing defense",
+    ],
     targets: ["dns"],
     trusted: true,
     priority: 0,
@@ -164,11 +194,16 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     category: "privacy",
     description:
       "Native query parameter stripper eliminating tracking tokens, click identifiers, and referral parameters across the web.",
-    features: ["Click ID removal (fbclid/gclid)", "UTM parameter stripping", "Referral token sanitization"],
+    features: [
+      "Click ID removal (fbclid/gclid)",
+      "UTM parameter stripping",
+      "Referral token sanitization",
+    ],
     targets: ["browser"],
     trusted: true,
     priority: 0,
-    recommendedFor: "Browser extensions and content blockers supporting $removeparam rules",
+    recommendedFor:
+      "Browser extensions and content blockers supporting $removeparam rules",
   },
   {
     name: "Unbreak & Safe Exceptions [Beta]",
@@ -177,11 +212,16 @@ export const CURATED_SOURCE_PROFILES: SourceProfile[] = [
     category: "unbreak",
     description:
       "Hand-crafted exception allowlist rules for banking portals, SSO logins, delivery tracking, and essential services.",
-    features: ["Banking portal fixes", "SSO allowlists", "Anti-breakage rules (@@)"],
+    features: [
+      "Banking portal fixes",
+      "SSO allowlists",
+      "Anti-breakage rules (@@)",
+    ],
     targets: ["dns", "browser"],
     trusted: true,
     priority: 0,
-    recommendedFor: "Essential for all configurations to guarantee normal app functionality",
+    recommendedFor:
+      "Essential for all configurations to guarantee normal app functionality",
   },
   {
     name: "AdGuard DNS Filter",
@@ -516,11 +556,45 @@ export function displayFilterLabel(name: string): string {
   return legacy.replace(/^Blockingmachine\s+/i, "");
 }
 
+// URL hosts are case-insensitive; URL paths and local filenames are not.
+function profileKey(nameOrUrl: string): string {
+  const value = (nameOrUrl || "").trim();
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      // Normalize URL: lowercase host, keep rest case-sensitive
+      const url = new URL(value);
+      const normalizedHost = url.host.toLowerCase();
+      return `${url.protocol}//${normalizedHost}${url.pathname}${url.search}${url.hash}`;
+    } catch {
+      // If URL parsing fails, fallback to lowercasing the whole string
+      return value.toLowerCase();
+    }
+  }
+  // For non-URL values, treat case-insensitively except for file paths (starting with '.' or '/')
+  if (value.startsWith("./") || value.startsWith("/")) {
+    // Preserve case for relative or absolute paths
+    return value;
+  }
+  // Otherwise, lower case for case-insensitive matching (names, URLs without scheme, etc.)
+  return value.toLowerCase();
+
+
+}
+
+function copyProfile(profile: SourceProfile): SourceProfile {
+  return {
+    ...profile,
+    features: [...profile.features],
+    targets: [...profile.targets],
+  };
+}
+
 // Profile map keyed by normalized name and normalized URL
 const profileLookup = new Map<string, SourceProfile>();
 for (const profile of CURATED_SOURCE_PROFILES) {
-  profileLookup.set(profile.name.toLowerCase().trim(), profile);
-  profileLookup.set(profile.url.toLowerCase().trim(), profile);
+  const snapshot = copyProfile(profile);
+  profileLookup.set(profileKey(profile.name), snapshot);
+  profileLookup.set(profileKey(profile.url), snapshot);
 }
 
 for (const legacyName of LEGACY_DEFENSE_MODULE_NAMES) {
@@ -533,18 +607,19 @@ for (const legacyName of LEGACY_DEFENSE_MODULE_NAMES) {
 
 // Aliases
 profileLookup.set(
-  "https://raw.githubusercontent.com/ublockorigin/uassets/refs/heads/master/filters/filters.txt",
+  "https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/filters.txt",
   profileLookup.get("ublock origin filters")!,
 );
-profileLookup.set("ublock filters", profileLookup.get("ublock origin filters")!);
+profileLookup.set(
+  "ublock filters",
+  profileLookup.get("ublock origin filters")!,
+);
 
 // --- Source Classification Intelligence Helpers ---
 
 export function getSourceProfile(nameOrUrl: string): SourceProfile {
-  const normalized = (nameOrUrl || "").trim().toLowerCase();
-  if (profileLookup.has(normalized)) {
-    return profileLookup.get(normalized)!;
-  }
+  const profile = profileLookup.get(profileKey(nameOrUrl));
+  if (profile) return copyProfile(profile);
   return detectSourceClassification(nameOrUrl);
 }
 
@@ -553,9 +628,8 @@ export function detectSourceClassification(
   sampleRules?: string[],
 ): SourceProfile {
   const normalized = (urlOrName || "").trim().toLowerCase();
-  if (profileLookup.has(normalized)) {
-    return profileLookup.get(normalized)!;
-  }
+  const profile = profileLookup.get(profileKey(urlOrName));
+  if (profile) return copyProfile(profile);
 
   let scope: SourceScope = "hybrid";
   let category: SourceCategory = "ads";
@@ -563,57 +637,64 @@ export function detectSourceClassification(
   const targets: ("dns" | "browser")[] = ["browser", "dns"];
   let warning: string | undefined;
 
-  // 1. Inspect sample rules if provided
-  if (sampleRules && sampleRules.length > 0) {
-    let hasCosmetic = false;
+  // Count actual rules, not header lines, toward the bounded inspection sample.
+  const rules = (sampleRules || [])
+    .map((rule) => rule.trim())
+    .filter(
+      (rule) =>
+        rule &&
+        !rule.startsWith("!") &&
+        !rule.startsWith("[") &&
+        !(
+          rule.startsWith("#") &&
+          !/^#(?:#|@#|\$#|\?#|%#|\$\?#|@\$#|@\?#)/.test(rule)
+        ),
+    )
+    .slice(0, 100);
+  if (rules.length > 0) {
+    let hasBrowser = false;
     let hasHosts = false;
     let hasNetwork = false;
+    const domain =
+      /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z](?:[a-z0-9-]*[a-z0-9])?$/i;
 
-    for (const rule of sampleRules.slice(0, 100)) {
-      const trimmed = rule.trim();
-      if (!trimmed || trimmed.startsWith("!") || trimmed.startsWith("["))
-        continue;
-      if (
-        trimmed.includes("##") ||
-        trimmed.includes("#@#") ||
-        trimmed.includes("#$#") ||
-        trimmed.includes("#?#")
-      ) {
-        hasCosmetic = true;
-      } else if (
-        trimmed.startsWith("0.0.0.0 ") ||
-        trimmed.startsWith("127.0.0.1 ")
-      ) {
+    for (const rule of rules) {
+      if (/^(?:0\.0\.0\.0|127\.0\.0\.1|::|::1)\s+/.test(rule)) {
         hasHosts = true;
-      } else if (
-        trimmed.startsWith("||") ||
-        trimmed.startsWith("|") ||
-        trimmed.includes("^")
-      ) {
+        continue;
+      }
+      const unscoped = rule.match(
+        /^(?:@@)?\|\|([^\^$]+)\^(?:\$(?:important|badfilter)(?:,(?:important|badfilter))*)?$/,
+      );
+      if (domain.test(rule) || (unscoped && domain.test(unscoped[1]))) {
         hasNetwork = true;
+      } else {
+        // Paths, request types, third-party/domain constraints, cosmetic rules,
+        // scriptlets and removeparam need browser request or page context.
+        hasBrowser = true;
       }
     }
 
-    if (hasCosmetic && !hasNetwork && !hasHosts) {
-      scope = "browser";
+    if (hasBrowser) {
+      scope = hasHosts || hasNetwork ? "hybrid" : "browser";
       targets.length = 0;
       targets.push("browser");
-      features.push("Cosmetic element-hiding (DOM/CSS)");
+      if (scope === "hybrid") targets.push("dns");
+      features.push(
+        scope === "hybrid"
+          ? "DNS and browser-context filtering"
+          : "Browser-context filtering",
+      );
       warning =
-        "Contains cosmetic rules (##, #@#) which cannot be blocked by DNS sinkholes like Pi-hole.";
-    } else if (hasHosts && !hasCosmetic) {
+        "Browser-context rules require a compatible browser filter engine and cannot be enforced by DNS sinkholes.";
+    } else {
       scope = "dns";
       targets.length = 0;
       targets.push("dns");
-      features.push("DNS-level hosts format");
-    } else if (hasNetwork && !hasCosmetic) {
-      scope = "dns";
-      targets.length = 0;
-      targets.push("dns", "browser");
-      features.push("Network request blocking");
-    } else if (hasCosmetic && hasNetwork) {
-      scope = "hybrid";
-      features.push("Network & cosmetic filtering");
+      if (hasNetwork) targets.push("browser");
+      features.push(
+        hasNetwork ? "Domain-level network blocking" : "DNS-level hosts format",
+      );
     }
   }
 
@@ -626,7 +707,7 @@ export function detectSourceClassification(
     normalized.includes("banner")
   ) {
     category = "annoyances";
-    if (!sampleRules) {
+    if (rules.length === 0) {
       scope = "browser";
       targets.length = 0;
       targets.push("browser");
@@ -650,7 +731,7 @@ export function detectSourceClassification(
   ) {
     category = "security";
     features.push("Malware & security defense");
-    if (!sampleRules) {
+    if (rules.length === 0) {
       scope = "dns";
       targets.length = 0;
       targets.push("dns");
@@ -677,10 +758,11 @@ export function detectSourceClassification(
     category = "unbreak";
     features.push("Exception rules & site unbreaking");
   } else if (
-    normalized.includes("dns") ||
-    normalized.includes("hosts") ||
-    normalized.includes("pihole") ||
-    normalized.includes("adguardhome")
+    rules.length === 0 &&
+    (normalized.includes("dns") ||
+      normalized.includes("hosts") ||
+      normalized.includes("pihole") ||
+      normalized.includes("adguardhome"))
   ) {
     scope = "dns";
     targets.length = 0;
@@ -708,7 +790,8 @@ export function detectSourceClassification(
   const scopeExplanations: Record<SourceScope, string> = {
     dns: "Network-level DNS sinkholes (Pi-hole, AdGuard Home, routers)",
     browser: "Browser extensions (uBlock Origin, AdGuard Browser Extension)",
-    hybrid: "Browser extensions or DNS sinkholes (with cosmetic rules stripped)",
+    hybrid:
+      "Browser extensions or DNS sinkholes (with browser-context rules stripped)",
   };
 
   return {

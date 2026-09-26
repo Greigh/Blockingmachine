@@ -1,21 +1,16 @@
 ! Title: Smart TV & IoT Shield [Beta]
 ! Description: Targets telemetry, automated content recognition (ACR), diagnostics, and in-app ads on smart TVs and IoT hardware.
-! Version: 1.0.0-beta.2
+! Version: 1.0.0-beta.3
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
+! Compatibility: Mixed domain and browser URL-path rules; DNS exports retain only compatible domain rules.
 
 ! --- Roku Telemetry & Ad Delivery ---
 ||logs.roku.com^
-||austin.logs.roku.com^
-||swat.logs.roku.com^
-||bryant.logs.roku.com^
-||cooper.logs.roku.com^
-||liberty.logs.roku.com^
 ||ads.roku.com^
 ||track.sr.roku.com^
 ||identity.web.roku.com^
-||p.ads.roku.com^
 ||cloudservices.roku.com/api/v1/telemetry^
 
 ! --- Samsung Smart TV (Tizen) Telemetry & ACR ---
@@ -25,11 +20,6 @@
 ||log-config.samsungacr.com^
 ||samsungcloudsolution.com^
 ||samsungcloudsolution.net^
-||lcprd1.samsungcloudsolution.net^
-||otn.samsungcloudsolution.net^
-||notice.samsungcloudsolution.com^
-||sas.samsungcloudsolution.com^
-||acr0.samsungcloudsolution.com^
 ||vd.emp.samsung.com^
 
 ! --- LG Smart TV (webOS) Telemetry & Ads ---

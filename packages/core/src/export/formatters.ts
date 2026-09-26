@@ -2,16 +2,26 @@ import type { StoredRule } from "../RuleStore.js";
 import type { SupportedFormat } from "../types.js";
 import { cleanDomainPattern } from "../createMetadata.js";
 
+/** A stored rule must represent one enabled input line. */
+export function isExportableRule(rule: StoredRule): boolean {
+  return !!rule?.raw?.trim() && rule.metadata?.enabled !== false &&
+    !/[\r\n\u0085\u2028\u2029]/.test(rule.raw);
+}
+
+const COSMETIC_MARKER = /#(?:@?(?:#|\?#|\$#|\$\?#|%#)|[.,])|\$\$/;
+
 export function isException(rule: StoredRule): boolean {
-  return !!(
-    rule.isException ||
-    rule.type === "unblocking" ||
-    rule.raw.startsWith("@@") ||
-    rule.raw.includes("#@#") ||
-    rule.raw.includes("#@%") ||
-    rule.raw.includes("#@$") ||
-    rule.raw.includes("#$?#")
+  return !!rule && !!(
+    rule.isException || rule.type === "unblocking" || rule.type === "exception" ||
+    rule.raw.trim().startsWith("@@") || /#@(?:#|\?#|%#|\$#|\$\?#)/.test(rule.raw)
   );
+}
+
+/** Cosmetic selectors and scriptlet arguments may contain literal dollar signs. */
+export function getNetworkModifiers(rule: StoredRule): string[] {
+  if (COSMETIC_MARKER.test(rule.raw)) return [];
+  const dollarIndex = rule.raw.indexOf("$");
+  return dollarIndex < 0 ? [] : rule.raw.slice(dollarIndex + 1).split(",").map(mod => mod.trim().toLowerCase());
 }
 
 const BROWSER_ONLY_TYPES = new Set([
@@ -31,79 +41,23 @@ const BROWSER_ONLY_TYPES = new Set([
   "permissions",
 ]);
 
-const BROWSER_MODIFIERS = new Set([
-  "app",
-  "header",
-  "method",
-  "popup",
-  "strict-first-party",
-  "strict-third-party",
-  "document",
-  "font",
-  "image",
-  "media",
-  "object",
-  "other",
-  "ping",
-  "script",
-  "stylesheet",
-  "subdocument",
-  "websocket",
-  "xmlhttprequest",
-  "content",
-  "elemhide",
-]);
-
 export function isBrowserOnlyRule(rule: StoredRule): boolean {
-  if (!rule || !rule.raw) return true;
+  if (!isExportableRule(rule)) return true;
+  if (COSMETIC_MARKER.test(rule.raw) || BROWSER_ONLY_TYPES.has(rule.type)) return true;
+  if (rule.raw.split("$")[0].includes("/")) return true;
 
-  // Cosmetic, scriptlet, extended CSS, HTML filtering patterns
-  if (
-    rule.raw.includes("##") ||
-    rule.raw.includes("#@#") ||
-    rule.raw.includes("#?#") ||
-    rule.raw.includes("#$#") ||
-    rule.raw.includes("#%#") ||
-    rule.raw.includes("$$")
-  ) {
-    return true;
-  }
-
-  // Type check
-  if (rule.type && BROWSER_ONLY_TYPES.has(rule.type)) {
-    return true;
-  }
-
-  // Path check on ABP network rules (e.g. ||domain.com/path)
-  if (rule.raw.startsWith("||") || rule.raw.startsWith("@@||")) {
-    const rawNoPrefix = rule.raw.replace(/^(@@)?\|\|/, "").split("$")[0];
-    if (rawNoPrefix.includes("/")) {
-      return true;
-    }
-  }
-
-  // Browser-only modifiers check
-  const dollarIdx = rule.raw.indexOf("$");
-  if (dollarIdx !== -1) {
-    const mods = rule.raw.slice(dollarIdx + 1).split(",");
-    for (const rawMod of mods) {
-      const mod = rawMod.split("=")[0].trim().toLowerCase();
-      if (BROWSER_MODIFIERS.has(mod)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  // Every other option narrows, rewrites, or changes the request semantics and
+  // cannot be represented by an unconditional domain sinkhole.
+  return getNetworkModifiers(rule).some(mod => mod !== "important" && mod !== "badfilter");
 }
 
 export function getDnsDomain(rule: StoredRule): string | undefined {
-  if (isBrowserOnlyRule(rule)) return undefined;
+  if (isBrowserOnlyRule(rule) || getNetworkModifiers(rule).includes("badfilter")) return undefined;
   return cleanDomainPattern(rule.raw) || undefined;
 }
 
 export function formatAdguardRule(rule: StoredRule): string {
-  if (!rule || !rule.raw) return "";
+  if (!isExportableRule(rule)) return "";
   const raw = rule.raw.trim();
 
   // If rule is already valid ABP / AdGuard syntax, preserve as-is
@@ -124,7 +78,7 @@ export function formatAdguardRule(rule: StoredRule): string {
   }
 
   // Convert hosts file rules (0.0.0.0 domain or 127.0.0.1 domain) to ABP syntax
-  if (/^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+/.test(raw)) {
+  if (/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+/.test(raw)) {
     const domain = cleanDomainPattern(raw);
     if (domain) {
       return isException(rule) ? `@@||${domain}^` : `||${domain}^`;
@@ -144,6 +98,7 @@ export function formatRuleForType(
   rule: StoredRule,
   format: SupportedFormat,
 ): string {
+  if (!isExportableRule(rule)) return "";
   switch (format) {
     case "hosts":
       return formatHostsRule(rule);
@@ -159,7 +114,7 @@ export function formatRuleForType(
       return formatShadowrocketRule(rule);
     case "domains":
       if (isException(rule)) {
-        if (isBrowserOnlyRule(rule)) return "";
+        if (!getDnsDomain(rule)) return "";
         return `# EXCEPTION: ${rule.raw}`;
       }
       return getDnsDomain(rule) || "";
@@ -177,7 +132,7 @@ export function formatRuleForType(
 
 function formatHostsRule(rule: StoredRule): string {
   if (isException(rule)) {
-    if (isBrowserOnlyRule(rule)) return "";
+    if (!getDnsDomain(rule)) return "";
     return `# EXCEPTION: ${rule.raw}`;
   }
   const domain = getDnsDomain(rule);
@@ -187,7 +142,7 @@ function formatHostsRule(rule: StoredRule): string {
 
 function formatDnsmasqRule(rule: StoredRule): string {
   if (isException(rule)) {
-    if (isBrowserOnlyRule(rule)) return "";
+    if (!getDnsDomain(rule)) return "";
     return `# EXCEPTION: ${rule.raw}`;
   }
   const domain = getDnsDomain(rule);
@@ -197,17 +152,17 @@ function formatDnsmasqRule(rule: StoredRule): string {
 
 function formatUnboundRule(rule: StoredRule): string {
   if (isException(rule)) {
-    if (isBrowserOnlyRule(rule)) return "";
+    if (!getDnsDomain(rule)) return "";
     return `# EXCEPTION: ${rule.raw}`;
   }
   const domain = getDnsDomain(rule);
   if (!domain) return "";
-  return `local-zone: "${domain}" static`;
+  return `  local-zone: "${domain}" always_nxdomain`;
 }
 
 function formatBindRule(rule: StoredRule): string {
   if (isException(rule)) {
-    if (isBrowserOnlyRule(rule)) return "";
+    if (!getDnsDomain(rule)) return "";
     return `# EXCEPTION: ${rule.raw}`;
   }
   const domain = getDnsDomain(rule);
@@ -217,7 +172,7 @@ function formatBindRule(rule: StoredRule): string {
 
 function formatPrivoxyRule(rule: StoredRule): string {
   if (isException(rule)) {
-    if (isBrowserOnlyRule(rule)) return "";
+    if (!getDnsDomain(rule)) return "";
     return `# EXCEPTION: ${rule.raw}`;
   }
   const domain = getDnsDomain(rule);
@@ -227,7 +182,7 @@ function formatPrivoxyRule(rule: StoredRule): string {
 
 function formatShadowrocketRule(rule: StoredRule): string {
   if (isException(rule)) {
-    if (isBrowserOnlyRule(rule)) return "";
+    if (!getDnsDomain(rule)) return "";
     return `# EXCEPTION: ${rule.raw}`;
   }
   const domain = getDnsDomain(rule);

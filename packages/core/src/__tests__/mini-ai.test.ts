@@ -221,6 +221,90 @@ describe('Mini-AI Domain Threat Classifier', () => {
 
       expect(perDomainMs).toBeLessThan(10.0); // Sub-millisecond on bare metal; allows headroom for virtualized/throttled CI runners
     });
+
+    it('utilizes LRU prediction cache and tracks hit/miss statistics', () => {
+      const c = new MiniAiClassifier({ maxCacheSize: 50, enableCache: true });
+      c.clearCache();
+
+      // First query: cache miss
+      const p1 = c.classify('metrics.example.com');
+      expect(c.getCacheStats().misses).toBe(1);
+      expect(c.getCacheStats().hits).toBe(0);
+
+      // Second query: cache hit
+      const p2 = c.classify('metrics.example.com');
+      expect(c.getCacheStats().hits).toBe(1);
+      expect(p2.verdict).toBe(p1.verdict);
+      expect(p2.category).toBe(p1.category);
+
+      // Verify clearCache resets stats
+      c.clearCache();
+      expect(c.getCacheStats().size).toBe(0);
+    });
+
+    it('defends against prototype pollution in feedback and tuning', () => {
+      const c = new MiniAiClassifier();
+      c.tuneDomainFeedback('__proto__', 'block');
+      c.tuneDomainFeedback('constructor', 'block');
+      c.tuneDomainFeedback('prototype', 'block');
+
+      expect(c.getDomainFeedback('__proto__')).toBe(0);
+      expect(c.getDomainFeedback('constructor')).toBe(0);
+
+      c.importFeedback({
+        '__proto__': 1.0,
+        'constructor': 1.0,
+        'prototype': 1.0,
+        'clean-site.org': -1.0,
+      } as any);
+
+      expect(c.getDomainFeedback('__proto__')).toBe(0);
+      const exported = c.exportFeedback();
+      expect(exported['__proto__']).toBeUndefined();
+      expect(exported['constructor']).toBeUndefined();
+      expect(exported['clean-site.org']).toBe(-1.0);
+    });
+
+    it('safely handles oversized domains, null bytes, and control characters', () => {
+      const c = new MiniAiClassifier();
+
+      // Null byte injection attempt
+      const withNull = c.classify('evil\x00.tracker.com');
+      expect(withNull).toBeDefined();
+      expect(withNull.category).toBeDefined();
+
+      // Zero-width spaces & control characters
+      const withControl = c.classify('ads\u200B\u200C.com\x07');
+      expect(withControl).toBeDefined();
+
+      // Enormous string (memory exhaustion / ReDoS attempt)
+      const oversized = 'a'.repeat(500) + '.evil-dga.xyz';
+      const result = c.classify(oversized);
+      expect(result).toBeDefined();
+      expect(result.inferenceTimeMs).toBeLessThan(100);
+    });
+
+    it('accurately identifies and protects all private, local, and public DNS IP addresses', () => {
+      const c = new MiniAiClassifier();
+
+      // Private IPv4 (RFC 1918)
+      expect(c.classify('10.0.0.1').confidence).toBe(99);
+      expect(c.classify('192.168.1.1').confidence).toBe(99);
+      expect(c.classify('172.16.5.10').confidence).toBe(99);
+      expect(c.classify('127.0.0.1').confidence).toBe(99);
+      expect(c.classify('0.0.0.0').confidence).toBe(99);
+
+      // Private IPv6 (Loopback, Link-Local, ULA)
+      expect(c.classify('::1').confidence).toBe(99);
+      expect(c.classify('fe80::1').confidence).toBe(99);
+      expect(c.classify('fd00::dead:beef').confidence).toBe(99);
+
+      // Known Public DNS resolvers
+      expect(c.classify('1.1.1.1').confidence).toBe(99);
+      expect(c.classify('8.8.8.8').confidence).toBe(99);
+      expect(c.classify('9.9.9.9').confidence).toBe(99);
+      expect(c.classify('2606:4700:4700::1111').confidence).toBe(99);
+    });
   });
 
   describe('AiDetectorService Integration with Mini-AI (Default)', () => {
@@ -260,5 +344,229 @@ describe('Mini-AI Domain Threat Classifier', () => {
       expect(logScan.cleanCount).toBeGreaterThan(0);
       expect(elapsed).toBeLessThan(200); // 5 queries scanned in under 200ms
     });
+
+    it('protects Apple APNS on Akamai and Supabase project domains from false positive malware classification', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const falsePositiveTestDomains = [
+        '1.courier-push-apple.com.akadns.net',
+        '1.courier-sandbox-push-apple.com.akadns.net',
+        'lqaitnsphcretimgxxdz.supabase.co',
+        'lofvomagimpthggmorfp.supabase.co',
+        'api.supabase.co',
+        'project.railway.app',
+        'my-app.fly.dev',
+      ];
+
+      for (const domain of falsePositiveTestDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+        expect(result.confidence).toBeGreaterThanOrEqual(80);
+      }
+    });
+
+    it('protects global courier and logistics package tracking portals from false positive tracker detection', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const trackingDomains = [
+        'tracking.royalmail.com',
+        'tracking.canadapost.ca',
+        'tracking.dpd.co.uk',
+        'tracking.auspost.com.au',
+        'track.dhl.de',
+        'tracking.ups.com',
+        'tracking.fedex.com',
+      ];
+
+      for (const domain of trackingDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+        expect(result.confidence).toBeGreaterThanOrEqual(80);
+      }
+    });
+
+    it('protects Apple, Microsoft, and Google operating system service endpoints from false alarms', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const osServiceDomains = [
+        'gateway.icloud.com',
+        'mask.icloud.com',
+        'captive.apple.com',
+        'time.apple.com',
+        'weather-data.apple.com',
+        'msftconnecttest.com',
+        'msftncsi.com',
+        'time.windows.com',
+        'title.mgt.xboxlive.com',
+        'connectivitycheck.gstatic.com',
+        'time.google.com',
+      ];
+
+      for (const domain of osServiceDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+        expect(result.confidence).toBeGreaterThanOrEqual(80);
+      }
+    });
+
+    it('protects Smart Home, Smart TV, and local router appliance endpoints from false positives', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const iotDomains = [
+        'fritz.box',
+        'routerlogin.net',
+        'tplinkwifi.net',
+        '001788fffe123456.meethue.com',
+        'd3q49yxx0a51.iot.us-east-1.amazonaws.com',
+        'device-messaging-na.amazon.com',
+        'aic.lgtvcommon.com',
+        'setup.amplifi.com',
+      ];
+
+      for (const domain of iotDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+        expect(result.confidence).toBeGreaterThanOrEqual(80);
+      }
+    });
+
+    it('protects developer serverless hash slugs, container registries, and package mirrors', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const devDomains = [
+        'b41d8cd98f00b204e9800998ecf8427e.vercel.app',
+        'project-staging-8a7c.up.railway.app',
+        'app-srv-49a0b1.onrender.com',
+        'my-edge-app.deno.dev',
+        'my-worker.workers.dev',
+        'registry-1.docker.io',
+        'repo1.maven.org',
+        'files.pythonhosted.org',
+        'static.crates.io',
+      ];
+
+      for (const domain of devDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+        expect(result.confidence).toBeGreaterThanOrEqual(80);
+      }
+    });
+
+    it('prevents false brand combosquatting on legitimate dictionary words', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const dictionaryDomains = [
+        'snapple-delivery.com',
+        'steamboat-springs.gov',
+      ];
+
+      for (const domain of dictionaryDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+      }
+    });
+
+    it('protects institutional government and higher education domains worldwide', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const institutionalDomains = [
+        'www.gov.uk',
+        'www.bund.de',
+        'www.admin.ch',
+        'overheid.nl',
+        'www.gc.ca',
+        'ox.ac.uk',
+        'tokyo.ac.jp',
+      ];
+
+      for (const domain of institutionalDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+        expect(result.confidence).toBeGreaterThanOrEqual(85);
+      }
+    });
+
+    it('protects high-entropy media streaming shards and CDN chunk routing', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const streamingDomains = [
+        'video-weaver.iad03.hls.ttvnw.net',
+        'audio-ak-spotify-com.akamaized.net',
+        'v16m-default.akamaized.net',
+        's3-r-w.nflxvideo.net',
+      ];
+
+      for (const domain of streamingDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+        expect(result.confidence).toBeGreaterThanOrEqual(80);
+      }
+    });
+
+    it('protects Apple APNS CDN alias endpoints from false brand spoof or malware flags', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const appleApnsDomains = [
+        '1.courier-push-apple.com.akadns.net',
+        '1.courier-sandbox-push-apple.com.akadns.net',
+      ];
+
+      for (const domain of appleApnsDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+        expect(result.confidence).toBeGreaterThanOrEqual(85);
+      }
+    });
+
+    it('protects multi-tenant project hash subdomains from false DGA malware flags', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const multiTenantDomains = [
+        'lqaitnsphcretimgxxdz.supabase.co',
+        'lofvomagimpthggmorfp.supabase.co',
+        'ep-young-water-123456.neon.tech',
+        'db-project-xyz.turso.io',
+      ];
+
+      for (const domain of multiTenantDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+      }
+    });
+
+    it('protects expanded international institutional and health domains', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const institutionalDomains = [
+        'www.nhs.uk',
+        'europa.eu',
+        'who.int',
+        'un.org',
+        'parliament.uk',
+      ];
+
+      for (const domain of institutionalDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+      }
+    });
+
+    it('protects router administration and local network gateway portals', async () => {
+      const service = new AiDetectorService({ provider: 'mini-ai' });
+      const routerDomains = [
+        'fritz.box',
+        'routerlogin.net',
+        'tplinkwifi.net',
+        'setup.amplifi.com',
+        'orbilogin.com',
+      ];
+
+      for (const domain of routerDomains) {
+        const result = await service.scanDomain(domain);
+        expect(result.verdict).toBe('clean');
+        expect(result.category).toBe('Clean');
+      }
+    });
   });
 });
+

@@ -337,6 +337,7 @@ export interface DaemonStatusInfo {
 
 // Electron API interface
 export interface ElectronAPI {
+  copyToClipboard?: (text: string) => void | Promise<{ success?: boolean; error?: string }>;
   getTheme: () => Promise<ThemeType>;
   setTheme: (theme: ThemeType) => Promise<{ success: boolean; error?: string }>;
   getSources: () => Promise<FilterSource[]>;

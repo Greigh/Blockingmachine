@@ -67,7 +67,7 @@ describe("formatters & headers", () => {
       "address=/adtracker.net/0.0.0.0",
     );
     expect(formatRuleForType(sampleBlockingRule, "unbound")).toBe(
-      'local-zone: "adtracker.net" static',
+      '  local-zone: "adtracker.net" always_nxdomain',
     );
     expect(formatRuleForType(sampleBlockingRule, "bind")).toBe(
       'zone "adtracker.net" { type master; file "null.zone.file"; };',

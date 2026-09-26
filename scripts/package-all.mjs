@@ -11,8 +11,8 @@
  * - Cryptographic verification: SHA256SUMS.txt
  */
 
-import { execSync } from 'child_process';
-import { readFileSync, writeFileSync, mkdirSync, cpSync, readdirSync, statSync, existsSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { readFileSync, writeFileSync, mkdirSync, cpSync, readdirSync, statSync, existsSync, rmSync } from 'fs';
 import { resolve, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
@@ -32,7 +32,7 @@ mkdirSync(MAKE_DIR, { recursive: true });
 
 // 1. Build and package browser extensions
 console.log('📦 [1/4] Packaging Manifest V3 browser extensions...');
-execSync('node scripts/package-extension.mjs', { cwd: ROOT_DIR, stdio: 'inherit' });
+execFileSync('node', ['scripts/package-extension.mjs'], { cwd: ROOT_DIR, stdio: 'inherit' });
 
 const extDir = resolve(ROOT_DIR, 'dist/extensions');
 if (existsSync(extDir)) {
@@ -47,18 +47,19 @@ if (existsSync(extDir)) {
 console.log('\n📦 [2/4] Packing NPM release packages...');
 for (const pkg of ['core', 'cli']) {
   const pkgDir = resolve(ROOT_DIR, 'packages', pkg);
-  execSync('npm pack', { cwd: pkgDir, stdio: 'inherit' });
+  execFileSync('npm', ['pack'], { cwd: pkgDir, stdio: 'inherit' });
   for (const file of readdirSync(pkgDir)) {
     if (file.endsWith('.tgz')) {
-      cpSync(resolve(pkgDir, file), resolve(MAKE_DIR, file));
-      execSync(`rm -f "${resolve(pkgDir, file)}"`);
+      const targetPath = resolve(pkgDir, file);
+      cpSync(targetPath, resolve(MAKE_DIR, file));
+      rmSync(targetPath, { force: true });
     }
   }
 }
 
 // 3. Package Electron desktop app
 console.log('\n📦 [3/4] Building desktop application installers via Electron Forge...');
-execSync('npm run --prefix packages/electron-app make', { cwd: ROOT_DIR, stdio: 'inherit' });
+execFileSync('npm', ['run', '--prefix', 'packages/electron-app', 'make'], { cwd: ROOT_DIR, stdio: 'inherit' });
 
 const forgeOutDir = resolve(ROOT_DIR, 'packages/electron-app/out/make');
 if (existsSync(forgeOutDir)) {

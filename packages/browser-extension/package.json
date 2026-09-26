@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/browser-extension",
-  "version": "1.0.0-rc.5",
+  "version": "1.0.0-rc.6",
   "description": "Manifest V3 browser extension for Blockingmachine with DeclarativeNetRequest filtering, procedural scriptlet defusers, and live AI Radar inspection.",
   "private": true,
   "type": "module",
@@ -16,12 +16,12 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "@blockingmachine/core": "^1.0.0-rc.5",
+    "@blockingmachine/core": "^1.0.0-rc.6",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
-    "@types/chrome": "^0.0.308",
+    "@types/chrome": "^0.3.0",
     "@types/jest": "^30.0.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

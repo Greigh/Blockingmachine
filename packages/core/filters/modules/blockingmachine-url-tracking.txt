@@ -1,9 +1,10 @@
 ! Title: URL Tracking Stripper [Beta]
 ! Description: Advanced filter stripping tracking tokens, click identifiers, and marketing referral parameters from URLs across the web.
-! Version: 1.0.0-beta.1
+! Version: 1.0.0-beta.3
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
+! Compatibility: Browser-only: requires $removeparam support. These rules have no DNS equivalent.
 
 ! --- Meta / Facebook Click Identifiers ---
 *$removeparam=fbclid

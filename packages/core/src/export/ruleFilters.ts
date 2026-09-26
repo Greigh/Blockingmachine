@@ -1,6 +1,5 @@
 import type { StoredRule } from "../types.js";
-import { cleanDomainPattern } from "../createMetadata.js";
-import { isException } from "./formatters.js";
+import { getDnsDomain, getNetworkModifiers, isException, isExportableRule } from "./formatters.js";
 
 // Rule Type Sets
 const DNS_RULE_TYPES = new Set(["blocking", "unblocking"]);
@@ -25,55 +24,6 @@ const BROWSER_SUITABLE_RULE_TYPES = new Set([
   "unblocking",
   ...BROWSER_ONLY_RULE_TYPES,
 ]);
-const NETWORK_RULE_BROWSER_MODIFIERS = new Set([
-  "app",
-  "header",
-  "method",
-  "popup",
-  "strict-first-party",
-  "strict-third-party",
-  "document",
-  "font",
-  "image",
-  "media",
-  "object",
-  "other",
-  "ping",
-  "script",
-  "stylesheet",
-  "subdocument",
-  "websocket",
-  "xmlhttprequest",
-  "content",
-  "elemhide",
-  "generichide",
-  "genericblock",
-  "specifichide",
-  "redirect",
-  "match-case",
-  "denyallow",
-  "stealth",
-  "jsinject",
-  "urlblock",
-  "cookie",
-  "csp",
-  "permissions",
-  "replace",
-  "all",
-  "hls",
-  "inline-script",
-  "inline-font",
-  "jsonprune",
-  "xmlprune",
-  "removeheader",
-  "removeparam",
-  "urltransform",
-  "noop",
-  "empty",
-  "mp4",
-  "webrtc",
-]);
-
 const DNS_ONLY_MODIFIERS = new Set([
   "client",
   "dnstype",
@@ -128,63 +78,25 @@ const BARE_PUBLIC_SUFFIXES = new Set([
   "amazonaws.com",
 ]);
 
+/** Resolve cancellation while preserving unrelated rules on the same domain. */
+function withoutBadfilters(rules: StoredRule[]): StoredRule[] {
+  const enabled = rules.filter(isExportableRule);
+  const key = (rule: StoredRule) => {
+    const pattern = rule.raw.trim().split("$")[0];
+    const modifiers = getNetworkModifiers(rule).filter(mod => mod !== "badfilter").sort();
+    return `${pattern}$${modifiers.join(",")}`;
+  };
+  const disabled = new Set(enabled.filter(rule => getNetworkModifiers(rule).includes("badfilter")).map(key));
+  return enabled.filter(rule => !getNetworkModifiers(rule).includes("badfilter") && !disabled.has(key(rule)));
+}
+
 export function filterDNSRules(rules: StoredRule[]): StoredRule[] {
-  return rules.filter((rule) => {
+  return withoutBadfilters(rules).filter((rule) => {
     if (!DNS_RULE_TYPES.has(rule.type)) return false;
-    if (!rule.raw) return false;
-
-    // Exclude cosmetic rules, scriptlets, and standalone comments
-    if (
-      rule.raw.startsWith("#") ||
-      rule.raw.startsWith("!") ||
-      rule.raw.includes("##") ||
-      rule.raw.includes("#@#") ||
-      rule.raw.includes("#?#") ||
-      rule.raw.includes("#$#") ||
-      rule.raw.includes("#$?#") ||
-      rule.raw.includes("#%#") ||
-      rule.raw.includes("#@%#") ||
-      rule.raw.includes("#@$#") ||
-      rule.raw.includes("$$") ||
-      rule.raw.includes("#.") ||
-      rule.raw.includes("#,") ||
-      rule.raw.includes("+js(")
-    ) {
-      return false;
-    }
-
-    // ABP rules with URL paths cannot be blocked at DNS level
-    if (rule.raw.startsWith("||") || rule.raw.startsWith("@@||")) {
-      const rawNoPrefix = rule.raw.replace(/^(@@)?\|\|/, "").split("$")[0];
-      if (rawNoPrefix.includes("/")) return false;
-    } else if (rule.raw.includes("/")) {
-      return false;
-    }
-
-    // Check modifiers (parse all comma-separated modifiers after $)
-    const dollarIdx = rule.raw.indexOf("$");
-    if (dollarIdx !== -1) {
-      const modString = rule.raw.slice(dollarIdx + 1);
-      const mods = modString.split(",");
-      for (const rawMod of mods) {
-        const modName = rawMod.split("=")[0].trim().toLowerCase();
-        if (NETWORK_RULE_BROWSER_MODIFIERS.has(modName)) {
-          return false;
-        }
-      }
-    }
-
-    // Exclude reserved infrastructure and reverse DNS (.arpa)
-    const domain = (rule.domain || cleanDomainPattern(rule.raw) || "").toLowerCase();
-    if (RESERVED_INFRASTRUCTURE_DOMAINS.has(domain) || domain.endsWith(".arpa")) {
-      return false;
-    }
-
-    // Exclude bare public suffixes when wildcard-blocked (e.g. ||co.uk^ or ||pages.dev^)
-    if (rule.raw.startsWith("||") && BARE_PUBLIC_SUFFIXES.has(domain)) {
-      return false;
-    }
-
+    const domain = getDnsDomain(rule);
+    if (!domain) return false;
+    if (RESERVED_INFRASTRUCTURE_DOMAINS.has(domain) || domain.endsWith(".arpa")) return false;
+    if (rule.raw.trim().startsWith("||") && BARE_PUBLIC_SUFFIXES.has(domain)) return false;
     return true;
   });
 }
@@ -192,19 +104,11 @@ export function filterDNSRules(rules: StoredRule[]): StoredRule[] {
 export function filterBrowserRules(rules: StoredRule[]): StoredRule[] {
   return rules.filter((rule) => {
     if (!BROWSER_SUITABLE_RULE_TYPES.has(rule.type)) return false;
-    if (!rule.raw) return false;
+    if (!isExportableRule(rule)) return false;
 
-    // Prune DNS-only directives from browser rule lists
-    const dollarIdx = rule.raw.indexOf("$");
-    if (dollarIdx !== -1) {
-      const modString = rule.raw.slice(dollarIdx + 1);
-      const mods = modString.split(",");
-      for (const rawMod of mods) {
-        const modName = rawMod.split("=")[0].trim().toLowerCase();
-        if (DNS_ONLY_MODIFIERS.has(modName)) {
-          return false;
-        }
-      }
+    // Parse network options only; CSS attribute selectors can contain `$`.
+    if (getNetworkModifiers(rule).some(mod => DNS_ONLY_MODIFIERS.has(mod.split("=")[0].replace(/^~/, "")))) {
+      return false;
     }
 
     // Prune reverse DNS arpa lookups from browser extensions
@@ -214,7 +118,7 @@ export function filterBrowserRules(rules: StoredRule[]): StoredRule[] {
 
     // Prune raw hosts mappings for loopback / broadcasthost
     if (
-      /^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+(?:localhost|broadcasthost|local)/i.test(
+      /^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+(?:localhost|broadcasthost|local)(?:\s|$)/i.test(
         rule.raw
       )
     ) {
@@ -226,7 +130,7 @@ export function filterBrowserRules(rules: StoredRule[]): StoredRule[] {
 }
 
 export function filterBrowserOnlyRules(rules: StoredRule[]): StoredRule[] {
-  return rules.filter((rule) => BROWSER_ONLY_RULE_TYPES.has(rule.type));
+  return rules.filter((rule) => isExportableRule(rule) && BROWSER_ONLY_RULE_TYPES.has(rule.type));
 }
 
 export interface DnsPrecedenceResult {
@@ -269,10 +173,10 @@ export function resolveDnsPrecedence(rules: StoredRule[]): DnsPrecedenceResult {
   }
   const exceptionMap = new Map<string, ExceptionRecord>();
   for (const rule of rawExceptions) {
-    const domain = cleanDomainPattern(rule.raw) || rule.domain;
+    const domain = getDnsDomain(rule);
     if (!domain) continue;
     const cleanDom = domain.toLowerCase();
-    const isImportant = rule.raw.includes("$important");
+    const isImportant = getNetworkModifiers(rule).includes("important");
     const existing = exceptionMap.get(cleanDom);
     if (!existing || (!existing.isImportant && isImportant)) {
       exceptionMap.set(cleanDom, { domain: cleanDom, isImportant, rule });
@@ -285,10 +189,10 @@ export function resolveDnsPrecedence(rules: StoredRule[]): DnsPrecedenceResult {
   const allowlistedDomains = new Set<string>();
 
   for (const blockRule of rawBlocks) {
-    const domain = cleanDomainPattern(blockRule.raw) || blockRule.domain;
+    const domain = getDnsDomain(blockRule);
     if (!domain) continue;
     const blockDom = domain.toLowerCase();
-    const isImportantBlock = blockRule.raw.includes("$important");
+    const isImportantBlock = getNetworkModifiers(blockRule).includes("important");
 
     // Check if an exception covers this block rule
     let coveredByException: ExceptionRecord | null = null;
@@ -316,9 +220,17 @@ export function resolveDnsPrecedence(rules: StoredRule[]): DnsPrecedenceResult {
     }
   }
 
-  // Include standalone exceptions not explicitly shadowed by a block rule
+  // A child exception must not create a bypass through an important parent.
   for (const [exDom, exRecord] of exceptionMap) {
-    if (!overriddenExceptionsMap.has(exDom)) {
+    const importantCoveringBlock = !exRecord.isImportant && Array.from(activeBlocksMap).some(
+      ([blockDom, blockRule]) => (exDom === blockDom || exDom.endsWith("." + blockDom)) &&
+        getNetworkModifiers(blockRule).includes("important"),
+    );
+    if (importantCoveringBlock) {
+      overriddenExceptionsMap.set(exDom, exRecord.rule);
+      effectiveExceptionsMap.delete(exDom);
+      allowlistedDomains.delete(exDom);
+    } else {
       effectiveExceptionsMap.set(exDom, exRecord.rule);
       allowlistedDomains.add(exDom);
     }
@@ -336,14 +248,14 @@ export function resolveDnsPrecedence(rules: StoredRule[]): DnsPrecedenceResult {
 
   // Sort active blocks and effective exceptions deterministically
   const activeBlocks = Array.from(activeBlocksMap.values()).sort((a, b) => {
-    const domA = (cleanDomainPattern(a.raw) || a.domain || "").toLowerCase();
-    const domB = (cleanDomainPattern(b.raw) || b.domain || "").toLowerCase();
+    const domA = (getDnsDomain(a) || "").toLowerCase();
+    const domB = (getDnsDomain(b) || "").toLowerCase();
     return domA.localeCompare(domB);
   });
 
   const effectiveExceptions = Array.from(effectiveExceptionsMap.values()).sort((a, b) => {
-    const domA = (cleanDomainPattern(a.raw) || a.domain || "").toLowerCase();
-    const domB = (cleanDomainPattern(b.raw) || b.domain || "").toLowerCase();
+    const domA = (getDnsDomain(a) || "").toLowerCase();
+    const domB = (getDnsDomain(b) || "").toLowerCase();
     return domA.localeCompare(domB);
   });
 

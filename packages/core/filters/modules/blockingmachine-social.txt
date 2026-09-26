@@ -1,9 +1,10 @@
 ! Title: Social Tracker Neutralizer [Beta]
 ! Description: Neutralizes cross-site tracking beacons, embedded share widgets, and social pixels without breaking direct visits to social media sites.
-! Version: 1.0.0-beta.2
+! Version: 1.0.0-beta.3
 ! Expires: 2 days
 ! Homepage: https://github.com/greigh/blockingmachine
 ! License: BSD-3-Clause
+! Compatibility: Third-party, domain-scoped, path and cosmetic rules require a browser filter engine.
 
 ! --- Meta / Facebook Cross-Site Trackers ---
 ||connect.facebook.net/*/sdk.js$third-party

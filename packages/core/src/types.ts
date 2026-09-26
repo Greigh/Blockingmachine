@@ -1,17 +1,13 @@
 import type { StoredRule, RuleStore } from "./RuleStore.js";
 
-export type SupportedFormat =
-  | "hosts"
-  | "dnsmasq"
-  | "unbound"
-  | "bind"
-  | "privoxy"
-  | "shadowrocket"
-  | "adguard"
-  | "abp"
-  | "domains"
-  | "plain"
-  | "all";
+/** Concrete output formats. `all` is the multi-export selection shorthand. */
+export const EXPORT_FORMATS = [
+  "hosts", "dnsmasq", "unbound", "bind", "privoxy", "shadowrocket",
+  "adguard", "abp", "domains", "plain",
+] as const;
+
+export type OutputFormat = (typeof EXPORT_FORMATS)[number];
+export type SupportedFormat = OutputFormat | "all";
 
 export interface FilterListMetadata {
   title: string;
@@ -35,6 +31,7 @@ export interface FilterListMetadata {
 export interface ExportOptions {
   rules?: StoredRule[];
   store?: RuleStore;
+  /** Defaults to all concrete formats; an empty array writes no files. */
   formats?: SupportedFormat[];
   categories?: string[];
   excludeCategories?: string[];

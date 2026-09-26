@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, clipboard } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 import type { FilterSource, ThemeType, FilterFormat } from './types/index';
 import type { UpdateInfo, ProcessProgress, UpdateProgress } from './types/index';
@@ -18,6 +18,17 @@ const ALLOWED_CHANNELS = new Set([
 
 // Expose the API to the renderer process
 contextBridge.exposeInMainWorld('electron', {
+  copyToClipboard: (text: string) => {
+    try {
+      if (clipboard && typeof clipboard.writeText === 'function') {
+        clipboard.writeText(String(text ?? ''));
+        return;
+      }
+    } catch {
+      // Fallback to IPC
+    }
+    ipcRenderer.invoke('copy-to-clipboard', text).catch(() => {});
+  },
   getFilterSources: () => ipcRenderer.invoke('get-sources') as Promise<FilterSource[]>,
   setFilterSources: (sources: FilterSource[]) => ipcRenderer.invoke('save-sources', sources),
   getSources: () => ipcRenderer.invoke('get-sources') as Promise<FilterSource[]>,

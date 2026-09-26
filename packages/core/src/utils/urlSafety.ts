@@ -16,10 +16,10 @@ function extractIpv4Octets(host: string): [number, number, number, number] | nul
     }
   }
 
-  // IPv4-mapped IPv6 (::ffff:127.0.0.1, ::ffff:7f00:1, 0:0:0:0:0:ffff:...)
-  const ffffIndex = host.toLowerCase().lastIndexOf('ffff:');
-  if (ffffIndex !== -1) {
-    const mapped = host.slice(ffffIndex + 5);
+  // URL canonicalizes IPv4-mapped IPv6 to ::ffff:<hex>:<hex>.
+  // An ffff segment elsewhere in a global IPv6 address is not an IPv4 mapping.
+  if (host.startsWith('::ffff:')) {
+    const mapped = host.slice('::ffff:'.length);
     const dotMatch = mapped.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
     if (dotMatch) {
       const o0 = Number(dotMatch[1]);
@@ -51,9 +51,10 @@ function extractIpv4Octets(host: string): [number, number, number, number] | nul
 }
 
 /**
- * Validates whether a target URL is safe for web crawling, filter downloading, and network fetching.
- * Strictly blocks private RFC 1918 subnets, loopback, link-local metadata (169.254.169.254),
- * local network hostnames (.local, .lan, localhost), and non-HTTP(S) protocols against SSRF attacks.
+ * Lexically checks HTTP(S) URLs for known non-public IP literals and local hostnames.
+ * This does not resolve DNS or validate the address used by a network connection.
+ * Callers requiring SSRF protection must also validate and pin resolved addresses;
+ * a public-looking hostname can resolve to a private address or change through DNS rebinding.
  * @beta
  */
 export function isSafePublicWebUrl(urlStr: string): SafeUrlCheckResult {
@@ -82,7 +83,7 @@ export function isSafePublicWebUrl(urlStr: string): SafeUrlCheckResult {
     return { isSafe: false, reason: `Forbidden protocol "${parsed.protocol}": only http and https are permitted` };
   }
 
-  let host = parsed.hostname.toLowerCase().trim();
+  let host = parsed.hostname.toLowerCase().replace(/\.+$/, '');
   if (host.startsWith('[') && host.endsWith(']')) {
     host = host.slice(1, -1);
   }
@@ -95,19 +96,20 @@ export function isSafePublicWebUrl(urlStr: string): SafeUrlCheckResult {
     host.endsWith('.lan') ||
     host.endsWith('.home.arpa')
   ) {
-    return { isSafe: false, reason: 'Target resolved to localhost or internal network domain' };
+    return { isSafe: false, reason: 'Target is localhost or an internal network domain' };
   }
 
+  const ipv6Prefix = host.includes(':') ? parseInt(host.split(':')[0], 16) : NaN;
   if (
     host === '::1' ||
     host === '::' ||
-    host.startsWith('fe80:') ||
-    host.startsWith('fc00:') ||
-    host.startsWith('fd00:') ||
+    (ipv6Prefix & 0xffc0) === 0xfe80 || // fe80::/10 link-local
+    (ipv6Prefix & 0xfe00) === 0xfc00 || // fc00::/7 unique-local
+    (ipv6Prefix & 0xff00) === 0xff00 || // ff00::/8 multicast
     host.startsWith('2001:db8:') ||
     host.startsWith('100:')
   ) {
-    return { isSafe: false, reason: 'Target resolved to IPv6 loopback, link-local, documentation, or private address' };
+    return { isSafe: false, reason: 'Target is an IPv6 loopback, link-local, multicast, documentation, or private address' };
   }
 
   const octets = extractIpv4Octets(host);
@@ -136,9 +138,18 @@ export function isSafePublicWebUrl(urlStr: string): SafeUrlCheckResult {
     if (o0 === 192 && o1 === 168) {
       return { isSafe: false, reason: 'Target is RFC 1918 private subnet (192.168.0.0/16)' };
     }
+    if (o0 === 100 && o1 >= 64 && o1 <= 127) {
+      return { isSafe: false, reason: 'Target is shared address space (100.64.0.0/10)' };
+    }
+    if (o0 === 198 && (o1 === 18 || o1 === 19)) {
+      return { isSafe: false, reason: 'Target is a benchmarking address (198.18.0.0/15)' };
+    }
     // Broadcast 255.255.255.255
     if (o0 === 255 && o1 === 255 && o2 === 255 && o3 === 255) {
       return { isSafe: false, reason: 'Target is broadcast address' };
+    }
+    if (o0 >= 224) {
+      return { isSafe: false, reason: 'Target is an IPv4 multicast or reserved address (224.0.0.0/3)' };
     }
     // Documentation / Test networks RFC 5737
     if (o0 === 192 && o1 === 0 && o2 === 2) {

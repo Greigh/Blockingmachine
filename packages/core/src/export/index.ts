@@ -6,14 +6,15 @@ import type {
   SupportedFormat,
   ExportOptions,
 } from "../types.js";
-import { formatRuleForType, isException } from "./formatters.js";
+import { EXPORT_FORMATS } from "../types.js";
+import { formatRuleForType, isException, isExportableRule } from "./formatters.js";
 import { generateHeader } from "./headers.js";
 import {
   filterDNSRules,
   filterBrowserRules,
   resolveDnsPrecedence,
 } from "./ruleFilters.js";
-import { writeFile } from "fs/promises";
+import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 
 // Export functions defined in this file
@@ -23,6 +24,10 @@ export async function exportFormat(
   rules: StoredRule[],
   meta: FilterListMetadata,
 ): Promise<void> {
+  if (format !== "all" && !EXPORT_FORMATS.includes(format)) {
+    throw new Error(`Unsupported export format: ${format}`);
+  }
+  rules = rules.filter(isExportableRule);
   const isDnsFormat = [
     "hosts",
     "dnsmasq",
@@ -79,7 +84,7 @@ export async function exportFormat(
     const cosmeticRules: string[] = [];
     const networkRules: string[] = [];
 
-    for (const rule of rules) {
+    for (const rule of filterBrowserRules(rules)) {
       const formatted = formatRuleForType(rule, format);
       if (!formatted) continue;
 
@@ -177,7 +182,7 @@ export async function exportWithOptions(
     rules = store.getUniqueRules();
   }
 
-  let filteredRules = [...rules]; // Create a copy to avoid modifying the original
+  let filteredRules = rules.filter(isExportableRule);
 
   // Rest of your filtering logic stays the same
   if (options.categories?.length) {
@@ -193,7 +198,7 @@ export async function exportWithOptions(
     );
   }
 
-  if (options.minPriority) {
+  if (options.minPriority !== undefined) {
     filteredRules = filteredRules.filter(
       (rule: StoredRule) =>
         rule.metadata.sourceInfo.priority >= options.minPriority!,
@@ -209,10 +214,17 @@ export async function exportWithOptions(
   const baseRules = [...filteredRules];
 
   // Export to each format specified with format-specific rules and stats
-  const formatsToExport = options.formats || ["all"];
+  const requestedFormats = options.formats ?? ["all"];
+  for (const format of requestedFormats) {
+    if (format !== "all" && !EXPORT_FORMATS.includes(format)) {
+      throw new Error(`Unsupported export format: ${format}`);
+    }
+  }
+  const formatsToExport = new Set(requestedFormats.flatMap(format => format === "all" ? [...EXPORT_FORMATS] : [format]));
+  if (formatsToExport.size > 0) await mkdir(outputDir, { recursive: true });
   for (const format of formatsToExport) {
     let formatRules = baseRules;
-    if (["hosts", "dnsmasq", "unbound"].includes(format)) {
+    if (["hosts", "dnsmasq", "unbound", "bind", "privoxy", "shadowrocket", "domains"].includes(format)) {
       formatRules = filterDNSRules(baseRules);
     } else if (["adguard", "abp"].includes(format)) {
       formatRules = filterBrowserRules(baseRules);

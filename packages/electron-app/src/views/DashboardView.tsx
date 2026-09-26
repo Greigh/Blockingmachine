@@ -187,6 +187,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }
   }
 
+  // Adblock Shield Rating — computed from source count + compiled rule count
+  const adblockRatingScore = (() => {
+    const sources = dashboardStats.enabledSources;
+    const rules = lastResult?.uniqueRuleCount ?? history[0]?.uniqueRuleCount ?? 0;
+    // Weight: sources are the primary lever (max 70 pts), rules the secondary (max 30 pts)
+    const sourcePts = Math.min(70, Math.round((sources / 12) * 70));
+    const rulePts = Math.min(30, Math.round(Math.min(1, rules / 500_000) * 30));
+    return sourcePts + rulePts;
+  })();
+
+  const adblockRatingGrade = adblockRatingScore >= 95 ? 'A+' : adblockRatingScore >= 88 ? 'A' : adblockRatingScore >= 80 ? 'B+' : adblockRatingScore >= 70 ? 'B' : adblockRatingScore >= 58 ? 'C' : adblockRatingScore >= 40 ? 'D' : 'F';
+  const adblockRatingColor = adblockRatingGrade.startsWith('A') ? '#10b981' : adblockRatingGrade.startsWith('B') ? '#22d3ee' : adblockRatingGrade === 'C' ? '#f59e0b' : '#ef4444';
+  const adblockRatingLabel = adblockRatingGrade.startsWith('A') ? 'Excellent' : adblockRatingGrade.startsWith('B') ? 'Good' : adblockRatingGrade === 'C' ? 'Fair' : adblockRatingGrade === 'D' ? 'Weak' : 'No Shield';
+
   return (
     <div className="dashboard-content-flow">
       {/* Hero Action Card */}
@@ -345,6 +359,29 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
         )}
+
+        {/* Adblock Shield Rating Card */}
+        <div
+          className="desktop-card summary-card"
+          title={`Shield Rating: ${adblockRatingScore}/100 — Based on ${dashboardStats.enabledSources} active sources and compiled rule count. Add more sources to improve your rating.`}
+          style={{ cursor: 'help', borderLeft: `3px solid ${adblockRatingColor}` }}
+        >
+          <div className="summary-icon-wrap" style={{ color: adblockRatingColor }}>
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke={adblockRatingColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              {adblockRatingGrade.startsWith('A') && (
+                <polyline stroke={adblockRatingColor} points="9 12 11 14 15 10" strokeWidth="2.5" />
+              )}
+            </svg>
+          </div>
+          <div className="summary-data-col">
+            <span className="summary-num" style={{ color: adblockRatingColor, fontSize: '1.4rem', fontWeight: 800 }}>
+              {adblockRatingGrade}
+              <span style={{ fontSize: '0.65rem', fontWeight: 600, marginLeft: 4, color: 'var(--secondary-color)', verticalAlign: 'middle' }}>{adblockRatingScore}/100</span>
+            </span>
+            <span className="summary-label">Shield Rating — {adblockRatingLabel}</span>
+          </div>
+        </div>
       </div>
 
       {/* 3-Step Newcomer & Core Workflow Guide */}

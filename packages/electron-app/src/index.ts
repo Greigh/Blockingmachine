@@ -13,6 +13,7 @@ import {
   Notification,
   Tray,
   nativeImage,
+  clipboard,
 } from 'electron';
 import { promises as fs, existsSync, createReadStream } from 'fs';
 import isDev from 'electron-is-dev';
@@ -1978,6 +1979,16 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         }
       }
     );
+
+    ipcMain.handle('copy-to-clipboard', async (_event: IpcMainInvokeEvent, text: string) => {
+      try {
+        clipboard.writeText(String(text || ''));
+        return { success: true };
+      } catch (error) {
+        console.error('[IPC Main] Error copying to clipboard:', error);
+        return { success: false, error: String(error) };
+      }
+    });
 
     ipcMain.handle('get-sources', async (_event: IpcMainInvokeEvent) => {
       const sources: FilterSource[] = store.get('filterSources');

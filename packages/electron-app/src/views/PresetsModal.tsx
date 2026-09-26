@@ -206,6 +206,165 @@ export const PRESET_CATALOG: PresetItem[] = [
     features: ['Scriptlet Defusers', 'Anti-Adblock Modal Suppression', 'Scroll-Lock Removal', 'Multi-Vendor Shield'],
     recommendedFor: 'Bypassing aggressive anti-adblock modals, game canvas locks, and paywall overlays',
   },
+  // ─── Security & Malware ──────────────────────────────────────────────────────
+  {
+    name: 'URLhaus Malware Domains',
+    url: 'https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-agh-online.txt',
+    scope: 'dns',
+    category: 'Security',
+    description: 'Active malware URL intelligence from URLhaus (abuse.ch). Blocks domains actively distributing malware payloads in real time.',
+    features: ['Real-time malware domains', 'DNS sinkhole safe', 'High-confidence IOCs', 'Abuse.ch intelligence'],
+    recommendedFor: 'Pi-hole, AdGuard Home, router firewalls — home and enterprise networks',
+  },
+  {
+    name: 'Phishing Army',
+    url: 'https://phishing.army/download/phishing_army_blocklist_extended.txt',
+    scope: 'dns',
+    category: 'Security',
+    description: 'Community-maintained phishing domain blocklist targeting credential harvesting pages, fake login portals, and brand impersonation sites.',
+    features: ['Phishing domains', 'Brand spoof defense', 'Pure DNS', 'Frequent updates'],
+    recommendedFor: 'All DNS sinkholes — especially family and corporate networks',
+  },
+  {
+    name: 'Malicious URL Filter (RPiList)',
+    url: 'https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/malware',
+    scope: 'dns',
+    category: 'Security',
+    description: 'Curated blocklist of active malware, ransomware, botnet C2, and exploit kit delivery infrastructure.',
+    features: ['C2 botnet domains', 'Ransomware infrastructure', 'Exploit kit domains', 'Pure DNS'],
+    recommendedFor: 'Pi-hole, AdGuard Home, network firewalls',
+  },
+  {
+    name: 'Hagezi DNS Blocklist — Multi-PRO',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_59.txt',
+    scope: 'dns',
+    category: 'Privacy',
+    description: "HaGeZi's Multi-PRO: an aggressive all-in-one DNS blocklist covering ads, trackers, telemetry, malware, coin mining, and phishing.",
+    features: ['Ads', 'Trackers', 'Malware', 'Coinminers', 'Phishing', 'Pure DNS'],
+    recommendedFor: 'Pi-hole and AdGuard Home users wanting a single comprehensive list',
+  },
+  {
+    name: 'Hagezi DNS Blocklist — Threat Intelligence',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_67.txt',
+    scope: 'dns',
+    category: 'Security',
+    description: "HaGeZi's threat intelligence feed: active botnet C2, ransomware infrastructure, and live phishing sites curated from multiple threat intelligence sources.",
+    features: ['Active C2 domains', 'Ransomware domains', 'Phishing sites', 'Pure DNS', 'Frequently updated'],
+    recommendedFor: 'Network firewalls, Pi-hole, and AdGuard Home requiring threat-intelligence-grade blocking',
+  },
+  {
+    name: 'Steven Black Unified Hosts (Ads + Malware)',
+    url: 'https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts',
+    scope: 'dns',
+    category: 'Advertising',
+    description: 'The most widely used merged hosts file combining adware and malware blocking from multiple community sources.',
+    features: ['Unified hosts file', 'Adware blocking', 'Malware blocking', 'Industry standard'],
+    recommendedFor: 'All DNS sinkholes — the baseline hosts file used by millions',
+  },
+  {
+    name: 'OISD Full Blocklist',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_27.txt',
+    scope: 'dns',
+    category: 'Advertising',
+    description: 'Full edition of the acclaimed OISD list. Covers ads, trackers, and malicious domains with aggressive blocking and minimal false positives.',
+    features: ['Ads', 'Trackers', 'Malicious domains', 'Pure DNS', 'Low false-positive rate'],
+    recommendedFor: 'All DNS sinkholes seeking a more comprehensive alternative to the OISD Small edition',
+  },
+  {
+    name: 'NextDNS Privacy Essentials',
+    url: 'https://raw.githubusercontent.com/nicktacular/nextdns-privacy-essentials/main/blocklist.txt',
+    scope: 'dns',
+    category: 'Privacy',
+    description: 'Essential privacy-focused list targeting analytics, fingerprinting scripts, and invasive trackers without breaking popular sites.',
+    features: ['Analytics blocking', 'Fingerprint scripts', 'DNS sinkhole safe', 'Low breakage'],
+    recommendedFor: 'DNS sinkholes and users wanting privacy without site breakage',
+  },
+  // ─── Mobile Ads ──────────────────────────────────────────────────────────────
+  {
+    name: 'AdAway Hosts (Mobile Ad Blocking)',
+    url: 'https://adaway.org/hosts.txt',
+    scope: 'dns',
+    category: 'Advertising',
+    description: 'The classic Android AdAway hosts blocklist targeting mobile advertising networks, in-app ad SDKs, and mobile telemetry.',
+    features: ['Mobile ad networks', 'In-app ad SDKs', 'DNS sinkhole safe', 'Android optimized'],
+    recommendedFor: 'Pi-hole and AdGuard Home covering Android and mobile device traffic',
+  },
+  {
+    name: 'Mobile Ad & Tracker Shield (RPiList)',
+    url: 'https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/samsung',
+    scope: 'dns',
+    category: 'Privacy',
+    description: 'Aggressively blocks Samsung analytics, Bixby telemetry, SmartHub ads, and mobile ad SDKs common on Android devices.',
+    features: ['Samsung telemetry', 'Bixby diagnostics', 'In-app ads', 'Pure DNS'],
+    recommendedFor: 'Pi-hole and AdGuard Home with Samsung and Android devices on the network',
+  },
+  // ─── Crypto / Gambling ───────────────────────────────────────────────────────
+  {
+    name: 'CoinMiner & Cryptojacking Blocker',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_50.txt',
+    scope: 'dns',
+    category: 'Security',
+    description: 'Dedicated list blocking in-browser cryptomining scripts (Coinhive variants, cryptoloot) and background JavaScript miners.',
+    features: ['Cryptojacking scripts', 'In-browser miners', 'DNS sinkhole safe', 'Auto-updated'],
+    recommendedFor: 'All networks — prevents silent CPU drain from cryptomining injections',
+  },
+  {
+    name: 'Gambling & Betting Domains',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_27.txt',
+    scope: 'dns',
+    category: 'Annoyances',
+    description: 'Blocks known online gambling, sports betting, and casino domains for network-wide parental and policy controls.',
+    features: ['Casino domains', 'Sports betting', 'Pure DNS', 'Family-safe'],
+    recommendedFor: 'Family networks, schools, and corporate environments blocking gambling sites',
+  },
+  // ─── Annoyances / Cosmetic ───────────────────────────────────────────────────
+  {
+    name: 'uBlock Origin Annoyances (Cookie Notices)',
+    url: 'https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/annoyances.txt',
+    scope: 'browser',
+    category: 'Annoyances',
+    description: 'uBlock Origin annoyances filter removing cookie consent dialogs, GDPR overlays, newsletter popups, and nag screens across thousands of sites.',
+    features: ['Cookie notices', 'GDPR overlays', 'Push notification prompts', 'Newsletter popups'],
+    recommendedFor: 'Browser extensions (uBlock Origin, AdGuard Browser)',
+    warning: 'Cosmetic rules — not effective on DNS-only sinkholes like Pi-hole',
+  },
+  {
+    name: 'Legitimate URL Shorteners',
+    url: 'https://raw.githubusercontent.com/DandelionSprout/adfilt/master/LegitimateURLShortener.txt',
+    scope: 'browser',
+    category: 'Privacy',
+    description: 'Cleans and expands shortened URLs (bit.ly, t.co, shorturl.at) to reveal their true destinations and remove redirector tracking.',
+    features: ['URL shortener expansion', 'Redirect tracking removal', 'Privacy protection'],
+    recommendedFor: 'Browser extensions supporting $removeparam and URL expansion rules',
+  },
+  {
+    name: 'DandelionSprout Anti-Malware',
+    url: 'https://raw.githubusercontent.com/DandelionSprout/adfilt/master/Dandelion%20Sprout%27s%20Anti-Malware%20List.txt',
+    scope: 'hybrid',
+    category: 'Security',
+    description: 'Comprehensive malware, scam, and potentially unwanted program (PUP) blocklist covering suspicious installers, fake cracks, and rogue sites.',
+    features: ['Malware domains', 'Scam sites', 'PUP downloads', 'Fake installer blocks'],
+    recommendedFor: 'Browser extensions and DNS sinkholes wanting stronger malware coverage',
+  },
+  // ─── Advanced ────────────────────────────────────────────────────────────────
+  {
+    name: 'NextDNS CNAME Cloaking Shield',
+    url: 'https://raw.githubusercontent.com/nicktacular/nextdns-cname-cloaking/main/blocklist.txt',
+    scope: 'dns',
+    category: 'Privacy',
+    description: 'Targets CNAME cloaking evasion techniques where trackers hide behind first-party subdomains to bypass standard DNS blocking.',
+    features: ['CNAME cloaking', 'First-party tracker evasion', 'DNS resolver level', 'Advanced privacy'],
+    recommendedFor: 'AdGuard Home and resolvers supporting CNAME flattening',
+  },
+  {
+    name: 'The Big Block (1Hosts Pro)',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_44.txt',
+    scope: 'dns',
+    category: 'Advertising',
+    description: '1Hosts Pro — a large consolidated blocklist covering advertising, tracking, and analytics with a focus on minimal false positives.',
+    features: ['Ads', 'Trackers', 'Analytics', 'Pure DNS', 'Conservative false-positive rate'],
+    recommendedFor: 'Pi-hole and AdGuard Home wanting a single large consolidated list',
+  },
 ];
 
 export interface PresetBundle {
@@ -217,64 +376,99 @@ export interface PresetBundle {
   items: PresetItem[];
 }
 
-export const PRESET_BUNDLES: PresetBundle[] = [
-  {
-    id: 'anti-adblock-defuser',
-    name: 'Anti-Adblock & Paywall Defuser',
-    description: 'Comprehensive circumvention mitigation neutralizing Admiral, Google Funding Choices, BlockThrough, AdInPlay, and aggressive anti-adblock nag screens.',
-    badge: 'Anti-Circumvention',
-    category: 'Anti-Adblock Mitigation',
-    items: [
-      PRESET_CATALOG[PRESET_CATALOG.length - 2], // GetAdmiral Domains
-      PRESET_CATALOG[PRESET_CATALOG.length - 1], // Anti-Adblock & Ad-Recovery Defusers
-      PRESET_CATALOG[9], // AdGuard Annoyances Filter
-    ],
-  },
-  {
-    id: 'blockingmachine-suite',
-    name: 'Defense Suite [Beta]',
-    description: 'Our complete 8-part native modular defense suite: Base Ads, Privacy Engine, Smart TV & IoT Shield, Web Annoyances, Social Neutralizer, Threat Defense, URL Tracking Stripper, and Safe Exceptions.',
-    badge: 'First-Party Beta',
-    category: 'Full Defense [Beta]',
-    items: PRESET_CATALOG.filter((p) => p.url.startsWith('./filters/modules/blockingmachine-') && p.name.includes('[Beta]')),
-  },
-  {
-    id: 'essential',
-    name: 'Essential Shield Pack',
-    description: 'The definitive baseline: blocks network ads, malware trackers, and intrusive beacons without breaking websites.',
-    badge: 'Recommended',
-    category: 'Advertising & Security',
-    items: [
-      PRESET_CATALOG[0], // AdGuard DNS (dns)
-      PRESET_CATALOG[1], // uBlock Origin (hybrid)
-      PRESET_CATALOG[6], // Peter Lowe (dns)
-    ],
-  },
-  {
-    id: 'privacy-fortress',
-    name: 'Privacy & Anti-Telemetry Fortress',
-    description: 'High-rigor telemetry neutralization for Windows/Office background tracking and aggressive trackers, plus unbreak fixes.',
-    badge: 'Max Privacy',
-    category: 'Privacy',
-    items: [
-      PRESET_CATALOG[4], // HaGeZi Windows/Office (dns)
-      PRESET_CATALOG[5], // uBlock Unbreak (hybrid)
-      PRESET_CATALOG[7], // OISD Blocklist Small (dns)
-    ],
-  },
-  {
-    id: 'distraction-free',
-    name: 'Distraction-Free Web Pack',
-    description: 'Eliminates annoying GDPR cookie notices, floating popups, newsletter walls, and cross-site social tracking buttons.',
-    badge: 'Clean Browsing',
-    category: 'Annoyances & Social',
-    items: [
-      PRESET_CATALOG[8], // AdGuard Annoyances (browser)
-      PRESET_CATALOG[9], // Fanboy's Annoyance (browser)
-      PRESET_CATALOG[10], // AdGuard Social (browser)
-    ],
-  },
-];
+export const PRESET_BUNDLES: PresetBundle[] = (() => {
+  const byName = (name: string): PresetItem => {
+    const found = PRESET_CATALOG.find((p) => p.name === name);
+    if (!found) throw new Error(`Preset not found: ${name}`);
+    return found;
+  };
+
+  return [
+    {
+      id: 'blockingmachine-suite',
+      name: 'Defense Suite [Beta]',
+      description: 'Our complete 8-part native modular defense suite: Base Ads, Privacy Engine, Smart TV & IoT Shield, Web Annoyances, Social Neutralizer, Threat Defense, URL Tracking Stripper, and Safe Exceptions.',
+      badge: 'First-Party Beta',
+      category: 'Full Defense [Beta]',
+      items: PRESET_CATALOG.filter((p) => p.url.startsWith('./filters/modules/blockingmachine-') && p.name.includes('[Beta]')),
+    },
+    {
+      id: 'essential',
+      name: 'Essential Shield Pack',
+      description: 'The definitive baseline: blocks network ads, malware trackers, and intrusive beacons without breaking websites.',
+      badge: 'Recommended',
+      category: 'Advertising & Security',
+      items: [
+        byName('AdGuard DNS Filter'),
+        byName('uBlock Origin Filters'),
+        byName("Peter Lowe's List"),
+        byName('OISD Blocklist Small'),
+      ],
+    },
+    {
+      id: 'threat-intelligence',
+      name: 'Threat Intelligence & Malware Defense',
+      description: 'Multi-source threat intelligence blocking active malware delivery domains, phishing portals, C2 botnet infrastructure, and cryptojacking scripts in real time.',
+      badge: 'Security',
+      category: 'Security',
+      items: [
+        byName('URLhaus Malware Domains'),
+        byName('Phishing Army'),
+        byName('Hagezi DNS Blocklist — Threat Intelligence'),
+        byName('CoinMiner & Cryptojacking Blocker'),
+      ],
+    },
+    {
+      id: 'privacy-fortress',
+      name: 'Privacy & Anti-Telemetry Fortress',
+      description: 'High-rigor telemetry neutralization for Windows/Office background tracking, aggressive trackers, and fingerprinting scripts, plus unbreak fixes.',
+      badge: 'Max Privacy',
+      category: 'Privacy',
+      items: [
+        byName("HaGeZi's Windows/Office Tracker"),
+        byName('Hagezi DNS Blocklist — Multi-PRO'),
+        byName('uBlock Unbreak Filter'),
+      ],
+    },
+    {
+      id: 'anti-adblock-defuser',
+      name: 'Anti-Adblock & Paywall Defuser',
+      description: 'Comprehensive circumvention mitigation neutralizing Admiral, Google Funding Choices, BlockThrough, AdInPlay, and aggressive anti-adblock nag screens.',
+      badge: 'Anti-Circumvention',
+      category: 'Anti-Adblock Mitigation',
+      items: [
+        byName('GetAdmiral Domains'),
+        byName('Anti-Adblock & Ad-Recovery Defusers'),
+        byName('AdGuard Annoyances Filter'),
+      ],
+    },
+    {
+      id: 'distraction-free',
+      name: 'Distraction-Free Web Pack',
+      description: 'Eliminates annoying GDPR cookie notices, floating popups, newsletter walls, cross-site social tracking buttons, and push notification nags.',
+      badge: 'Clean Browsing',
+      category: 'Annoyances & Social',
+      items: [
+        byName('AdGuard Annoyances Filter'),
+        byName("Fanboy's Annoyance List"),
+        byName('AdGuard Social Media Filter'),
+        byName('uBlock Origin Annoyances (Cookie Notices)'),
+      ],
+    },
+    {
+      id: 'mobile-shield',
+      name: 'Mobile & Smart Device Shield',
+      description: 'Network-wide blocking of mobile ad SDKs, in-app advertising networks, Samsung/Bixby telemetry, and Android tracking — covering all devices on your network.',
+      badge: 'Mobile',
+      category: 'Privacy & Advertising',
+      items: [
+        byName('AdAway Hosts (Mobile Ad Blocking)'),
+        byName('Mobile Ad & Tracker Shield (RPiList)'),
+        byName('AdGuard DNS Filter'),
+      ],
+    },
+  ];
+})();
 
 interface PresetsModalProps {
   isOpen: boolean;

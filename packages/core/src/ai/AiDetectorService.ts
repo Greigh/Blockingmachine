@@ -1,32 +1,43 @@
+import { createHash } from 'node:crypto';
 import { calculateShannonEntropy, detectDgaPatterns, decomposeDomain } from './entropy.js';
-import { resolveCnameChain } from './cnameResolver.js';
-import { sanitizeDomain, synthesizeRules } from './ruleSynthesizer.js';
+import { resolveCnameChain, isBenignCnameTarget } from './cnameResolver.js';
+import { sanitizeDomain, synthesizeRules, isDomainCoveredByRules } from './ruleSynthesizer.js';
 import { classifyDomainWithMiniAi, globalMiniAiClassifier } from './MiniAiClassifier.js';
 import {
   SUSPICIOUS_AD_TOKENS,
   SUSPICIOUS_TRACKER_TOKENS,
   SPECIFIC_NETWORK_TOKENS,
+  HIGH_ABUSE_TLDS,
   classifyInfrastructure,
   clampConfidencePercent,
+  detectAntiAdblock,
   hasStrongAdIntent,
   hostnameHasToken,
+  isActiveDirectoryOrLocalDomain,
   isBenignServiceEndpoint,
+  isInstitutionalDomain,
   isTelemetryToken,
+  normalizeHostname,
   scoreBrandSpoof,
 } from './reputation.js';
-import type {
-  AiProviderConfig,
-  AiScanResult,
-  AiVerdict,
-  CrawlScanResult,
-  QueryLogScanResult,
-  RawDnsQuery,
-  RiskLevel,
-  ThreatCategory,
+import {
+  clampConfidence,
+  normalizeThreatCategory,
+  normalizeVerdict,
+  type AiProviderConfig,
+  type AiScanResult,
+  type AiVerdict,
+  type CrawlScanResult,
+  type QueryLogScanResult,
+  type RawDnsQuery,
+  type RiskLevel,
+  type ThreatCategory,
 } from './types.js';
 
 import { isSafePublicWebUrl, type SafeUrlCheckResult } from '../utils/urlSafety.js';
 export { isSafePublicWebUrl, type SafeUrlCheckResult };
+
+type LlmAssessment = Pick<AiScanResult, 'verdict' | 'confidence' | 'category' | 'reasons'>;
 
 interface ScanCacheEntry {
   result: AiScanResult;
@@ -35,7 +46,8 @@ interface ScanCacheEntry {
 
 /**
  * Intelligent AI Ad & Tracker Discovery Service [Beta]
- * Combines Shannon entropy, DGA detection, CNAME uncloaking, and multi-provider LLMs.
+ * Combines Shannon entropy, DGA detection, CNAME uncloaking, brand spoofing defenses,
+ * embedded neural/logistic Mini-AI, and multi-provider LLMs.
  * @beta
  */
 export class AiDetectorService {
@@ -54,8 +66,11 @@ export class AiDetectorService {
       apiKey: config?.apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || '',
       apiEndpoint: config?.apiEndpoint,
       modelName: config?.modelName,
-      allowlist: config?.allowlist || [],
+      allowlist: [...(config?.allowlist || [])],
       bypassCache: config?.bypassCache || false,
+      skipDns: config?.skipDns,
+      dnsTimeoutMs: config?.dnsTimeoutMs,
+      existingRules: [...(config?.existingRules || [])],
     };
   }
 
@@ -74,59 +89,117 @@ export class AiDetectorService {
     this.cacheMisses = 0;
   }
 
-  public updateConfig(config: Partial<AiProviderConfig>) {
-    this.defaultConfig = { ...this.defaultConfig, ...config };
+  public updateConfig(config: Partial<AiProviderConfig>): void {
+    this.defaultConfig = structuredClone({ ...this.defaultConfig, ...config });
+    this.clearCache();
   }
 
   public getConfig(): AiProviderConfig {
-    return { ...this.defaultConfig };
+    return structuredClone(this.defaultConfig);
   }
 
   /**
-   * Checks whether domain matches verified essential infrastructure or user allowlist.
+   * Checks whether domain matches verified essential infrastructure, institutional domains,
+   * enterprise internal endpoints, or user allowlists with zero false-positive protection.
    */
   public isSafeInfrastructure(domain: string, allowlist?: string[]): boolean {
     const clean = this.normalizeDomain(domain);
+    if (!clean) return false;
+
+    // 1. User feedback explicit override (False Positive correction)
     if (globalMiniAiClassifier.getDomainFeedback(clean) <= -0.9) {
       return true;
     }
+
+    // 2. Explicit allowlist check
     if (allowlist && allowlist.length > 0) {
-      if (allowlist.some((al) => clean === al.toLowerCase() || clean.endsWith(`.${al.toLowerCase()}`))) {
+      if (
+        allowlist.some((al) => {
+          if (!al || typeof al !== 'string') return false;
+          const norm = this.normalizeDomain(al);
+          return !!norm && (clean === norm || clean.endsWith('.' + norm));
+        })
+      ) {
         return true;
       }
     }
-    if (scoreBrandSpoof(clean) > 0 || hasStrongAdIntent(clean)) return false;
+
+    // 3. Localhost and loopback endpoints
+    if (clean === 'localhost' || clean === '127.0.0.1' || clean === '::1') {
+      return true;
+    }
+
+    // 4. Institutional domains (government, military, academic)
+    if (isInstitutionalDomain(clean)) {
+      return true;
+    }
+
+    // 5. Active Directory / Private enterprise network endpoints
+    if (isActiveDirectoryOrLocalDomain(clean)) {
+      return true;
+    }
+
+    // 6. Security red-lines: brand spoofs, advertising intent, and anti-adblock are never safe
+    if (scoreBrandSpoof(clean) > 0 || hasStrongAdIntent(clean)) {
+      return false;
+    }
+    const aab = detectAntiAdblock(clean);
+    if (aab.detected) {
+      return false;
+    }
+
+    // 7. Verified cloud, CDN, and infrastructure providers
     const infra = classifyInfrastructure(clean);
-    if (infra.adNetwork || infra.kind === 'tracker-network') return false;
-    if (infra.safe) return true;
+    if (infra.adNetwork || infra.kind === 'tracker-network') {
+      return false;
+    }
+    if (infra.safe && (infra.kind === 'cdn' || infra.kind === 'cloud' || infra.kind === 'vendor')) {
+      return true;
+    }
+
+    // 8. Recognized benign SaaS customer service, documentation, website builders, IdP
+    if (isBenignCnameTarget(clean)) {
+      return true;
+    }
+
+    // 9. Benign service endpoint on readable, non-abusive domain
     return isBenignServiceEndpoint(clean);
   }
 
   /**
-   * Scans a single domain or URL for ad/tracker characteristics.
+   * Scans a single domain or URL for ad, tracker, CNAME cloaking, DGA, and phishing characteristics.
    */
   public async scanDomain(
     domainOrUrl: string,
     overrideConfig?: Partial<AiProviderConfig>,
   ): Promise<AiScanResult> {
-    const config = { ...this.defaultConfig, ...overrideConfig };
+    const config = structuredClone({ ...this.defaultConfig, ...overrideConfig });
     const cleanDomain = this.normalizeDomain(domainOrUrl);
+    // Every setting that affects analysis participates in the key. Hash credentials
+    // and potentially large rule lists instead of retaining them in cache keys.
+    const cacheKey = createHash('sha256').update(JSON.stringify([
+      cleanDomain, config.provider, config.ollamaUrl, config.ollamaModel,
+      config.apiKey, config.apiEndpoint, config.modelName, config.allowlist,
+      config.skipDns, config.dnsTimeoutMs, config.existingRules,
+      globalMiniAiClassifier.getDomainFeedback(cleanDomain),
+    ])).digest('hex');
 
     // 0. Check in-memory LRU/TTL cache
     if (!config.bypassCache) {
-      const cached = this.scanCache.get(cleanDomain);
+      const cached = this.scanCache.get(cacheKey);
       if (cached) {
         if (Date.now() < cached.expiresAt) {
           this.cacheHits++;
           // Refresh LRU position
-          this.scanCache.delete(cleanDomain);
-          this.scanCache.set(cleanDomain, cached);
+          this.scanCache.delete(cacheKey);
+          this.scanCache.set(cacheKey, cached);
           return {
-            ...cached.result,
+            ...structuredClone(cached.result),
+            target: domainOrUrl,
             timestamp: new Date().toISOString(),
           };
         } else {
-          this.scanCache.delete(cleanDomain);
+          this.scanCache.delete(cacheKey);
         }
       }
     }
@@ -137,8 +210,8 @@ export class AiDetectorService {
       const decomposition = decomposeDomain(cleanDomain);
       const infra = classifyInfrastructure(cleanDomain);
       const allowlisted = !!config.allowlist?.some((entry) => {
-        const item = entry.toLowerCase();
-        return cleanDomain === item || cleanDomain.endsWith(`.${item}`);
+        const item = this.normalizeDomain(entry);
+        return !!item && (cleanDomain === item || cleanDomain.endsWith(`.${item}`));
       });
       const guardDetail = infra.safe
         ? infra.reason
@@ -164,7 +237,7 @@ export class AiDetectorService {
       };
 
       if (!config.bypassCache) {
-        this.setCache(cleanDomain, cleanResult);
+        this.setCache(cacheKey, cleanResult);
       }
 
       return cleanResult;
@@ -228,9 +301,10 @@ export class AiDetectorService {
 
         if (llmResult) {
           finalVerdict = llmResult.verdict;
-          finalConfidence = Math.max(finalConfidence, llmResult.confidence);
+          finalConfidence = llmResult.confidence;
           finalCategory = llmResult.category;
           finalRisk = this.verdictToRiskLevel(finalVerdict, finalConfidence);
+          allReasons.length = 0;
           allReasons.push(...llmResult.reasons);
           modelUsed = llmResult.model;
         }
@@ -240,11 +314,22 @@ export class AiDetectorService {
       }
     }
 
-    // 5. Synthesize recommended filter rules
+    // 5. Existing rules coverage check
+    let coveredByRule: string | undefined;
+    if (config.existingRules && config.existingRules.length > 0) {
+      const coverage = isDomainCoveredByRules(cleanDomain, config.existingRules);
+      if (coverage.isCovered) {
+        coveredByRule = coverage.coveringRule;
+        allReasons.push(`Already covered by existing rule: ${coveredByRule}`);
+      }
+    }
+
+    // 6. Synthesize recommended filter rules
     const generatedRules = synthesizeRules({
       domain: cleanDomain,
       verdict: finalVerdict,
       category: finalCategory,
+      confidence: finalConfidence,
       cnames: cnameInfo.cnames,
     });
 
@@ -262,6 +347,7 @@ export class AiDetectorService {
       cnames: cnameInfo.cnames,
       resolvedIps: cnameInfo.ips,
       generatedRules,
+      coveredByRule,
       featureScores,
       inferenceTimeMs,
       provider: config.provider,
@@ -270,7 +356,7 @@ export class AiDetectorService {
     };
 
     if (!config.bypassCache) {
-      this.setCache(cleanDomain, scanResult);
+      this.setCache(cacheKey, scanResult);
     }
 
     return scanResult;
@@ -282,7 +368,7 @@ export class AiDetectorService {
       if (oldestKey) this.scanCache.delete(oldestKey);
     }
     this.scanCache.set(key, {
-      result,
+      result: structuredClone(result),
       expiresAt: Date.now() + this.cacheTtlMs,
     });
   }
@@ -306,7 +392,7 @@ export class AiDetectorService {
     );
 
     const results: AiScanResult[] = [];
-    const batchSize = (config.provider === 'mini-ai' || config.provider === 'local-heuristics') ? 32 : 4;
+    const batchSize = config.provider === 'mini-ai' || config.provider === 'local-heuristics' ? 32 : 4;
 
     for (let i = 0; i < uniqueDomains.length; i += batchSize) {
       const batch = uniqueDomains.slice(i, i + batchSize);
@@ -378,15 +464,10 @@ export class AiDetectorService {
   // --- Internal Helper Methods ---
 
   private normalizeDomain(input: string): string {
-    const sanitized = sanitizeDomain(input);
-    if (sanitized) return sanitized;
-    let clean = input.trim().toLowerCase();
-    clean = clean.replace(/^[a-z]+:\/\//i, '');
-    clean = clean.split('/')[0];
-    clean = clean.split(':')[0];
-    while (clean.startsWith('.')) clean = clean.slice(1);
-    while (clean.endsWith('.')) clean = clean.slice(0, -1);
-    return clean;
+    if (typeof input !== 'string') return '';
+    const host = normalizeHostname(input);
+    const sanitized = sanitizeDomain(host);
+    return sanitized || host;
   }
 
   private evaluateHeuristics(
@@ -405,11 +486,40 @@ export class AiDetectorService {
       category = 'CNAME Cloaking';
       reasons.push(`CNAME cloaking unmasked: points to known tracking network ${cnameInfo.knownTrackerTarget}`);
     } else if (cnameInfo.hasCnameCloaking && cnameInfo.cloakedTarget) {
-      score += 40;
-      reasons.push(`Domain aliases external third-party CNAME target: ${cnameInfo.cloakedTarget}`);
+      score += 50;
+      category = 'CNAME Cloaking';
+      reasons.push(`Suspicious CNAME cloaking detected: first-party alias points to third-party host ${cnameInfo.cloakedTarget}`);
     }
 
-    // 2. Keyword token analysis (boundaries, so "status" is not "stat")
+    // 2. Brand Spoofing & Phishing Check
+    const brandSpoof = scoreBrandSpoof(domain);
+    if (brandSpoof > 0) {
+      score += Math.min(95, 60 + brandSpoof * 30);
+      category = 'Malware/Phishing';
+      reasons.push('Deceptive brand spoofing or credential harvesting pattern detected');
+    }
+
+    // 3. Known Ad / Tracker Infrastructure
+    const infra = classifyInfrastructure(domain);
+    if (infra.adNetwork) {
+      score += 85;
+      if (category === 'Clean') category = 'Advertising';
+      reasons.push(infra.reason || 'Matches known advertising network infrastructure');
+    } else if (infra.kind === 'tracker-network') {
+      score += 85;
+      if (category === 'Clean') category = 'Telemetry/Analytics';
+      reasons.push(infra.reason || 'Matches known tracking or analytics network infrastructure');
+    }
+
+    // 4. Anti-Adblock Circumvention Detection
+    const aab = detectAntiAdblock(domain);
+    if (aab.detected) {
+      score += 90;
+      if (category === 'Clean') category = 'Advertising';
+      reasons.push(aab.reason || 'Anti-adblock evasion detection and circumvention script provider');
+    }
+
+    // 5. Keyword token analysis (strict boundaries)
     const matchedTokens: string[] = [];
     const keywordTokens = [...SUSPICIOUS_AD_TOKENS, ...SUSPICIOUS_TRACKER_TOKENS];
     for (const token of keywordTokens) {
@@ -427,11 +537,21 @@ export class AiDetectorService {
       }
     }
 
-    // 3. DGA / entropy. Lexical shape alone is not an ad or malware verdict.
-    if (dgaResult.isLikelyDga && matchedTokens.length === 0 && !cnameInfo.knownTrackerTarget) {
-      score += Math.min(20, dgaResult.score * 0.2);
-      reasons.push(...dgaResult.reasons);
-      reasons.push('Lexical pattern is unusual, but there is no ad, tracker, or phishing evidence');
+    // 6. DGA / Algorithmic Randomization
+    const decomp = decomposeDomain(domain);
+    const isHighAbuseTld = HIGH_ABUSE_TLDS.has(decomp.tld);
+
+    if (dgaResult.isLikelyDga && matchedTokens.length === 0 && !cnameInfo.knownTrackerTarget && brandSpoof === 0) {
+      if (dgaResult.score >= 70 || isHighAbuseTld) {
+        score += Math.min(75, dgaResult.score * 0.7);
+        if (category === 'Clean') category = 'Malware/Phishing';
+        reasons.push(...dgaResult.reasons);
+        reasons.push('High-probability algorithmic domain generation (DGA) pattern detected');
+      } else {
+        score += Math.min(25, dgaResult.score * 0.25);
+        reasons.push(...dgaResult.reasons);
+        reasons.push('Lexical pattern is unusual, but insufficient standalone evidence to block');
+      }
     } else if (dgaResult.isLikelyDga) {
       score += dgaResult.score * 0.6;
       reasons.push(...dgaResult.reasons);
@@ -441,14 +561,25 @@ export class AiDetectorService {
       reasons.push(`High lexical entropy (${entropy}) indicates dynamically generated hostname`);
     }
 
+    // 7. Benign Service Exoneration Discount
+    if (isBenignServiceEndpoint(domain) && brandSpoof === 0 && !infra.adNetwork && !aab.detected) {
+      if (matchedTokens.length === 0 && !cnameInfo.knownTrackerTarget) {
+        score = Math.max(0, score - 30);
+        reasons.push('Standard operational or service endpoint characteristics');
+      }
+    }
+
     // Determine verdict based on combined score
     let verdict: AiVerdict = 'clean';
-    if (score >= 70) {
-      verdict = category === 'Telemetry/Analytics' ? 'tracker' : 'ad_server';
+    if (category === 'Malware/Phishing' && score >= 65) {
+      verdict = 'malicious';
+    } else if (score >= 70) {
+      verdict = category === 'Telemetry/Analytics' ? 'tracker' : category === 'CNAME Cloaking' ? 'tracker' : 'ad_server';
     } else if (score >= 40) {
       verdict = 'suspicious';
       if (category === 'Clean') category = 'Advertising';
     } else {
+      category = 'Clean';
       reasons.push('No anomalous ad tech, tracking tokens, or CNAME cloaking detected');
     }
 
@@ -467,6 +598,45 @@ export class AiDetectorService {
     return 'none';
   }
 
+  private parseLlmJson(raw: unknown): LlmAssessment {
+    if (typeof raw !== 'string') throw new Error('Missing model response text');
+    let cleaned = raw.trim();
+    // 1. Try markdown fenced json block
+    const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (fenceMatch) {
+      cleaned = fenceMatch[1].trim();
+    } else {
+      // 2. Extract substring between first { and last }
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        cleaned = cleaned.slice(firstBrace, lastBrace + 1).trim();
+      }
+    }
+    const parsed: unknown = JSON.parse(cleaned);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Model response must be a JSON object');
+    }
+    const result = parsed as Record<string, unknown>;
+    if (typeof result.verdict !== 'string' || typeof result.confidence !== 'number'
+      || !Number.isFinite(result.confidence)) {
+      throw new Error('Model response requires a verdict and finite numeric confidence');
+    }
+    const verdict = normalizeVerdict(result.verdict);
+    const fallbackCategory: Record<AiVerdict, ThreatCategory> = {
+      clean: 'Clean', tracker: 'Telemetry/Analytics', ad_server: 'Advertising',
+      malicious: 'Malware/Phishing', suspicious: 'Unknown',
+    };
+    const reasons = Array.isArray(result.reasons) ? result.reasons : [result.reasons];
+    return {
+      verdict,
+      confidence: clampConfidence(result.confidence),
+      category: normalizeThreatCategory(result.category, fallbackCategory[verdict]),
+      reasons: [...new Set(reasons.filter((reason): reason is string => typeof reason === 'string')
+        .map((reason) => reason.trim()).filter(Boolean))],
+    };
+  }
+
   private async queryLlm(
     domain: string,
     config: AiProviderConfig,
@@ -477,7 +647,7 @@ export class AiDetectorService {
       cloakedTarget?: string;
       preliminaryVerdict: string;
     },
-  ): Promise<{ verdict: AiVerdict; confidence: number; category: ThreatCategory; reasons: string[]; model: string } | null> {
+  ): Promise<(LlmAssessment & { model: string }) | null> {
     const prompt = `Analyze this domain for network-level ad blocking and telemetry detection:
 Domain: "${domain}"
 Context:
@@ -495,14 +665,6 @@ Respond ONLY with a valid JSON object matching this schema:
   "category": "Advertising" | "Telemetry/Analytics" | "CNAME Cloaking" | "Malware/Phishing" | "Clean",
   "reasons": ["string explaining specific technical findings"]
 }`;
-
-    const parseLlmJson = (raw: string): any => {
-      let cleaned = raw.trim();
-      if (cleaned.startsWith('```')) {
-        cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-      }
-      return JSON.parse(cleaned);
-    };
 
     // 1. Local Ollama Provider
     if (config.provider === 'ollama') {
@@ -526,12 +688,9 @@ Respond ONLY with a valid JSON object matching this schema:
       }
 
       const json: any = await res.json();
-      const parsed = parseLlmJson(json.response);
+      const parsed = this.parseLlmJson(json.response);
       return {
-        verdict: parsed.verdict,
-        confidence: Number(parsed.confidence) || 80,
-        category: parsed.category || 'Advertising',
-        reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [String(parsed.reasons)],
+        ...parsed,
         model: `ollama/${model}`,
       };
     }
@@ -562,12 +721,9 @@ Respond ONLY with a valid JSON object matching this schema:
       const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) throw new Error('Empty response from Gemini');
 
-      const parsed = parseLlmJson(text);
+      const parsed = this.parseLlmJson(text);
       return {
-        verdict: parsed.verdict,
-        confidence: Number(parsed.confidence) || 85,
-        category: parsed.category || 'Advertising',
-        reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [String(parsed.reasons)],
+        ...parsed,
         model: 'gemini-2.0-flash',
       };
     }
@@ -600,12 +756,9 @@ Respond ONLY with a valid JSON object matching this schema:
       const content = json?.choices?.[0]?.message?.content;
       if (!content) throw new Error('Empty response from OpenAI');
 
-      const parsed = parseLlmJson(content);
+      const parsed = this.parseLlmJson(content);
       return {
-        verdict: parsed.verdict,
-        confidence: Number(parsed.confidence) || 85,
-        category: parsed.category || 'Advertising',
-        reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [String(parsed.reasons)],
+        ...parsed,
         model: `openai/${model}`,
       };
     }
