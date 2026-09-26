@@ -1,3 +1,12 @@
+import { createRequire } from "node:module";
+
+// Read the version from package.json at module load time.
+// Using createRequire so this works in both ESM (import.meta) and CommonJS/Jest contexts.
+const _require = createRequire(import.meta.url);
+const _pkgVersion: string = (
+  _require("../../package.json") as { version: string }
+).version;
+
 export interface FilterMetaConfig {
   title: string;
   description: string;
@@ -24,7 +33,7 @@ export function createFilterMeta(now: Date = new Date()): FilterMetaConfig {
     homepage: "https://github.com/greigh/blockingmachine",
     website: "https://greighstudios.com/",
     license: "BSD-3-Clause",
-    version: "1.0.0-rc.6",
+    version: _pkgVersion,
     expires: "1 day",
     lastUpdated: now.toISOString(),
     stats: {

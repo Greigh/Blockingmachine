@@ -6,7 +6,7 @@
  * .zip archives for Chrome Web Store and Firefox Add-ons (AMO).
  */
 
-import { execSync, execFileSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { readFileSync, writeFileSync, mkdirSync, statSync, cpSync, rmSync } from 'fs';
 import { resolve, basename } from 'path';
 import { fileURLToPath } from 'url';
@@ -23,14 +23,14 @@ console.log('📦 [Package Extension] Starting multi-store extension packaging..
 
 // 1. Build extension bundle
 console.log('🔨 [1/5] Building extension distribution bundle...');
-execSync('npm run build --workspace=@blockingmachine/browser-extension', {
+execFileSync('npm', ['run', 'build', '--workspace=@blockingmachine/browser-extension'], {
   cwd: ROOT_DIR,
   stdio: 'inherit',
 });
 
 // 2. Validate MV3 compliance
 console.log('🔍 [2/5] Running Manifest V3 compliance guardian...');
-execSync('node scripts/verify-mv3-compliance.mjs', {
+execFileSync('node', ['scripts/verify-mv3-compliance.mjs'], {
   cwd: ROOT_DIR,
   stdio: 'inherit',
 });

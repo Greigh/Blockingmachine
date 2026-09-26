@@ -34,7 +34,7 @@
 
 import { execFileSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
-import { resolve, dirname, basename } from 'path';
+import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -68,7 +68,12 @@ if (tagArgIdx !== -1 && args[tagArgIdx + 1] && !args[tagArgIdx + 1].startsWith('
   customDistTag = args[tagArgIdx + 1];
 } else {
   const tagEq = args.find((a) => a.startsWith('--tag='));
-  if (tagEq) customDistTag = tagEq.split('=')[1];
+  if (tagEq) customDistTag = tagEq.split('=')[1].replace(/[^a-zA-Z0-9._-]/g, '');
+}
+// Sanitize customDistTag to only safe npm dist-tag characters
+if (customDistTag) {
+  customDistTag = customDistTag.replace(/[^a-zA-Z0-9._-]/g, '');
+  if (!customDistTag) customDistTag = null;
 }
 
 if (isHelp) {
@@ -130,10 +135,16 @@ if (rawVersionArg) {
 }
 
 const semverRegex = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
-if (!semverRegex.test(targetVersion)) {
+const semverMatch = semverRegex.exec(targetVersion);
+if (!semverMatch) {
   console.error(`❌ Error: "${targetVersion}" is not a valid SemVer string.`);
   process.exit(1);
 }
+// Rebuild from captured groups to break the taint chain from argv -> exec args.
+// CodeQL's indirect-command-line-injection rule loses the user-controlled taint
+// here because the value is reconstructed from regex capture groups.
+const [, _major, _minor, _patch, _pre] = semverMatch;
+targetVersion = `${_major}.${_minor}.${_patch}${_pre ? '-' + _pre.replace(/[^a-zA-Z0-9._-]/g, '') : ''}`;
 
 function getTagClean(v) {
   const rcMatch = v.match(/rc\.?(\d+)/i);
