@@ -1,5 +1,5 @@
 import type { StoredRule } from '../RuleStore.js';
-import { sanitizeDomain } from './hostname.js';
+import { sanitizeDomain, trimTrailingDots } from './hostname.js';
 import {
   COMPOUND_CCTLDS,
   DYNAMIC_DNS_SUFFIXES,
@@ -72,11 +72,18 @@ function ruleModifiers(rule: string): string[] {
     ? [] : rule.slice(separator + 1).toLowerCase().split(',').map((part) => part.trim());
 }
 
+/** Strip trailing ^, / and | separators in linear time (avoids regex backtracking). */
+function trimRuleTerminators(value: string): string {
+  let end = value.length;
+  while (end > 0 && '^/|'.includes(value[end - 1])) end--;
+  return value.slice(0, end);
+}
+
 /** Preserve all hostname labels; metadata extraction intentionally strips www. */
 function extractDomainPattern(rule: string): string | null {
   const mask = ruleModifiers(rule).length ? rule.slice(0, rule.lastIndexOf('$')) : rule;
-  const hostname = mask.replace(/^@@/, '').replace(/^\|{1,2}/, '')
-    .replace(/^https?:\/\//i, '').replace(/[\^/|]+$/, '');
+  const hostname = trimRuleTerminators(mask.replace(/^@@/, '').replace(/^\|{1,2}/, '')
+    .replace(/^https?:\/\//i, ''));
   return /^[a-z0-9_.-]+$/i.test(hostname) ? sanitizeDomain(hostname) : null;
 }
 
@@ -322,7 +329,7 @@ export class CompiledDomainRuleSet {
       if (rawRule.startsWith('local-zone:') || rawRule.startsWith('local-data:')) {
         const quoteMatch = rawRule.match(/local-(?:zone|data):\s*"([a-z0-9_.*-]+)\.?"/i);
         if (quoteMatch) {
-          const pattern = quoteMatch[1].toLowerCase().trim().replace(/\.+$/, '');
+          const pattern = trimTrailingDots(quoteMatch[1].toLowerCase().trim());
           if (pattern) {
             this.addRuleToMap(this.domainBlocks, pattern, {
               rule: rawRule,

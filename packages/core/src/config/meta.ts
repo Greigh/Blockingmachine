@@ -24,7 +24,7 @@ export function createFilterMeta(now: Date = new Date()): FilterMetaConfig {
     homepage: "https://github.com/greigh/blockingmachine",
     website: "https://greighstudios.com/",
     license: "BSD-3-Clause",
-    version: "1.0.0-rc.5",
+    version: "1.0.0-rc.6",
     expires: "1 day",
     lastUpdated: now.toISOString(),
     stats: {

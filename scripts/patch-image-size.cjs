@@ -6,12 +6,19 @@ const path = require('path');
 
 const targetPath = path.resolve(__dirname, '../node_modules/image-size/dist/cjs/index.js');
 
-if (!fs.existsSync(targetPath)) {
-  process.exit(0);
+// Open once and work through the descriptor so the file cannot be swapped
+// between the existence check, the read and the write.
+let fd;
+try {
+  fd = fs.openSync(targetPath, 'r+');
+} catch (error) {
+  if (error.code === 'ENOENT') process.exit(0);
+  throw error;
 }
 
-const content = fs.readFileSync(targetPath, 'utf8');
+const content = fs.readFileSync(fd, 'utf8');
 if (content.includes('// APPDMG_COMPAT_SHIM')) {
+  fs.closeSync(fd);
   process.exit(0);
 }
 
@@ -49,5 +56,7 @@ compatSizeOf.types = originalTypes.types;
 module.exports = compatSizeOf;
 `;
 
-fs.writeFileSync(targetPath, content + shimCode, 'utf8');
+fs.ftruncateSync(fd, 0);
+fs.writeSync(fd, content + shimCode, 0, 'utf8');
+fs.closeSync(fd);
 console.log('Applied appdmg compatibility shim to image-size 2.x');
