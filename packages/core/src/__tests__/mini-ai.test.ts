@@ -251,12 +251,10 @@ describe('Mini-AI Domain Threat Classifier', () => {
       expect(c.getDomainFeedback('__proto__')).toBe(0);
       expect(c.getDomainFeedback('constructor')).toBe(0);
 
-      c.importFeedback({
-        '__proto__': 1.0,
-        'constructor': 1.0,
-        'prototype': 1.0,
-        'clean-site.org': -1.0,
-      } as any);
+      // JSON.parse creates a real own "__proto__" key, unlike an object literal.
+      c.importFeedback(JSON.parse(
+        '{"__proto__": 1.0, "constructor": 1.0, "prototype": 1.0, "clean-site.org": -1.0}',
+      ));
 
       expect(c.getDomainFeedback('__proto__')).toBe(0);
       const exported = c.exportFeedback();

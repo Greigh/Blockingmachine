@@ -100,7 +100,7 @@ export class RuleDeduplicator {
     const dollar = isRegex ? (input[regexEnd + 1] === "$" ? regexEnd + 1 : -1) : input.indexOf("$");
     let target = dollar < 0 ? input : input.slice(0, dollar);
     const options = dollar < 0 ? "" : input.slice(dollar + 1);
-    const hosts = target.match(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+([^#]+)(?:#.*)?$/);
+    const hosts = target.match(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+([^\s#][^#]*)(?:#.*)?$/);
     if (hosts) target = hosts[1].trim();
 
     // Canonicalize only whole-host patterns. Never strip URL schemes, query

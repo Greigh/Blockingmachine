@@ -9,6 +9,7 @@
  *  - Inter-package dependency ranges (@blockingmachine/core, @blockingmachine/cli, etc.)
  *  - package-lock.json (via npm install --package-lock-only)
  *  - README.md release badge
+ *  - packages/core/src/config/meta.ts filter metadata version
  *
  * Usage:
  *   node scripts/bump-version.js <version>
@@ -172,7 +173,21 @@ try {
   // README.md does not exist or is not accessible
 }
 
-// 5. Sync package-lock.json
+// 5. Update the hard-coded filter metadata version in @blockingmachine/core
+const metaPath = path.join(rootDir, 'packages', 'core', 'src', 'config', 'meta.ts');
+try {
+  const meta = fs.readFileSync(metaPath, 'utf8');
+  const metaRegex = /(\bversion:\s*")[^"]*(")/;
+  if (metaRegex.test(meta)) {
+    fs.writeFileSync(metaPath, meta.replace(metaRegex, `$1${targetVersion}$2`), 'utf8');
+    console.log(`✅ [packages/core/src/config/meta.ts] Filter metadata version updated to ${targetVersion}`);
+    updatedFiles.push('packages/core/src/config/meta.ts');
+  }
+} catch {
+  // meta.ts does not exist or is not accessible
+}
+
+// 6. Sync package-lock.json
 console.log(`\n🔒 Updating package-lock.json via "npm install --package-lock-only"...`);
 try {
   execSync('npm install --package-lock-only', {
@@ -185,7 +200,7 @@ try {
   console.warn(`⚠️ Warning: npm install --package-lock-only encountered an error:`, error.message);
 }
 
-// 6. Summary & next steps
+// 7. Summary & next steps
 console.log(`\n🎉 Successfully bumped all packages to v${targetVersion}!`);
 console.log(`\nModified files:`);
 updatedFiles.forEach(f => console.log(`   - ${f}`));

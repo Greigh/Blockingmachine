@@ -1,5 +1,5 @@
 import { promises as dns } from 'node:dns';
-import { normalizeHostname } from './hostname.js';
+import { normalizeHostname, trimTrailingDots } from './hostname.js';
 import { decomposeDomain, DYNAMIC_DNS_SUFFIXES } from './entropy.js';
 import {
   classifyInfrastructure,
@@ -309,7 +309,7 @@ function hasTrackingOrAdTokens(domain: string): boolean {
  */
 export function isBenignCnameTarget(target: string): boolean {
   if (!target || typeof target !== 'string') return false;
-  const lower = target.toLowerCase().trim().replace(/\.+$/, '');
+  const lower = trimTrailingDots(target.toLowerCase().trim());
   if (!lower) return false;
 
   // Never benign if it has tracking/ad tokens or is a known cloaked/ad target
@@ -350,7 +350,8 @@ interface CnameCacheEntry {
 const CNAME_CACHE_MAX_SIZE = 1024;
 const CNAME_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const cnameCache = new Map<string, CnameCacheEntry>();
-const inFlightResolutions = new Map<string, Promise<CnameResolutionResult>>();
+// Entries are wrapped so ownership checks compare a plain object, not a promise.
+const inFlightResolutions = new Map<string, { promise: Promise<CnameResolutionResult> }>();
 let cacheGeneration = 0;
 
 function cloneResolution(result: CnameResolutionResult): CnameResolutionResult {
@@ -440,9 +441,9 @@ export async function resolveCnameChain(domain: string, timeoutMs = 2500): Promi
   }
 
   // Check in-flight promise sharing (stampede prevention)
-  const existingPromise = inFlightResolutions.get(requestKey);
-  if (existingPromise) {
-    return cloneResolution(await existingPromise);
+  const existingEntry = inFlightResolutions.get(requestKey);
+  if (existingEntry) {
+    return cloneResolution(await existingEntry.promise);
   }
 
   const resolutionTask = (async (): Promise<CnameResolutionResult> => {
@@ -464,7 +465,7 @@ export async function resolveCnameChain(domain: string, timeoutMs = 2500): Promi
           const records = await resolver.resolveCname(current);
           if (stopped) return;
           if (records && records.length > 0) {
-            const nextTarget = records[0].toLowerCase().trim().replace(/\.+$/, '');
+            const nextTarget = trimTrailingDots(records[0].toLowerCase().trim());
             if (!nextTarget || visited.has(nextTarget)) break;
             cnames.push(nextTarget);
             current = nextTarget;
@@ -660,11 +661,12 @@ export async function resolveCnameChain(domain: string, timeoutMs = 2500): Promi
     return result;
   })();
 
-  inFlightResolutions.set(requestKey, resolutionTask);
+  const inFlightEntry = { promise: resolutionTask };
+  inFlightResolutions.set(requestKey, inFlightEntry);
   try {
     return cloneResolution(await resolutionTask);
   } finally {
-    if (inFlightResolutions.get(requestKey) === resolutionTask) {
+    if (inFlightResolutions.get(requestKey) === inFlightEntry) {
       inFlightResolutions.delete(requestKey);
     }
   }

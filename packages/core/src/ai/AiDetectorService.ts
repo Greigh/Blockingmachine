@@ -45,6 +45,25 @@ interface ScanCacheEntry {
 }
 
 /**
+ * Opaque per-process credential identifiers. API keys are mapped to a counter so
+ * they never enter hash input; a fresh id is issued if the map is ever cleared.
+ */
+const MAX_CREDENTIAL_IDS = 64;
+const credentialIds = new Map<string, number>();
+let nextCredentialId = 1;
+
+function credentialId(secret: string | undefined): number {
+  if (!secret) return 0;
+  let id = credentialIds.get(secret);
+  if (id === undefined) {
+    if (credentialIds.size >= MAX_CREDENTIAL_IDS) credentialIds.clear();
+    id = nextCredentialId++;
+    credentialIds.set(secret, id);
+  }
+  return id;
+}
+
+/**
  * Intelligent AI Ad & Tracker Discovery Service [Beta]
  * Combines Shannon entropy, DGA detection, CNAME uncloaking, brand spoofing defenses,
  * embedded neural/logistic Mini-AI, and multi-provider LLMs.
@@ -175,11 +194,11 @@ export class AiDetectorService {
   ): Promise<AiScanResult> {
     const config = structuredClone({ ...this.defaultConfig, ...overrideConfig });
     const cleanDomain = this.normalizeDomain(domainOrUrl);
-    // Every setting that affects analysis participates in the key. Hash credentials
-    // and potentially large rule lists instead of retaining them in cache keys.
+    // Every setting that affects analysis participates in the key. Credentials are
+    // replaced by an opaque id and large rule lists are hashed, never retained.
     const cacheKey = createHash('sha256').update(JSON.stringify([
       cleanDomain, config.provider, config.ollamaUrl, config.ollamaModel,
-      config.apiKey, config.apiEndpoint, config.modelName, config.allowlist,
+      credentialId(config.apiKey), config.apiEndpoint, config.modelName, config.allowlist,
       config.skipDns, config.dnsTimeoutMs, config.existingRules,
       globalMiniAiClassifier.getDomainFeedback(cleanDomain),
     ])).digest('hex');

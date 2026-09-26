@@ -42,7 +42,7 @@ const configSchema = z.object({
     .object({
       directory: z.string().default("./filters/output"),
     })
-    .default({}),
+    .default({ directory: "./filters/output" }),
   sources: z.array(sourceSchema).min(1, "At least one source is required"),
 });
 
