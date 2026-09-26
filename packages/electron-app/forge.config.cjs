@@ -89,6 +89,8 @@ const config = {
         options: {
           name: 'blockingmachine',
           productName: 'Blockingmachine',
+          // Must match packagerConfig.executableName; defaults to the scoped npm name otherwise.
+          bin: 'blockingmachine',
           icon: './assets/Blockingmachine.png',
           categories: ['Utility', 'Network'],
           maintainer: 'Greigh Studios LLC <daniel@greighstudios.com>'
@@ -102,6 +104,8 @@ const config = {
         options: {
           name: 'blockingmachine',
           productName: 'Blockingmachine',
+          // Must match packagerConfig.executableName; defaults to the scoped npm name otherwise.
+          bin: 'blockingmachine',
           icon: './assets/Blockingmachine.png',
           categories: ['Utility', 'Network']
         }

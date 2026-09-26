@@ -19,7 +19,7 @@
     "dev": "npm start",
     "package": "npm run --prefix packages/electron-app package",
     "make": "npm run --prefix packages/electron-app make",
-    "postinstall": "node scripts/patch-image-size.cjs",
+    "postinstall": "node scripts/patch-image-size.cjs && node scripts/patch-cross-zip.cjs",
     "version:bump": "node scripts/bump-version.mjs",
     "release": "node scripts/release.mjs",
     "verify:mv3": "node scripts/verify-mv3-compliance.mjs",
