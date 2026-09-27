@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Blockingmachine Reputation DB Remote Patch",
+  "description": "Format for hot-patch JSON file that can be pushed without a rebuild",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "patchedAt": { "type": "string", "description": "ISO 8601 timestamp of when this patch was published" },
+    "add": {
+      "type": "object",
+      "description": "Entries to add to named lists",
+      "additionalProperties": false,
+      "properties": {
+        "highAbuseTlds":        { "type": "array", "items": { "type": "string" } },
+        "adNetworks":           { "type": "array", "items": { "type": "string" } },
+        "trackerNetworks":      { "type": "array", "items": { "type": "string" } },
+        "cloudSuffixes":        { "type": "array", "items": { "type": "string" } },
+        "cdnSuffixes":          { "type": "array", "items": { "type": "string" } },
+        "iotTrusted":           { "type": "array", "items": { "type": "string" } },
+        "vendorSuffixes":       { "type": "array", "items": { "type": "string" } },
+        "platformSuffixes":     { "type": "array", "items": { "type": "string" } },
+        "multiTenantPlatforms": { "type": "array", "items": { "type": "string" } },
+        "untrustedHosting":     { "type": "array", "items": { "type": "string" } },
+        "cdnRoutingSuffixes":   { "type": "array", "items": { "type": "string" } },
+        "suspiciousAdTokens":   { "type": "array", "items": { "type": "string" } },
+        "suspiciousTrackerTokens": { "type": "array", "items": { "type": "string" } },
+        "specificNetworkTokens":{ "type": "array", "items": { "type": "string" } },
+        "highProfileBrands":    { "type": "array", "items": { "type": "string" } },
+        "dictionaryExemptions": { "type": "array", "items": { "type": "string" } },
+        "benignEndpointLabels": { "type": "array", "items": { "type": "string" } },
+        "dnsSuffixes":          { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "remove": {
+      "type": "object",
+      "description": "Entries to remove from named lists (e.g. false positives)",
+      "additionalProperties": false,
+      "properties": {
+        "highAbuseTlds":        { "type": "array", "items": { "type": "string" } },
+        "adNetworks":           { "type": "array", "items": { "type": "string" } },
+        "trackerNetworks":      { "type": "array", "items": { "type": "string" } },
+        "cloudSuffixes":        { "type": "array", "items": { "type": "string" } },
+        "cdnSuffixes":          { "type": "array", "items": { "type": "string" } },
+        "iotTrusted":           { "type": "array", "items": { "type": "string" } },
+        "vendorSuffixes":       { "type": "array", "items": { "type": "string" } },
+        "platformSuffixes":     { "type": "array", "items": { "type": "string" } },
+        "multiTenantPlatforms": { "type": "array", "items": { "type": "string" } },
+        "untrustedHosting":     { "type": "array", "items": { "type": "string" } },
+        "cdnRoutingSuffixes":   { "type": "array", "items": { "type": "string" } },
+        "suspiciousAdTokens":   { "type": "array", "items": { "type": "string" } },
+        "suspiciousTrackerTokens": { "type": "array", "items": { "type": "string" } },
+        "specificNetworkTokens":{ "type": "array", "items": { "type": "string" } },
+        "highProfileBrands":    { "type": "array", "items": { "type": "string" } },
+        "dictionaryExemptions": { "type": "array", "items": { "type": "string" } },
+        "benignEndpointLabels": { "type": "array", "items": { "type": "string" } },
+        "dnsSuffixes":          { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "brandEcosystems": {
+      "type": "object",
+      "description": "Add or extend brand ecosystem domain arrays",
+      "additionalProperties": { "type": "array", "items": { "type": "string" } }
+    }
+  },
+  "required": ["schemaVersion", "patchedAt"]
+}

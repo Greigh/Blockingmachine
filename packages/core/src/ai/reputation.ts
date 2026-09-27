@@ -9,10 +9,23 @@ import type {
   ReputationFeatures,
   ThreatCategory,
 } from './types.js';
+import { loadDb, loadDbSync, type DbLists } from './db-loader.js';
 
 /**
  * Registrable-domain and hostname-suffix reputation for the embedded classifier.
- * Suffix groups are the maintenance point: add a parent zone, not one-off hosts.
+ *
+ * ## Updating the domain lists
+ *
+ * The quickest way to add or remove domains without a code change:
+ * 1. Edit `packages/core/src/ai/db/remote-patch.json` on the `main` branch
+ * 2. The change is hot-patched into running instances within one TTL cycle
+ *    (default: 1 hour, set in `db/manifest.json`)
+ *
+ * For persistent base-list changes, edit this file directly and the JSON
+ * files will serve as the hot-patch override layer on top.
+ *
+ * @see packages/core/src/ai/db-loader.ts
+ * @see packages/core/src/ai/db/remote-patch.json
  * @beta
  */
 
@@ -22,7 +35,8 @@ export const HIGH_ABUSE_TLDS = new Set([
   'country', 'stream', 'date', 'faith', 'review', 'download', 'trade', 'webcam',
   'win', 'men', 'party', 'science', 'cricket', 'accountant', 'mom', 'sbs',
   'cfd', 'skin', 'quest', 'beauty', 'hair', 'makeup', 'cyou', 'best', 'boats',
-  'bond', 'casa', 'lol', 'bid',
+  'bond', 'lol', 'bid',
+  // Note: 'casa' was removed — nabu.casa is a legitimate Home Assistant Cloud domain
 ]);
 
 /** Delimited ad-tech tokens. Short or generic words match only on label boundaries. */
@@ -2442,3 +2456,58 @@ export function verdictBadgeLabel(verdict: string): string {
       return verdict.replace(/_/g, ' ').toUpperCase();
   }
 }
+
+// ─── Database integration ────────────────────────────────────────────────────
+//
+// The base lists object captures everything hardcoded above.  The remote-patch
+// loader can add or remove entries from any of these lists without a rebuild.
+//
+// Usage:
+//   import { refreshDb, getDbLists } from './reputation.js';
+//   await refreshDb();                          // force re-fetch of remote patch
+//   const lists = getDbLists();                 // get the merged live lists
+//   lists.iotTrusted.includes('nabu.casa');     // → true after any patch
+
+/** Snapshot of the hardcoded base lists — the loader merges remote patches on top. */
+export const BASE_DB_LISTS: DbLists = {
+  highAbuseTlds: [...HIGH_ABUSE_TLDS],
+  adNetworks: [...AD_NETWORK_SUFFIXES],
+  trackerNetworks: [...TRACKER_NETWORK_SUFFIXES],
+  cloudSuffixes: [...CLOUD_SUFFIXES],
+  cdnSuffixes: [...CDN_SUFFIXES],
+  iotTrusted: [...IOT_SUFFIXES],
+  vendorSuffixes: [...VENDOR_SUFFIXES],
+  platformSuffixes: [...PLATFORM_SUFFIXES],
+  multiTenantPlatforms: [...MULTI_TENANT_PLATFORMS],
+  untrustedHosting: [...UNTRUSTED_HOSTING_PLATFORMS],
+  cdnRoutingSuffixes: [...CDN_ROUTING_SUFFIXES],
+  suspiciousAdTokens: [...SUSPICIOUS_AD_TOKENS],
+  suspiciousTrackerTokens: [...SUSPICIOUS_TRACKER_TOKENS],
+  specificNetworkTokens: [...SPECIFIC_NETWORK_TOKENS],
+  highProfileBrands: [...HIGH_PROFILE_BRANDS],
+  dictionaryExemptions: [...DICTIONARY_COMPOUND_EXEMPTIONS],
+  benignEndpointLabels: [...BENIGN_ENDPOINT_LABELS],
+  dnsSuffixes: [...DNS_SUFFIXES],
+};
+
+/** Synchronously returns the live merged db (base + last cached remote patch). */
+export function getDbLists(): DbLists {
+  return loadDbSync(BASE_DB_LISTS, BRAND_ECOSYSTEMS).lists;
+}
+
+/**
+ * Triggers an async remote-patch refresh and returns the merged lists.
+ * Call this once at app startup; subsequent calls within the TTL window use cache.
+ *
+ * @param opts.forceRefresh - Bypass the TTL and fetch immediately
+ * @param opts.disableRemote - Use only the base lists (for offline/test envs)
+ */
+export async function refreshDb(
+  opts: { forceRefresh?: boolean; disableRemote?: boolean } = {},
+): Promise<{ lists: DbLists; remoteLastFetched: string | null }> {
+  const result = await loadDb(BASE_DB_LISTS, BRAND_ECOSYSTEMS, opts);
+  return { lists: result.lists, remoteLastFetched: result.remoteLastFetched };
+}
+
+// Re-export loader types for callers
+export type { DbLists, DbPatch } from './db-loader.js';
