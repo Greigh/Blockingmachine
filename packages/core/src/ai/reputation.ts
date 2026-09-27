@@ -671,7 +671,10 @@ const IOT_SUFFIXES = [
   'honeywell.com', 'resideo.com', 'lutron.com', 'leviton.com', 'control4.com',
   'lifx.co', 'nanoleaf.me', 'govee.com', 'govee-cloud.com', 'meross.com', 'shelly.cloud',
   'aqara.com', 'xiaomi.com', 'mi.com', 'mijia.com', 'mi-img.com',
-  'home-assistant.io', 'nabucasa.com', 'nuki.io', 'homey.app', 'threadgroup.org',
+  // Home Assistant Cloud uses nabu.casa (not nabucasa.com) for remote UI access.
+  // Per-instance subdomains are 32-char hex UUIDs (e.g. voou7v0lpaqq0xt7wimwzp4sepmqmqpr.ui.nabu.casa)
+  // and must not be treated as DGA-generated malware domains.
+  'home-assistant.io', 'nabucasa.com', 'nabu.casa', 'nuki.io', 'homey.app', 'threadgroup.org',
   'bosch-smarthome.com', 'home-connect.com', 'myqdevice.com', 'chamberlain.com',
   'simplisafe.com', 'wink.com', 'insteon.com', 'logitech.com', 'myharmony.com',
   'garmin.com', 'fitbit.com', 'withings.com', 'whoop.com', 'strava.com', 'polar.com', 'oura.com', 'ouraring.com',
@@ -1506,6 +1509,8 @@ export const MULTI_TENANT_PLATFORMS: ReadonlySet<string> = new Set([
   'turso.io', 'turso.tech', 'upstash.io', 'convex.dev', 'convex.cloud',
   'modal.run', 'modal.com', 'val.town', 'val.run', 'gitbook.io', 'readme.io',
   'hashnode.dev', 's3.amazonaws.com', 'blob.core.windows.net', 'storage.googleapis.com',
+  // Home Assistant Cloud: instance-specific UUID subdomains (e.g. <uuid>.ui.nabu.casa)
+  'nabu.casa',
 ]);
 
 /**
