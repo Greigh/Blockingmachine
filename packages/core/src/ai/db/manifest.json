@@ -1,0 +1,9 @@
+{
+  "$schema": "./db-schema.json",
+  "schemaVersion": 1,
+  "description": "Blockingmachine AI Reputation Database — single source of truth for all domain/token classification lists",
+  "version": "1.0.0-rc.6",
+  "remoteUrl": "https://raw.githubusercontent.com/Greigh/Blockingmachine/main/packages/core/src/ai/db/remote-patch.json",
+  "remoteTtlSeconds": 3600,
+  "lastUpdated": "2026-09-27"
+}
