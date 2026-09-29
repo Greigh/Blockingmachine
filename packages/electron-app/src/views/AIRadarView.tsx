@@ -10,7 +10,11 @@ import type {
   RuleConflictResult,
   LiveRadarSession,
 } from '../types/';
-import { formatConfidencePercent, verdictBadgeLabel } from '../aiDisplay';
+import type { HeatSummary, RadarHeatEntry } from '../radarHeatMap';
+import type { RadarDisplayConfig } from '../types/';
+import { formatConfidencePercent, formatRelativeTime, heatBadgeClass, verdictBadgeLabel } from '../aiDisplay';
+import { formatTriageBucketSummary } from '../triageDisplay';
+import { TriageOutcomeChip } from '../components/TriageOutcomeChip';
 import { BetaBadge } from '../components/BetaBadge';
 import { EntropyGuideModal } from '../components/EntropyGuideModal';
 
@@ -25,6 +29,14 @@ interface AIRadarViewProps {
 }
 
 type RadarTab = 'sinkhole-scout' | 'domain-inspector' | 'canary-crawler' | 'quarantine-history';
+
+/** Formats an interval in minutes for compact display, e.g. `30m`, `1h`, `12h`. */
+function formatIntervalShort(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return '—';
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  const hours = minutes / 60;
+  return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`;
+}
 
 export const AIRadarView: React.FC<AIRadarViewProps> = ({
   liveRadarSession,
@@ -103,6 +115,25 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     service: 'adguard',
   });
 
+  /** Effective sweep interval: the heat map's adaptive suggestion when present, else the configured one. */
+  const effectiveWatchdogInterval = Math.max(
+    5,
+    watchdogConfig.adaptiveIntervalMinutes && watchdogConfig.adaptiveIntervalMinutes >= 5
+      ? Math.round(watchdogConfig.adaptiveIntervalMinutes)
+      : Math.round(watchdogConfig.intervalMinutes || 60),
+  );
+
+  const watchdogCadenceLabel =
+    watchdogConfig.adaptiveIntervalMinutes && watchdogConfig.adaptiveIntervalMinutes >= 5
+      ? `Adaptive · ~${formatIntervalShort(effectiveWatchdogInterval)}`
+      : `Fixed · ${formatIntervalShort(effectiveWatchdogInterval)}`;
+
+  const watchdogCadenceTitle =
+    (watchdogConfig.cadenceReason || 'No adaptive suggestion computed yet — the next sweep will record one.') +
+    (watchdogConfig.cadenceUpdatedAt
+      ? ` (updated ${formatRelativeTime(new Date(watchdogConfig.cadenceUpdatedAt).getTime(), Date.now())})`
+      : '');
+
   // Tab 2: Domain Inspector State
   const [inspectorInput, setInspectorInput] = useState('');
   const [isInspecting, setIsInspecting] = useState(false);
@@ -115,6 +146,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
 
   // Tab 4: Quarantine & History State
   const [quarantineList, setQuarantineList] = useState<ThreatQuarantineItem[]>([]);
+  const [heatSummary, setHeatSummary] = useState<HeatSummary | null>(null);
+  const [heatClock, setHeatClock] = useState<number>(Date.now());
+  const [showIgnoredOffenders, setShowIgnoredOffenders] = useState<boolean>(false);
+  const [radarDisplayConfig, setRadarDisplayConfig] = useState<RadarDisplayConfig>({
+    showIgnoredOffenders: false,
+  });
   const [quarantineFilter, setQuarantineFilter] = useState<string>('all');
   const [quarantineSearch, setQuarantineSearch] = useState<string>('');
 
@@ -158,6 +195,17 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     }
   }, []);
 
+  const loadHeatSummary = useCallback(async () => {
+    if (window.electron?.getRadarHeatSummary) {
+      try {
+        const summary = await window.electron.getRadarHeatSummary();
+        if (isMountedRef.current && summary) setHeatSummary(summary);
+      } catch (err) {
+        console.error('Failed to load radar heat summary:', err);
+      }
+    }
+  }, []);
+
   // Load configuration on mount
   useEffect(() => {
     isMountedRef.current = true;
@@ -184,6 +232,13 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     loadQuarantine();
     loadWatchdog();
     loadFeedbackStats();
+    loadHeatSummary();
+
+    if (window.electron?.getRadarDisplayConfig) {
+      window.electron.getRadarDisplayConfig().then((cfg) => {
+        if (isMountedRef.current && cfg) setRadarDisplayConfig(cfg);
+      }).catch((err) => console.error('Failed to load radar display config:', err));
+    }
 
     return () => {
       isMountedRef.current = false;
@@ -192,7 +247,30 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       }
       timersRef.current = [];
     };
-  }, [loadQuarantine, loadWatchdog, loadFeedbackStats]);
+  }, [loadQuarantine, loadWatchdog, loadFeedbackStats, loadHeatSummary]);
+
+  // Follow live radar display preference changes from Settings
+  useEffect(() => {
+    if (!window.electron?.onRadarDisplayConfigUpdated) return;
+    const unsubscribe = window.electron.onRadarDisplayConfigUpdated((cfg) => {
+      if (isMountedRef.current && cfg) setRadarDisplayConfig(cfg);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Keep "last seen" relative times fresh and the heat summary live while the radar is visible
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (isMountedRef.current) {
+        setHeatClock(Date.now());
+        loadHeatSummary();
+        // Pull the watchdog config too so adaptive-cadence updates from
+        // background sweeps surface without leaving the view.
+        loadWatchdog();
+      }
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [loadHeatSummary, loadWatchdog]);
 
   const handleCopy = useCallback(async (text: string, key: string) => {
     try {
@@ -417,6 +495,102 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       setError?.(`Failed to whitelist domain: ${err?.message || err}`);
     }
   };
+
+  // Block a repeat offender straight from the heat map: synthesize a Universal
+  // blocking rule, add it to Custom Rules, and tune Mini-AI feedback to block
+  // (delegated to handleAddRulesToCustom), then refresh the heat card.
+  const handleHeatBlock = async (entry: RadarHeatEntry) => {
+    await handleAddRulesToCustom([`||${entry.domain}^`], entry.domain);
+    loadHeatSummary();
+  };
+
+  // Allowlist a repeat offender: adds the exception rule and whitelists Mini-AI
+  // feedback (delegated), then clears its persistent heat so it stops surfacing.
+  const handleHeatWhitelist = async (domain: string) => {
+    await handleWhitelistDomain(domain);
+    if (window.electron?.clearRadarHeatDomain) {
+      try {
+        await window.electron.clearRadarHeatDomain(domain);
+      } catch (err) {
+        console.error('Failed to clear heat for domain:', err);
+      }
+    }
+    loadHeatSummary();
+  };
+
+  // Ignore a repeat offender: hides it (and its zone) from Top Repeat Offenders
+  // WITHOUT trusting it — no exception rule, no whitelist feedback, no rule
+  // changes. Its heat freezes so restoring preserves what was hidden.
+  const handleHeatIgnore = async (entry: RadarHeatEntry) => {
+    if (!window.electron?.ignoreRadarHeatDomain) return;
+    try {
+      await window.electron.ignoreRadarHeatDomain(entry.domain);
+      setSuccessMessage?.(
+        `${entry.domain} is now ignored — it will no longer surface in Top Repeat Offenders. Restore it anytime from the Ignored list.`,
+      );
+      loadHeatSummary();
+    } catch (err) {
+      setError?.(`Failed to ignore ${entry.domain}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  // Restore a previously ignored offender to the active heat list.
+  const handleHeatUnignore = async (domain: string) => {
+    if (!window.electron?.unignoreRadarHeatDomain) return;
+    try {
+      await window.electron.unignoreRadarHeatDomain(domain);
+      setSuccessMessage?.(`${domain} restored to Top Repeat Offenders.`);
+      loadHeatSummary();
+    } catch (err) {
+      setError?.(`Failed to restore ${domain}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  // Shared row renderer for ignored offenders (used inline when the global
+  // "show ignored" preference is on, and inside the collapsible section).
+  const renderIgnoredRow = (entry: RadarHeatEntry) => (
+    <tr key={`ignored-${entry.domain}`} className="heat-row-ignored">
+      <td
+        className="heat-domain-cell heat-domain-ignored"
+        title={entry.ignoredAt ? `Ignored ${new Date(entry.ignoredAt).toLocaleString()} — hidden, not trusted` : 'Hidden, not trusted'}
+      >
+        {entry.domain}
+      </td>
+      <td>
+        <span className={`verdict-chip ${entry.verdict}`}>
+          {verdictBadgeLabel(entry.verdict)}
+        </span>
+      </td>
+      <td>
+        <span className="heat-flags-badge heat-low">{entry.flags}×</span>
+      </td>
+      <td className="heat-lastseen-cell">
+        {entry.ignoredAt ? formatRelativeTime(entry.ignoredAt, heatClock) : '—'}
+      </td>
+      <td style={{ textAlign: 'right' }}>
+        <div className="heat-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => handleHeatUnignore(entry.domain)}
+            title="Restore this offender (and its zone) to Top Repeat Offenders"
+          >
+            Restore
+          </button>
+          {onNavigateInspector && (
+            <button
+              type="button"
+              className="secondary-button"
+              style={{ padding: '4px 8px', fontSize: 11 }}
+              onClick={() => onNavigateInspector(entry.domain)}
+            >
+              Inspect
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
 
   // Batch block all flagged queries
   const handleBlockAllFlagged = async () => {
@@ -661,6 +835,9 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
   const totalQueries = hasLiveResults ? liveRadarSession!.totalQueriesAnalyzed : (scoutResult?.totalQueriesAnalyzed || 0);
   const flaggedCount = hasLiveResults ? liveRadarSession!.flaggedCount : (scoutResult?.flaggedCount || 0);
   const cleanCount = hasLiveResults ? liveRadarSession!.cleanCount : (scoutResult?.cleanCount || 0);
+  // How the cascade handled this list, or null when no result carries a cascade record — in which
+  // case the row is not rendered at all rather than showing a cascade that decided nothing.
+  const triageBucketSummary = formatTriageBucketSummary(allResults);
   const isVisible = hasLiveResults || Boolean(scoutResult) || Boolean(liveRadarSession?.active);
 
   const adCount = allResults.filter((r) => r.verdict === 'ad_server' || r.category === 'Advertising').length;
@@ -823,6 +1000,13 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             </div>
           </div>
 
+          {watchdogConfig.enabled && (
+            <div className="watchdog-cadence-line" title={watchdogCadenceTitle}>
+              <span className="heat-chip">⏱ {watchdogCadenceLabel}</span>
+              <span className="watchdog-cadence-reason">{watchdogCadenceTitle}</span>
+            </div>
+          )}
+
           <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border-color, rgba(255, 255, 255, 0.08))' }}>
             <label
               style={{
@@ -846,6 +1030,139 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Top Repeat Offenders — persistent radar heat map summary */}
+      {heatSummary && (heatSummary.totalDomains > 0 || heatSummary.ignoredCount > 0) && (
+        <div className="radar-heat-card">
+          <div className="heat-header">
+            <div className="heat-title-inline">
+              <span className="heat-title-strong">Top Repeat Offenders</span>
+              <span className="heat-title-note">Persistent Radar Heat Map</span>
+            </div>
+            <div className="heat-summary-chips">
+              <span className="heat-chip" title="Distinct flagged domains remembered across sweeps">
+                {heatSummary.totalDomains} tracked
+              </span>
+              <span className="heat-chip hot" title="Domains flagged three or more times">
+                {heatSummary.hotDomains} hot
+              </span>
+              <span className="heat-chip" title="Flags recorded in the last 24 hours">
+                {heatSummary.recentFlags} flags / 24h
+              </span>
+              {heatSummary.ignoredCount > 0 && (
+                <span className="heat-chip" title="Ignored offenders are hidden, not trusted — scans continue, heat is frozen">
+                  {heatSummary.ignoredCount} ignored
+                </span>
+              )}
+            </div>
+          </div>
+          <table className="heat-table">
+            <thead>
+              <tr>
+                <th>Domain</th>
+                <th>Verdict</th>
+                <th>Flags</th>
+                <th>Last Seen</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {heatSummary.topOffenders.map((entry) => (
+                <tr key={entry.domain}>
+                  <td className="heat-domain-cell" title={`First seen ${new Date(entry.firstSeen).toLocaleString()} · ${entry.clients.length} device(s)`}>
+                    {entry.domain}
+                  </td>
+                  <td>
+                    <span className={`verdict-chip ${entry.verdict}`}>
+                      {verdictBadgeLabel(entry.verdict)}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`heat-flags-badge ${heatBadgeClass(entry.flags)}`}>
+                      {entry.flags}×
+                    </span>
+                  </td>
+                  <td className="heat-lastseen-cell">
+                    {formatRelativeTime(entry.lastSeen, heatClock)}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <div className="heat-actions">
+                      <button
+                        type="button"
+                        className="secondary-button block-threat-btn"
+                        onClick={() => handleHeatBlock(entry)}
+                        title="Synthesize and add a blocking rule for this domain"
+                      >
+                        ＋ Block
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button whitelist-threat-btn"
+                        onClick={() => handleHeatWhitelist(entry.domain)}
+                        title="Whitelist this domain and clear its heat"
+                      >
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                        <span>Allowlist</span>
+                      </button>
+                      {onNavigateInspector && (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          style={{ padding: '4px 8px', fontSize: 11 }}
+                          onClick={() => onNavigateInspector(entry.domain)}
+                          title="Inspect in Unified Rule & AI Inspector"
+                        >
+                          Inspect
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="secondary-button heat-ignore-btn"
+                        onClick={() => handleHeatIgnore(entry)}
+                        title="Hide this offender (and its zone) from the list without trusting it — no allowlist rule is created"
+                      >
+                        Ignore
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {radarDisplayConfig.showIgnoredOffenders
+                ? heatSummary.ignoredEntries.map(renderIgnoredRow)
+                : null}
+            </tbody>
+          </table>
+          {heatSummary.ignoredCount > 0 && !radarDisplayConfig.showIgnoredOffenders && (
+            <div className="heat-ignored-section">
+              <button
+                type="button"
+                className="heat-ignored-toggle"
+                onClick={() => setShowIgnoredOffenders((prev) => !prev)}
+              >
+                <span
+                  className="heat-ignored-chevron"
+                  style={{ transform: showIgnoredOffenders ? 'rotate(90deg)' : 'none' }}
+                >
+                  ▸
+                </span>
+                <span>
+                  Ignored ({heatSummary.ignoredCount})
+                </span>
+                <span className="heat-ignored-note">hidden, not trusted — scans continue, heat is frozen</span>
+              </button>
+              {showIgnoredOffenders && (
+                <table className="heat-table heat-table-ignored">
+                  <tbody>
+                    {heatSummary.ignoredEntries.map(renderIgnoredRow)}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Mode Navigation Tabs */}
       <div className="ai-radar-nav-tabs">
@@ -1150,6 +1467,22 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 </div>
               )}
 
+              {/* What the cascade did with this list, when it was running.
+
+                  Rendered only when at least one result carries a cascade record: a summary reading
+                  "0 screened locally" for a list scanned with the cascade off would read as a
+                  cascade that found nothing, and the counts are bucket-exclusive, so a reader can
+                  add them up and get the list length back. */}
+              {triageBucketSummary && (
+                <div
+                  className="triage-summary-row"
+                  title="Triage cascade: what the local screening settled on its own, what was escalated to the model, what was contested, and what the ambiguity budget could not reach."
+                >
+                  <span className="triage-summary-label">Triage</span>
+                  <span className="triage-summary-text">{triageBucketSummary}</span>
+                </div>
+              )}
+
               {/* Spacious Results List */}
               {streamFilteredResults.length === 0 ? (
                 <div className="radar-empty-query-box">
@@ -1281,6 +1614,8 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                             {item.category && item.category.toLowerCase() !== item.verdict.toLowerCase() && item.category.toLowerCase() !== 'clean' && (
                               <span className="category-chip">{item.category}</span>
                             )}
+
+                            <TriageOutcomeChip triage={item.triage} />
 
                             <div
                               className="entropy-score-badge compact"
@@ -1418,6 +1753,9 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   <div>
                     <strong>{liveRadarSession?.active ? 'Live Radar session active in background:' : 'Scout query audit completed:'}</strong>{' '}
                     <span>{allResults.length} queries scanned • {flaggedCount} threat(s) flagged {liveRadarSession?.active && `(${formatSessionRemaining()})`}</span>
+                    {triageBucketSummary && (
+                      <span className="triage-summary-text compact">Triage: {triageBucketSummary}</span>
+                    )}
                   </div>
                 </div>
                 <button
@@ -1807,6 +2145,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                                 item.category.toLowerCase() !== 'clean' && (
                                   <span className="category-chip">{item.category}</span>
                                 )}
+                              <TriageOutcomeChip triage={item.triage} />
                             </div>
                             <div className="threat-entropy-row">
                               <div
@@ -2364,6 +2703,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                               host.category.toLowerCase() !== 'clean' && (
                                 <span className="category-chip">{host.category}</span>
                               )}
+                            <TriageOutcomeChip triage={host.triage} />
                           </div>
                         </div>
 

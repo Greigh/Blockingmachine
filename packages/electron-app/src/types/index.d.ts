@@ -1,4 +1,6 @@
 import type { Options } from 'electron-store';
+import type { RadarHeatMap } from '../radarHeatMap';
+import type { UnboundReachability, UnboundReachabilitySnapshot } from '../unboundReachability';
 
 export interface ElectronStore<T extends Record<string, any>> {
   get<K extends keyof T>(key: K): T[K];
@@ -24,6 +26,8 @@ export type {
   CompactionResult,
   RuleConflictResult,
   SynthesisTarget,
+  TriageOutcomeSummary,
+  FalsePositiveGuardResult,
 } from '@blockingmachine/core';
 export type ThemeType = 'light' | 'dark' | 'system';
 
@@ -174,8 +178,24 @@ export type ThreatCategory = 'Advertising' | 'Telemetry/Analytics' | 'CNAME Cloa
 export type RiskLevel = 'critical' | 'high' | 'medium' | 'low' | 'none';
 export type AiProviderType = 'mini-ai' | 'local-heuristics' | 'ollama' | 'gemini' | 'openai';
 
+/**
+ * Triage cascade settings.
+ *
+ * When enabled, the embedded classifier screens every candidate and `provider` becomes
+ * the *escalation backend* for the ones it cannot decide, rather than the single engine
+ * that evaluates everything.
+ */
+export interface TriageCascadeConfig {
+  enabled: boolean;
+  /** Model calls allowed per scan. */
+  maxEscalations?: number;
+  /** Also escalate uncertain *clean* verdicts — discovery mode. */
+  escalateClean?: boolean;
+}
+
 export interface AiProviderConfig {
   provider: AiProviderType;
+  cascade?: TriageCascadeConfig;
   ollamaUrl?: string;
   ollamaModel?: string;
   apiKey?: string;
@@ -220,7 +240,19 @@ export interface AiWatchdogConfig {
   service: 'adguard' | 'pihole';
   lastRun?: string;
   lastThreatsFound?: number;
+  /** Adaptive cadence suggested by the radar heat map after the last sweep. */
+  adaptiveIntervalMinutes?: number;
+  /** Human-readable rationale behind the current adaptive cadence. */
+  cadenceReason?: string;
+  /** ISO timestamp of when the adaptive cadence was last recomputed. */
+  cadenceUpdatedAt?: string;
   autoQuarantineEntropyDga?: boolean;
+}
+
+/** Renderer display preferences for the AI Radar (power-user browsing aids). */
+export interface RadarDisplayConfig {
+  /** Show ignored offenders inline in Top Repeat Offenders instead of the collapsed section. */
+  showIgnoredOffenders: boolean;
 }
 
 export interface AiScanResult {
@@ -242,6 +274,23 @@ export interface AiScanResult {
   inferenceTimeMs?: number;
   provider: AiProviderType;
   modelUsed?: string;
+  /**
+   * Set only when the false-positive guard cleared this target before any screening ran.
+   *
+   * The guard sits in front of both the cascade and the single-engine paths, so this is present with
+   * the cascade on or off — and it is the reason a running scan can contain results that carry no
+   * `triage` at all.
+   */
+  falsePositiveGuard?: FalsePositiveGuardResult;
+  /**
+   * What the triage cascade did with this candidate, when it was running.
+   *
+   * Absent on results scanned with the cascade off — which the results list reports as *not
+   * screened* rather than as a defaulted score, because "no record" and "decided instantly" are
+   * different facts. The engine has always attached this; the app's own declaration omitted it, so
+   * nothing could read it.
+   */
+  triage?: TriageOutcomeSummary;
   timestamp: string;
 }
 
@@ -314,8 +363,35 @@ export interface StoreSchema {
   aiThreatQuarantine?: ThreatQuarantineItem[];
   aiWatchdogConfig?: AiWatchdogConfig;
   miniAiFeedback?: Record<string, number>;
+  radarHeatMap?: RadarHeatMap;
+  radarDisplayConfig?: RadarDisplayConfig;
   autoStartFeedServer?: boolean;
   launchOnStartup?: boolean;
+  /** `host`, `host:port`, or a URL for the Unbound instance the reachability check queries. */
+  unboundResolver?: string;
+  /** A resolver that is *not* the one under test, used to confirm the canary exists upstream. */
+  unboundReferenceResolver?: string;
+  /** The last reachability result, so the pane can report it without re-querying the resolver. */
+  unboundReachability?: UnboundReachabilitySnapshot;
+}
+
+export interface UnboundResolverSettings {
+  /** What the user typed, verbatim. Empty means the default applies. */
+  address: string;
+  /** `host:port` the check will query, or null when the address is unusable. */
+  effective: string | null;
+  error: string | null;
+  /** True when nothing is set and the check falls back to the conventional address. */
+  isDefault: boolean;
+  /** What the user typed into the reference field, verbatim. */
+  referenceAddress: string;
+  /** `host:port` the existence check will query, or null when there is none. */
+  referenceEffective: string | null;
+  referenceError: string | null;
+  /** Where the reference came from, so the hint can say whose address it is. */
+  referenceSource: 'explicit' | 'system' | 'none';
+  /** This machine's configured DNS servers, for suggesting what to type. */
+  systemServers: string[];
 }
 
 export interface DaemonStatusInfo {
@@ -372,6 +448,13 @@ export interface ElectronAPI {
   getCompilationHistory: () => Promise<CompilationSnapshot[]>;
   inspectDomain: (domain: string) => Promise<DomainInspectionResult>;
   testFeedUrl: (url: string) => Promise<FeedDiagnostic>;
+  getUnboundReachability?: () => Promise<UnboundReachabilitySnapshot | null>;
+  checkUnboundReachability?: () => Promise<UnboundReachability>;
+  getUnboundResolvers?: () => Promise<UnboundResolverSettings>;
+  setUnboundResolvers?: (values: {
+    address?: string;
+    referenceAddress?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   startFeedServer: (port?: number) => Promise<FeedServerStatus>;
   stopFeedServer: () => Promise<FeedServerStatus>;
   getFeedServerStatus: () => Promise<FeedServerStatus>;
@@ -398,6 +481,14 @@ export interface ElectronAPI {
   compactSubdomainRules?: (domains: string[], threshold?: number) => Promise<CompactionResult>;
   checkRuleConflict?: (rule: string) => Promise<RuleConflictResult>;
   getMiniAiFeedbackStats?: () => Promise<{ count: number; feedback: Record<string, number> }>;
+  resetMiniAiFeedback?: (domain: string) => Promise<{ success: boolean }>;
+  getRadarHeatSummary?: () => Promise<import('./radarHeatMap').HeatSummary>;
+  clearRadarHeatDomain?: (domain: string) => Promise<{ success: boolean; error?: string }>;
+  ignoreRadarHeatDomain?: (domain: string) => Promise<{ success: boolean; error?: string }>;
+  unignoreRadarHeatDomain?: (domain: string) => Promise<{ success: boolean; error?: string }>;
+  getRadarDisplayConfig?: () => Promise<RadarDisplayConfig>;
+  setRadarDisplayConfig?: (config: Partial<RadarDisplayConfig>) => Promise<{ success: boolean; error?: string }>;
+  onRadarDisplayConfigUpdated?: (callback: (config: RadarDisplayConfig) => void) => () => void;
   synthesizeCustomRules?: (input: {
     domain: string;
     verdict: any;

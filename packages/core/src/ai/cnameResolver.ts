@@ -4,10 +4,9 @@ import { decomposeDomain, DYNAMIC_DNS_SUFFIXES } from './entropy.js';
 import {
   classifyInfrastructure,
   detectAntiAdblock,
+  getDbLists,
   hostnameHasToken,
   isSameBrandEcosystem,
-  SUSPICIOUS_AD_TOKENS,
-  SUSPICIOUS_TRACKER_TOKENS,
 } from './reputation.js';
 import type { CnameResolutionResult } from './types.js';
 
@@ -295,10 +294,10 @@ export function isTrackingSubdomain(domain: string): boolean {
 function hasTrackingOrAdTokens(domain: string): boolean {
   if (!domain || typeof domain !== 'string') return false;
   const lower = domain.toLowerCase();
-  for (const token of SUSPICIOUS_AD_TOKENS) {
+  for (const token of getDbLists().suspiciousAdTokens) {
     if (hostnameHasToken(lower, token)) return true;
   }
-  for (const token of SUSPICIOUS_TRACKER_TOKENS) {
+  for (const token of getDbLists().suspiciousTrackerTokens) {
     if (hostnameHasToken(lower, token)) return true;
   }
   return false;

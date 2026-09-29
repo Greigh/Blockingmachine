@@ -21,7 +21,9 @@ import { ShellCommand } from "./commands/ShellCommand.js";
 import { ServeCommand } from "./commands/ServeCommand.js";
 import { AiScanCommand } from "./commands/AiScanCommand.js";
 import { AiCrawlCommand } from "./commands/AiCrawlCommand.js";
+import { CoverageCommand } from "./commands/CoverageCommand.js";
 import { listRuleSnapshots, rollbackSnapshot } from "./lib/db.js";
+import { EXPORT_FORMATS, type SupportedFormat } from "@blockingmachine/core";
 import type { MetaConfig } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -45,6 +47,31 @@ process.on("uncaughtException", (error) => {
 });
 
 const program = new Command();
+
+/**
+ * Parse `--format privoxy,bind` into the typed format list.
+ *
+ * An unknown name is an error rather than something skipped. Before this option existed there was
+ * no way to choose a format from the CLI at all, which left `privoxy` and `bind` — both of which the
+ * README advertises — unreachable from the command line; quietly ignoring a typo would put the
+ * caller back in exactly that position while appearing to succeed.
+ */
+function parseExportFormats(raw: unknown): SupportedFormat[] | undefined {
+  if (typeof raw !== "string" || !raw.trim()) return undefined;
+  const requested = raw
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  const unknown = requested.filter(
+    (name) => !(EXPORT_FORMATS as readonly string[]).includes(name),
+  );
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown export format: ${unknown.join(", ")}. Valid formats: ${EXPORT_FORMATS.join(", ")}.`,
+    );
+  }
+  return requested as SupportedFormat[];
+}
 
 async function loadConfig(): Promise<AppConfig> {
   const rawConfig = (await loadConfigFromLib()) as RawConfig;
@@ -89,6 +116,10 @@ program
   .command("export")
   .description("Export filter lists")
   .option("-o, --output-path <path>", "Output path")
+  .option(
+    "-f, --format <formats>",
+    `Comma-separated formats to write (${EXPORT_FORMATS.join(", ")}). Defaults to hosts,dnsmasq,adguard.`,
+  )
   .option("--sync-pihole <url>", "Pi-hole reload/update endpoint URL")
   .option("--webhook <url>", "Webhook URL to notify upon completion")
   .action(async (cmdOptions) => {
@@ -97,6 +128,7 @@ program
       const cmd = new ExportCommand({ config, logger });
       const result = await cmd.execute({
         outputPath: cmdOptions.outputPath,
+        formats: parseExportFormats(cmdOptions.format),
         syncPihole: cmdOptions.syncPihole,
         webhook: cmdOptions.webhook,
       });
@@ -273,6 +305,12 @@ program
   .option("--pihole-url <url>", "Pi-hole base URL", "http://127.0.0.1")
   .option("--pihole-token <token>", "Pi-hole web API token")
   .option("--limit <number>", "Number of queries to analyze", "50")
+  .option(
+    "--cascade",
+    "Screen every candidate with the embedded classifier and escalate only undecided ones to the provider",
+  )
+  .option("--escalate-clean", "In cascade mode, also escalate uncertain *clean* verdicts (discovery mode)")
+  .option("--max-escalations <number>", "Model calls the cascade may spend per scan", "25")
   .option("--json", "Output machine-readable JSON result")
   .action(async (target, cmdOptions) => {
     try {
@@ -284,6 +322,11 @@ program
         ollamaUrl: cmdOptions.ollamaUrl,
         model: cmdOptions.model,
         apiKey: cmdOptions.apiKey,
+        cascade: cmdOptions.cascade === true,
+        escalateClean: cmdOptions.escalateClean === true,
+        maxEscalations: cmdOptions.maxEscalations
+          ? parseInt(cmdOptions.maxEscalations, 10)
+          : undefined,
         querylog: cmdOptions.querylog,
         adguardUrl: cmdOptions.adguardUrl,
         adguardUser: cmdOptions.adguardUser,
@@ -329,6 +372,38 @@ program
       }
     } catch (error) {
       logger.error(`AI Crawl failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("coverage")
+  .description("[Beta] Measure how much of the compiled list real browsing actually matched")
+  .option("-r, --rules <file>", "Compiled rule list to measure against")
+  .option("-t, --trace <file>", "Request trace: one host or URL per line, optional trailing count")
+  .option("--hits <file>", "Rule-hit ledger: count<TAB>rule per line, as exported by the extension")
+  .option("--hot", "Measure the coverage-derived hot set instead of the full compiled export")
+  .option("--top <number>", "How many hottest rules to list", "10")
+  .option("--json", "Output machine-readable JSON result")
+  .action(async (cmdOptions: { rules?: string; trace?: string; hits?: string; hot?: boolean; top?: string; json?: boolean }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new CoverageCommand({ config, logger });
+      const res = await cmd.execute({
+        rules: cmdOptions.rules,
+        trace: cmdOptions.trace,
+        hits: cmdOptions.hits,
+        hot: cmdOptions.hot,
+        top: cmdOptions.top ? parseInt(cmdOptions.top, 10) : 10,
+        json: cmdOptions.json,
+      });
+      if (!res.success && !cmdOptions.json) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Coverage analysis failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       process.exit(1);
     }
   });

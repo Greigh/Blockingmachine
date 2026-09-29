@@ -2,6 +2,29 @@ import type { StoredRule } from "../RuleStore.js";
 import type { SupportedFormat } from "../types.js";
 import { cleanDomainPattern } from "../createMetadata.js";
 
+/**
+ * Privoxy action-file section headers.
+ *
+ * Privoxy evaluates an action file top-down and — unlike a Shadowrocket/Surge rule set — **the last
+ * action that matches a URL wins**. A child bypass therefore has to be emitted *after* the parent
+ * block it escapes. The sections are emitted by the format drivers, not by `formatPrivoxyRule`:
+ * where a section begins is a document-level decision and a single rule cannot know it.
+ */
+export const PRIVOXY_BLOCK_SECTION = "{+block{Blockingmachine Blocklist}}";
+export const PRIVOXY_BYPASS_SECTION = "{-block}";
+
+/**
+ * The record section a BIND master file needs before any policy record.
+ *
+ * BIND refuses to load a primary zone whose file has no SOA, so a file of bare policy records does
+ * not load at all. The SOA/NS pair below is the one the BIND ARM's own RPZ example uses.
+ */
+export const RPZ_ZONE_PREAMBLE = [
+  "$TTL 3600",
+  "@ IN SOA localhost. root.localhost. ( 1 3600 600 604800 86400 )",
+  "@ IN NS localhost.",
+].join("\n");
+
 /** A stored rule must represent one enabled input line. */
 export function isExportableRule(rule: StoredRule): boolean {
   return !!rule?.raw?.trim() && rule.metadata?.enabled !== false &&
@@ -9,6 +32,28 @@ export function isExportableRule(rule: StoredRule): boolean {
 }
 
 const COSMETIC_MARKER = /#(?:@?(?:#|\?#|\$#|\$\?#|%#)|[.,])|\$\$/;
+
+/**
+ * The comment prefix a format's own syntax uses.
+ *
+ * A DNS master file (BIND) is not `named.conf`: it holds resource records, and its comment
+ * character is `;` — `#` is a parse error there, not a comment.
+ */
+export function exportCommentPrefix(format: SupportedFormat): string {
+  if (format === "adguard" || format === "abp" || format === "all") return "! ";
+  if (format === "bind") return "; ";
+  return "# ";
+}
+
+/** An inert line recording an exception, in the target format's own comment syntax. */
+export function formatExceptionComment(
+  rule: StoredRule,
+  format: SupportedFormat,
+  overridden = false,
+): string {
+  const label = overridden ? "EXCEPTION OVERRIDDEN BY $important" : "EXCEPTION";
+  return `${exportCommentPrefix(format)}${label}: ${rule.raw}`;
+}
 
 export function isException(rule: StoredRule): boolean {
   return !!rule && !!(
@@ -163,21 +208,28 @@ function formatUnboundRule(rule: StoredRule): string {
 function formatBindRule(rule: StoredRule): string {
   if (isException(rule)) {
     if (!getDnsDomain(rule)) return "";
-    return `# EXCEPTION: ${rule.raw}`;
+    return formatExceptionComment(rule, "bind");
   }
   const domain = getDnsDomain(rule);
   if (!domain) return "";
-  return `zone "${domain}" { type master; file "null.zone.file"; };`;
+  // One `zone { type master; file … }` stanza per blocked domain cannot work: BIND refuses a
+  // primary zone whose file holds no SOA, and no single file can serve 100k different origins. The
+  // artifact is therefore a Response Policy Zone, where the records *are* the list. `CNAME .` is
+  // RPZ's documented NXDOMAIN policy, and because the name is relative it is rewritten against the
+  // RPZ origin — which is exactly how BIND recovers the name being blocked.
+  return `${domain} CNAME .`;
 }
 
 function formatPrivoxyRule(rule: StoredRule): string {
   if (isException(rule)) {
     if (!getDnsDomain(rule)) return "";
-    return `# EXCEPTION: ${rule.raw}`;
+    return formatExceptionComment(rule, "privoxy");
   }
   const domain = getDnsDomain(rule);
   if (!domain) return "";
-  return `{ +block { ${domain} } }`;
+  // The leading dot is the whole mechanism: a bare host in a Privoxy action file matches that host
+  // only, while `.example.com` matches the domain and every subdomain of it.
+  return `.${domain}`;
 }
 
 function formatShadowrocketRule(rule: StoredRule): string {
@@ -187,5 +239,8 @@ function formatShadowrocketRule(rule: StoredRule): string {
   }
   const domain = getDnsDomain(rule);
   if (!domain) return "";
-  return `DOMAIN,${domain},REJECT`;
+  // `DOMAIN-SUFFIX`, not `DOMAIN`: the blocklist is keyed by registrable domain, and `DOMAIN`
+  // matches that exact host only — every subdomain of a blocked domain would sail straight
+  // through. `DOMAIN-SUFFIX` is what Shadowrocket and Surge users mean by a domain block.
+  return `DOMAIN-SUFFIX,${domain},REJECT`;
 }

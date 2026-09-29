@@ -131,6 +131,45 @@ export const ANTI_ADBLOCK_PROVIDER_SET: ReadonlySet<string> = new Set(
   ANTI_ADBLOCK_PROVIDERS,
 );
 
+/**
+ * Independent evidence families that can support a threat verdict.
+ *
+ * "Specific" families are name-based knowledge with high precision — a match is
+ * itself meaningful. The remaining families are statistical shape measurements of a
+ * single hostname, which a perfectly legitimate name can exhibit by accident.
+ */
+export type EvidenceFamily =
+  | 'known-network'
+  | 'brand-impersonation'
+  | 'cname-uncloak'
+  | 'punycode'
+  | 'hex-sld'
+  | 'vowel-free'
+  | 'keyword'
+  | 'consonant-run'
+  | 'digit-run'
+  | 'ngram'
+  | 'abuse-tld';
+
+/**
+ * `corroborated` — enough independent evidence for a confident verdict.
+ * `single-signal` — one family only; a lead, not a finding.
+ * `lexical-only` — the model's own probability is the sole support.
+ */
+export type CorroborationTier = 'corroborated' | 'single-signal' | 'lexical-only';
+
+export interface CorroborationAssessment {
+  /** Evidence families detected, most specific first. */
+  families: EvidenceFamily[];
+  /** How many detected families are high-precision name-based matches. */
+  specific: number;
+  tier: CorroborationTier;
+  /** Highest risk level this evidence can justify. */
+  maxRiskLevel: RiskLevel;
+  /** Highest confidence percentage this evidence can justify. */
+  maxConfidence: number;
+}
+
 export interface MiniAiFeatureContribution {
   name: string;
   value: number;
@@ -148,10 +187,61 @@ export interface MiniAiPrediction {
   topContributions: MiniAiFeatureContribution[];
   inferenceTimeMs: number;
   reasons: string[];
+  /**
+   * How well the verdict is corroborated — see `assessCorroboration()`. Omitted on
+   * fail-safe and short-circuit paths (malformed input, IP addresses, whitelist overrides).
+   */
+  corroboration?: CorroborationTier;
+  /** Independent evidence families detected for this verdict. */
+  evidenceFamilies?: EvidenceFamily[];
+}
+
+/**
+ * Triage cascade settings.
+ *
+ * With `enabled`, the embedded classifier screens every candidate first and the
+ * configured `provider` is used only as the *escalation backend* for the candidates it
+ * cannot defend. Without it, `provider` keeps its original meaning: the single engine
+ * that evaluates everything, with no local screening pass.
+ * @beta
+ */
+export interface TriageCascadeConfig {
+  enabled: boolean;
+  /** Escalations allowed per scan call. */
+  maxEscalations?: number;
+  /** Escalations already spent, so a session budget can be enforced across calls. */
+  spentEscalations?: number;
+  /** Ambiguity below which a candidate is resolved locally. */
+  minAmbiguity?: number;
+  /** Allow escalating an uncertain *clean* verdict (off by default). */
+  escalateClean?: boolean;
+}
+
+/**
+ * What the cascade did with one candidate, recorded on the scan result so a verdict can
+ * be traced back to the screening pass that produced it.
+ * @beta
+ */
+export interface TriageOutcomeSummary {
+  action: 'resolve-locally' | 'escalate' | 'deferred';
+  /** 0-1; how undecided the local verdict was. */
+  ambiguity: number;
+  /** Signal codes that fired, e.g. `near-tie`, `unsupported`. */
+  signals: string[];
+  /** One line per firing signal, suitable for display. */
+  explanations: string[];
+  /** Where the final verdict came from. */
+  source: 'local' | 'escalated' | 'contested';
+  /** The escalation recommended clearing a target the local evidence defends. */
+  contradicted: boolean;
+  /** An escalation was attempted and failed; the local verdict stands. */
+  escalationFailed: boolean;
+  model?: string;
 }
 
 export interface AiProviderConfig {
   provider: AiProviderType;
+  cascade?: TriageCascadeConfig;
   ollamaUrl?: string; // Default http://127.0.0.1:11434
   ollamaModel?: string; // Default llama3.2
   apiKey?: string;
@@ -202,6 +292,15 @@ export interface AiScanResult {
   provider: AiProviderType;
   modelUsed?: string;
   antiAdblock?: AntiAdblockDetection;
+  /**
+   * Present only when the false-positive guard cleared this target before screening ran.
+   *
+   * Independent of `triage`: the guard sits in front of both the cascade and the single-engine
+   * paths, so this is set with the cascade on or off.
+   */
+  falsePositiveGuard?: FalsePositiveGuardResult;
+  /** Present only when the triage cascade evaluated this target. */
+  triage?: TriageOutcomeSummary;
   timestamp: string;
 }
 
@@ -367,6 +466,27 @@ export interface AntiAdblockDetection {
   reason?: string;
 }
 
+/**
+ * The pre-screening false-positive guard's verdict on a target, recorded rather than implied.
+ *
+ * `isSafeInfrastructure` runs *before* any classifier or model — infrastructure, product endpoints
+ * and allowlisted hosts are cleared on sight — so a guarded result has no `triage` record and no
+ * `featureScores`. That is a deliberate skip, not a cascade that decided nothing, and the
+ * distinction was previously readable only from the sentence appended to `reasons`. Anything
+ * showing a screen's coverage needs it as data, because "no cascade record" and "the guard cleared
+ * it" mean opposite things about a running scan and look identical on the result.
+ *
+ * `cleared` is kept as a field rather than inferred from presence so a future "evaluated but not
+ * cleared" record has somewhere to go without changing the shape readers already handle.
+ * @beta
+ */
+export interface FalsePositiveGuardResult {
+  /** The target was cleared before screening. */
+  cleared: boolean;
+  /** Why, as the guard phrases it, e.g. `Product status, API, CDN, or update endpoint`. */
+  reason?: string;
+}
+
 // -----------------------------------------------------------------------------
 // Runtime Type Guards (Validation Predicates)
 // -----------------------------------------------------------------------------
@@ -494,7 +614,25 @@ export function isAiScanResult(val: unknown): val is AiScanResult {
         (val.antiAdblock.provider === undefined ||
           isAntiAdblockProviderId(val.antiAdblock.provider)) &&
         isOptionalString(val.antiAdblock.providerName) &&
-        isOptionalString(val.antiAdblock.reason)))
+        isOptionalString(val.antiAdblock.reason))) &&
+    (val.falsePositiveGuard === undefined ||
+      (isRecord(val.falsePositiveGuard) &&
+        typeof val.falsePositiveGuard.cleared === 'boolean' &&
+        isOptionalString(val.falsePositiveGuard.reason))) &&
+    (val.triage === undefined ||
+      (isRecord(val.triage) &&
+        (val.triage.action === 'resolve-locally' ||
+          val.triage.action === 'escalate' ||
+          val.triage.action === 'deferred') &&
+        isInRange(val.triage.ambiguity, 0, 1) &&
+        isStringArray(val.triage.signals) &&
+        isStringArray(val.triage.explanations) &&
+        (val.triage.source === 'local' ||
+          val.triage.source === 'escalated' ||
+          val.triage.source === 'contested') &&
+        typeof val.triage.contradicted === 'boolean' &&
+        typeof val.triage.escalationFailed === 'boolean' &&
+        isOptionalString(val.triage.model)))
   );
 }
 

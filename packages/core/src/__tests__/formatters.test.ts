@@ -69,14 +69,19 @@ describe("formatters & headers", () => {
     expect(formatRuleForType(sampleBlockingRule, "unbound")).toBe(
       '  local-zone: "adtracker.net" always_nxdomain',
     );
+    // RPZ policy record: `CNAME .` is BIND's documented NXDOMAIN block. A per-domain
+    // `zone { type master; … }` stanza cannot load at all — BIND refuses a primary zone with no SOA.
     expect(formatRuleForType(sampleBlockingRule, "bind")).toBe(
-      'zone "adtracker.net" { type master; file "null.zone.file"; };',
+      "adtracker.net CNAME .",
     );
+    // The leading dot is the mechanism: a bare host matches that host only in Privoxy.
     expect(formatRuleForType(sampleBlockingRule, "privoxy")).toBe(
-      "{ +block { adtracker.net } }",
+      ".adtracker.net",
     );
+    // DOMAIN-SUFFIX, not DOMAIN: the block covers the domain and everything under it, which is
+    // what a domain block means in a Surge-style rule set.
     expect(formatRuleForType(sampleBlockingRule, "shadowrocket")).toBe(
-      "DOMAIN,adtracker.net,REJECT",
+      "DOMAIN-SUFFIX,adtracker.net,REJECT",
     );
     expect(formatRuleForType(sampleBlockingRule, "adguard")).toBe(
       "||adtracker.net^",
@@ -96,8 +101,9 @@ describe("formatters & headers", () => {
     expect(formatRuleForType(sampleExceptionRule, "unbound")).toBe(
       "# EXCEPTION: @@||safe-tracker.com^",
     );
+    // A BIND master file comments with `;` — `#` is a parse error there, not a comment.
     expect(formatRuleForType(sampleExceptionRule, "bind")).toBe(
-      "# EXCEPTION: @@||safe-tracker.com^",
+      "; EXCEPTION: @@||safe-tracker.com^",
     );
     expect(formatRuleForType(sampleExceptionRule, "privoxy")).toBe(
       "# EXCEPTION: @@||safe-tracker.com^",
@@ -126,7 +132,22 @@ describe("formatters & headers", () => {
     expect(unboundHeader).toMatch(/^# Title: Test Blocklist/m);
 
     const bindHeader = generateHeader(metadata, "bind");
-    expect(bindHeader).toMatch(/^# Title: Test Blocklist/m);
+    expect(bindHeader).toMatch(/^; Title: Test Blocklist/m);
+    expect(bindHeader).not.toMatch(/^# Title:/m);
+  });
+
+  test("opens the format-specific section a bare list of rules would be rejected without", () => {
+    // A Privoxy action file is section-based; patterns before the first action block belong to no
+    // action. A BIND primary zone needs an SOA before any record. Both are part of the artifact,
+    // not a step the user is left to discover from a load error.
+    const privoxyHeader = generateHeader(metadata, "privoxy");
+    expect(privoxyHeader).toContain("{+block{Blockingmachine Blocklist}}");
+
+    const bindHeader = generateHeader(metadata, "bind");
+    expect(bindHeader).toContain("$TTL 3600");
+    expect(bindHeader).toContain("@ IN SOA localhost. root.localhost.");
+    expect(bindHeader).toContain("response-policy");
+    expect(bindHeader).toContain("rpz.blockingmachine");
   });
 
   test("generateHeader uses ! comment prefix for adguard and abp formats", () => {

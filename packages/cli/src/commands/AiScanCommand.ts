@@ -26,6 +26,11 @@ export interface AiScanOptions {
   piholeUrl?: string;
   piholeToken?: string;
   limit?: number;
+  /** Screen everything locally, escalating only undecided candidates to the provider. */
+  cascade?: boolean;
+  /** Also escalate uncertain *clean* verdicts — discovery mode. */
+  escalateClean?: boolean;
+  maxEscalations?: number;
 }
 
 export class AiScanCommand extends BaseCommand<AiScanOptions> {
@@ -42,6 +47,16 @@ export class AiScanCommand extends BaseCommand<AiScanOptions> {
       apiKey: options.apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY,
       apiEndpoint: options.apiEndpoint,
       modelName: options.model,
+      // The cascade turns `provider` into the *escalation backend*: the embedded
+      // classifier screens every candidate first, and only what it cannot defend is
+      // sent to the configured model.
+      cascade: options.cascade
+        ? {
+            enabled: true,
+            maxEscalations: options.maxEscalations ?? 25,
+            escalateClean: options.escalateClean === true,
+          }
+        : undefined,
     };
 
     const service = new AiDetectorService(aiConfig);
@@ -87,6 +102,42 @@ export class AiScanCommand extends BaseCommand<AiScanOptions> {
         console.log(`  Inference Speed: ${chalk.green(`${result.inferenceTimeMs}ms`)} ${chalk.dim('(Air-gapped in-memory)')}`);
       }
       console.log(`  Shannon Entropy: ${result.entropy} ${result.isLikelyDga ? chalk.red('(Elevated DGA score)') : chalk.dim('(Normal range)')}`);
+
+      // A guarded result has no `triage` section below, which would otherwise read as a scan that
+      // produced nothing. Say which of the two happened.
+      if (result.falsePositiveGuard?.cleared) {
+        console.log(
+          `  Screening:       ${chalk.gray('⊘ skipped — cleared by the false-positive guard')}${result.falsePositiveGuard.reason ? chalk.dim(` (${result.falsePositiveGuard.reason})`) : ''}`,
+        );
+      }
+
+      if (result.triage) {
+        const t = result.triage;
+        const actionBadge =
+          t.action === 'escalate'
+            ? chalk.bgBlue.white(' ESCALATED ')
+            : t.action === 'deferred'
+              ? chalk.bgYellow.black(' DEFERRED ')
+              : chalk.bgGreen.black(' SCREENED LOCALLY ');
+        console.log(`\n  ${chalk.bold('Triage Cascade:')} ${actionBadge}`);
+        console.log(
+          `    Ambiguity:       ${chalk.cyan(t.ambiguity.toFixed(2))} ${chalk.dim('(0 = decided, 1 = coin flip)')}`,
+        );
+        console.log(
+          `    Verdict source:  ${chalk.white(t.source)}${t.model ? chalk.dim(` via ${t.model}`) : ''}`,
+        );
+        if (t.contradicted) {
+          console.log(
+            `    ${chalk.yellow('⚠ The model recommended clearing this target; the local verdict was kept because it rests on name-based evidence.')}`,
+          );
+        }
+        if (t.escalationFailed) {
+          console.log(`    ${chalk.yellow('⚠ Escalation unavailable; the local verdict stands.')}`);
+        }
+        for (const line of t.explanations) {
+          console.log(`    • ${chalk.dim(line)}`);
+        }
+      }
 
       if (result.decomposition) {
         const d = result.decomposition;

@@ -1,0 +1,16 @@
+{
+  "source": "shadow log (110 sample rows, reference-as-proxy + 120 reviewed disagreements as gold labels)",
+  "n": 230,
+  "target_recall": 0.9,
+  "block": {
+    "threshold": 0.2,
+    "precision": 0.6597938144329897,
+    "recall": 0.9952153110047847
+  },
+  "review": {
+    "threshold": 0.2,
+    "precision": 0.6597938144329897,
+    "recall": 0.9952153110047847
+  },
+  "note": "block threshold maximizes precision at target recall; review is a higher-recall triage band. Production gates still apply (allowlist first, shadow disagreement review)."
+}

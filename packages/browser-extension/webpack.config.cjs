@@ -22,6 +22,17 @@ class CopyAssetsAndManifestPlugin {
           fs.copyFileSync(path.join(assetsSrc, file), path.join(assetsDist, file));
         }
       }
+
+      // Copy the static DNR rulesets. The manifest names these paths and Chrome loads them
+      // from the packaged extension, so they must land verbatim in dist/ next to manifest.json.
+      const rulesSrc = path.resolve(__dirname, 'rules');
+      if (fs.existsSync(rulesSrc)) {
+        const rulesDist = path.join(distDir, 'rules');
+        fs.mkdirSync(rulesDist, { recursive: true });
+        for (const file of fs.readdirSync(rulesSrc)) {
+          fs.copyFileSync(path.join(rulesSrc, file), path.join(rulesDist, file));
+        }
+      }
     });
   }
 }
@@ -41,8 +52,17 @@ module.exports = {
   resolve: {
     extensions: ['.ts', '.tsx', '.js', '.jsx', '.json'],
     extensionAlias: {
-      '.js': ['.ts', '.js'],
+      // TypeScript, ts-jest and this bundler all have to agree on what `./Foo.js` means.
+      // `.tsx` belongs in the `.js` list as much as `.ts` does: without it a component is
+      // resolvable by `tsc` and by Jest but not by webpack, which fails the build only.
+      '.js': ['.ts', '.tsx', '.js'],
       '.jsx': ['.tsx', '.jsx']
+    },
+    alias: {
+      // The element Mini-AI lives in core and is shared with the desktop app. Point
+      // the bundler at core's source so the extension never needs core's `dist`
+      // built first, and so only this one module (not the whole of core) is bundled.
+      '@blockingmachine/core/element-ai': path.resolve(__dirname, '../core/src/ai/elementClassifier.ts')
     }
   },
   module: {
@@ -64,6 +84,13 @@ module.exports = {
         use: ['style-loader', 'css-loader']
       }
     ]
+  },
+  // The popup is a React 19 app, so ~230 KiB minified is the floor for
+  // react-dom alone. Budget explicitly above that: the default 244 KiB hint
+  // fires on routine UI work and hides genuinely large additions in the noise.
+  performance: {
+    maxAssetSize: 384 * 1024,
+    maxEntrypointSize: 384 * 1024
   },
   plugins: [
     new HtmlWebpackPlugin({

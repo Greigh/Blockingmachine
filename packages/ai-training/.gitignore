@@ -1,0 +1,36 @@
+# Local build inputs and outputs.
+#
+# The repo carries the training *sources* and the frozen feature contract (feature
+# names, token/TLD lists, bigram table, fixtures). The data and the trained artifacts
+# stay on the machine that produced them: the label store is a few megabytes of SQLite,
+# the filter lists are third-party downloads, and every model_* file is reproducible by
+# re-running the pipeline documented in README.md.
+#
+# The one artifact that does ship is `packages/core/ai-weights/model.json` — the served
+# weights — which is committed deliberately, with its SHA-256 pinned by the promotion
+# ceremony.
+
+# Label store + observation corpus (rebuilt by labels.py / crawl.py).
+labels.db
+observations-*.db
+
+# Downloaded inputs (third-party filter lists and rankings).
+adguard_tracking.txt
+majestic.csv
+
+# Trained artifacts (rebuilt by train.py / evaluate.py / export.py).
+model_artifacts/
+model_artifacts_v2/
+model.json
+model_v2_experimental.json
+
+# M5 ceremony outputs (rebuilt per promotion run).
+drift_baseline.json
+gate_report.json
+review_queue.csv
+reviewed.csv
+
+# Python environment.
+.venv/
+__pycache__/
+*.pyc

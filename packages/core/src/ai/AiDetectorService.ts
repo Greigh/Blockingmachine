@@ -1,13 +1,11 @@
 import { createHash } from 'node:crypto';
 import { calculateShannonEntropy, detectDgaPatterns, decomposeDomain } from './entropy.js';
 import { resolveCnameChain, isBenignCnameTarget } from './cnameResolver.js';
+import { analyzeQueryBehavior, escalateRiskWithBehavior, type BehavioralDomainInsight } from './behavioral.js';
 import { sanitizeDomain, synthesizeRules, isDomainCoveredByRules } from './ruleSynthesizer.js';
 import { classifyDomainWithMiniAi, globalMiniAiClassifier } from './MiniAiClassifier.js';
 import {
-  SUSPICIOUS_AD_TOKENS,
-  SUSPICIOUS_TRACKER_TOKENS,
-  SPECIFIC_NETWORK_TOKENS,
-  HIGH_ABUSE_TLDS,
+  getDbLists,
   classifyInfrastructure,
   clampConfidencePercent,
   detectAntiAdblock,
@@ -28,16 +26,53 @@ import {
   type AiScanResult,
   type AiVerdict,
   type CrawlScanResult,
+  type MiniAiPrediction,
   type QueryLogScanResult,
   type RawDnsQuery,
   type RiskLevel,
   type ThreatCategory,
+  type TriageOutcomeSummary,
 } from './types.js';
+import {
+  planTriage,
+  mergeTriageVerdict,
+  type TriageCandidate,
+} from './triage.js';
 
 import { isSafePublicWebUrl, type SafeUrlCheckResult } from '../utils/urlSafety.js';
 export { isSafePublicWebUrl, type SafeUrlCheckResult };
+import { getRegistrableZone } from './MiniAiClassifier.js';
 
 type LlmAssessment = Pick<AiScanResult, 'verdict' | 'confidence' | 'category' | 'reasons'>;
+
+/**
+ * Filters crawl-extracted hosts down to genuinely *third-party* candidates.
+ * Hosts sharing the page's registrable zone (including the www counterpart)
+ * are first-party; hosts already covered by active rules are neither new nor
+ * unblocked. Both would otherwise pollute the crawler's "new unblocked hosts"
+ * report with noise the user cannot act on.
+ * @beta
+ */
+export function selectThirdPartyCandidates(
+  pageHostname: string,
+  extractedHosts: string[],
+  existingRules: string[],
+): string[] {
+  if (!Array.isArray(extractedHosts)) return [];
+  const pageHost = (pageHostname || '').toLowerCase();
+  const pageZone = getRegistrableZone(pageHost) || pageHost;
+  const firstPartyZones = new Set<string>([pageZone, pageHost, `www.${pageZone}`].filter(Boolean));
+  return extractedHosts.filter((host) => {
+    if (typeof host !== 'string' || !host.trim()) return false;
+    const zone = getRegistrableZone(host) || host;
+    if (firstPartyZones.has(zone)) return false;
+    try {
+      return !isDomainCoveredByRules(host, existingRules || []).isCovered;
+    } catch {
+      return true;
+    }
+  });
+}
 
 interface ScanCacheEntry {
   result: AiScanResult;
@@ -90,6 +125,9 @@ export class AiDetectorService {
       skipDns: config?.skipDns,
       dnsTimeoutMs: config?.dnsTimeoutMs,
       existingRules: [...(config?.existingRules || [])],
+      // Copied explicitly: this constructor builds the defaults field by field, so a new
+      // setting that is not named here silently never reaches a scan.
+      cascade: config?.cascade ? { ...config.cascade } : undefined,
     };
   }
 
@@ -201,6 +239,11 @@ export class AiDetectorService {
       credentialId(config.apiKey), config.apiEndpoint, config.modelName, config.allowlist,
       config.skipDns, config.dnsTimeoutMs, config.existingRules,
       globalMiniAiClassifier.getDomainFeedback(cleanDomain),
+      // Cascade settings change the outcome, so they must participate in the key.
+      // `spentEscalations` deliberately does not: it is a session counter, and keying
+      // on it would fragment the cache on every call.
+      config.cascade?.enabled, config.cascade?.maxEscalations,
+      config.cascade?.minAmbiguity, config.cascade?.escalateClean,
     ])).digest('hex');
 
     // 0. Check in-memory LRU/TTL cache
@@ -252,6 +295,10 @@ export class AiDetectorService {
         resolvedIps: [],
         generatedRules: [],
         provider: config.provider,
+        // Recorded as data, not only as the sentence in `reasons`: a guarded result has no
+        // `triage` and no `featureScores`, and anything reporting screening coverage has to tell
+        // "cleared without being screened" apart from "the cascade was never running".
+        falsePositiveGuard: { cleared: true, reason: guardDetail },
         timestamp: new Date().toISOString(),
       };
 
@@ -284,8 +331,11 @@ export class AiDetectorService {
     let featureScores: Record<string, number> | undefined;
     let inferenceTimeMs: number | undefined;
 
-    // 4. If Mini-AI is selected (Default), run embedded neural/logistic model (<0.05ms)
-    if (config.provider === 'mini-ai') {
+    /**
+     * Runs the embedded classifier and adopts its verdict. Free (~0.05ms, no network),
+     * so the cascade can afford to run it on every candidate.
+     */
+    const runLocalScreen = (): MiniAiPrediction => {
       const miniPrediction = classifyDomainWithMiniAi(cleanDomain, {
         cnames: cnameInfo.cnames,
         hasCnameCloaking: cnameInfo.hasCnameCloaking,
@@ -307,6 +357,96 @@ export class AiDetectorService {
         confidence: miniPrediction.confidence,
         ...miniPrediction.classProbabilities,
       };
+      return miniPrediction;
+    };
+
+    const cascade = config.cascade;
+    const cascadeEnabled = cascade?.enabled === true;
+    let triageOutcome: TriageOutcomeSummary | undefined;
+
+    const toLocalCandidate = (prediction: MiniAiPrediction): TriageCandidate => ({
+      id: cleanDomain,
+      verdict: prediction.verdict,
+      confidence: prediction.confidence,
+      riskLevel: prediction.riskLevel,
+      classProbabilities: prediction.classProbabilities,
+      corroboration: prediction.corroboration,
+      evidenceFamilies: prediction.evidenceFamilies,
+      topContributions: prediction.topContributions,
+    });
+
+    // 4. Triage cascade: screen locally, then escalate only what the classifier cannot
+    //    defend. This is the inverted architecture — `provider` names the *escalation
+    //    backend* rather than the single engine that sees every candidate.
+    if (cascadeEnabled) {
+      const localCandidate = toLocalCandidate(runLocalScreen());
+      const plan = planTriage([localCandidate], {
+        maxEscalations: cascade?.maxEscalations ?? 1,
+        spentEscalations: cascade?.spentEscalations ?? 0,
+        minAmbiguity: cascade?.minAmbiguity,
+        escalateClean: cascade?.escalateClean,
+      });
+      const item = plan.items[0];
+      const screening = {
+        ambiguity: item.ambiguity,
+        signals: item.reasons,
+        explanations: item.explanations,
+      };
+
+      const escalationBackendAvailable =
+        config.provider !== 'mini-ai' && config.provider !== 'local-heuristics';
+
+      if (item.action === 'escalate' && escalationBackendAvailable) {
+        try {
+          const llmResult = await this.queryLlm(cleanDomain, config, {
+            entropy,
+            dgaScore: dgaResult.score,
+            cnames: cnameInfo.cnames,
+            cloakedTarget: cnameInfo.knownTrackerTarget || cnameInfo.cloakedTarget,
+            preliminaryVerdict: item.local.verdict,
+          });
+
+          const merged = mergeTriageVerdict(localCandidate, llmResult);
+          finalVerdict = merged.verdict;
+          finalConfidence = merged.confidence;
+          if (merged.category) finalCategory = merged.category;
+          finalRisk = merged.riskLevel;
+          allReasons.length = 0;
+          allReasons.push(...merged.reasons);
+          if (merged.model) modelUsed = merged.model;
+
+          triageOutcome = {
+            ...screening,
+            action: 'escalate',
+            source: merged.source,
+            contradicted: merged.contradicted,
+            escalationFailed: merged.escalationFailed,
+            model: merged.model,
+          };
+        } catch (err: any) {
+          // A cascade degrades into the local classifier, never into a gap.
+          triageOutcome = {
+            ...screening,
+            action: 'escalate',
+            source: 'local',
+            contradicted: false,
+            escalationFailed: true,
+          };
+          allReasons.push(
+            `(Escalation offline: kept the embedded classifier verdict: ${err?.message || err})`,
+          );
+        }
+      } else {
+        triageOutcome = {
+          ...screening,
+          action: item.action,
+          source: 'local',
+          contradicted: false,
+          escalationFailed: false,
+        };
+      }
+    } else if (config.provider === 'mini-ai') {
+      runLocalScreen();
     } else if (config.provider !== 'local-heuristics') {
       // If external LLM provider is enabled (Ollama, Gemini, OpenAI)
       try {
@@ -371,6 +511,7 @@ export class AiDetectorService {
       inferenceTimeMs,
       provider: config.provider,
       modelUsed,
+      triage: triageOutcome,
       timestamp: new Date().toISOString(),
     };
 
@@ -410,15 +551,77 @@ export class AiDetectorService {
       new Set(queries.map((q) => this.normalizeDomain(q.domain)).filter(Boolean)),
     );
 
+    // Behavioral analysis over the full raw stream (fan-out + beaconing cadence)
+    const behaviorByDomain = new Map<string, BehavioralDomainInsight>();
+    try {
+      for (const insight of analyzeQueryBehavior(queries)) {
+        behaviorByDomain.set(insight.domain, insight);
+      }
+    } catch {
+      // Behavioral analysis is best-effort corroboration; never block a scan
+    }
+
     const results: AiScanResult[] = [];
     const batchSize = config.provider === 'mini-ai' || config.provider === 'local-heuristics' ? 32 : 4;
+
+    // Cascade: plan the escalation budget across the *whole* log before scanning it,
+    // so a 400-domain log makes a bounded number of model calls and the most undecided
+    // domains are the ones that receive them. Screening every domain here is free and
+    // warms the classifier cache that scanDomain immediately reuses.
+    const escalateByDomain = new Map<string, boolean>();
+    if (config.cascade?.enabled) {
+      const localCandidates: TriageCandidate[] = uniqueDomains.map((domain) => {
+        const prediction = classifyDomainWithMiniAi(domain, { allowlist: config.allowlist });
+        return {
+          id: domain,
+          verdict: prediction.verdict,
+          confidence: prediction.confidence,
+          riskLevel: prediction.riskLevel,
+          classProbabilities: prediction.classProbabilities,
+          corroboration: prediction.corroboration,
+          evidenceFamilies: prediction.evidenceFamilies,
+          topContributions: prediction.topContributions,
+        };
+      });
+      const plan = planTriage(localCandidates, {
+        maxEscalations: config.cascade.maxEscalations,
+        spentEscalations: config.cascade.spentEscalations,
+        minAmbiguity: config.cascade.minAmbiguity,
+        escalateClean: config.cascade.escalateClean,
+      });
+      const budgeted = new Set(plan.escalate.map((item) => item.id));
+      for (const domain of uniqueDomains) escalateByDomain.set(domain, budgeted.has(domain));
+    }
 
     for (let i = 0; i < uniqueDomains.length; i += batchSize) {
       const batch = uniqueDomains.slice(i, i + batchSize);
       const batchResults = await Promise.all(
-        batch.map((domain) => this.scanDomain(domain, config)),
+        batch.map((domain) => {
+          if (!config.cascade?.enabled) return this.scanDomain(domain, config);
+          // The plan already ranked this domain, so the per-domain budget is precomputed
+          // and scanDomain reuses its own identical pure assessment rather than re-ranking.
+          return this.scanDomain(domain, {
+            ...config,
+            cascade: {
+              ...config.cascade,
+              maxEscalations: escalateByDomain.get(domain) ? 1 : 0,
+              spentEscalations: 0,
+            },
+          });
+        }),
       );
       results.push(...batchResults);
+    }
+
+    // Enrich results with behavioral evidence. Clean verdicts keep their verdict
+    // (periodic legitimate services beacon too); flagged verdicts get escalated
+    // risk and human-readable corroboration lines.
+    for (const result of results) {
+      const insight = behaviorByDomain.get(result.domain);
+      if (!insight) continue;
+      if (result.verdict === 'clean') continue;
+      result.reasons = Array.from(new Set([...result.reasons, ...insight.reasons]));
+      result.riskLevel = escalateRiskWithBehavior(result.riskLevel, insight) as RiskLevel;
     }
 
     const flaggedCount = results.filter((r) => r.verdict !== 'clean').length;
@@ -452,7 +655,9 @@ export class AiDetectorService {
       throw new Error(`SSRF Guard blocked crawl request to "${fullUrl}": ${safety.reason}`);
     }
 
+    const parsedPageUrl = new URL(fullUrl);
     const extractedHosts = await this.extractWebpageOrigins(fullUrl);
+    const newUnblockedHosts = selectThirdPartyCandidates(parsedPageUrl.hostname, extractedHosts, config.existingRules || []);
     const flaggedHosts: AiScanResult[] = [];
     const synthesizedRules: string[] = [];
 
@@ -474,7 +679,7 @@ export class AiDetectorService {
       url: fullUrl,
       scannedAt: new Date().toISOString(),
       extractedHosts,
-      newUnblockedHosts: extractedHosts,
+      newUnblockedHosts,
       flaggedHosts,
       synthesizedRules: Array.from(new Set(synthesizedRules)),
     };
@@ -540,13 +745,14 @@ export class AiDetectorService {
 
     // 5. Keyword token analysis (strict boundaries)
     const matchedTokens: string[] = [];
-    const keywordTokens = [...SUSPICIOUS_AD_TOKENS, ...SUSPICIOUS_TRACKER_TOKENS];
+    const dbLists = getDbLists();
+    const keywordTokens = [...dbLists.suspiciousAdTokens, ...dbLists.suspiciousTrackerTokens];
     for (const token of keywordTokens) {
       if (hostnameHasToken(domain, token)) matchedTokens.push(token);
     }
 
     if (matchedTokens.length > 0) {
-      const hasSpecificAdNetwork = matchedTokens.some((t) => SPECIFIC_NETWORK_TOKENS.has(t));
+      const hasSpecificAdNetwork = matchedTokens.some((t) => dbLists.specificNetworkTokens.includes(t));
       score += hasSpecificAdNetwork ? 75 : Math.min(85, matchedTokens.length * 45);
       reasons.push(`Contains ad/telemetry keyword token(s): ${matchedTokens.join(', ')}`);
       if (category === 'Clean') {
@@ -558,7 +764,7 @@ export class AiDetectorService {
 
     // 6. DGA / Algorithmic Randomization
     const decomp = decomposeDomain(domain);
-    const isHighAbuseTld = HIGH_ABUSE_TLDS.has(decomp.tld);
+    const isHighAbuseTld = dbLists.highAbuseTlds.includes(decomp.tld);
 
     if (dgaResult.isLikelyDga && matchedTokens.length === 0 && !cnameInfo.knownTrackerTarget && brandSpoof === 0) {
       if (dgaResult.score >= 70 || isHighAbuseTld) {

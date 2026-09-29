@@ -31,8 +31,25 @@ jobs:
       - name: Run lint
         run: npm run lint
 
+      # Workspace builds use transpile-only loaders, so a type error can pass the
+      # build and only surface at runtime. Check types across every workspace.
+      - name: Type check
+        run: npm run type-check
+
       - name: Run unit tests
         run: npm test
 
       - name: Build packages
         run: npm run build
+
+      # Generated artifacts are only trustworthy if something re-derives them. The units above
+      # re-fit the element weights; these checks cover what a unit test cannot reach without
+      # duplicating a driver, and run after the build because both read compiled core output.
+      - name: Verify generated artifacts
+        run: |
+          npm run check:element-weights
+          npm run check:hotlist
+          # The tier rulesets are a hand-curated baseline in the repository and a compiled plan in
+          # a packaged build; the check is provenance-aware, so this verifies the baseline's shape
+          # and counts rather than comparing it to a hub list CI does not have.
+          npm run check:tiers

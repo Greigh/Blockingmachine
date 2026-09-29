@@ -1,15 +1,25 @@
 import { normalizeHostname } from './hostname.js';
 export { normalizeHostname } from './hostname.js';
+export type {
+  CorroborationAssessment,
+  CorroborationTier,
+  EvidenceFamily,
+} from './types.js';
 import { calculateShannonEntropy, decomposeDomain } from './entropy.js';
 import type {
   AntiAdblockDetection,
   CategoryAdjustment,
+  CorroborationAssessment,
+  CorroborationTier,
+  DomainFeatureVector,
+  EvidenceFamily,
   InfraClassification,
   InfraKind,
   ReputationFeatures,
+  RiskLevel,
   ThreatCategory,
 } from './types.js';
-import { loadDb, loadDbSync, type DbLists } from './db-loader.js';
+import { loadDb, loadDbSync, normalizeDbList, type DbLists } from './db-loader.js';
 
 /**
  * Registrable-domain and hostname-suffix reputation for the embedded classifier.
@@ -29,7 +39,7 @@ import { loadDb, loadDbSync, type DbLists } from './db-loader.js';
  * @beta
  */
 
-export const HIGH_ABUSE_TLDS = new Set([
+export const HIGH_ABUSE_TLDS = new Set<string>([
   'top', 'xyz', 'buzz', 'click', 'fit', 'rest', 'tk', 'cf', 'gq', 'ml', 'ga',
   'work', 'cam', 'surf', 'loan', 'racing', 'icu', 'gdn', 'vip', 'monster',
   'country', 'stream', 'date', 'faith', 'review', 'download', 'trade', 'webcam',
@@ -626,6 +636,12 @@ const CLOUD_SUFFIXES = [
   'amazontrust.com', 'a2z.com', 'media-amazon.com', 'ssl-images-amazon.com',
   'amazonvideo.com', 'primevideo.com', 'awsglobalaccelerator.com',
   'elasticbeanstalk.com', 'apprunner.com', 'elb.amazonaws.com',
+  // AWS-owned developer zones: `aws.dev` (AWS developer/documentation property) and
+  // `on.aws` (Lambda function URLs and App Runner service domains) are registered to
+  // Amazon / AWS Registry LLC. Diagnostic endpoints that reference a third-party CDN
+  // vendor — e.g. akamai.external.web.us-east-1.prod.diagnostic.networking.aws.dev —
+  // live here and are vendor infrastructure, not impersonation.
+  'aws.dev', 'on.aws',
   // Google Cloud and Google service endpoints
   'googleapis.com', 'google.com', 'gstatic.com', 'googleusercontent.com',
   'gvt1.com', 'gvt2.com', 'gvt3.com', '1e100.net', 'appspot.com',
@@ -1287,6 +1303,21 @@ export function classifyInfrastructure(domain: string): InfraClassification {
   }
 
   if (best) {
+    // A vendor zone protects the vendor's *services*. When the hostname's own
+    // label declares a measurement or ad-delivery function, it is that vendor's
+    // collector, not a service — `analytics.twitter.com`, `telemetry.microsoft.com`.
+    // Institutional and Active Directory guards above stay absolute, so
+    // `ad.ucla.edu` and `ad.corp.local` are unaffected.
+    if (hostnameDeclaresMeasurementEndpoint(clean)) {
+      return {
+        safe: false,
+        adNetwork: false,
+        kind: 'none',
+        suffix: best.suffix,
+        reason: `Measurement or ad-delivery endpoint (${best.suffix} zone)`,
+      };
+    }
+
     return {
       safe: true,
       adNetwork: false,
@@ -1340,7 +1371,59 @@ export function hasStrongAdIntent(domain: string): boolean {
   return STRONG_AD_TOKENS.some((token) => hostnameHasToken(clean, token));
 }
 
+/**
+ * Labels that name a measurement or ad-delivery *function* outright.
+ *
+ * These are the tokens the codebase already treats as definitive evidence of
+ * tracking, plus the ad-serving function words from {@link AD_INTENT_LABELS}. Two
+ * deliberate omissions:
+ *
+ * - `tracking` / `track` — package tracking (`tracking.ups.com`) is a legitimate
+ *   logistics function on zones that are themselves safelisted vendor suffixes.
+ * - `stats`, `counter`, `click`, `branch`, `adjust`, `segment` — already excluded
+ *   from the suspicious token list because they collide with ordinary sites
+ *   (`stats.stackexchange.com`, `click.docusign.net`).
+ */
+export const MEASUREMENT_ENDPOINT_LABELS: readonly string[] = [
+  'analytics',
+  'telemetry',
+  'beacon',
+  'beacons',
+  'pixel',
+  'pixels',
+  'tracker',
+  'trackers',
+  'conversion',
+  'conversions',
+  'attribution',
+  'adserver',
+  'adservice',
+  'adsystem',
+  'adtech',
+] as const;
+
+/**
+ * True when a hostname's own labels declare a measurement or ad-delivery function.
+ *
+ * This exists because vendor safelisting is zone-based while intent is
+ * label-based: `analytics.twitter.com` sits inside a known vendor zone but is
+ * Twitter's tracking collector. Protecting it would protect the beacon, not the
+ * site — blocking that hostname does not break twitter.com.
+ */
+export function hostnameDeclaresMeasurementEndpoint(domain: string): boolean {
+  const clean = normalizeHostname(domain);
+  if (!clean) return false;
+  return MEASUREMENT_ENDPOINT_LABELS.some((token) => hostnameHasToken(clean, token));
+}
+
+/**
+ * True when a token names measurement/telemetry rather than ad delivery, so
+ * keyword matches can be filed under Telemetry/Analytics instead of Advertising.
+ * Vendor names count too: `mapbox-analytics` is measurement whichever word
+ * matched.
+ */
 export function isTelemetryToken(token: string): boolean {
+  if (typeof token !== 'string') return false;
   return TELEMETRY_NAME_TOKENS.has(token.toLowerCase());
 }
 
@@ -1368,17 +1451,49 @@ function computeLevenshtein(a: string, b: string): number {
   return prevRow[n];
 }
 
+/**
+ * English inflection suffixes that turn a brand name into an ordinary word.
+ * `booking` -> `bookings`, `railway` -> `railways`, `telegram` -> `telegrams`,
+ * `peacock` -> `peacocks`, `outlook` -> `outlooks`, `blizzard` -> `blizzards`,
+ * `vanguard` -> `vanguards`, `replicate` -> `replicates`, `robinhood` -> `robinhoods`.
+ * These are real vocabulary, not impostors.
+ */
+const BRAND_INFLECTION_SUFFIXES: ReadonlySet<string> = new Set([
+  's', 'es', 'ed', 'ing', 'y', 'ly', 'al', 'er', 'ers', 'ion', 'ions',
+]);
+
+/**
+ * A trailing hostname index (`netflix1`, `booking12`, `max1`, `ups2`) or an
+ * ordinary English inflection (`bookings`, `railways`, `telegrams`) is everyday
+ * naming, not typosquatting. Only meaningful once the token is longer than the
+ * brand and starts with it — substitutions inside the brand are still squats.
+ */
+function isBrandSuffixOrdinary(token: string, brand: string): boolean {
+  if (token.length <= brand.length || !token.startsWith(brand)) return false;
+  const suffix = token.slice(brand.length);
+  return BRAND_INFLECTION_SUFFIXES.has(suffix) || /^\d{1,4}$/.test(suffix);
+}
+
 function isTypoSquat(token: string, brand: string): boolean {
   if (!token || token === brand) return false;
   if (Math.abs(token.length - brand.length) > 2) return false;
   const dist = computeLevenshtein(token, brand);
   if (dist <= 0 || dist > 2) return false;
-  // 1. Character substitution with digits / leetspeak (e.g. g00gle, paypa1, app1e, m1crosoft)
-  if (/\d/.test(token) && (dist === 1 || (brand.length >= 5 && dist === 2))) return true;
+  // 1. Number-for-letter leetspeak *substitution*, which preserves the length
+  //    (e.g. g00gle, paypa1, app1e, m1crosoft). A longer token is naming instead:
+  //    `max1`, `ups1`, `zoom2`, `dns1`, `meta2` are ordinary hostname indices.
+  if (token.length === brand.length && /\d/.test(token) && (dist === 1 || (brand.length >= 5 && dist === 2))) {
+    return true;
+  }
   // 2. Repeated character insertion typosquat (e.g. appple, gooogle, payyypal, netfflix)
   if (dist === 1 && brand.length >= 5 && /([a-z])\1{2,}/i.test(token)) return true;
-  // 3. For longer brands (7+ chars), 1-edit distance rarely collides with standard English words (e.g. twiter, netflx, microsofd, coinbse)
-  if (dist === 1 && brand.length >= 7) return true;
+  // 3. For longer brands (7+ chars), 1-edit distance rarely collides with standard
+  //    English words (e.g. twiter, netflx, microsofd, coinbse) — with one large
+  //    exception: an appended inflection (`bookings`, `railways`) or index
+  //    (`netflix1`, `outlook2`) makes ordinary naming, not an impostor.
+  if (dist === 1 && brand.length >= 7) {
+    return !isBrandSuffixOrdinary(token, brand);
+  }
   return false;
 }
 
@@ -2152,8 +2267,21 @@ export function scoreBrandSpoof(domain: string): number {
               return 1;
             }
           } else {
-            // On untrusted / arbitrary domains (e.g. apple.evil.com, apple-login.xyz, paypal-com.net)
-            if (label === brand || PHISH_KEYWORDS.test(label) || PSEUDO_TLD_PATTERN.test(label)) {
+            // On arbitrary domains a credential lure or pseudo-TLD in the label is
+            // definitive impersonation (apple-login.xyz, paypal-com.net, uspsdelivery.com).
+            if (PHISH_KEYWORDS.test(label) || PSEUDO_TLD_PATTERN.test(label)) {
+              return 1;
+            }
+            // A *bare* vendor token carrying no lure is NOT impersonation on its own.
+            // Vendor names legitimately appear as hostname labels on other vendors'
+            // infrastructure (akamai.external.web.us-east-1.prod.diagnostic.networking.aws.dev,
+            // netflix.akamaized.net), and a large share of the brand list doubles as
+            // ordinary English vocabulary that is commonly used as a subdomain name
+            // (max, meta, target, discover, square, zoom, chase, wise, steam, linear,
+            // render, fly, bun, neon …). Mirrors hasCorroboratedMalwareSignals():
+            // impersonation needs a second, independent signal, so a bare token is only
+            // escalated on a zone that is itself high-abuse or a punycode hostname.
+            if (abuseTld || hasPunycode) {
               return 1;
             }
           }
@@ -2291,6 +2419,111 @@ export function hasCorroboratedMalwareSignals(domain: string, features: Reputati
   if (subLabel.length >= 16 && /^[a-f0-9]+$/i.test(subLabel) && (features.highRiskTld > 0 || sldDga)) return true;
 
   return false;
+}
+
+const SPECIFIC_EVIDENCE: ReadonlySet<EvidenceFamily> = new Set<EvidenceFamily>([
+  'known-network',
+  'brand-impersonation',
+  'cname-uncloak',
+  'punycode',
+  'hex-sld',
+  'vowel-free',
+]);
+
+const RISK_ORDER: Record<RiskLevel, number> = {
+  none: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+  critical: 4,
+};
+
+/** Never raises a risk level — only lowers one that outruns its evidence. */
+export function clampRiskLevel(risk: RiskLevel, max: RiskLevel): RiskLevel {
+  return (RISK_ORDER[risk] ?? 0) <= (RISK_ORDER[max] ?? 0) ? risk : max;
+}
+
+/**
+ * Counts the independent evidence families behind a threat verdict and derives the
+ * confidence and risk ceilings that evidence can honestly support.
+ *
+ * This is what stops a lone weak lexical signal from presenting itself as a 100%
+ * `critical` malware finding: a DGA call backed only by a consonant run reads as
+ * `high` at 70%, while a known ad network or a corroborated brand impersonation
+ * (which already requires its own second signal) keeps its full confidence.
+ *
+ * @beta
+ */
+export function assessCorroboration(
+  domain: string,
+  features: DomainFeatureVector,
+  options?: { knownTrackerCname?: boolean },
+): CorroborationAssessment {
+  const clean = normalizeHostname(domain);
+  const families: EvidenceFamily[] = [];
+
+  const infra = classifyInfrastructure(clean);
+  if (infra.adNetwork || infra.kind === 'ad-network' || infra.kind === 'tracker-network' || hasStrongAdIntent(clean)) {
+    families.push('known-network');
+  }
+  if (features.adKeywordWeight > 0.3 || features.trackerKeywordWeight > 0.3) {
+    families.push('keyword');
+  }
+  if (features.brandSpoofScore > 0) {
+    families.push('brand-impersonation');
+  }
+  if (options?.knownTrackerCname || (features.cnameKnownTracker || 0) > 0) {
+    families.push('cname-uncloak');
+  }
+  if ((features.punycode || 0) > 0) {
+    families.push('punycode');
+  }
+  // A hex string on the *registrable* SLD is a beacon/shard signature; the same hash
+  // as a subdomain label is ordinary CDN routing, so only the SLD form counts here.
+  const decomposition = decomposeDomain(clean);
+  const sldCompact = decomposition.sld.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (sldCompact.length >= 16 && /^[a-f0-9]+$/i.test(sldCompact)) {
+    families.push('hex-sld');
+  }
+  // Shannon entropy is deliberately NOT a family: nearly every hostname longer than
+  // ~15 characters reaches 3.5 bits/char, so it cannot distinguish anything.
+  const letters = clean.replace(/[^a-z]/g, '');
+  if (letters.length >= 8 && features.vowelRatio <= 0.1) {
+    // A label of eight or more letters with essentially no vowels is not a word in
+    // any language that uses this alphabet — this is the strongest shape signal.
+    families.push('vowel-free');
+  }
+  if (features.consecutiveConsonants >= 0.5) {
+    families.push('consonant-run');
+  }
+  if ((features.consecutiveDigits || 0) >= 0.75 || (features.numericSubdomain || 0) > 0) {
+    families.push('digit-run');
+  }
+  if (features.trigramPerplexity >= 0.6) {
+    families.push('ngram');
+  }
+  if ((features.highRiskTld || 0) > 0) {
+    families.push('abuse-tld');
+  }
+
+  const specific = families.filter((family) => SPECIFIC_EVIDENCE.has(family)).length;
+
+  let tier: CorroborationTier;
+  if (families.length === 0) {
+    tier = 'lexical-only';
+  } else if (specific >= 1 || families.length >= 3) {
+    tier = 'corroborated';
+  } else {
+    tier = 'single-signal';
+  }
+
+  if (tier === 'corroborated') {
+    return { families, specific, tier, maxRiskLevel: 'critical', maxConfidence: 100 };
+  }
+  if (tier === 'single-signal') {
+    return { families, specific, tier, maxRiskLevel: 'high', maxConfidence: 70 };
+  }
+  return { families, specific, tier, maxRiskLevel: 'medium', maxConfidence: 50 };
 }
 
 /**
@@ -2490,23 +2723,146 @@ export const BASE_DB_LISTS: DbLists = {
   dnsSuffixes: [...DNS_SUFFIXES],
 };
 
-/** Synchronously returns the live merged db (base + last cached remote patch). */
+// ─── Live list registry ──────────────────────────────────────────────────────
+//
+// Every classifier reads the exported const objects directly (module-level
+// references).  Instead of chasing captured references across modules, a
+// refresh MUTATES those objects in place (array splice / Set clear+add), so
+// every consumer sees updated data on its very next call with zero call-site
+// churn.  Only the local suffix indexes need an explicit rebuild afterwards.
+
+/** Map each DbLists key to the exported const it feeds. */
+const LIVE_LIST_TARGETS: Readonly<Record<keyof DbLists, { type: 'set' | 'array'; target: Set<string> | string[] }>> = {
+  highAbuseTlds: { type: 'set', target: HIGH_ABUSE_TLDS as Set<string> },
+  adNetworks: { type: 'array', target: AD_NETWORK_SUFFIXES as unknown as string[] },
+  trackerNetworks: { type: 'array', target: TRACKER_NETWORK_SUFFIXES as unknown as string[] },
+  cloudSuffixes: { type: 'array', target: CLOUD_SUFFIXES as unknown as string[] },
+  cdnSuffixes: { type: 'array', target: CDN_SUFFIXES as unknown as string[] },
+  iotTrusted: { type: 'array', target: IOT_SUFFIXES as unknown as string[] },
+  vendorSuffixes: { type: 'array', target: VENDOR_SUFFIXES as unknown as string[] },
+  platformSuffixes: { type: 'array', target: PLATFORM_SUFFIXES as unknown as string[] },
+  multiTenantPlatforms: { type: 'set', target: MULTI_TENANT_PLATFORMS as Set<string> },
+  untrustedHosting: { type: 'set', target: UNTRUSTED_HOSTING_PLATFORMS as Set<string> },
+  cdnRoutingSuffixes: { type: 'array', target: CDN_ROUTING_SUFFIXES as unknown as string[] },
+  suspiciousAdTokens: { type: 'array', target: SUSPICIOUS_AD_TOKENS as unknown as string[] },
+  suspiciousTrackerTokens: { type: 'array', target: SUSPICIOUS_TRACKER_TOKENS as unknown as string[] },
+  specificNetworkTokens: { type: 'set', target: SPECIFIC_NETWORK_TOKENS },
+  highProfileBrands: { type: 'array', target: HIGH_PROFILE_BRANDS as unknown as string[] },
+  dictionaryExemptions: { type: 'set', target: DICTIONARY_COMPOUND_EXEMPTIONS as Set<string> },
+  benignEndpointLabels: { type: 'set', target: BENIGN_ENDPOINT_LABELS as Set<string> },
+  dnsSuffixes: { type: 'array', target: DNS_SUFFIXES as unknown as string[] },
+};
+
+/** Rebuilds the module-level suffix lookup indexes used by classifyInfrastructure(). */
+function rebuildReputationIndexes(): void {
+  AD_INDEX.clear();
+  for (const [key, suffixes] of buildSuffixIndex(LIVE_LIST_TARGETS.adNetworks.target as string[])) {
+    AD_INDEX.set(key, suffixes);
+  }
+  TRACKER_INDEX.clear();
+  for (const [key, suffixes] of buildSuffixIndex(LIVE_LIST_TARGETS.trackerNetworks.target as string[])) {
+    TRACKER_INDEX.set(key, suffixes);
+  }
+  for (const safe of SAFE_INDEXES) {
+    safe.index.clear();
+    for (const [key, suffixes] of buildSuffixIndex(safe.group.suffixes)) {
+      safe.index.set(key, suffixes);
+    }
+  }
+}
+
+/** Installs a merged DbLists snapshot into the live exported constants. */
+function installLiveLists(lists: DbLists): void {
+  for (const key of Object.keys(LIVE_LIST_TARGETS) as Array<keyof DbLists>) {
+    const entry = LIVE_LIST_TARGETS[key];
+    const values = normalizeDbList(key, lists[key] ?? []);
+    if (entry.type === 'set') {
+      const set = entry.target as Set<string>;
+      set.clear();
+      for (const v of values) set.add(v);
+    } else {
+      const arr = entry.target as string[];
+      arr.length = 0;
+      for (const v of values) arr.push(v);
+    }
+  }
+  rebuildReputationIndexes();
+}
+
+/** Base ecosystem snapshot for rebuilding on refresh (patch merges are additive). */
+let liveBrandEcosystems: Record<string, readonly string[]> = { ...BRAND_ECOSYSTEMS };
+
+/** Cached merged snapshot (base + last cached remote patch) for cheap hot-path reads. */
+let mergedListsCache: DbLists | null = null;
+
+/**
+ * Synchronously returns the live merged db (base + last cached remote patch).
+ * Cheap: the merge runs once and is refreshed by refreshDb() — suitable for
+ * per-domain hot paths. The returned object must be treated as read-only.
+ */
 export function getDbLists(): DbLists {
-  return loadDbSync(BASE_DB_LISTS, BRAND_ECOSYSTEMS).lists;
+  if (!mergedListsCache) {
+    mergedListsCache = loadDbSync(BASE_DB_LISTS, liveBrandEcosystems).lists;
+  }
+  return mergedListsCache;
+}
+
+/** Metadata about the most recent successful remote-patch install. */
+export interface DbRefreshStatus {
+  /** ISO timestamp of the last successful remote fetch, or null if never. */
+  remoteLastFetched: string | null;
+  /** True when the live lists currently differ from the bundled base lists. */
+  patchApplied: boolean;
+  /** Error message when the last refresh attempt failed to fetch, if any. */
+  lastError: string | null;
+}
+
+let lastRefreshStatus: DbRefreshStatus = {
+  remoteLastFetched: null,
+  patchApplied: false,
+  lastError: null,
+};
+
+/** Returns the current remote-patch refresh status (for UI / diagnostics). */
+export function getDbRefreshStatus(): DbRefreshStatus {
+  return { ...lastRefreshStatus };
 }
 
 /**
- * Triggers an async remote-patch refresh and returns the merged lists.
- * Call this once at app startup; subsequent calls within the TTL window use cache.
+ * Triggers an async remote-patch refresh and installs the merged lists into
+ * the live classifier constants. Call this once at app startup; subsequent
+ * calls within the TTL window use cache.
+ *
+ * Never throws — a failed refresh leaves the current lists untouched.
  *
  * @param opts.forceRefresh - Bypass the TTL and fetch immediately
  * @param opts.disableRemote - Use only the base lists (for offline/test envs)
+ * @param opts.apply - Install the merged lists into the live classifier sets (default true)
  */
 export async function refreshDb(
-  opts: { forceRefresh?: boolean; disableRemote?: boolean } = {},
+  opts: { forceRefresh?: boolean; disableRemote?: boolean; apply?: boolean } = {},
 ): Promise<{ lists: DbLists; remoteLastFetched: string | null }> {
-  const result = await loadDb(BASE_DB_LISTS, BRAND_ECOSYSTEMS, opts);
-  return { lists: result.lists, remoteLastFetched: result.remoteLastFetched };
+  try {
+    const result = await loadDb(BASE_DB_LISTS, liveBrandEcosystems, opts);
+    const patchApplied = result.remoteLastFetched !== null;
+    lastRefreshStatus = {
+      remoteLastFetched: result.remoteLastFetched,
+      patchApplied,
+      lastError: null,
+    };
+    if (opts.apply !== false && (patchApplied || opts.disableRemote)) {
+      liveBrandEcosystems = result.brandEcosystems;
+      mergedListsCache = result.lists;
+      installLiveLists(result.lists);
+    }
+    return { lists: result.lists, remoteLastFetched: result.remoteLastFetched };
+  } catch (err) {
+    lastRefreshStatus = {
+      ...lastRefreshStatus,
+      lastError: err instanceof Error ? err.message : String(err),
+    };
+    return { lists: getDbLists(), remoteLastFetched: lastRefreshStatus.remoteLastFetched };
+  }
 }
 
 // Re-export loader types for callers
