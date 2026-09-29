@@ -83,5 +83,9 @@ export * from "./ai/index.js";
 // Blocklist coverage analysis (which rules actually fire on real traffic)
 export * from "./coverage.js";
 
+// Browser-reported rule hits, aggregated across sessions — the evidence the trimmed hot set is
+// built from when it comes from real usage rather than a captured trace.
+export * from "./ledgerAggregate.js";
+
 // Replaying captured requests through a compiled rule set (the offline half of a measurement)
 export * from "./ruleReplay.js";
