@@ -35,11 +35,42 @@
  * keeps the hand-picked, highest-confidence entries stable across runs and makes the diff of
  * a regenerated tier purely additive.
  *
+ * ## Ranking the cut by what actually blocked
+ *
+ * The hub's list is ~117,000 domains and the budget is 30,000, so the cut is not a detail —
+ * it decides what the extension blocks. Taking candidates in input order means the list's
+ * own ordering decides it, and a merged blocklist's order is a merge artifact: whichever
+ * upstream list was concatenated first gets the slots, which says nothing about the traffic
+ * the user actually generates.
+ *
+ * `--hits <file>` therefore ranks each tier's candidates by the browser's own rule-hit
+ * evidence before the budget is allocated — the same `<count> <rule>` ledger text
+ * `build-hot-list.mjs --hits` reads, whether that is a raw browser ledger or the hot list
+ * built from it. Hosts with evidence ship first, most-fired first; the rest keep their input
+ * order, so the cut spends its slots on measured traffic and the unmeasured remainder is
+ * still, deterministically, the tail of the list.
+ *
+ * Three boundaries are deliberate:
+ *
+ *  - **Ranking is opt-in, with no default evidence file.** A default that depended on a
+ *    locally generated artifact would make the plan machine-dependent, which is exactly how
+ *    `--check` came to exit 1 on every machine that had ever compiled. Naming the file is
+ *    the packaging decision it should be.
+ *  - **Evidence ranks within a tier; it never re-tiers.** Which tier a host belongs to is a
+ *    statement about what kind of thing it is, and moving a busy `tier_privacy` host into
+ *    `tier_core` would corrupt both the taxonomy and the curated baseline.
+ *  - **Curated hosts keep their place.** They are first in their tier, in curated order, with
+ *    or without evidence — they are hand-picked, not measured.
+ *
+ * With `--hits`, rule ids follow measured usefulness; without it, they follow input order.
+ * Either way the output is byte-identical for identical inputs, so `--check` stays a diff.
+ *
  * ## Determinism
  *
  * The same inputs always produce byte-identical tier files: hosts keep the order they
- * arrived in (curated first), rule ids are assigned from that order, and no clock, hash
- * iteration, or locale rule participates.
+ * arrived in (curated first, then evidence rank, then input order within each group), rule
+ * ids are assigned from that order, and no clock, hash iteration, or locale rule
+ * participates.
  *
  * ## What `--check` can and cannot be
  *
@@ -56,8 +87,13 @@
  * Usage:
  *   node scripts/compile-tier-rulesets.mjs
  *   node scripts/compile-tier-rulesets.mjs --input filters/output/hosts.txt --budget 20000
+ *   node scripts/compile-tier-rulesets.mjs --hits ledger-hits.txt
  *   node scripts/compile-tier-rulesets.mjs --check
  *   node scripts/compile-tier-rulesets.mjs --json
+ *
+ * Where the evidence comes from:
+ *   npm run ledger:merge -- --in export-1.json --in export-2.json --out ledger-hits.txt
+ *   node scripts/compile-tier-rulesets.mjs --hits ledger-hits.txt
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -156,6 +192,17 @@ const DOMAIN_REGEX = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0
 
 function isPlainObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Repo-relative when the path is inside the repo, absolute when it is not.
+ *
+ * `relative` on its own prints a `../../../..` chain for a ledger kept beside the checkout, which
+ * is neither short nor honest about where the file actually was.
+ */
+export function displayPath(path) {
+  const rel = relative(ROOT_DIR, path);
+  return rel.startsWith('..') ? path : rel;
 }
 
 /** Splits a hostname into whole tokens: dots, hyphens and underscores all separate. */
@@ -269,6 +316,101 @@ export function assignTier(host, curatedTierByHost) {
   if (matches(TIER_VOCABULARY.tier_ads)) return 'tier_ads';
   if (matches(TIER_VOCABULARY.tier_privacy)) return 'tier_privacy';
   return null;
+}
+
+/**
+ * Reads a browser-reported rule-hit ledger into host -> hit counts.
+ *
+ * Accepts the `<count> <rule>` text `build-hot-list.mjs --hits` already parses — a merged
+ * ledger or the hot list built from one — and canonicalises each rule with
+ * `extractHostFromLine`, the same function the input side uses, so a rule and a candidate
+ * that name the same host agree on the name without a second normaliser disagreeing with the
+ * first.
+ *
+ * The refusals are core's, and for the same reasons. A line that is only a number names no
+ * rule, so it cannot be counted. An `@@` exception is dropped rather than stripped to a host:
+ * it is on the record because it *allowed* a request, and ranking a block by the traffic an
+ * exception saved is the inversion the ledger exists to prevent. Every refusal is counted so
+ * the report can say how much of the file it understood.
+ *
+ * A `*.host` rule is not a refusal here, though the input side refuses it: `||host^` is how the
+ * tier ships that coverage, and ranking can only reorder hosts the input already produced, so
+ * widening a wildcard to its base cannot introduce a host nobody listed.
+ *
+ * Core owns the format definition in `packages/core/src/ledgerAggregate.ts`. This reader is not
+ * imported from there because the compiler runs before any build — it is a packaging script with
+ * no compiled dependency today, and taking one would make `compile:tiers` refuse to run on a
+ * clean checkout. The agreement between the two readers is pinned by a test in the extension
+ * suite instead, which is the cheaper half of "one definition" to keep honest.
+ */
+export function readHitEvidence(text) {
+  const counts = new Map();
+  const header = {};
+  let read = 0;
+  let skipped = 0;
+
+  for (const rawLine of String(text || '').split('\n')) {
+    const line = rawLine.replace(/^\uFEFF/, '').trim();
+    if (!line) continue;
+    if (line.startsWith('#') || line.startsWith('!')) {
+      // Both comment marks carry provenance: a merged ledger writes `#`, and the hot list
+      // `build-hot-list.mjs` writes over it writes `!`. Reading only one would report a ledger's
+      // worth as "unknown" for the other format, which is the one thing the header is for.
+      const match = /^[#!]\s*([A-Za-z][A-Za-z ]*):\s*(.+?)\s*$/.exec(line);
+      if (match) header[match[1].trim().toLowerCase()] = match[2];
+      continue;
+    }
+    if (/^\d+$/.test(line)) {
+      skipped += 1;
+      continue;
+    }
+
+    let rule = line;
+    let count = 1;
+    const leading = /^(\d+)\s+(.+)$/.exec(line);
+    const trailing = /^(.+?)\s+(\d+)$/.exec(line);
+    if (leading) {
+      count = Number(leading[1]);
+      rule = leading[2];
+    } else if (trailing) {
+      rule = trailing[1];
+      count = Number(trailing[2]);
+    }
+    if (!Number.isFinite(count) || count <= 0) {
+      skipped += 1;
+      continue;
+    }
+
+    // A `*.example.com` rule is evidence about `example.com`: the tier rule that would be shipped
+    // for it is `||example.com^`, which covers the apex and every subdomain, so the host the rule
+    // is *about* is the base domain. That widening cannot add coverage the input did not already
+    // have, because ranking only reorders hosts the input produced — a host with no candidate is
+    // simply never looked up.
+    const host = extractHostFromLine(/^\*\./.test(rule.trim()) ? rule.trim().slice(2) : rule);
+    if (!host) {
+      skipped += 1;
+      continue;
+    }
+    read += 1;
+    counts.set(host, (counts.get(host) ?? 0) + Math.floor(count));
+  }
+
+  return { counts, header, read, skipped };
+}
+
+/**
+ * Orders candidates by how often the browser actually matched them.
+ *
+ * Stable in the only way that matters here: hits descending, and input order for equal counts
+ * and for everything unmeasured, so two runs over the same evidence produce the same bytes and
+ * an unmeasured tail stays the tail rather than shuffling between runs.
+ */
+export function rankHostsByHits(hosts, counts) {
+  if (!counts || counts.size === 0) return [...hosts];
+  return hosts
+    .map((host, index) => ({ host, index, hits: counts.get(host) ?? 0 }))
+    .sort((a, b) => b.hits - a.hits || a.index - b.index)
+    .map((entry) => entry.host);
 }
 
 /**
@@ -449,6 +591,9 @@ export function parseArgs(argv) {
     check: false,
     json: false,
     quiet: false,
+    // No default: see the header. A default evidence file would make the plan depend on a
+    // locally generated artifact, which is how `--check` came to fail on every compiled machine.
+    hits: null,
     rulesDir: RULES_DIR,
     countsPath: GENERATED_COUNTS_PATH,
     cataloguePath: CATALOGUE_PATH,
@@ -468,6 +613,7 @@ export function parseArgs(argv) {
         tier,
       });
     } else if (arg === '--budget') options.budget = Number.parseInt(next(), 10);
+    else if (arg === '--hits') options.hits = next();
     else if (arg === '--residual') {
       options.residual = normalizeTierName(next()) || options.residual;
     }
@@ -499,6 +645,39 @@ export function compile(options) {
     options.inputs.length > 0
       ? options.inputs
       : defaultInputCandidates().map((path) => ({ path, tier: null }));
+
+  // The evidence is read before the blocklists so a bad path fails before the work, and a
+  // file that yielded nothing usable is an error rather than a silent fall back to input order:
+  // an operator who named an evidence file is asking for a ranked build, and shipping an
+  // unranked one under that flag would be a lie about what was measured.
+  let hitEvidence = null;
+  if (options.hits) {
+    const path = resolve(options.hits);
+    if (!existsSync(path)) {
+      throw new Error(
+        `--hits file not found: ${relative(ROOT_DIR, path)}. Produce one with:\n` +
+          '  npm run ledger:merge -- --in export-1.json --in export-2.json --out ledger-hits.txt',
+      );
+    }
+    const parsed = readHitEvidence(readFileSync(path, 'utf8'));
+    if (parsed.counts.size === 0) {
+      throw new Error(
+        `--hits file held no usable rule hits: ${relative(ROOT_DIR, path)} ` +
+          `(${parsed.read} read, ${parsed.skipped} skipped). A ledger with no named rules cannot rank anything.`,
+      );
+    }
+    hitEvidence = {
+      source: displayPath(path),
+      // Kept on the internal object and left out of the report, which states the totals instead
+      // of a map with one entry per host.
+      counts: parsed.counts,
+      hosts: parsed.counts.size,
+      hits: [...parsed.counts.values()].reduce((sum, value) => sum + value, 0),
+      read: parsed.read,
+      skipped: parsed.skipped,
+      header: parsed.header,
+    };
+  }
 
   const available = [];
   const seen = { lines: 0 };
@@ -548,6 +727,27 @@ export function compile(options) {
     byTier.get(tier).push(host);
   }
 
+  // The plan this input order would have produced, computed so the report can say what ranking
+  // actually bought rather than only that it ran. `allocateBudget` is pure, and the cost is one
+  // more pass over the same candidates.
+  const inputOrderedPlan = allocateBudget(new Map(byTier), {
+    budget: options.budget,
+    shares: options.shares,
+  });
+
+  if (hitEvidence) {
+    for (const tier of TIER_IDS) {
+      const list = byTier.get(tier) || [];
+      // Curated hosts are first in their tier by construction, and they stay there: they are
+      // hand-picked rather than measured, and re-ordering them would make the regenerated
+      // diff touch the one part of the file that was never in question.
+      const curatedCount = (curatedByTier.get(tier) || []).length;
+      const curated = list.slice(0, curatedCount);
+      const synced = list.slice(curatedCount);
+      byTier.set(tier, [...curated, ...rankHostsByHits(synced, hitEvidence.counts)]);
+    }
+  }
+
   const { selection, overflow, remainingBudget } = allocateBudget(byTier, {
     budget: options.budget,
     shares: options.shares,
@@ -592,6 +792,24 @@ export function compile(options) {
     );
   }
 
+  // What the ranking bought, in the only terms that matter: how much of what ships is backed by
+  // a measured match, and how many hosts that promoted displaced from the input-ordered plan.
+  // "It ranked" is not a claim worth printing; these two numbers are.
+  let shippedWithEvidence = 0;
+  let promoted = 0;
+  const promotedExamples = [];
+  for (const tier of TIER_IDS) {
+    const baseline = new Set(inputOrderedPlan.selection.get(tier) || []);
+    for (const host of selection.get(tier) || []) {
+      if (!hitEvidence || !hitEvidence.counts.has(host)) continue;
+      shippedWithEvidence += 1;
+      if (!baseline.has(host)) {
+        promoted += 1;
+        if (promotedExamples.length < 5) promotedExamples.push(host);
+      }
+    }
+  }
+
   const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
   return {
     tiers,
@@ -615,6 +833,20 @@ export function compile(options) {
       total,
       omittedTotal: Object.values(omitted).reduce((sum, value) => sum + value, 0),
       remainingBudget,
+      // Null unless `--hits` was given, so a report never implies the plan was measured.
+      hitEvidence: hitEvidence
+        ? {
+            source: hitEvidence.source,
+            hosts: hitEvidence.hosts,
+            hits: hitEvidence.hits,
+            read: hitEvidence.read,
+            skipped: hitEvidence.skipped,
+            header: hitEvidence.header,
+            shippedWithEvidence,
+            promoted,
+            promotedExamples,
+          }
+        : null,
     },
   };
 }
@@ -807,6 +1039,34 @@ function main() {
       `   total   ${report.total.toLocaleString()} / ${report.budget.toLocaleString()} budget` +
         ` · ${report.omittedTotal.toLocaleString()} omitted`,
     );
+    if (report.hitEvidence) {
+      const evidence = report.hitEvidence;
+      // The header the ledger carries is its own provenance, and it is the difference between
+      // "ranked by 34 days of real browsing" and "ranked by one afternoon", so it is printed
+      // rather than left for the reader to open the file and find.
+      const span = evidence.header.sessions && evidence.header.days
+        ? ` — ${evidence.header.sessions} session(s) across ${evidence.header.days} day(s)`
+        : evidence.header['measured on']
+          ? ` — measured on ${evidence.header['measured on']}`
+          : '';
+      console.log(
+        `   ranked  ${evidence.shippedWithEvidence.toLocaleString()} of ` +
+          `${report.total.toLocaleString()} shipped rules carry measured hits` +
+          ` (${evidence.hosts.toLocaleString()} hosts in ${evidence.source}${span})`,
+      );
+      console.log(
+        `           ${evidence.promoted.toLocaleString()} evidence-backed host(s) took the slots of ` +
+          `${evidence.promoted > 0 ? 'unmeasured ones' : 'no unmeasured host (nothing was crowded out)'}` +
+          (evidence.promotedExamples.length > 0 ? `, e.g. ${evidence.promotedExamples.slice(0, 3).join(', ')}` : ''),
+      );
+      if (evidence.skipped > 0) {
+        console.log(
+          `           ${evidence.skipped.toLocaleString()} ledger line(s) named no block host and were not ranked`,
+        );
+      }
+    } else {
+      console.log('   ranked  no rule-hit evidence given — tiers are in input order (--hits <ledger>)');
+    }
     if (report.unclassified > 0) {
       console.log(
         `   note    ${report.unclassified.toLocaleString()} hosts matched no vocabulary and were placed in ${report.residualTier} (--residual to change)`,

@@ -18,6 +18,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ALL_STATIC_TIER_IDS, validateTierRuleset } from '../shared/rulesetTiers.js';
+// Core owns the ledger format. The compiler reads it without importing core (it runs before
+// any build), so the two readers are pinned against each other here instead — from the specific
+// module, so the suite does not drag in the whole package.
+import { parseHitLedgerText } from '../../../core/src/ledgerAggregate.js';
 
 const COMPILER = fileURLToPath(new URL('../../../../scripts/compile-tier-rulesets.mjs', import.meta.url));
 
@@ -29,9 +33,7 @@ beforeEach(() => {
   // A *synthetic* curated baseline rather than the repository's files. The checked-in tiers
   // may themselves already be a compiled 30,000-rule output, so copying them would make this
   // suite pass or fail depending on whether someone had just run a package build.
-  for (const tier of ALL_STATIC_TIER_IDS) {
-    writeCurated(tier, [`curated-${tier.replace('tier_', '')}.example.com`]);
-  }
+  writeBaselineCurated();
   // The catalogue the baseline check reads its expected counts from, in the same shape as
   // `src/shared/rulesetTiers.ts` but with counts that match the synthetic baseline above.
   writeCatalogue(Object.fromEntries(ALL_STATIC_TIER_IDS.map((tier) => [tier, 1])));
@@ -49,6 +51,20 @@ function writeCurated(tier: string, hosts: string[]): void {
     condition: { urlFilter: `||${host}^` },
   }));
   writeFileSync(join(workDir, 'rules', `${tier}.json`), JSON.stringify(rules, null, 2), 'utf8');
+}
+
+/**
+ * The synthetic curated baseline this suite compiles on top of.
+ *
+ * The compiler reads the tier files on disk as its curated seed, so a second run in the same
+ * rules directory compiles on top of the *first run's output* — which is the additive-by-design
+ * behaviour, and also means a before/after comparison has to put the baseline back first or it
+ * is comparing a ranked build against a ranked build.
+ */
+function writeBaselineCurated(): void {
+  for (const tier of ALL_STATIC_TIER_IDS) {
+    writeCurated(tier, [`curated-${tier.replace('tier_', '')}.example.com`]);
+  }
 }
 
 function readTier(tier: string): Array<{ id: number; priority: number; action: { type: string }; condition: { urlFilter: string } }> {
@@ -313,5 +329,256 @@ describe('tier compiler', () => {
     const result = runCompiler(['--input', input, '--budget', '100']);
     expect(result.status).toBe(1);
     expect(result.stdout).toContain('must ship at least one rule');
+  });
+});
+
+/**
+ * Ranking the 30,000-rule cut by the browser's own rule-hit evidence.
+ *
+ * The cut is the decision that matters — it decides what the extension blocks — and taking
+ * candidates in input order lets a merge artifact decide it instead. The property under test is
+ * not "ranking happened" but "the measured host shipped and the unmeasured one at the front of
+ * the list did not", plus the boundaries that keep this from being a ranking that re-tiers,
+ * re-orders the curated baseline, or quietly falls back to input order when the evidence file is
+ * wrong.
+ */
+describe('tier compiler · ranking the cut by rule-hit evidence', () => {
+  /** Hosts in a fixed input order, so "last in the list" is a statement about the fixture. */
+  const adsHosts = (count: number) =>
+    Array.from({ length: count }, (_, i) => `host-${String(i).padStart(2, '0')}.adnet-example.com`);
+
+  /** The hosts that made it into a tier, in the order the file holds them. */
+  const shippedHosts = (tier: string) => readTier(tier).map((rule) => rule.condition.urlFilter.replace(/^\|\||\^$/g, ''));
+
+  test('spends the budget on measured hosts instead of the front of the list', () => {
+    const ads = writeInput('ads.txt', adsHosts(20));
+    // The two busiest hosts are last in the input, which is the whole point: input order would
+    // have spent the slots on host-00 and host-01.
+    const hits = writeInput('hits.txt', ['12 ||host-19.adnet-example.com^', '3 ||host-18.adnet-example.com^']);
+
+    const ranked = runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '8', '--json']);
+    expect(ranked.status).toBe(0);
+    const rankedHosts = shippedHosts('tier_ads');
+
+    expect(rankedHosts).toContain('host-19.adnet-example.com');
+    expect(rankedHosts).toContain('host-18.adnet-example.com');
+    // Most-fired first, ahead of the unmeasured hosts that outrank nothing.
+    const firstSynced = rankedHosts.filter((host) => host !== 'curated-ads.example.com');
+    expect(firstSynced[0]).toBe('host-19.adnet-example.com');
+    expect(firstSynced[1]).toBe('host-18.adnet-example.com');
+
+    // The same input without evidence keeps input order, and host-19 never ships. The baseline is
+    // restored first: the compiler seeds from the tier files on disk, so the second run would
+    // otherwise compile on top of the ranked output and inherit host-19 as a curated host.
+    writeBaselineCurated();
+    const unranked = runCompiler(['--input', `tier_ads=${ads}`, '--budget', '8', '--json']);
+    expect(unranked.status).toBe(0);
+    const unrankedHosts = shippedHosts('tier_ads');
+    expect(unrankedHosts).not.toContain('host-19.adnet-example.com');
+    expect(unrankedHosts).toContain('host-00.adnet-example.com');
+  });
+
+  test('reports what ranking bought rather than only that it ran', () => {
+    const ads = writeInput('ads.txt', adsHosts(20));
+    const hits = writeInput('hits.txt', ['12 ||host-19.adnet-example.com^', '3 ||host-18.adnet-example.com^']);
+
+    const crowded = JSON.parse(
+      runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '8', '--json']).stdout,
+    );
+    expect(crowded.hitEvidence).not.toBeNull();
+    expect(crowded.hitEvidence.source).toContain('hits.txt');
+    expect(crowded.hitEvidence.hosts).toBe(2);
+    expect(crowded.hitEvidence.hits).toBe(15);
+    expect(crowded.hitEvidence.shippedWithEvidence).toBe(2);
+    // Both measured hosts took slots the input-ordered plan had given to unmeasured ones.
+    expect(crowded.hitEvidence.promoted).toBe(2);
+    expect(crowded.hitEvidence.promotedExamples).toEqual(
+      expect.arrayContaining(['host-19.adnet-example.com', 'host-18.adnet-example.com']),
+    );
+
+    // With a budget nothing is crowded out of, the same flag reports zero rather than claiming
+    // a promotion that did not happen.
+    const roomy = JSON.parse(
+      runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '1000', '--json']).stdout,
+    );
+    expect(roomy.hitEvidence.promoted).toBe(0);
+    expect(roomy.hitEvidence.shippedWithEvidence).toBe(2);
+  });
+
+  test('says nothing was measured when no evidence file was given', () => {
+    const ads = writeInput('ads.txt', adsHosts(20));
+    const report = JSON.parse(runCompiler(['--input', `tier_ads=${ads}`, '--budget', '8', '--json']).stdout);
+
+    // Null rather than an empty evidence block, so a report can never imply a ranked build.
+    expect(report.hitEvidence).toBeNull();
+  });
+
+  test('keeps curated hosts first and in their own tier, evidence or not', () => {
+    writeCurated('tier_ads', ['hand-picked.example.com']);
+    const ads = writeInput('ads.txt', adsHosts(20));
+    // The curated host has the *most* hits of anything, which is exactly the case where a naive
+    // "sort everything by hits" would reorder the one part of the file nobody asked to change.
+    const hits = writeInput('hits.txt', [
+      '900 ||hand-picked.example.com^',
+      '2 ||host-19.adnet-example.com^',
+    ]);
+
+    expect(runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '8']).status).toBe(0);
+
+    const hosts = shippedHosts('tier_ads');
+    // Curated first, then the measured host it out-scored 450 to 1.
+    expect(hosts[0]).toBe('hand-picked.example.com');
+    expect(hosts[1]).toBe('host-19.adnet-example.com');
+  });
+
+  test('never re-tiers a busy host out of the tier its vocabulary put it in', () => {
+    // A privacy host with more hits than anything in ads stays in privacy: which tier something
+    // belongs to is a statement about what it is, not about how often it fires.
+    const privacy = writeInput('privacy.txt', adsHosts(6).map((host) => host.replace('adnet', 'analytics')));
+    const hits = writeInput('hits.txt', [
+      '500 ||host-05.analytics-example.com^',
+      '1 ||host-00.analytics-example.com^',
+    ]);
+
+    expect(runCompiler(['--input', `tier_privacy=${privacy}`, '--hits', hits, '--budget', '1000']).status).toBe(0);
+    expect(shippedHosts('tier_privacy')).toContain('host-05.analytics-example.com');
+    expect(shippedHosts('tier_ads')).not.toContain('host-05.analytics-example.com');
+  });
+
+  test('refuses a mistyped evidence file instead of quietly shipping input order', () => {
+    const ads = writeInput('ads.txt', adsHosts(20));
+
+    const missing = runCompiler(['--input', `tier_ads=${ads}`, '--hits', join(workDir, 'nope.txt')]);
+    expect(missing.status).toBe(1);
+    expect(missing.stdout).toContain('--hits file not found');
+    // The message has to say how to make one, or the operator is left at the failure.
+    expect(missing.stdout).toContain('ledger:merge');
+  });
+
+  test('refuses a ledger that names no rule at all', () => {
+    const ads = writeInput('ads.txt', adsHosts(20));
+    const empty = writeInput('hits.txt', ['# Browser-reported rule-hit ledger', '# Days: 0', '42']);
+
+    const result = runCompiler(['--input', `tier_ads=${ads}`, '--hits', empty]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('no usable rule hits');
+  });
+
+  test('never ranks by an exception, which is on the record because it allowed a request', () => {
+    const ads = writeInput('ads.txt', [
+      'allowed-example.com',
+      ...adsHosts(20),
+    ]);
+    // A huge count on an `@@` rule: it saved the request, so it is not a reason to ship a block.
+    const hits = writeInput('hits.txt', ['500 @@||allowed-example.com^', '1 ||host-00.adnet-example.com^']);
+
+    const report = JSON.parse(
+      runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '8', '--json']).stdout,
+    );
+    expect(report.hitEvidence.hosts).toBe(1);
+    expect(report.hitEvidence.hits).toBe(1);
+    expect(report.hitEvidence.skipped).toBe(1);
+    // The exception is not even a candidate for the head of the tier.
+    const synced = shippedHosts('tier_ads').filter((host) => host !== 'curated-ads.example.com');
+    expect(synced[0]).toBe('host-00.adnet-example.com');
+  });
+
+  test('carries the ledger’s own provenance into the report', () => {
+    const ads = writeInput('ads.txt', adsHosts(20));
+    const hits = writeInput('hits.txt', [
+      '# Browser-reported rule-hit ledger',
+      '# Sessions: 12',
+      '# Days: 34',
+      '# First seen: 2026-08-01',
+      '7 ||host-19.adnet-example.com^',
+    ]);
+
+    const result = runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '8']);
+    expect(result.status).toBe(0);
+    // Printed rather than left for the reader to go and find: "ranked by 34 days" and "ranked by
+    // one afternoon" are the same mechanism and very different evidence.
+    expect(result.stdout).toContain('12 session(s) across 34 day(s)');
+  });
+
+  test('is deterministic with evidence: the same ledger produces byte-identical tiers', () => {
+    const ads = writeInput('ads.txt', adsHosts(20));
+    const hits = writeInput('hits.txt', [
+      '5 ||host-19.adnet-example.com^',
+      '5 ||host-18.adnet-example.com^',
+      '5 ||host-01.adnet-example.com^',
+    ]);
+
+    expect(runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '8']).status).toBe(0);
+    const first = ALL_STATIC_TIER_IDS.map((tier) => readFileSync(join(workDir, 'rules', `${tier}.json`), 'utf8'));
+
+    expect(runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '8']).status).toBe(0);
+    const second = ALL_STATIC_TIER_IDS.map((tier) => readFileSync(join(workDir, 'rules', `${tier}.json`), 'utf8'));
+
+    expect(second).toEqual(first);
+  });
+
+  test('ranks a wildcard rule by the host it is about, not refuses it', () => {
+    // The input side refuses `*.host` because a zone block cannot express "subdomains only". As
+    // *evidence* it is not a refusal: `||host^` is how the tier would ship that coverage, and
+    // ranking only reorders hosts the input produced, so widening cannot add one.
+    const ads = writeInput('ads.txt', adsHosts(20));
+    const hits = writeInput('hits.txt', ['9 *.host-19.adnet-example.com', '2 |host-18.adnet-example.com|']);
+
+    const report = JSON.parse(
+      runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '8', '--json']).stdout,
+    ).hitEvidence;
+    expect(report.hosts).toBe(2);
+    expect(report.hits).toBe(11);
+    expect(report.skipped).toBe(0);
+
+    const synced = shippedHosts('tier_ads').filter((host) => host !== 'curated-ads.example.com');
+    expect(synced[0]).toBe('host-19.adnet-example.com');
+  });
+
+  test('reads provenance written in the hot list’s own `!` comment style', () => {
+    const ads = writeInput('ads.txt', adsHosts(20));
+    // `build-hot-list.mjs` writes its header over `!`; a reader that only understood `#` would
+    // report this evidence's worth as unknown, which is the one thing the header exists to say.
+    const hits = writeInput('hits.txt', [
+      '! Source:          genericBrowserRules.txt (249,751 lines)',
+      '! Measured on:     browsing-trace.txt (request trace replay, 232 requests)',
+      '||host-19.adnet-example.com^ 7',
+    ]);
+
+    const result = runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '8']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('measured on browsing-trace.txt');
+  });
+
+  test('counts the ledger exactly as core’s parser does', () => {
+    const ads = writeInput('ads.txt', adsHosts(20));
+    const ledger = [
+      '# Browser-reported rule-hit ledger',
+      '# Sessions: 3',
+      '# Days: 2',
+      '7 ||host-19.adnet-example.com^',
+      '2 ||host-18.adnet-example.com^',
+      '1 ||host-00.adnet-example.com^',
+      '500 @@||allowed-example.com^',
+      '42',
+    ].join('\n');
+    const hits = writeInput('hits.txt', ledger.split('\n'));
+
+    const report = JSON.parse(
+      runCompiler(['--input', `tier_ads=${ads}`, '--hits', hits, '--budget', '8', '--json']).stdout,
+    ).hitEvidence;
+    const core = parseHitLedgerText(ledger);
+
+    // Same block entries, same total, same refusals. The compiler has its own reader so it can run
+    // before core is built; this is what keeps that from becoming a second, drifting definition.
+    // The one deliberate difference is a `*.host` rule, which core keeps as written and this
+    // reader counts against the base host — asserted separately, above.
+    expect(report.read).toBe(core.hits.length);
+    expect(report.hits).toBe(core.hits.reduce((sum, hit) => sum + hit.count, 0));
+    expect(report.hosts).toBe(core.hits.length);
+    // One exception plus one bare number: the two lines that name no block.
+    expect(report.skipped).toBe(core.exceptions.length + 1);
+    expect(report.header.sessions).toBe('3');
+    expect(report.header.days).toBe('2');
   });
 });
