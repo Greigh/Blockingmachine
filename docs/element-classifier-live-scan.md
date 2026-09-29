@@ -28,9 +28,10 @@ page, one encyclopedia article whose title is *Tracker (file system)*.
 | `nytimes.com` | 2,961 | 224 |
 | `en.wikipedia.org/wiki/Tracker_(file_system)` | 470 | 74 |
 
-The harness and the capture files are in `.freebuff/live-scan/` (scratch, deliberately not
-committed): `analyze.mjs` replays a capture, `probe.mjs` prints the feature vector and
-evidence families for one element, `recv-0*.json` are the captures.
+The harness and the capture files live in a local `live-scan/` scratch directory — deliberately not
+committed, and the directory itself is ignored so a capture cannot land in the repo by accident:
+`analyze.mjs` replays a capture, `probe.mjs` prints the feature vector and evidence families for one
+element, `recv-0*.json` are the captures.
 
 **Limits of the evidence.** Five pages is a sample, not a survey; it is one render of each
 page, at one viewport (440×903 on GitHub, 1440×900 elsewhere), on one day. Nothing here
