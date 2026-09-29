@@ -14,6 +14,18 @@
 // 1. Data Models, Enums & Interfaces
 export * from './types.js';
 
+// 1b. Remote reputation-db loader (manifest, patch schema, cache)
+export {
+  setDbDirectory,
+  setDbCacheDirectory,
+  applyPatch,
+  normalizeDbList,
+  type DbLists,
+  type DbPatch,
+  type DbManifest,
+  type LoadedDb,
+} from './db-loader.js';
+
 // 2. Registrable Domain & Hostname Reputation, Brand Spoof & Anti-Adblock
 export {
   HIGH_ABUSE_TLDS,
@@ -40,11 +52,26 @@ export {
   scoreBrandSpoof,
   isBenignServiceEndpoint,
   hasCorroboratedMalwareSignals,
+  assessCorroboration,
+  clampRiskLevel,
   adjustThreatCategory,
   clampConfidencePercent,
   formatConfidencePercent,
   verdictBadgeLabel,
+
+  // Remote hot-patch database (push list updates without an app release)
+  BASE_DB_LISTS,
+  getDbLists,
+  refreshDb,
+  getDbRefreshStatus,
+  type DbRefreshStatus,
 } from './reputation.js';
+
+export type {
+  CorroborationAssessment,
+  CorroborationTier,
+  EvidenceFamily,
+} from './types.js';
 
 // 3. Shannon Entropy, DGA Heuristics & Domain Decomposition
 export {
@@ -101,12 +128,128 @@ export {
   globalMiniAiClassifier,
   classifyDomainWithMiniAi,
   extractDomainFeatures,
+  getRegistrableZone,
   type MiniAiClassifierOptions,
 } from './MiniAiClassifier.js';
+
+// 7a. Embedded Mini-AI Element Classifier (DOM snapshots: ad / tracker / nag / content)
+export {
+  ELEMENT_CLASSES,
+  ELEMENT_ACTIONS,
+  ELEMENT_SOURCE_KINDS,
+  ELEMENT_AD_STRONG_TOKENS,
+  ELEMENT_AD_WEAK_TOKENS,
+  ELEMENT_TRACKER_STRONG_TOKENS,
+  ELEMENT_TRACKER_WEAK_TOKENS,
+  ELEMENT_CONSENT_STRONG_MARKERS,
+  ELEMENT_CONSENT_WEAK_TOKENS,
+  ELEMENT_NAG_MARKERS,
+  ELEMENT_SOCIAL_STRONG_MARKERS,
+  ELEMENT_SOCIAL_WEAK_TOKENS,
+  ELEMENT_ANTI_ADBLOCK_PHRASES,
+  ELEMENT_LURE_PHRASES,
+  ELEMENT_SOURCE_HOST_KINDS,
+  ELEMENT_URL_PATH_TOKENS,
+  ELEMENT_MODEL_WEIGHTS,
+  IAB_AD_SIZES,
+  MiniAiElementClassifier,
+  globalMiniAiElementClassifier,
+  classifyElementWithMiniAi,
+  normalizeElementSnapshot,
+  extractElementFeatures,
+  analyzeElement,
+  assessElementEvidence,
+  adjustElementClass,
+  elementSignature,
+  tokenizeElementIdentifier,
+  matchSourceHostKind,
+  hostOfUrl,
+  isElementSnapshot,
+  type ElementClass,
+  type ElementAction,
+  type ElementSourceKind,
+  type ElementEvidenceFamily,
+  type ElementSnapshot,
+  type ElementFeatureVector,
+  type ElementFeatureName,
+  type ElementFeatureAnalysis,
+  type ElementEvidenceDetails,
+  type ElementEvidenceAssessment,
+  type ElementPrediction,
+  type MiniAiElementClassifierOptions,
+} from './elementClassifier.js';
+
+// 7c. Triage Cascade (screen everything locally, escalate only the undecided)
+export {
+  HIGH_PRECISION_FAMILIES,
+  DEFAULT_TRIAGE_OPTIONS,
+  assessAmbiguity,
+  planTriage,
+  mergeTriageVerdict,
+  mergeTriageVerdicts,
+  summarizeTriage,
+  type TriageCandidate,
+  type TriageSignals,
+  type TriageReasonCode,
+  type AmbiguityAssessment,
+  type TriageAction,
+  type TriageItem,
+  type TriageStats,
+  type TriagePlan,
+  type TriageOptions,
+  type EscalationVerdict,
+  type TriageVerdict,
+  type TriageVerdictSource,
+} from './triage.js';
+
+// 7b. Behavioral DNS Stream Analysis (fan-out & beaconing cadence)
+export {
+  analyzeQueryBehavior,
+  escalateRiskWithBehavior,
+  type BehavioralDomainInsight,
+} from './behavioral.js';
 
 // 8. AI Detector Multi-Provider Service Orchestrator
 export {
   AiDetectorService,
+  selectThirdPartyCandidates,
   isSafePublicWebUrl,
   type SafeUrlCheckResult,
 } from './AiDetectorService.js';
+
+// 9. Learned GBDT Classifier (trained offline in Python, served here)
+export {
+  LEARNED_FEATURE_VERSION,
+  LEARNED_FEATURE_NAMES,
+  LEARNED_FEATURE_NAMES_V2,
+  LEARNED_V1_FEATURE_COUNT,
+  LEARNED_TOKENS,
+  LEARNED_COMMON_TLDS,
+  LEARNED_SUSPICIOUS_TLDS,
+  LEARNED_BIGRAM_LOG_PROBS,
+  normalizeLearnedDomain,
+  featurizeLearned,
+  isIpLiteralAddress,
+  evaluateGbdt,
+  createLearnedClassifier,
+  parseLearnedModel,
+  parseLearnedAllowlist,
+  parseLearnedManifest,
+  verifyLearnedManifest,
+  sha256Hex,
+  runShadowComparison,
+  type BehavioralObservation,
+  type GbdtModelFile,
+  type GbdtNode,
+  type LearnedClassifier,
+  type LearnedDecision,
+  type LearnedThresholds,
+  type LearnedVerdict,
+  type LearnedAllowlistFile,
+  type LearnedManifest,
+  type ShadowDisagreement,
+  type ShadowReference,
+  type ShadowRunOptions,
+  type ShadowRunResult,
+  type ShadowSample,
+} from './learned/index.js';

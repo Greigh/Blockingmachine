@@ -21,11 +21,16 @@
       "import": "./dist/sources.js",
       "require": "./dist/sources.js"
     },
+    "./element-ai": {
+      "types": "./dist/ai/elementClassifier.d.ts",
+      "import": "./dist/ai/elementClassifier.js",
+      "require": "./dist/ai/elementClassifier.js"
+    },
     "./package.json": "./package.json"
   },
   "license": "BSD-3-Clause",
   "scripts": {
-    "build": "tsc --skipLibCheck",
+    "build": "tsc --skipLibCheck && node -e \"const fs=require('fs'),p=require('path');const src=p.join('src','ai','db'),dest=p.join('dist','ai','db');fs.mkdirSync(dest,{recursive:true});for(const f of ['manifest.json','remote-patch.json','patch-schema.json','db-schema.json']){fs.copyFileSync(p.join(src,f),p.join(dest,f));}\"",
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
     "type-check": "tsc --noEmit",
     "format": "prettier --write .",
@@ -36,6 +41,8 @@
   },
   "files": [
     "dist",
+    "src/ai/db",
+    "ai-weights",
     "LICENSE",
     "README.md"
   ],

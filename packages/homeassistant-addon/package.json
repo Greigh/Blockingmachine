@@ -8,5 +8,8 @@
     "name": "Greigh Studios LLC",
     "email": "daniel@greighstudios.com",
     "url": "https://greighstudios.com"
+  },
+  "scripts": {
+    "test": "node --test"
   }
 }

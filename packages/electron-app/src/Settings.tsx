@@ -7,6 +7,7 @@ import type {
   SinkholeTestResult,
   AiProviderConfig,
   AiWatchdogConfig,
+  RadarDisplayConfig,
 } from './types/';
 import {
   ACCENT_PALETTE,
@@ -117,6 +118,7 @@ const Settings: React.FC<SettingsProps> = ({
     apiKey: '',
     apiEndpoint: 'https://api.openai.com/v1',
     modelName: 'gpt-4o-mini',
+    cascade: { enabled: false, maxEscalations: 25, escalateClean: false },
   });
   const [watchdogConfig, setWatchdogConfig] = useState<AiWatchdogConfig>({
     enabled: false,
@@ -129,6 +131,9 @@ const Settings: React.FC<SettingsProps> = ({
   const [aiTestResult, setAiTestResult] = useState<{ success: boolean; latencyMs?: number; message: string } | null>(null);
   const [showAiKey, setShowAiKey] = useState(false);
   const [learnedFeedbackCount, setLearnedFeedbackCount] = useState<number>(0);
+  const [radarDisplayConfig, setRadarDisplayConfig] = useState<RadarDisplayConfig>({
+    showIgnoredOffenders: false,
+  });
   const [autoStartFeedServer, setAutoStartFeedServer] = useState(false);
   const [launchOnStartup, setLaunchOnStartup] = useState(false);
   const [startupMessage, setStartupMessage] = useState('');
@@ -221,6 +226,12 @@ const Settings: React.FC<SettingsProps> = ({
     if (window.electron?.getMiniAiFeedbackStats) {
       window.electron.getMiniAiFeedbackStats().then((stats) => {
         if (isMounted && stats) setLearnedFeedbackCount(stats.count || 0);
+      }).catch(console.error);
+    }
+
+    if (window.electron?.getRadarDisplayConfig) {
+      window.electron.getRadarDisplayConfig().then((cfg) => {
+        if (isMounted && cfg) setRadarDisplayConfig(cfg);
       }).catch(console.error);
     }
 
@@ -487,6 +498,25 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
+  const handleToggleShowIgnoredOffenders = async (enabled: boolean) => {
+    setRadarDisplayConfig((prev) => ({ ...prev, showIgnoredOffenders: enabled }));
+    if (window.electron?.setRadarDisplayConfig) {
+      try {
+        await window.electron.setRadarDisplayConfig({ showIgnoredOffenders: enabled });
+        setAiMessage({
+          text: enabled
+            ? 'Ignored offenders now shown inline in Top Repeat Offenders.'
+            : 'Ignored offenders moved back into the collapsed Ignored section.',
+          type: 'success',
+        });
+        safeSetTimeout(() => setAiMessage({ text: '', type: null }), 3000);
+      } catch (err: any) {
+        console.error('Failed to set radar display config:', err);
+        setAiMessage({ text: err?.message || 'Failed to save radar display preference.', type: 'error' });
+      }
+    }
+  };
+
   const handleResetAiFeedback = async () => {
     if (!window.electron?.tuneMiniAiFeedback) return;
     try {
@@ -637,6 +667,9 @@ const Settings: React.FC<SettingsProps> = ({
                   <option value="hosts">Hosts File (Standard 0.0.0.0 domain syntax for DNS)</option>
                   <option value="dnsmasq">DNSMasq (Router and Pi-hole address syntax)</option>
                   <option value="unbound">Unbound (Local DNS resolver block syntax)</option>
+                  <option value="shadowrocket">Shadowrocket (iOS rule set — DOMAIN-SUFFIX rules)</option>
+                  <option value="privoxy">Privoxy (action file — &#123;+block&#125; sections)</option>
+                  <option value="bind">BIND DNS (Response Policy Zone records)</option>
                   <option value="domains">Domain List (One clean domain per line)</option>
                   <option value="plain">Plain Text (Raw line-by-line rules)</option>
                 </select>
@@ -665,6 +698,9 @@ const Settings: React.FC<SettingsProps> = ({
                     { id: 'adguard', label: 'AdGuard / uBlock format' },
                     { id: 'domains', label: 'Plain Domain List (one per line)' },
                     { id: 'unbound', label: 'Unbound DNS Resolver' },
+                    { id: 'shadowrocket', label: 'Shadowrocket (iOS rule set)' },
+                    { id: 'privoxy', label: 'Privoxy (filtering proxy action file)' },
+                    { id: 'bind', label: 'BIND (Response Policy Zone)' },
                   ]
                     .filter((item) => item.id !== exportFormat)
                     .map((item) => (
@@ -1727,6 +1763,86 @@ const Settings: React.FC<SettingsProps> = ({
             )}
           </div>
 
+          {/* Triage Cascade — local screening with a bounded escalation budget */}
+          <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))', marginBottom: '14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 5h18M6 12h12M10 19h4" />
+                </svg>
+                <span>Triage Cascade</span>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.78rem' }}>
+                <input
+                  type="checkbox"
+                  checked={aiConfig.cascade?.enabled === true}
+                  onChange={(e) =>
+                    setAiConfig({
+                      ...aiConfig,
+                      cascade: {
+                        maxEscalations: 25,
+                        escalateClean: false,
+                        ...(aiConfig.cascade || {}),
+                        enabled: e.target.checked,
+                      },
+                    })
+                  }
+                />
+                <span>Screen locally first</span>
+              </label>
+            </div>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #9ca3af)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+              The embedded classifier screens every candidate first — it costs nothing per lookup — and only the ones it genuinely cannot decide are sent to the provider above. Without this, the selected provider evaluates <em>everything</em>, which is what makes model-assisted blocking expensive.
+            </p>
+
+            {aiConfig.cascade?.enabled && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Model calls per scan</label>
+                  <input
+                    type="number"
+                    className="path-input"
+                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+                    min={0}
+                    value={aiConfig.cascade?.maxEscalations ?? 25}
+                    onChange={(e) =>
+                      setAiConfig({
+                        ...aiConfig,
+                        cascade: {
+                          enabled: true,
+                          escalateClean: aiConfig.cascade?.escalateClean === true,
+                          ...(aiConfig.cascade || {}),
+                          maxEscalations: Math.max(0, parseInt(e.target.value, 10) || 0),
+                        },
+                      })
+                    }
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Clean-traffic discovery</label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.78rem', height: '34px' }}>
+                    <input
+                      type="checkbox"
+                      checked={aiConfig.cascade?.escalateClean === true}
+                      onChange={(e) =>
+                        setAiConfig({
+                          ...aiConfig,
+                          cascade: {
+                            enabled: true,
+                            maxEscalations: aiConfig.cascade?.maxEscalations ?? 25,
+                            ...(aiConfig.cascade || {}),
+                            escalateClean: e.target.checked,
+                          },
+                        })
+                      }
+                    />
+                    <span>Also escalate uncertain <em>clean</em> verdicts</span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Sentinel Watchdog Automation */}
           <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))', marginBottom: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -1782,6 +1898,30 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Radar Display Preferences */}
+          <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))', marginBottom: '14px' }}>
+            <div style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: '4px' }}>
+              AI Radar Display
+            </div>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #9ca3af)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+              Browsing aids for the AI Radar's Top Repeat Offenders card. Ignoring is not trusting: ignored offenders stay hidden without any allowlist rule.
+            </p>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', cursor: 'pointer', fontSize: '0.78rem', lineHeight: 1.4 }}>
+              <input
+                type="checkbox"
+                checked={radarDisplayConfig.showIgnoredOffenders}
+                onChange={(e) => handleToggleShowIgnoredOffenders(e.target.checked)}
+                style={{ cursor: 'pointer', accentColor: 'var(--accent-color, #6366f1)', marginTop: 2 }}
+              />
+              <span>
+                <strong>Show ignored offenders inline</strong>
+                <span style={{ display: 'block', opacity: 0.75, fontSize: '0.72rem' }}>
+                  List ignored offenders (and their frozen heat) directly in the Top Repeat Offenders table instead of the collapsed Ignored section. Takes effect immediately, even with a Radar view already open.
+                </span>
+              </span>
+            </label>
           </div>
 
           {/* Action Footer */}

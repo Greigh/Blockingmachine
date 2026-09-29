@@ -93,6 +93,85 @@ describe("CLI Commands", () => {
     expect(adguardContent).toContain("||browser-only.com^$script");
   });
 
+  test("ExportCommand emits a deployable Shadowrocket rule set, not just Surge-shaped lines", async () => {
+    const outputDir = path.join(tmpDir, "filters", "output");
+    await fs.mkdir(outputDir, { recursive: true });
+
+    const rawRules = [
+      "||ads.example.com^",
+      "||parent.example^",
+      "@@||child.parent.example^",
+      "tracker.net",
+    ].join("\n");
+    await fs.writeFile(path.join(outputDir, "imported-rules.txt"), rawRules, "utf-8");
+
+    const config: any = {
+      baseDir: tmpDir,
+      output: { directory: outputDir },
+      sources: [],
+    };
+
+    const exportCmd = new ExportCommand({ config, logger: mockLogger });
+    const result = await exportCmd.execute({ outputPath: outputDir, formats: ["shadowrocket"] });
+    expect(result.success).toBe(true);
+
+    const content = await fs.readFile(path.join(outputDir, "filter-list.shadowrocket"), "utf-8");
+    // `!` is AdGuard syntax; a Shadowrocket config rejects it, and the app reads rules from a
+    // `[Rule]` section rather than from a bare list of lines.
+    expect(content).toContain("# Title:");
+    expect(content).not.toMatch(/^! /m);
+    expect(content).toContain("[Rule]");
+    expect(content.indexOf("[Rule]")).toBeLessThan(content.indexOf("DOMAIN-SUFFIX,"));
+
+    expect(content).toContain("DOMAIN-SUFFIX,ads.example.com,REJECT");
+    expect(content).toContain("DOMAIN-SUFFIX,tracker.net,REJECT");
+    expect(content).not.toContain("DOMAIN,");
+
+    // First match wins, so the child bypass has to precede the parent block it escapes.
+    expect(content).toContain("DOMAIN-SUFFIX,child.parent.example,DIRECT");
+    expect(content.indexOf("DOMAIN-SUFFIX,child.parent.example,DIRECT")).toBeLessThan(
+      content.indexOf("DOMAIN-SUFFIX,parent.example,REJECT"),
+    );
+  });
+
+  test("ExportCommand writes privoxy and bind as the sectioned documents their tools load", async () => {
+    const outputDir = path.join(tmpDir, "filters", "output");
+    await fs.mkdir(outputDir, { recursive: true });
+
+    const rawRules = [
+      "||ads.example.com^",
+      "||parent.example^",
+      "@@||child.parent.example^",
+      "tracker.net",
+    ].join("\n");
+    await fs.writeFile(path.join(outputDir, "imported-rules.txt"), rawRules, "utf-8");
+
+    const config: any = { baseDir: tmpDir, output: { directory: outputDir }, sources: [] };
+    const exportCmd = new ExportCommand({ config, logger: mockLogger });
+    const result = await exportCmd.execute({ outputPath: outputDir, formats: ["privoxy", "bind"] });
+    expect(result.success).toBe(true);
+
+    const privoxy = await fs.readFile(path.join(outputDir, "filter-list.privoxy"), "utf-8");
+    // The block section has to open before the first pattern, or the patterns belong to no action.
+    expect(privoxy).toContain("{+block{Blockingmachine Blocklist}}");
+    expect(privoxy.indexOf("{+block{")).toBeLessThan(privoxy.indexOf("\n.ads.example.com\n"));
+    expect(privoxy).toContain("\n.tracker.net\n");
+    // The old bug: a section header per rule with an empty pattern list, which blocks nothing.
+    expect(privoxy).not.toContain("{ +block {");
+    // Last match wins, so the bypass follows the block it escapes.
+    expect(privoxy.indexOf("\n.parent.example\n")).toBeLessThan(privoxy.indexOf("{-block}"));
+    expect(privoxy.indexOf("{-block}")).toBeLessThan(privoxy.indexOf("\n.child.parent.example\n"));
+
+    const bind = await fs.readFile(path.join(outputDir, "filter-list.bind"), "utf-8");
+    // A primary zone with no SOA is refused by BIND, so the artifact carries one.
+    expect(bind).toContain("@ IN SOA localhost. root.localhost.");
+    expect(bind).toContain("ads.example.com CNAME .");
+    expect(bind).toContain("child.parent.example CNAME rpz-passthru.");
+    expect(bind).not.toContain("null.zone.file");
+    // `#` comments the rest of the CLI writes are a parse error in a master file.
+    expect(bind).not.toMatch(/^# /m);
+  });
+
   test("ImportCommand imports, preserves cosmetic rules and deduplicates rules from local file source", async () => {
     const sourceFile = path.join(tmpDir, "sample-source.txt");
     const sourceContent = [

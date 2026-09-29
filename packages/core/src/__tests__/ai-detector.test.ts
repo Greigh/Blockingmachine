@@ -194,6 +194,29 @@ describe('AI Ad & Tracker Discovery Engine', () => {
       expect(res.reasons[0]).toContain('False Positive Guard');
     });
 
+    it('records the guard clearance as data, not only as a sentence', async () => {
+      // A guarded result carries no `triage` record — the screening pass never ran — so anything
+      // reporting a scan's coverage has to tell "cleared without being screened" apart from "the
+      // cascade was off". That needs a field; parsing `reasons` was the previous answer.
+      const res = await service.scanDomain('cdnjs.cloudflare.com');
+
+      expect(res.falsePositiveGuard).toEqual({ cleared: true, reason: expect.any(String) });
+      expect(res.falsePositiveGuard?.reason).toBeTruthy();
+      // The prose marker stays for readers that already look for it, and the structured reason is
+      // the guard's own detail rather than a copy of the marker sentence.
+      expect(res.falsePositiveGuard?.reason).not.toContain('False Positive Guard');
+      expect(res.triage).toBeUndefined();
+      expect(res.featureScores).toBeUndefined();
+    });
+
+    it('leaves the guard record off a result the guard did not clear', async () => {
+      // Absence is load-bearing: the display treats a present record as proof of a skip, so a
+      // default value on ordinary results would mark every scan as guard-cleared.
+      const res = await service.scanDomain('doubleclick.net');
+
+      expect(res.falsePositiveGuard).toBeUndefined();
+    });
+
     it('honors user custom allowlist', async () => {
       const customAllow = ['custom-internal-portal.local'];
       const res = await service.scanDomain('ad.custom-internal-portal.local', { allowlist: customAllow });
@@ -674,7 +697,12 @@ describe('AI Ad & Tracker Discovery Engine', () => {
       const service = new AiDetectorService({ provider: 'mini-ai' });
       const threatDomains = [
         'apple-login.xyz',
-        'apple.evil-domain.com',
+        // A bare brand label is only escalated with a corroborating signal, so this
+        // case carries the high-abuse TLD that makes it credible impersonation.
+        // A bare `apple.<random-zone>.com` is deliberately treated as clean (see
+        // ai-false-positive-guard.test.ts) because vendor names and ordinary English
+        // words are constantly used as hostname labels.
+        'apple.evil-domain.xyz',
         'apple-login.statuspage.io',
         'xn--pple-43d.com',
         'paypa1.com',

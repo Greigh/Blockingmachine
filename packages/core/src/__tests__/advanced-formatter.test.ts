@@ -150,3 +150,199 @@ example.com#$#abort-current-inline-script
     expect(adguardOutput).toContain("! Unique rules: 6");
   });
 });
+
+/**
+ * The Shadowrocket export has existed for a long time without a deploy target behind it, which hid
+ * the fact that the artifact itself was not deployable: it had no `[Rule]` section for the app to
+ * read the rules out of, and it used `DOMAIN,` — the exact-host form — so every subdomain of a
+ * blocked domain was missed. These pin the artifact, not a target, because that is what a user
+ * actually fetches.
+ */
+describe("shadowrocket rule set", () => {
+  const metadata: FilterMetadata = {
+    title: "Test Blocklist",
+    description: "A test list for verification",
+    homepage: "https://example.com",
+    version: "1.0.0",
+    lastUpdated: "2026-09-14T00:00:00.000Z",
+  };
+
+  const rules: StoredRule[] = parseFilterList(
+    [
+      "||parent.example^",
+      "@@||child.parent.example^",
+      "||ads.example.com^",
+      "||allowed.example.com^",
+      "@@||allowed.example.com^",
+    ].join("\n"),
+    "shadowrocket-source",
+  );
+
+  test("opens a [Rule] section before the rules and comments with #", () => {
+    const output = generateFilterList(rules, metadata, "shadowrocket");
+
+    expect(output).toContain("# Format: Shadowrocket");
+    expect(output).toContain("[Rule]");
+    // `!` is AdGuard syntax; a Shadowrocket config rejects it, so the header must never use it.
+    expect(output).not.toMatch(/^! /m);
+    // The section header has to precede the rules, or they have nowhere to be read from.
+    expect(output.indexOf("[Rule]")).toBeLessThan(output.indexOf("DOMAIN-SUFFIX,"));
+  });
+
+  test("blocks with DOMAIN-SUFFIX so subdomains are covered", () => {
+    const output = generateFilterList(rules, metadata, "shadowrocket");
+
+    expect(output).toContain("DOMAIN-SUFFIX,ads.example.com,REJECT");
+    expect(output).toContain("DOMAIN-SUFFIX,parent.example,REJECT");
+    // `DOMAIN,host,REJECT` matches that exact host only — a silently weaker list.
+    expect(output).not.toContain("DOMAIN,");
+  });
+
+  test("emits a child bypass before the parent block it escapes", () => {
+    const output = generateFilterList(rules, metadata, "shadowrocket");
+
+    const bypass = output.indexOf("DOMAIN-SUFFIX,child.parent.example,DIRECT");
+    const parentBlock = output.indexOf("DOMAIN-SUFFIX,parent.example,REJECT");
+    expect(bypass).toBeGreaterThanOrEqual(0);
+    expect(parentBlock).toBeGreaterThanOrEqual(0);
+    // First match wins in a Surge-style rule set, so ordering is the whole mechanism.
+    expect(bypass).toBeLessThan(parentBlock);
+  });
+
+  test("does not block an allowlisted domain, and records why as a comment", () => {
+    const output = generateFilterList(rules, metadata, "shadowrocket");
+
+    expect(output).not.toContain("DOMAIN-SUFFIX,allowed.example.com,REJECT");
+    expect(output).toContain("# EXCEPTION: @@||allowed.example.com^");
+  });
+});
+
+/**
+ * Privoxy: a section-based action file where the *last* matching action wins.
+ *
+ * The format was advertised for years while the core formatter emitted `{ +block { host } }` once
+ * per rule — a section header with an empty pattern list, which blocks nothing.
+ */
+describe("privoxy action file", () => {
+  const metadata: FilterMetadata = {
+    title: "Test Blocklist",
+    description: "A test list for verification",
+    homepage: "https://example.com",
+    version: "1.0.0",
+    lastUpdated: "2026-09-14T00:00:00.000Z",
+  };
+
+  const rules: StoredRule[] = parseFilterList(
+    [
+      "||parent.example^",
+      "@@||child.parent.example^",
+      "||ads.example.com^",
+      "||allowed.example.com^",
+      "@@||allowed.example.com^",
+    ].join("\n"),
+    "privoxy-source",
+  );
+
+  test("opens a block section before the first pattern", () => {
+    const output = generateFilterList(rules, metadata, "privoxy");
+
+    expect(output).toContain("{+block{Blockingmachine Blocklist}}");
+    // Patterns before the first action block belong to no action, so the section has to precede
+    // them rather than follow the header.
+    expect(output.indexOf("{+block{")).toBeLessThan(output.indexOf("\n.ads.example.com\n"));
+  });
+
+  test("emits a dot-prefixed host pattern, which is what covers subdomains", () => {
+    const output = generateFilterList(rules, metadata, "privoxy");
+
+    expect(output).toContain("\n.ads.example.com\n");
+    expect(output).toContain("\n.parent.example\n");
+    // The old bug: a per-rule section header with no pattern under it.
+    expect(output).not.toContain("{ +block {");
+    expect(output).not.toContain("{ +block{ads.example.com}}");
+  });
+
+  test("emits a child bypass after the parent block it escapes", () => {
+    const output = generateFilterList(rules, metadata, "privoxy");
+
+    const parentBlock = output.indexOf("\n.parent.example\n");
+    const bypassSection = output.indexOf("{-block}");
+    const bypass = output.indexOf("\n.child.parent.example\n");
+    expect(parentBlock).toBeGreaterThanOrEqual(0);
+    expect(bypassSection).toBeGreaterThan(parentBlock);
+    // Last match wins in Privoxy, so the bypass has to follow the block — the reverse of the
+    // Shadowrocket rule set above.
+    expect(bypass).toBeGreaterThan(bypassSection);
+  });
+
+  test("does not block an allowlisted domain, and records why as a comment", () => {
+    const output = generateFilterList(rules, metadata, "privoxy");
+
+    expect(output).not.toContain("\n.allowed.example.com\n");
+    expect(output).toContain("# EXCEPTION: @@||allowed.example.com^");
+  });
+});
+
+/**
+ * BIND: the artifact is a Response Policy Zone, not a `named.conf` of zone stanzas.
+ *
+ * The old formatter emitted one `zone "host" { type master; file "null.zone.file"; };` per blocked
+ * domain — a file that does not exist, and a primary zone BIND refuses to load because it has no
+ * SOA. No single master file can serve 100k origins anyway, so the list has to be RPZ records.
+ */
+describe("bind response policy zone", () => {
+  const metadata: FilterMetadata = {
+    title: "Test Blocklist",
+    description: "A test list for verification",
+    homepage: "https://example.com",
+    version: "1.0.0",
+    lastUpdated: "2026-09-14T00:00:00.000Z",
+  };
+
+  const rules: StoredRule[] = parseFilterList(
+    [
+      "||parent.example^",
+      "@@||child.parent.example^",
+      "||ads.example.com^",
+      "||allowed.example.com^",
+      "@@||allowed.example.com^",
+    ].join("\n"),
+    "bind-source",
+  );
+
+  test("carries the SOA a primary zone cannot load without", () => {
+    const output = generateFilterList(rules, metadata, "bind");
+
+    expect(output).toContain("$TTL 3600");
+    expect(output).toContain("@ IN SOA localhost. root.localhost.");
+    expect(output).toContain("@ IN NS localhost.");
+    expect(output).toContain("response-policy");
+  });
+
+  test("blocks with an RPZ policy record rather than a per-domain zone stanza", () => {
+    const output = generateFilterList(rules, metadata, "bind");
+
+    expect(output).toContain("ads.example.com CNAME .");
+    expect(output).toContain("parent.example CNAME .");
+    // The unusable shape: a zone pointing at a file that holds no SOA.
+    expect(output).not.toContain("null.zone.file");
+    // The only `zone` stanza is the single copy-ready named.conf hint in the header — not one per
+    // blocked domain, which is what could not load.
+    expect(output.match(/\{ type master; file/g)).toHaveLength(1);
+  });
+
+  test("bypasses a child with rpz-passthru., which wins on the longest match", () => {
+    const output = generateFilterList(rules, metadata, "bind");
+
+    expect(output).toContain("child.parent.example CNAME rpz-passthru.");
+  });
+
+  test("comments with the master-file character, not #", () => {
+    const output = generateFilterList(rules, metadata, "bind");
+
+    expect(output).toContain("; EXCEPTION: @@||allowed.example.com^");
+    // `#` is a comment in named.conf but a parse error in a master file.
+    expect(output).not.toMatch(/^# /m);
+    expect(output).not.toContain("allowed.example.com CNAME .");
+  });
+});

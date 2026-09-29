@@ -273,6 +273,10 @@ export interface ExportOptions {
 }
 
 // Make sure SupportedFormat is also defined
+//
+// Kept in step with the formatter's own `EXPORT_FORMATS`: this list used to omit `domains` and
+// `plain`, so those two were unreachable through `--format` even though the core formatter writes
+// them and the README documents the domain list.
 export type SupportedFormat =
   | "hosts"
   | "dnsmasq"
@@ -282,6 +286,8 @@ export type SupportedFormat =
   | "shadowrocket"
   | "adguard"
   | "abp"
+  | "domains"
+  | "plain"
   | "all";
 
 // Filter list metadata

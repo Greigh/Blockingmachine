@@ -7,7 +7,6 @@ import {
   RuleStore,
   RuleClassificationType,
   type StoredRule,
-  type RuleType,
 } from "./RuleStore.js";
 import { createRuleMetadata } from "./createMetadata.js";
 

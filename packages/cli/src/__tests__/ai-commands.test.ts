@@ -40,6 +40,26 @@ describe('CLI AI Radar Commands', () => {
       expect(result.data.generatedRules).toContain('||doubleclick.net^');
     });
 
+    it('reports a guard-cleared domain as skipped rather than as a scan that decided nothing', async () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const cmd = new AiScanCommand({ config: mockConfig, logger: mockLogger });
+        const result = await cmd.execute({
+          target: 'cdnjs.cloudflare.com',
+          provider: 'local-heuristics',
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.data.falsePositiveGuard?.cleared).toBe(true);
+        // Without this line the report shows no `Triage Cascade` section at all, which reads as a
+        // scan that produced nothing rather than one that never screened the target.
+        const printed = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
+        expect(printed).toContain('cleared by the false-positive guard');
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
     it('successfully scans a clean mainstream domain', async () => {
       const cmd = new AiScanCommand({ config: mockConfig, logger: mockLogger });
       const result = await cmd.execute({

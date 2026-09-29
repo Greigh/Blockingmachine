@@ -54,6 +54,11 @@ contextBridge.exposeInMainWorld('electron', {
   getCompilationHistory: () => ipcRenderer.invoke('get-compilation-history'),
   inspectDomain: (domain: string) => ipcRenderer.invoke('inspect-domain', domain),
   testFeedUrl: (url: string) => ipcRenderer.invoke('test-feed-url', url),
+  getUnboundReachability: () => ipcRenderer.invoke('get-unbound-reachability'),
+  checkUnboundReachability: () => ipcRenderer.invoke('check-unbound-reachability'),
+  getUnboundResolvers: () => ipcRenderer.invoke('get-unbound-resolvers'),
+  setUnboundResolvers: (values: { address?: string; referenceAddress?: string }) =>
+    ipcRenderer.invoke('set-unbound-resolvers', values),
   startFeedServer: (port?: number) => ipcRenderer.invoke('start-feed-server', port),
   stopFeedServer: () => ipcRenderer.invoke('stop-feed-server'),
   getFeedServerStatus: () => ipcRenderer.invoke('get-feed-server-status'),
@@ -88,6 +93,20 @@ contextBridge.exposeInMainWorld('electron', {
   compactSubdomainRules: (domains: string[], threshold?: number) => ipcRenderer.invoke('compact-subdomain-rules', domains, threshold),
   checkRuleConflict: (rule: string) => ipcRenderer.invoke('check-rule-conflict', rule),
   getMiniAiFeedbackStats: () => ipcRenderer.invoke('get-mini-ai-feedback-stats'),
+  resetMiniAiFeedback: (domain: string) => ipcRenderer.invoke('reset-mini-ai-feedback', domain),
+  getRadarHeatSummary: () => ipcRenderer.invoke('get-radar-heat-summary'),
+  clearRadarHeatDomain: (domain: string) => ipcRenderer.invoke('clear-radar-heat-domain', domain),
+  ignoreRadarHeatDomain: (domain: string) => ipcRenderer.invoke('ignore-radar-heat-domain', domain),
+  unignoreRadarHeatDomain: (domain: string) => ipcRenderer.invoke('unignore-radar-heat-domain', domain),
+  getRadarDisplayConfig: () => ipcRenderer.invoke('get-radar-display-config'),
+  setRadarDisplayConfig: (config: any) => ipcRenderer.invoke('set-radar-display-config', config),
+  onRadarDisplayConfigUpdated: (callback: (config: any) => void) => {
+    const handler = (_event: IpcRendererEvent, config: any) => callback(config);
+    ipcRenderer.on('radar-display-config-updated', handler);
+    return () => {
+      ipcRenderer.removeListener('radar-display-config-updated', handler);
+    };
+  },
   synthesizeCustomRules: (input: any) => ipcRenderer.invoke('synthesize-custom-rules', input),
   startLiveRadarSession: (options: any) => ipcRenderer.invoke('start-live-radar-session', options),
   stopLiveRadarSession: () => ipcRenderer.invoke('stop-live-radar-session'),

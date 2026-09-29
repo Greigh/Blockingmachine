@@ -335,23 +335,37 @@ async function generateAdditionalFormats(adguardFilePath) {
     await fs.writeFile(path.join(databaseRoot, 'filters', 'unbound.conf'), unboundRules.join('\n'));
     console.log('✓ Generated unbound.conf format');
     
-    // Generate BIND named.conf format
+    // Generate the BIND Response Policy Zone.
+    //
+    // A file of `zone "host" { type master; file …; };` stanzas cannot load: BIND refuses a primary
+    // zone whose file has no SOA, and no single master file can serve a hundred thousand different
+    // origins. The way to block a name in BIND is RPZ, so the artifact is one zone whose policy
+    // records are the list. A master file comments with `;`, not `#`.
     const namedRules = [];
-    namedRules.push('# Title: Blockingmachine BIND List');
-    namedRules.push('# Description: Combined filter list optimized for BIND');
-    namedRules.push('# Homepage: https://github.com/greigh/blockingmachine');
-    namedRules.push('# License: BSD-3-Clause');
-    namedRules.push('# Made by: Greigh Studios LLC aka Greigh');
-    namedRules.push('# Version: 3.0.0');
-    namedRules.push(`# Last Updated: ${new Date().toISOString()}`);
-    namedRules.push('# Expires: 1 day');
+    namedRules.push('; Title: Blockingmachine BIND RPZ');
+    namedRules.push('; Description: Response Policy Zone for BIND, one policy record per blocked name');
+    namedRules.push('; Homepage: https://github.com/greigh/blockingmachine');
+    namedRules.push('; License: BSD-3-Clause');
+    namedRules.push('; Made by: Greigh Studios LLC aka Greigh');
+    namedRules.push('; Version: 3.0.0');
+    namedRules.push(`; Last Updated: ${new Date().toISOString()}`);
+    namedRules.push('; Expires: 1 day');
+    namedRules.push(`; Rules count: 0`);
+    namedRules.push(';');
+    namedRules.push('; Enable it in named.conf with:');
+    namedRules.push(';   zone "rpz.blockingmachine" { type master; file "db.blockingmachine.rpz"; };');
+    namedRules.push(';   options { response-policy { zone "rpz.blockingmachine"; }; };');
+    namedRules.push('; `CNAME .` means NXDOMAIN (block); `CNAME rpz-passthru.` means allow.');
     namedRules.push('');
+    namedRules.push('$TTL 3600');
+    namedRules.push('@ IN SOA localhost. root.localhost. ( 1 3600 600 604800 86400 )');
+    namedRules.push('@ IN NS localhost.');
     let namedCount = 0;
 
     lines.forEach((line) => {
       if (line.match(/^@@\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^@@\|\|/, '').replace(/\^$/, '');
-        if (domain) namedRules.push(`# EXCEPTION: @@||${domain}^`);
+        if (domain) namedRules.push(`; EXCEPTION: @@||${domain}^`);
         return;
       }
 
@@ -361,15 +375,15 @@ async function generateAdditionalFormats(adguardFilePath) {
       if (line.match(/^\|\|([^\/\^$]+)\^$/)) {
         const domain = line.replace(/^\|\|/, '').replace(/\^$/, '');
         if (domain && !domain.includes('*') && !domain.includes('$') && !isDomainAllowed(domain)) {
-          namedRules.push(`zone "${domain}" { type master; file "/dev/null"; };`);
+          namedRules.push(`${domain} CNAME .`);
           namedCount++;
         }
       }
     });
-    namedRules.splice(7, 0, `# Rules count: ${namedCount}`);
+    namedRules[8] = `; Rules count: ${namedCount}`;
 
     await fs.writeFile(path.join(databaseRoot, 'filters', 'named.conf'), namedRules.join('\n'));
-    console.log('✓ Generated named.conf format');
+    console.log('✓ Generated BIND RPZ zone');
     
     // Generate Privoxy format
     const privoxyRules = [];

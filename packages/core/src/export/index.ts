@@ -7,7 +7,7 @@ import type {
   ExportOptions,
 } from "../types.js";
 import { EXPORT_FORMATS } from "../types.js";
-import { formatRuleForType, isException, isExportableRule } from "./formatters.js";
+import { formatRuleForType, formatExceptionComment, isException, isExportableRule, PRIVOXY_BYPASS_SECTION } from "./formatters.js";
 import { generateHeader } from "./headers.js";
 import {
   filterDNSRules,
@@ -42,6 +42,14 @@ export async function exportFormat(
     const precedence = resolveDnsPrecedence(rules);
     const lines: string[] = [];
 
+    // A Shadowrocket/Surge rule set is first-match-wins, so a child bypass has to be emitted
+    // before the parent block it escapes.
+    if (format === "shadowrocket") {
+      for (const sub of precedence.subdomainExceptions) {
+        lines.push(`DOMAIN-SUFFIX,${sub.subdomain},DIRECT`);
+      }
+    }
+
     // Active blocks
     for (const rule of precedence.activeBlocks) {
       const line = formatRuleForType(rule, format);
@@ -57,17 +65,29 @@ export async function exportFormat(
       for (const sub of precedence.subdomainExceptions) {
         lines.push(`  local-zone: "${sub.subdomain}" transparent`);
       }
+    } else if (format === "privoxy") {
+      // Last match wins in an action file, so the bypass section has to come *after* the blocks it
+      // escapes — the mirror image of the Shadowrocket ordering above.
+      if (precedence.subdomainExceptions.length > 0) {
+        lines.push(PRIVOXY_BYPASS_SECTION);
+        for (const sub of precedence.subdomainExceptions) {
+          lines.push(`.${sub.subdomain}`);
+        }
+      }
+    } else if (format === "bind") {
+      // RPZ resolves on the longest match, so a child passthru needs no ordering at all.
+      for (const sub of precedence.subdomainExceptions) {
+        lines.push(`${sub.subdomain} CNAME rpz-passthru.`);
+      }
     }
 
     // Effective exception comments
     for (const exRule of precedence.effectiveExceptions) {
-      lines.push(`# EXCEPTION: ${exRule.raw}`);
+      lines.push(formatExceptionComment(exRule, format));
     }
 
     for (const ovRule of precedence.overriddenExceptions) {
-      lines.push(
-        `# EXCEPTION OVERRIDDEN BY $important: ${ovRule.raw}`,
-      );
+      lines.push(formatExceptionComment(ovRule, format, true));
     }
 
     const uniqueLines = Array.from(new Set(lines));

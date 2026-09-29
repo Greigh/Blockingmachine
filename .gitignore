@@ -83,8 +83,15 @@ assets/*.cert
 *.backup
 *.tsbuildinfo
 
+# Reputation db remote-patch cache (runtime artifact)
+.remote-patch-cache.json
+packages/core/src/ai/db/.remote-patch-cache.json
+
 # Python files
 __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+
+# Local agent/session scratch — never part of the product
+.freebuff/

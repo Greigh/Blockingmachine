@@ -10,6 +10,7 @@ import {
   parseFilterList,
   filterDNSRules,
   formatAdguardRule,
+  generateFilterList,
   resolveDnsPrecedence,
 } from "@blockingmachine/core";
 import type { FilterListMetadata } from "../types.js";
@@ -155,6 +156,48 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
                 "",
               ].join("\n");
               output = dnsmasqHeader + formattedRules.join("\n");
+              break;
+            }
+            case "shadowrocket": {
+              const precedence = resolveDnsPrecedence(dnsSafeRules);
+              const bypassRules: string[] = [];
+              const blockRules: string[] = [];
+              // First-match-wins: a child bypass has to come before the parent block it escapes.
+              for (const sub of precedence.subdomainExceptions) {
+                bypassRules.push(`DOMAIN-SUFFIX,${sub.subdomain},DIRECT`);
+              }
+              for (const rule of precedence.activeBlocks) {
+                const domain = cleanDomainPattern(rule.raw) || rule.domain;
+                if (domain) blockRules.push(`DOMAIN-SUFFIX,${domain},REJECT`);
+              }
+              for (const rule of precedence.effectiveExceptions) {
+                blockRules.push(`# EXCEPTION: ${rule.raw}`);
+              }
+              const shadowrocketHeader = [
+                `# Title: ${meta.title}`,
+                `# Description: ${meta.description}`,
+                `# Homepage: ${meta.homepage}`,
+                `# Version: ${meta.version}`,
+                `# Last updated: ${meta.lastUpdated}`,
+                `# Rules count: ${blockRules.length}`,
+                "# Format: Shadowrocket rule set (Surge-compatible)",
+                "[Rule]",
+                "",
+              ].join("\n");
+              output = shadowrocketHeader + [...bypassRules, ...blockRules].join("\n");
+              break;
+            }
+            case "privoxy":
+            case "bind":
+            case "domains":
+            case "plain": {
+              // None of these is a list of one formatted line per rule: a Privoxy action file is
+              // section-based, a BIND artifact is a Response Policy Zone that has to carry an SOA,
+              // and `domains` prunes exceptions rather than emitting them. All four go through the
+              // shared formatter, so the CLI cannot emit a different document from the one the
+              // desktop Hub writes for the same rules. It applies its own DNS filtering, so the
+              // unfiltered parsed set is what it should receive.
+              output = generateFilterList(parsedRules, meta, format);
               break;
             }
             default:

@@ -107,6 +107,24 @@ describe('AI Radar Types & Runtime Hardening Guards', () => {
       expect(isAiScanResult({ ...valid, verdict: 'not-a-verdict' })).toBe(false);
     });
 
+    it('validates the false-positive guard record', () => {
+      const valid = createDefaultScanResult('cdnjs.cloudflare.com');
+
+      expect(isAiScanResult(valid)).toBe(true);
+      expect(isAiScanResult({ ...valid, falsePositiveGuard: { cleared: true } })).toBe(true);
+      expect(
+        isAiScanResult({ ...valid, falsePositiveGuard: { cleared: false, reason: 'evaluated' } }),
+      ).toBe(true);
+      // `cleared` is what the display branches on, so a record that omits it or spells it as prose
+      // must not validate — a lenient reader would otherwise treat it as a cleared domain.
+      expect(isAiScanResult({ ...valid, falsePositiveGuard: { reason: 'CDN' } })).toBe(false);
+      expect(isAiScanResult({ ...valid, falsePositiveGuard: { cleared: 'yes' } })).toBe(false);
+      expect(isAiScanResult({ ...valid, falsePositiveGuard: { cleared: true, reason: 7 } })).toBe(
+        false,
+      );
+      expect(isAiScanResult({ ...valid, falsePositiveGuard: 'cleared' })).toBe(false);
+    });
+
     it('validates a valid MiniAiPrediction', () => {
       const pred = createDefaultMiniAiPrediction({
         confidence: 88,

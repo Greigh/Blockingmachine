@@ -11,6 +11,8 @@ export interface ScoutQuery {
   domain: string;
   client?: string;
   elapsedMs?: number;
+  /** Raw log timestamp (ISO 8601 when available) used for behavioral cadence analysis. */
+  timestamp?: string;
   blocked: false;
 }
 
@@ -141,7 +143,7 @@ export function parseAdguardQueryLog(body: string): { queries: ScoutQuery[]; raw
   const data = Array.isArray(json?.data) ? json.data : [];
   const queries: ScoutQuery[] = [];
   for (const item of data) {
-    const record = item as { question?: { name?: string }; client?: string; elapsed_ms?: number; filter_id?: number };
+    const record = item as { question?: { name?: string }; time?: string; client?: string; elapsed_ms?: number; filter_id?: number };
     const name = record?.question?.name;
     if (!name) continue;
     const isBlocked = Boolean(record.filter_id && record.filter_id > 0);
@@ -150,6 +152,7 @@ export function parseAdguardQueryLog(body: string): { queries: ScoutQuery[]; raw
         domain: name,
         client: record.client,
         elapsedMs: record.elapsed_ms,
+        timestamp: record.time,
         blocked: false,
       });
     }

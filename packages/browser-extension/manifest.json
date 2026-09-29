@@ -10,7 +10,8 @@
     "alarms",
     "tabs",
     "activeTab",
-    "scripting"
+    "scripting",
+    "contextMenus"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -18,6 +19,14 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      { "id": "tier_core", "enabled": true, "path": "rules/tier_core.json" },
+      { "id": "tier_ads", "enabled": false, "path": "rules/tier_ads.json" },
+      { "id": "tier_privacy", "enabled": false, "path": "rules/tier_privacy.json" },
+      { "id": "tier_annoyances", "enabled": false, "path": "rules/tier_annoyances.json" }
+    ]
   },
   "content_scripts": [
     {

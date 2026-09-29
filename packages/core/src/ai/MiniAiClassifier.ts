@@ -1,8 +1,15 @@
 import { calculateShannonEntropy, decomposeDomain } from './entropy.js';
 import {
-  HIGH_ABUSE_TLDS,
-  SUSPICIOUS_AD_TOKENS,
-  SUSPICIOUS_TRACKER_TOKENS,
+  COMPOUND_CCTLDS,
+  DYNAMIC_DNS_SUFFIXES,
+  FOUR_PART_PUBLIC_SUFFIXES,
+  THREE_PART_PUBLIC_SUFFIXES,
+} from './entropy.js';
+import {
+  MULTI_TENANT_PLATFORMS,
+  assessCorroboration,
+  clampRiskLevel,
+  getDbLists,
   adjustThreatCategory,
   classifyInfrastructure,
   detectAntiAdblock,
@@ -246,15 +253,16 @@ export function extractDomainFeatures(
   const trigramPerplexity = evalLabel.length >= 8 ? Math.max(0, Math.min(1.0, 1.0 - trigramFamiliarity)) : 0.2;
 
   // 7. Keyword Matching (label boundaries; `status` must not match `stat`)
+  const dbLists = getDbLists();
   let adKeywordWeight = 0;
-  for (const token of SUSPICIOUS_AD_TOKENS) {
+  for (const token of dbLists.suspiciousAdTokens) {
     if (!hostnameHasToken(clean, token)) continue;
     adKeywordWeight += token.length >= 4 ? 0.5 : 0.4;
   }
   adKeywordWeight = Math.max(0, Math.min(1.5, adKeywordWeight));
 
   let trackerKeywordWeight = 0;
-  for (const token of SUSPICIOUS_TRACKER_TOKENS) {
+  for (const token of dbLists.suspiciousTrackerTokens) {
     if (!hostnameHasToken(clean, token)) continue;
     trackerKeywordWeight += token.length >= 4 ? 0.5 : 0.4;
   }
@@ -285,7 +293,7 @@ export function extractDomainFeatures(
   const knownSafeInfra = allowlisted || reputationSafe ? 1.0 : 0.0;
 
   // 10. High-Risk TLD & Punycode
-  const highRiskTld = HIGH_ABUSE_TLDS.has(tld) ? 1.0 : 0.0;
+  const highRiskTld = dbLists.highAbuseTlds.includes(tld) ? 1.0 : 0.0;
   const punycode = clean.includes('xn--') ? 1.0 : 0.0;
 
   // 11. Hyphen & Numeric Subdomains
@@ -494,12 +502,39 @@ interface CacheEntry {
   timestamp: number;
 }
 
+/**
+ * Registers the best-known registrable zone for a domain (e.g. `example.com`
+ * for `api.example.com`). Multi-label public suffixes are resolved with the
+ * shared suffix tables, and dynamic-hosting suffixes keep their tenant label.
+ * Falls back to the standard two-label zone when no table matches.
+ */
+export function getRegistrableZone(hostname: string): string | null {
+  if (!hostname) return null;
+  const parts = hostname.split('.').filter(Boolean);
+  if (parts.length <= 2) return hostname;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const candidate = parts.slice(i).join('.');
+    if (
+      FOUR_PART_PUBLIC_SUFFIXES.has(candidate) ||
+      THREE_PART_PUBLIC_SUFFIXES.has(candidate) ||
+      COMPOUND_CCTLDS.has(candidate) ||
+      DYNAMIC_DNS_SUFFIXES.has(candidate) ||
+      MULTI_TENANT_PLATFORMS.has(candidate)
+    ) {
+      const zone = parts.slice(Math.max(0, i - 1)).join('.');
+      return zone || null;
+    }
+  }
+  return parts.slice(-2).join('.');
+}
+
 function clonePrediction(prediction: MiniAiPrediction): MiniAiPrediction {
   return {
     ...prediction,
     classProbabilities: { ...prediction.classProbabilities },
     topContributions: prediction.topContributions.map((item) => ({ ...item })),
     reasons: [...prediction.reasons],
+    evidenceFamilies: prediction.evidenceFamilies ? [...prediction.evidenceFamilies] : undefined,
   };
 }
 
@@ -543,6 +578,13 @@ export class MiniAiClassifier {
 
     if (action === 'reset') {
       this.userFeedbackMap.delete(clean);
+      // Also clear the generalized registrable-zone entry written by a prior
+      // whitelist/block tuning — otherwise a reset can never undo the zone
+      // bias and the domain stays force-classified via the zone fallback.
+      const zone = getRegistrableZone(clean);
+      if (zone && zone !== clean) {
+        this.userFeedbackMap.delete(zone);
+      }
       this.clearCache();
       return;
     }
@@ -554,6 +596,20 @@ export class MiniAiClassifier {
 
     this.userFeedbackMap.delete(clean);
     this.userFeedbackMap.set(clean, action === 'whitelist' ? -1.0 : 1.0);
+
+    // Generalize the correction to the registrable zone so sibling subdomains
+    // (api2.example.com after api.example.com was whitelisted) inherit it.
+    // Exact entries always take precedence over the zone entry.
+    const zone = getRegistrableZone(clean);
+    if (zone && zone !== clean) {
+      if (this.userFeedbackMap.size >= this.maxFeedbackEntries && !this.userFeedbackMap.has(zone)) {
+        const oldestKey = this.userFeedbackMap.keys().next().value;
+        if (oldestKey && oldestKey !== clean) this.userFeedbackMap.delete(oldestKey);
+      }
+      this.userFeedbackMap.delete(zone);
+      this.userFeedbackMap.set(zone, action === 'whitelist' ? -1.0 : 1.0);
+    }
+
     this.clearCache();
   }
 
@@ -562,10 +618,57 @@ export class MiniAiClassifier {
     this.clearCache();
   }
 
+  /**
+   * Resolves the effective feedback bias for a domain.
+   * A user correction on any subdomain generalizes to sibling subdomains of the
+   * same registrable zone: whitelisting `api.example.com` also relaxes future
+   * flags on `api2.example.com`, while the exact domain (if tuned separately)
+   * always takes precedence.
+   */
   public getDomainFeedback(domain: string): number {
     if (typeof domain !== 'string') return 0;
     const clean = sanitizeInputDomain(domain);
+    const exact = this.userFeedbackMap.get(clean);
+    if (exact !== undefined) return exact;
+    const zone = getRegistrableZone(clean);
+    if (zone && zone !== clean) {
+      const zoneBias = this.userFeedbackMap.get(zone);
+      if (zoneBias !== undefined) return zoneBias;
+    }
+    return 0;
+  }
+
+  /** Effective bias recorded for a zone (via `getRegistrableZone`). */
+  public getZoneFeedback(zone: string): number {
+    if (typeof zone !== 'string') return 0;
+    const clean = sanitizeInputDomain(zone);
     return this.userFeedbackMap.get(clean) || 0;
+  }
+
+  /** Zone that a feedback entry was recorded for (exact domain, or the zone it generalized to). */
+  public getFeedbackZone(domain: string): string | null {
+    if (typeof domain !== 'string') return null;
+    const clean = sanitizeInputDomain(domain);
+    if (this.userFeedbackMap.has(clean)) return clean;
+    const zone = getRegistrableZone(clean);
+    if (zone && this.userFeedbackMap.has(zone)) return zone;
+    return null;
+  }
+
+  /** Removes the feedback entry for a domain (or its generalized zone entry). */
+  public deleteDomainFeedback(domain: string): boolean {
+    if (typeof domain !== 'string') return false;
+    const clean = sanitizeInputDomain(domain);
+    if (this.userFeedbackMap.delete(clean)) {
+      this.clearCache();
+      return true;
+    }
+    const zone = getRegistrableZone(clean);
+    if (zone && zone !== clean && this.userFeedbackMap.delete(zone)) {
+      this.clearCache();
+      return true;
+    }
+    return false;
   }
 
   public exportFeedback(): Record<string, number> {
@@ -916,6 +1019,19 @@ export class MiniAiClassifier {
         riskLevel = 'medium';
       }
 
+      // Count the independent evidence families behind the verdict and cap what the
+      // verdict is allowed to claim. Without this, a name-shaped guess backed by one
+      // statistical property reports itself as "100% critical malware". A clean verdict
+      // is exempt: its confidence is the model's certainty that nothing is wrong.
+      const corroboration = verdict === 'clean'
+        ? null
+        : assessCorroboration(normalized, features, {
+            knownTrackerCname: features.cnameKnownTracker > 0,
+          });
+      if (corroboration) {
+        riskLevel = clampRiskLevel(riskLevel, corroboration.maxRiskLevel);
+      }
+
       // Compile human-readable explanations & top feature attributions
       const reasons: string[] = [];
 
@@ -1044,18 +1160,31 @@ export class MiniAiClassifier {
         reasons.push('Standard lexical structure: no ad tokens, tracking beacons, or DGA patterns detected');
       }
 
+      if (corroboration && corroboration.tier !== 'corroborated') {
+        reasons.push(
+          corroboration.tier === 'single-signal'
+            ? `Single-signal evidence (${corroboration.families.join(', ')}): reported as a lead, confidence capped at ${corroboration.maxConfidence}%`
+            : 'No independent evidence beyond the lexical model: reported as a lead, not a finding',
+        );
+      }
+
       const elapsed = Math.round((performance.now() - startTime) * 1000) / 1000;
-      const confidence = Math.round(highestProb * 100);
+      const confidence = Math.max(
+        0,
+        Math.min(corroboration ? corroboration.maxConfidence : 100, Math.round(highestProb * 100)),
+      );
 
       const predictionResult: MiniAiPrediction = {
         verdict,
         category: bestCategory,
-        confidence: Math.max(0, Math.min(100, confidence)),
+        confidence,
         riskLevel,
         classProbabilities,
         topContributions: contributions.sort((a, b) => b.weight * b.value - a.weight * a.value).slice(0, 5),
         inferenceTimeMs: elapsed,
         reasons: Array.from(new Set(reasons)),
+        corroboration: corroboration?.tier,
+        evidenceFamilies: corroboration?.families,
       };
 
       if (cacheKey) {

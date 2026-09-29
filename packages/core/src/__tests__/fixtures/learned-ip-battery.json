@@ -1,0 +1,58 @@
+[
+ {
+  "domain": "1.2.3.4",
+  "ip_literal": 1.0
+ },
+ {
+  "domain": "255.255.255.255",
+  "ip_literal": 1.0
+ },
+ {
+  "domain": "0.0.0.0",
+  "ip_literal": 1.0
+ },
+ {
+  "domain": "01.2.3.4",
+  "ip_literal": 0.0
+ },
+ {
+  "domain": "1.2.3.256",
+  "ip_literal": 0.0
+ },
+ {
+  "domain": "1.2.3",
+  "ip_literal": 0.0
+ },
+ {
+  "domain": "1.2.3.4.5",
+  "ip_literal": 0.0
+ },
+ {
+  "domain": "::1",
+  "ip_literal": 1.0
+ },
+ {
+  "domain": "2001:db8::1",
+  "ip_literal": 1.0
+ },
+ {
+  "domain": "fe80::1",
+  "ip_literal": 1.0
+ },
+ {
+  "domain": "::ffff:1.2.3.4",
+  "ip_literal": 1.0
+ },
+ {
+  "domain": "2001:db8:::1",
+  "ip_literal": 0.0
+ },
+ {
+  "domain": "github.com",
+  "ip_literal": 0.0
+ },
+ {
+  "domain": "1234.com",
+  "ip_literal": 0.0
+ }
+]

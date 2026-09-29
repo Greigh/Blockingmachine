@@ -1,6 +1,18 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { FilterFormat, FeedServerStatus, SinkholeTestResult, SinkholeConfig, DaemonStatusInfo } from '../types/';
+import type {
+  FilterFormat,
+  FeedServerStatus,
+  SinkholeTestResult,
+  SinkholeConfig,
+  DaemonStatusInfo,
+  UnboundResolverSettings,
+} from '../types/';
 import { ServiceMismatchBanner } from '../components/ServiceMismatchBanner';
+import { UnboundReachabilityCard } from '../components/UnboundReachabilityCard';
+import type {
+  UnboundReachability,
+  UnboundReachabilitySnapshot,
+} from '../unboundReachability';
 import { isServiceMismatch } from '../sinkholeIdentity';
 import { separateAdguardUrls } from '../queryLogScout';
 import {
@@ -11,6 +23,42 @@ import {
   replaceMatchingExplicitPort,
   resolveAdguardDirectUrl,
 } from '../sinkholeNet';
+import {
+  UNBOUND_TARGETS,
+  unboundFeedUrl,
+  unboundFetchCommand,
+  unboundFormatWarning,
+  unboundIncludeDirective,
+} from '../unboundDeploy';
+import {
+  SHADOWROCKET_STEPS,
+  shadowrocketFeedUrl,
+  shadowrocketFormatWarning,
+  shadowrocketSyntaxNote,
+} from '../shadowrocketDeploy';
+import {
+  PRIVOXY_STEPS,
+  privoxyActionsFileDirective,
+  privoxyFeedUrl,
+  privoxyFormatWarning,
+  privoxySyntaxNote,
+} from '../privoxyDeploy';
+import {
+  BIND_STEPS,
+  bindFormatWarning,
+  bindNamedConfZoneLine,
+  bindReloadCommand,
+  bindResponsePolicyLine,
+  bindSyntaxNote,
+  bindZoneFileName,
+} from '../bindDeploy';
+import {
+  DEFAULT_DEPLOY_TARGET_ID,
+  DEPLOY_TARGETS,
+  deployTargetById,
+  type DeployTargetId,
+  type DeploySelectEffect,
+} from '../deploy/deployTargets';
 
 interface DeployHubViewProps {
   savePath: string;
@@ -18,7 +66,8 @@ interface DeployHubViewProps {
   onTriggerCompile?: () => void;
 }
 
-type PlatformTab = 'adguard-home' | 'pihole' | 'home-assistant' | 'system-daemon' | 'adguard-desktop' | 'hosts' | 'dnsmasq';
+/** The registry owns the id union, so the tabs and the pane dispatch cannot drift apart. */
+type PlatformTab = DeployTargetId;
 
 export const DeployHubView: React.FC<DeployHubViewProps> = ({
   savePath,
@@ -39,7 +88,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     return id;
   }, []);
 
-  const [activeTab, setActiveTab] = useState<PlatformTab>('adguard-home');
+  const [activeTab, setActiveTab] = useState<PlatformTab>(DEFAULT_DEPLOY_TARGET_ID);
   const [exportFormat, setExportFormat] = useState<FilterFormat>('adguard');
   const [serverStatus, setServerStatus] = useState<FeedServerStatus | null>(null);
   const [isServerLoading, setIsServerLoading] = useState(false);
@@ -110,6 +159,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   const [showPiholeKey, setShowPiholeKey] = useState(false);
   const [autoStartFeedServer, setAutoStartFeedServer] = useState(false);
   const [launchOnStartup, setLaunchOnStartup] = useState(false);
+  const [unboundReachability, setUnboundReachability] = useState<UnboundReachability | null>(null);
+  const [unboundSnapshot, setUnboundSnapshot] = useState<UnboundReachabilitySnapshot | null>(null);
+  const [unboundResolver, setUnboundResolver] = useState<UnboundResolverSettings | null>(null);
+  const [resolverDraft, setResolverDraft] = useState('');
+  const [referenceDraft, setReferenceDraft] = useState('');
+  const [isCheckingUnbound, setIsCheckingUnbound] = useState(false);
+  const [resolverMessage, setResolverMessage] = useState<string | null>(null);
 
   // Local System DNS Daemon
   const [daemonStatus, setDaemonStatus] = useState<DaemonStatusInfo | null>(null);
@@ -291,6 +347,21 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
       });
     }
 
+    if (window.electron?.getUnboundReachability) {
+      window.electron.getUnboundReachability().then((snap) => {
+        if (isMountedRef.current) setUnboundSnapshot(snap);
+      });
+    }
+
+    if (window.electron?.getUnboundResolvers) {
+      window.electron.getUnboundResolvers().then((setting) => {
+        if (!isMountedRef.current) return;
+        setUnboundResolver(setting);
+        setResolverDraft(setting.address || '');
+        setReferenceDraft(setting.referenceAddress || '');
+      });
+    }
+
     if (window.electron?.getSinkholeConfig) {
       window.electron.getSinkholeConfig().then((cfg) => {
         if (isMountedRef.current && cfg) {
@@ -349,6 +420,43 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     } finally {
       setIsServerLoading(false);
     }
+  };
+
+  const handleCheckUnboundReachability = async () => {
+    if (!window.electron?.checkUnboundReachability) return;
+    setIsCheckingUnbound(true);
+    setResolverMessage(null);
+    try {
+      const result = await window.electron.checkUnboundReachability();
+      if (!isMountedRef.current) return;
+      setUnboundReachability(result);
+      setUnboundSnapshot(result);
+    } catch (err) {
+      if (isMountedRef.current) {
+        setResolverMessage(err instanceof Error ? err.message : 'The check could not run.');
+      }
+    } finally {
+      if (isMountedRef.current) setIsCheckingUnbound(false);
+    }
+  };
+
+  const handleSaveUnboundResolver = async () => {
+    if (!window.electron?.setUnboundResolvers) return;
+    const saved = await window.electron.setUnboundResolvers({
+      address: resolverDraft.trim(),
+      referenceAddress: referenceDraft.trim(),
+    });
+    if (!isMountedRef.current) return;
+    if (!saved.success) {
+      setResolverMessage(saved.error ?? 'Those addresses could not be used.');
+      return;
+    }
+    const setting = await window.electron.getUnboundResolvers?.();
+    if (!isMountedRef.current || !setting) return;
+    setUnboundResolver(setting);
+    setResolverDraft(setting.address || '');
+    setReferenceDraft(setting.referenceAddress || '');
+    setResolverMessage('Saved.');
   };
 
   const handleToggleAutoStartFeedServer = async (enabled: boolean) => {
@@ -529,6 +637,31 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   const fileName = savePath ? savePath.split(/[/\\]/).pop() || 'rules.txt' : 'rules.txt';
   const lanFeedUrl = serverStatus?.lanUrl ? `${serverStatus.lanUrl}/${fileName}` : `http://<your-mac-ip>:9191/${fileName}`;
   const localHttpUrl = serverStatus?.localUrl ? `${serverStatus.localUrl}/${fileName}` : `http://localhost:9191/${fileName}`;
+  const unboundFeedLanUrl = unboundFeedUrl(serverStatus?.lanUrl || '', exportFormat, savePath);
+  const unboundFormatNotice = unboundFormatWarning(exportFormat);
+  const shadowrocketFeedLanUrl = shadowrocketFeedUrl(serverStatus?.lanUrl || '', exportFormat, savePath);
+  const shadowrocketFormatNotice = shadowrocketFormatWarning(exportFormat);
+  const privoxyFeedLanUrl = privoxyFeedUrl(serverStatus?.lanUrl || '', exportFormat, savePath);
+  const privoxyFormatNotice = privoxyFormatWarning(exportFormat);
+  const bindZonePath = bindZoneFileName(savePath);
+  const bindFormatNotice = bindFormatWarning(exportFormat);
+
+  /**
+   * The implementations behind the registry's named select effects.
+   *
+   * Typed as an exhaustive record of `DeploySelectEffect`, so a target that declares an effect the
+   * component does not implement fails the build rather than silently doing nothing.
+   */
+  const SELECT_EFFECTS: Record<DeploySelectEffect, () => void> = {
+    'refresh-daemon-status': () => void refreshDaemonStatus(),
+  };
+
+  /** Selects a tab, running whatever side effect the registry declares for it. */
+  const handleSelectTarget = (id: DeployTargetId) => {
+    setActiveTab(id);
+    const effect = deployTargetById(id)?.selectEffect;
+    if (effect) SELECT_EFFECTS[effect]();
+  };
 
   return (
     <div className="deploy-hub-container">
@@ -656,133 +789,40 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
           2. PLATFORM NAVIGATION TABS
          ========================================================================= */}
       <div className="deploy-platform-tabs" role="tablist" aria-label="Deployment Platforms">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'adguard-home'}
-          className={`platform-tab-btn ${activeTab === 'adguard-home' ? 'active' : ''}`}
-          onClick={() => setActiveTab('adguard-home')}
-        >
-          <span className="platform-tab-icon">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-            </svg>
-          </span>
-          <span className="platform-tab-label">AdGuard Home</span>
-        </button>
-
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'pihole'}
-          className={`platform-tab-btn ${activeTab === 'pihole' ? 'active' : ''}`}
-          onClick={() => setActiveTab('pihole')}
-        >
-          <span className="platform-tab-icon">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="4" y="4" width="16" height="16" rx="2" />
-              <rect x="9" y="9" width="6" height="6" />
-              <line x1="9" y1="1" x2="9" y2="4" />
-              <line x1="15" y1="1" x2="15" y2="4" />
-              <line x1="9" y1="20" x2="9" y2="23" />
-              <line x1="15" y1="20" x2="15" y2="23" />
-            </svg>
-          </span>
-          <span className="platform-tab-label">Pi-hole</span>
-        </button>
-
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'home-assistant'}
-          className={`platform-tab-btn ${activeTab === 'home-assistant' ? 'active' : ''}`}
-          onClick={() => setActiveTab('home-assistant')}
-        >
-          <span className="platform-tab-icon">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-              <polyline points="9 22 9 12 15 12 15 22" />
-            </svg>
-          </span>
-          <span className="platform-tab-label">Home Assistant</span>
-        </button>
-
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'system-daemon'}
-          className={`platform-tab-btn ${activeTab === 'system-daemon' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveTab('system-daemon');
-            refreshDaemonStatus();
-          }}
-        >
-          <span className="platform-tab-icon">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
-              <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
-              <line x1="6" y1="6" x2="6.01" y2="6" />
-              <line x1="6" y1="18" x2="6.01" y2="18" />
-            </svg>
-          </span>
-          <span className="platform-tab-label">Local System DNS</span>
-        </button>
-
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'adguard-desktop'}
-          className={`platform-tab-btn ${activeTab === 'adguard-desktop' ? 'active' : ''}`}
-          onClick={() => setActiveTab('adguard-desktop')}
-        >
-          <span className="platform-tab-icon">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-              <line x1="8" y1="21" x2="16" y2="21" />
-              <line x1="12" y1="17" x2="12" y2="21" />
-            </svg>
-          </span>
-          <span className="platform-tab-label">AdGuard App</span>
-        </button>
-
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'hosts'}
-          className={`platform-tab-btn ${activeTab === 'hosts' ? 'active' : ''}`}
-          onClick={() => setActiveTab('hosts')}
-        >
-          <span className="platform-tab-icon">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="4 17 10 11 4 5" />
-              <line x1="12" y1="19" x2="20" y2="19" />
-            </svg>
-          </span>
-          <span className="platform-tab-label">System Hosts</span>
-        </button>
-
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'dnsmasq'}
-          className={`platform-tab-btn ${activeTab === 'dnsmasq' ? 'active' : ''}`}
-          onClick={() => setActiveTab('dnsmasq')}
-        >
-          <span className="platform-tab-icon">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="2" y1="12" x2="22" y2="12" />
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-            </svg>
-          </span>
-          <span className="platform-tab-label">Routers & DNS</span>
-        </button>
+        {DEPLOY_TARGETS.map((target) => (
+          <button
+            key={target.id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === target.id}
+            title={target.summary}
+            className={`platform-tab-btn ${activeTab === target.id ? 'active' : ''}`}
+            onClick={() => handleSelectTarget(target.id)}
+          >
+            <span className="platform-tab-icon">{target.icon}</span>
+            <span className="platform-tab-label">{target.label}</span>
+          </button>
+        ))}
       </div>
 
-      {/* =========================================================================
+      {renderDeployPane()}
+    </div>
+  );
+
+  /**
+   * The pane for whichever target is active.
+   *
+   * A `switch` over the registry's ids rather than nine `activeTab === '…'` guards threaded through
+   * the JSX: the compiler narrows the id here, and the `never` default below turns "a target was
+   * added to the registry but not to this switch" into a build failure instead of an empty pane.
+   */
+  function renderDeployPane(): React.ReactNode {
+    switch (activeTab) {
+      /* =======================================================================
           3. DUAL-PANE PLATFORM WORKSPACE: ADGUARD HOME
-         ========================================================================= */}
-      {activeTab === 'adguard-home' && (
+         ======================================================================= */
+      case 'adguard-home':
+        return (
         <div className="deploy-dual-pane">
           {/* Left Column: Live API Automation */}
           <div className="deploy-pane-column">
@@ -1265,12 +1305,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
             )}
           </div>
         </div>
-      )}
+      );
 
-      {/* =========================================================================
+      /* =======================================================================
           3. DUAL-PANE PLATFORM WORKSPACE: PI-HOLE
-         ========================================================================= */}
-      {activeTab === 'pihole' && (
+         ======================================================================= */
+      case 'pihole':
+        return (
         <div className="deploy-dual-pane">
           {/* Left Column: Pi-hole Live API Automation */}
           <div className="deploy-pane-column">
@@ -1483,12 +1524,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
             </div>
           </div>
         </div>
-      )}
+      );
 
-      {/* =========================================================================
+      /* =======================================================================
           3. PLATFORM WORKSPACE: HOME ASSISTANT (ADD-ON & INTEGRATION)
-         ========================================================================= */}
-      {activeTab === 'home-assistant' && (
+         ======================================================================= */
+      case 'home-assistant':
+        return (
         <div className="deploy-dual-pane">
           {/* Left Column: Home Assistant Automation & Live Sync */}
           <div className="deploy-pane-column">
@@ -1809,12 +1851,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
             </div>
           </div>
         </div>
-      )}
+      );
 
-      {/* =========================================================================
+      /* =======================================================================
           2.4 PLATFORM WORKSPACE: LOCAL SYSTEM DNS DAEMON
-         ========================================================================= */}
-      {activeTab === 'system-daemon' && (
+         ======================================================================= */
+      case 'system-daemon':
+        return (
         <div className="deploy-dual-pane">
           {/* Left Column: Local Daemon Status & System DNS */}
           <div className="deploy-pane-column">
@@ -2095,12 +2138,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
             </div>
           </div>
         </div>
-      )}
+      );
 
-      {/* =========================================================================
+      /* =======================================================================
           3. PLATFORM WORKSPACE: ADGUARD APP (DESKTOP)
-         ========================================================================= */}
-      {activeTab === 'adguard-desktop' && (
+         ======================================================================= */
+      case 'adguard-desktop':
+        return (
         <div className="deploy-single-platform-wrap">
           <div className="deploy-info-card">
             <div className="deploy-pane-header">
@@ -2184,12 +2228,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
             </div>
           </div>
         </div>
-      )}
+      );
 
-      {/* =========================================================================
+      /* =======================================================================
           3. PLATFORM WORKSPACE: SYSTEM HOSTS
-         ========================================================================= */}
-      {activeTab === 'hosts' && (
+         ======================================================================= */
+      case 'hosts':
+        return (
         <div className="deploy-single-platform-wrap">
           <div className="deploy-info-card">
             <div className="deploy-pane-header">
@@ -2272,12 +2317,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
             </div>
           </div>
         </div>
-      )}
+      );
 
-      {/* =========================================================================
+      /* =======================================================================
           3. PLATFORM WORKSPACE: ROUTERS & DNS
-         ========================================================================= */}
-      {activeTab === 'dnsmasq' && (
+         ======================================================================= */
+      case 'dnsmasq':
+        return (
         <div className="deploy-single-platform-wrap">
           <div className="deploy-info-card">
             <div className="deploy-pane-header">
@@ -2353,7 +2399,449 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
             </div>
           </div>
         </div>
-      )}
-    </div>
-  );
+      );
+
+      /* =======================================================================
+          3. PLATFORM WORKSPACE: UNBOUND
+         ======================================================================= */
+      case 'unbound':
+        return (
+        <div className="deploy-single-platform-wrap">
+          <div className="deploy-info-card">
+            <div className="deploy-pane-header">
+              <div className="deploy-pane-title-group">
+                <span className="deploy-pane-icon-badge">🧭</span>
+                <div>
+                  <h3 className="deploy-pane-title">Unbound Local-Zone Feed</h3>
+                  <p className="deploy-pane-subtitle">OPNsense, pfSense, Linux, OpenWrt</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="deploy-feed-box">
+              <div className="deploy-feed-box-top">
+                <span className="deploy-feed-box-label">Unbound Feed URL</span>
+                <span className="deploy-feed-box-tag">local-zone rules</span>
+              </div>
+              <div className="deploy-feed-input-row">
+                <input type="text" readOnly value={unboundFeedLanUrl} className="deploy-feed-input" />
+                <button
+                  type="button"
+                  className={`deploy-copy-feed-btn ${copiedKey === 'unbound-feed' ? 'copied' : ''}`}
+                  onClick={() => handleCopy(unboundFeedLanUrl, 'unbound-feed')}
+                >
+                  {copiedKey === 'unbound-feed' ? '✓ Copied' : 'Copy Feed URL'}
+                </button>
+              </div>
+            </div>
+
+            {unboundFormatNotice && (
+              <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+                ⚠︎ {unboundFormatNotice}
+              </p>
+            )}
+
+            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+              Unbound has no remote blocklist feature, so it cannot subscribe to an AdGuard or hosts
+              feed. Point <code>unbound.conf</code> at a drop-in file once, then let the scheduled
+              refresh below keep that file current.
+            </p>
+
+            <div className="deploy-actions-row">
+              <button
+                type="button"
+                className={`deploy-tool-btn ${copiedKey === 'unbound-include' ? 'copied' : ''}`}
+                onClick={() =>
+                  handleCopy(unboundIncludeDirective(UNBOUND_TARGETS[1].configPath), 'unbound-include')
+                }
+              >
+                <span>{copiedKey === 'unbound-include' ? '✓ Copied' : 'Copy include: directive'}</span>
+              </button>
+              <button
+                type="button"
+                className={`deploy-tool-btn ${copiedKey === 'unbound-refresh' ? 'copied' : ''}`}
+                onClick={() =>
+                  handleCopy(
+                    unboundFetchCommand(unboundFeedLanUrl, UNBOUND_TARGETS[1].configPath),
+                    'unbound-refresh',
+                  )
+                }
+              >
+                <span>{copiedKey === 'unbound-refresh' ? '✓ Copied' : 'Copy refresh command'}</span>
+              </button>
+            </div>
+          </div>
+
+          <UnboundReachabilityCard
+            result={unboundReachability}
+            snapshot={unboundSnapshot}
+            resolverAddress={resolverDraft}
+            resolverLabel={unboundResolver?.effective ?? null}
+            resolverIsDefault={unboundResolver?.isDefault ?? true}
+            resolverError={unboundResolver?.error ?? null}
+            referenceAddress={referenceDraft}
+            referenceLabel={unboundResolver?.referenceEffective ?? null}
+            referenceError={unboundResolver?.referenceError ?? null}
+            referenceSource={unboundResolver?.referenceSource ?? 'none'}
+            systemServers={unboundResolver?.systemServers ?? []}
+            resolverMessage={resolverMessage}
+            checking={isCheckingUnbound}
+            now={new Date().toISOString()}
+            onResolverAddressChange={setResolverDraft}
+            onReferenceAddressChange={setReferenceDraft}
+            onSaveResolver={handleSaveUnboundResolver}
+            onCheck={handleCheckUnboundReachability}
+          />
+
+          <div className="deploy-info-card">
+            <div className="deploy-pane-header">
+              <div className="deploy-pane-title-group">
+                <span className="deploy-pane-icon-badge">📋</span>
+                <div>
+                  <h3 className="deploy-pane-title">Unbound Setup Recipes</h3>
+                  <p className="deploy-pane-subtitle">Drop-in file first, then a scheduled refresh</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="deploy-numbered-stepper">
+              {UNBOUND_TARGETS.map((target, index) => (
+                <div className="stepper-step" key={target.id}>
+                  <div className="stepper-num">{index + 1}</div>
+                  <div className="stepper-content">
+                    <h4>{target.name}</h4>
+                    <p>
+                      Add <code>{unboundIncludeDirective(target.configPath)}</code> to{' '}
+                      <code>unbound.conf</code>, then schedule this refresh so local-zone updates land
+                      without a full restart:
+                      <br />
+                      <code>{unboundFetchCommand(unboundFeedLanUrl, target.configPath)}</code>
+                    </p>
+                  </div>
+                </div>
+              ))}
+
+              <div className="stepper-step">
+                <div className="stepper-num">4</div>
+                <div className="stepper-content">
+                  <h4>Keep the hub address stable</h4>
+                  <p>
+                    Leave <strong>Auto-start on launch</strong> on so the feed answers at the same
+                    address after a restart, and turn on <strong>Launch on computer startup</strong>{' '}
+                    if this machine is the resolver host. A changed LAN address only needs the URL in
+                    the commands above updated — the feed itself does not move.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+
+      /* =======================================================================
+          3. PLATFORM WORKSPACE: SHADOWROCKET
+         ======================================================================= */
+      case 'shadowrocket':
+        return (
+        <div className="deploy-single-platform-wrap">
+          <div className="deploy-info-card">
+            <div className="deploy-pane-header">
+              <div className="deploy-pane-title-group">
+                <span className="deploy-pane-icon-badge">📱</span>
+                <div>
+                  <h3 className="deploy-pane-title">Shadowrocket Rule Set Feed</h3>
+                  <p className="deploy-pane-subtitle">iPhone, iPad, Apple-silicon Mac — and Surge</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="deploy-feed-box">
+              <div className="deploy-feed-box-top">
+                <span className="deploy-feed-box-label">Shadowrocket Feed URL</span>
+                <span className="deploy-feed-box-tag">DOMAIN-SUFFIX rules</span>
+              </div>
+              <div className="deploy-feed-input-row">
+                <input type="text" readOnly value={shadowrocketFeedLanUrl} className="deploy-feed-input" />
+                <button
+                  type="button"
+                  className={`deploy-copy-feed-btn ${copiedKey === 'shadowrocket-feed' ? 'copied' : ''}`}
+                  onClick={() => handleCopy(shadowrocketFeedLanUrl, 'shadowrocket-feed')}
+                >
+                  {copiedKey === 'shadowrocket-feed' ? '✓ Copied' : 'Copy Feed URL'}
+                </button>
+              </div>
+            </div>
+
+            {shadowrocketFormatNotice && (
+              <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+                ⚠︎ {shadowrocketFormatNotice}
+              </p>
+            )}
+
+            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+              Shadowrocket cannot read an AdGuard or hosts list. It subscribes to a Surge-style rule
+              set, which is what the Shadowrocket format emits: one{' '}
+              <code>DOMAIN-SUFFIX,host,REJECT</code> line per blocked domain under a{' '}
+              <code>[Rule]</code> section.
+            </p>
+            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+              {shadowrocketSyntaxNote()}
+            </p>
+          </div>
+
+          <div className="deploy-info-card">
+            <div className="deploy-pane-header">
+              <div className="deploy-pane-title-group">
+                <span className="deploy-pane-icon-badge">📋</span>
+                <div>
+                  <h3 className="deploy-pane-title">Shadowrocket Setup Recipe</h3>
+                  <p className="deploy-pane-subtitle">Serve it here, subscribe on the device</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="deploy-numbered-stepper">
+              {SHADOWROCKET_STEPS.map((step, index) => (
+                <div className="stepper-step" key={step.id}>
+                  <div className="stepper-num">{index + 1}</div>
+                  <div className="stepper-content">
+                    <h4>{step.title}</h4>
+                    <p>
+                      {step.detail}
+                      {step.id === 'subscribe' && (
+                        <>
+                          <br />
+                          <code>{shadowrocketFeedLanUrl}</code>
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+
+      /* =======================================================================
+          3. PLATFORM WORKSPACE: PRIVOXY
+         ======================================================================= */
+      case 'privoxy':
+        return (
+        <div className="deploy-single-platform-wrap">
+          <div className="deploy-info-card">
+            <div className="deploy-pane-header">
+              <div className="deploy-pane-title-group">
+                <span className="deploy-pane-icon-badge">🧱</span>
+                <div>
+                  <h3 className="deploy-pane-title">Privoxy Action-File Feed</h3>
+                  <p className="deploy-pane-subtitle">Privoxy on Linux, BSD, macOS and router packages</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="deploy-feed-box">
+              <div className="deploy-feed-box-top">
+                <span className="deploy-feed-box-label">Privoxy Action File URL</span>
+                <span className="deploy-feed-box-tag">&#123;+block&#125; sections</span>
+              </div>
+              <div className="deploy-feed-input-row">
+                <input type="text" readOnly value={privoxyFeedLanUrl} className="deploy-feed-input" />
+                <button
+                  type="button"
+                  className={`deploy-copy-feed-btn ${copiedKey === 'privoxy-feed' ? 'copied' : ''}`}
+                  onClick={() => handleCopy(privoxyFeedLanUrl, 'privoxy-feed')}
+                >
+                  {copiedKey === 'privoxy-feed' ? '✓ Copied' : 'Copy Feed URL'}
+                </button>
+              </div>
+            </div>
+
+            {privoxyFormatNotice && (
+              <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+                ⚠︎ {privoxyFormatNotice}
+              </p>
+            )}
+
+            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+              Privoxy cannot read an AdGuard or hosts list. It reads an action file, where every URL
+              pattern belongs to the <code>&#123;+block&#125;</code> section above it — which is what
+              the Privoxy format emits.
+            </p>
+            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+              {privoxySyntaxNote()}
+            </p>
+
+            <div className="deploy-actions-row">
+              <button
+                type="button"
+                className={`deploy-tool-btn ${copiedKey === 'privoxy-actionsfile' ? 'copied' : ''}`}
+                onClick={() =>
+                  handleCopy(privoxyActionsFileDirective(privoxyFeedLanUrl), 'privoxy-actionsfile')
+                }
+              >
+                <span>{copiedKey === 'privoxy-actionsfile' ? '✓ Copied' : 'Copy actionsfile line'}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="deploy-info-card">
+            <div className="deploy-pane-header">
+              <div className="deploy-pane-title-group">
+                <span className="deploy-pane-icon-badge">📋</span>
+                <div>
+                  <h3 className="deploy-pane-title">Privoxy Setup Recipe</h3>
+                  <p className="deploy-pane-subtitle">Serve it here, point Privoxy at it</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="deploy-numbered-stepper">
+              {PRIVOXY_STEPS.map((step, index) => (
+                <div className="stepper-step" key={step.id}>
+                  <div className="stepper-num">{index + 1}</div>
+                  <div className="stepper-content">
+                    <h4>{step.title}</h4>
+                    <p>
+                      {step.detail}
+                      {step.id === 'actionsfile' && (
+                        <>
+                          <br />
+                          <code>{privoxyActionsFileDirective(privoxyFeedLanUrl)}</code>
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+
+      /* =======================================================================
+          3. PLATFORM WORKSPACE: BIND (RPZ)
+         ======================================================================= */
+      case 'bind':
+        return (
+        <div className="deploy-single-platform-wrap">
+          <div className="deploy-info-card">
+            <div className="deploy-pane-header">
+              <div className="deploy-pane-title-group">
+                <span className="deploy-pane-icon-badge">🗄️</span>
+                <div>
+                  <h3 className="deploy-pane-title">BIND Response Policy Zone</h3>
+                  <p className="deploy-pane-subtitle">named 9.8 and later, on Linux and BSD</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="deploy-feed-box">
+              <div className="deploy-feed-box-top">
+                <span className="deploy-feed-box-label">RPZ zone file to save as</span>
+                <span className="deploy-feed-box-tag">CNAME policy records</span>
+              </div>
+              <div className="deploy-feed-input-row">
+                <input type="text" readOnly value={bindZonePath} className="deploy-feed-input" />
+                <button
+                  type="button"
+                  className={`deploy-copy-feed-btn ${copiedKey === 'bind-path' ? 'copied' : ''}`}
+                  onClick={() => handleCopy(bindZonePath, 'bind-path')}
+                >
+                  {copiedKey === 'bind-path' ? '✓ Copied' : 'Copy file name'}
+                </button>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+              BIND has no remote blocklist feature, so there is no feed URL here: the zone file is a
+              local file that has to be copied to the resolver and reloaded. What it does have is
+              RPZ, and the compiled artifact is one — records plus the SOA a primary zone cannot
+              load without.
+            </p>
+            {bindFormatNotice && (
+              <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+                ⚠︎ {bindFormatNotice}
+              </p>
+            )}
+            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+              {bindSyntaxNote()}
+            </p>
+
+            <div className="deploy-actions-row">
+              <button
+                type="button"
+                className={`deploy-tool-btn ${copiedKey === 'bind-zone-line' ? 'copied' : ''}`}
+                onClick={() => handleCopy(bindNamedConfZoneLine(bindZonePath), 'bind-zone-line')}
+              >
+                <span>{copiedKey === 'bind-zone-line' ? '✓ Copied' : 'Copy zone stanza'}</span>
+              </button>
+              <button
+                type="button"
+                className={`deploy-tool-btn ${copiedKey === 'bind-policy-line' ? 'copied' : ''}`}
+                onClick={() => handleCopy(bindResponsePolicyLine(), 'bind-policy-line')}
+              >
+                <span>{copiedKey === 'bind-policy-line' ? '✓ Copied' : 'Copy response-policy line'}</span>
+              </button>
+              <button
+                type="button"
+                className={`deploy-tool-btn ${copiedKey === 'bind-reload' ? 'copied' : ''}`}
+                onClick={() => handleCopy(bindReloadCommand(), 'bind-reload')}
+              >
+                <span>{copiedKey === 'bind-reload' ? '✓ Copied' : 'Copy reload command'}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="deploy-info-card">
+            <div className="deploy-pane-header">
+              <div className="deploy-pane-title-group">
+                <span className="deploy-pane-icon-badge">📋</span>
+                <div>
+                  <h3 className="deploy-pane-title">BIND Setup Recipe</h3>
+                  <p className="deploy-pane-subtitle">Local zone file, then a reload per compile</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="deploy-numbered-stepper">
+              {BIND_STEPS.map((step, index) => (
+                <div className="stepper-step" key={step.id}>
+                  <div className="stepper-num">{index + 1}</div>
+                  <div className="stepper-content">
+                    <h4>{step.title}</h4>
+                    <p>
+                      {step.detail}
+                      {step.id === 'namedconf' && (
+                        <>
+                          <br />
+                          <code>{bindNamedConfZoneLine(bindZonePath)}</code>
+                          <br />
+                          <code>{bindResponsePolicyLine()}</code>
+                        </>
+                      )}
+                      {step.id === 'reload' && (
+                        <>
+                          <br />
+                          <code>{bindReloadCommand()}</code>
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+
+      default: {
+        // Unreachable while every registry id has a case above. Assigning to `never` is what turns
+        // "added to the registry but not to this switch" into a build failure rather than a tab
+        // that opens onto nothing.
+        const unhandled: never = activeTab;
+        return unhandled;
+      }
+    }
+  }
 };

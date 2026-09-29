@@ -10,7 +10,12 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "baseUrl": ".",
+    "paths": {
+      "@blockingmachine/core/element-ai": ["../core/src/ai/elementClassifier.ts"],
+      "@blockingmachine/core/domain-ai": ["../core/src/ai/MiniAiClassifier.ts"]
+    }
   },
   "include": ["src/**/*"]
 }

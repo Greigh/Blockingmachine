@@ -642,6 +642,37 @@ export class CompiledDomainRuleSet {
   public getRuleCount(): number {
     return this.totalRuleCount;
   }
+
+  /**
+   * How many rules were actually indexed, i.e. how many can ever win a domain lookup.
+   *
+   * `getRuleCount()` also counts cosmetic rules, request-scoped rules (`$third-party`,
+   * `$script`, `$removeparam`…), and `$badfilter` markers. None of those can be decided from a
+   * hostname alone, so measuring coverage against the full count would report every one of them
+   * as a rule that "never fired". This is the denominator such a measurement actually wants.
+   */
+  public getIndexedRuleCount(): number {
+    let count = 0;
+    for (const list of this.exactBlocks.values()) count += list.length;
+    for (const list of this.exactExceptions.values()) count += list.length;
+    for (const list of this.domainBlocks.values()) count += list.length;
+    for (const list of this.domainExceptions.values()) count += list.length;
+    return count + this.wildcardBlocks.length + this.wildcardExceptions.length;
+  }
+
+  /**
+   * How many indexed rules *block*, as opposed to allowlist.
+   *
+   * Blocking coverage has to be measured against this, not the combined count: an exception
+   * rule never contributes a block, so leaving it in the denominator would report it as a rule
+   * that failed to fire.
+   */
+  public getIndexedBlockingRuleCount(): number {
+    let count = 0;
+    for (const list of this.exactBlocks.values()) count += list.length;
+    for (const list of this.domainBlocks.values()) count += list.length;
+    return count + this.wildcardBlocks.length;
+  }
 }
 
 /**

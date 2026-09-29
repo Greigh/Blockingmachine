@@ -69,11 +69,19 @@ export {
 } from "./export/ruleFilters.js";
 
 // Types
-export type {
-  ExportOptions,
-  FilterListMetadata,
-  SupportedFormat,
+export {
+  EXPORT_FORMATS,
+  type ExportOptions,
+  type FilterListMetadata,
+  type SupportedFormat,
+  type OutputFormat,
 } from "./types.js";
 
 // AI Ad & Tracker Discovery Engine
 export * from "./ai/index.js";
+
+// Blocklist coverage analysis (which rules actually fire on real traffic)
+export * from "./coverage.js";
+
+// Replaying captured requests through a compiled rule set (the offline half of a measurement)
+export * from "./ruleReplay.js";

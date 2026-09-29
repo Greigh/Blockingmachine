@@ -1,6 +1,7 @@
 import { join, dirname, isAbsolute, basename, resolve as pathResolve, sep } from 'path';
-import { createServer, Server as HttpServer, ServerResponse } from 'http';
+import { createServer, Server as HttpServer, ServerResponse, type IncomingMessage } from 'http';
 import { networkInterfaces } from 'os';
+import { getServers as getDnsServers } from 'dns';
 import {
   app,
   BrowserWindow,
@@ -34,6 +35,24 @@ import {
   type SinkholeEndpoint,
 } from './sinkholeNet';
 import { sinkholeFetch } from './sinkholeFetch';
+import { unboundFeedFileName } from './unboundDeploy';
+import {
+  RESOLVER_CONTROL_DOMAIN,
+  classifyUnboundReachability,
+  createFeedServeLog,
+  parseUnboundDropIn,
+  pickCanaryDomain,
+  reachabilityProbeHeaders,
+  toReachabilitySnapshot,
+  type UnboundReachability,
+  type UnboundReachabilitySnapshot,
+} from './unboundReachability';
+import {
+  parseUnboundResolverAddress,
+  pickReferenceTarget,
+  resolveUnboundResolver,
+} from './unboundAddress';
+import { probeUnboundResolver } from './unboundProbe';
 import {
   classifyDirectStatus,
   classifyHaApiResponse,
@@ -55,6 +74,8 @@ import {
   isDomainCoveredByRules,
   globalMiniAiClassifier,
   compactSubdomainRules,
+  refreshDb,
+  setDbCacheDirectory,
   checkRuleConflict,
   synthesizeRules,
   evaluateDomainRules,
@@ -73,10 +94,22 @@ import type {
   CompilationSnapshot,
   DomainInspectionResult,
   FeedDiagnostic,
+  UnboundResolverSettings,
   ThreatQuarantineItem,
   AiWatchdogConfig,
 } from './types';
 import { DaemonManager } from './daemonManager';
+import { shadowScoreWatchdogDomains } from './learnedShadow';
+import {
+  clearHeatForDomain,
+  emptyRadarHeatMap,
+  ignoreHeatDomain,
+  recordFlagsInHeatMap,
+  suggestWatchdogCadence,
+  summarizeHeatMap,
+  unignoreHeatDomain,
+  type RadarHeatMap,
+} from './radarHeatMap';
 
 async function installExtensions() {
   if (!isDev) return;
@@ -118,6 +151,12 @@ function isValidFormat(format: unknown): format is FilterFormat {
     'hosts',
     'dnsmasq',
     'unbound',
+    // Shadowrocket, Privoxy and BIND are deploy targets, not just syntaxes: the Deploy Hub writes a
+    // rule set, an action file and an RPZ zone for them, so each format has to be selectable or its
+    // tab can only ever point at a file the app cannot produce.
+    'shadowrocket',
+    'privoxy',
+    'bind',
     'domains',
     'plain',
   ];
@@ -494,6 +533,8 @@ let latestCompiledRules: StoredRule[] = [];
 
 // Auto-schedule background timer
 let autoScheduleTimer: NodeJS.Timeout | null = null;
+let dbRefreshTimer: NodeJS.Timeout | null = null;
+const DB_REFRESH_INTERVAL_MS = 60 * 60 * 1000; // hourly reputation-db patch refresh
 
 function setupAutoScheduleTimer(schedule: 'disabled' | '12h' | '24h' | 'weekly', _storeRef: ElectronStore<StoreSchema>) {
   if (autoScheduleTimer) {
@@ -529,6 +570,55 @@ function getSharedAiDetectorService(config: Partial<AiProviderConfig>): AiDetect
   return sharedAiDetectorService;
 }
 
+/**
+ * Merges flagged scan results into the persistent radar heat map and persists it.
+ * Only non-clean verdicts carry heat. Returns the updated map for reuse.
+ */
+function recordRadarHeat(storeRef: ElectronStore<StoreSchema>, flagged: AiScanResult[], clientHint?: string): RadarHeatMap {
+  const currentHeat = storeRef.get('radarHeatMap') || emptyRadarHeatMap();
+  const updated = recordFlagsInHeatMap(
+    currentHeat,
+    flagged.map((r) => ({
+      domain: r.domain,
+      verdict: r.verdict,
+      category: r.category,
+      riskLevel: r.riskLevel,
+      client: clientHint ?? (r as { client?: string }).client,
+    })),
+  );
+  try {
+    storeRef.set('radarHeatMap', updated);
+  } catch (err) {
+    console.error('[Radar Heat] Failed to persist heat map:', err);
+  }
+  return updated;
+}
+
+/**
+ * Applies the adaptive cadence suggestion to the persisted watchdog config.
+ * Logs only when the suggestion actually changes the effective interval, so
+ * steady-state sweeps don't spam the console with identical lines.
+ */
+function applyAdaptiveCadence(storeRef: ElectronStore<StoreSchema>, heat: RadarHeatMap): void {
+  try {
+    const current = storeRef.get('aiWatchdogConfig');
+    if (!current?.enabled) return;
+    const suggestion = suggestWatchdogCadence(heat, current.intervalMinutes || 60);
+    const previous = current.adaptiveIntervalMinutes || current.intervalMinutes || 60;
+    storeRef.set('aiWatchdogConfig', {
+      ...current,
+      adaptiveIntervalMinutes: suggestion.intervalMinutes,
+      cadenceReason: suggestion.reason,
+      cadenceUpdatedAt: new Date().toISOString(),
+    });
+    if (suggestion.intervalMinutes !== previous) {
+      console.log(`[Radar Heat] Adaptive cadence: next sweep in ~${suggestion.intervalMinutes}m (${suggestion.reason})`);
+    }
+  } catch (err) {
+    console.error('[Radar Heat] Failed to apply adaptive cadence:', err);
+  }
+}
+
 function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<StoreSchema>): void {
   if (aiWatchdogTimer) {
     clearInterval(aiWatchdogTimer);
@@ -540,8 +630,32 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
     return;
   }
 
-  const intervalMs = Math.max(5, config.intervalMinutes || 60) * 60 * 1000;
-  console.log(`[AI Watchdog] Started with interval: ${config.intervalMinutes || 60}m`);
+  // Adaptive cadence: the radar heat map may tighten or stretch the configured
+  // interval. If no adaptive value has been computed yet (fresh startup),
+  // derive one from the persisted heat map so the first sweep already runs at
+  // the suggested cadence instead of waiting a full configured cycle.
+  const configuredMinutes = Math.max(5, config.intervalMinutes || 60);
+  let adaptiveMinutes = configuredMinutes;
+  if (config.adaptiveIntervalMinutes && config.adaptiveIntervalMinutes >= 5) {
+    adaptiveMinutes = Math.min(720, Math.round(config.adaptiveIntervalMinutes));
+  } else {
+    const suggestion = suggestWatchdogCadence(storeRef.get('radarHeatMap'), configuredMinutes);
+    adaptiveMinutes = Math.min(720, suggestion.intervalMinutes);
+    if (adaptiveMinutes !== configuredMinutes) {
+      console.log(`[AI Watchdog] Cadence from heat map: ${adaptiveMinutes}m (${suggestion.reason})`);
+    }
+  }
+  // Clamp the adaptive value into the cadence function's own bounds relative
+  // to the CURRENT configured interval. A persisted suggestion computed for a
+  // previous intervalMinutes setting must not mask the user's new choice
+  // (e.g. user drops 60m -> 15m; a stale 120m adaptive would otherwise keep
+  // winning until the next sweep recomputes it).
+  const maxAdaptive = Math.min(720, configuredMinutes * 2);
+  const minAdaptive = Math.max(5, Math.round(configuredMinutes / 2));
+  if (adaptiveMinutes > maxAdaptive) adaptiveMinutes = maxAdaptive;
+  if (adaptiveMinutes < minAdaptive) adaptiveMinutes = minAdaptive;
+  const intervalMs = adaptiveMinutes * 60 * 1000;
+  console.log(`[AI Watchdog] Started with interval: ${adaptiveMinutes}m (configured: ${configuredMinutes}m)`);
 
   aiWatchdogTimer = setInterval(async () => {
     try {
@@ -551,6 +665,7 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
 
       const queries: RawDnsQuery[] = [];
       const limit = 50;
+      let flaggedWithClients: AiScanResult[] = [];
 
       if (config.service === 'adguard') {
         const loaded = await loadStoredAdguardQueries(storeRef, limit);
@@ -576,7 +691,7 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
             const name = item?.[2];
             const status = item?.[4];
             if (name && (status === '2' || status === '3')) {
-              queries.push({ domain: name, client: item?.[3], blocked: false });
+              queries.push({ domain: name, client: item?.[3], timestamp: piholeEpochToIso(item?.[0]), blocked: false });
             }
           }
           if (queries.length === 0) {
@@ -594,6 +709,31 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
           const conf = typeof r.confidence === 'number' ? (r.confidence > 1 ? r.confidence : r.confidence * 100) : 0;
           return r.isLikelyDga || (typeof r.entropy === 'number' && r.entropy > 4.2) || conf >= 85 || r.riskLevel === 'high' || r.riskLevel === 'critical';
         });
+
+        // Collect flagged domains (not only quarantined ones) with client
+        // attribution for the heat ledger. Cadence is applied after the scan
+        // block so empty sweeps participate too.
+        const clientByDomain = new Map<string, string | undefined>();
+        for (const q of queries) {
+          if (!clientByDomain.has(q.domain)) clientByDomain.set(q.domain, q.client);
+        }
+        flaggedWithClients = scan.results
+          .filter((r) => r.verdict !== 'clean')
+          .map((r) => ({ ...r, client: clientByDomain.get(r.domain) }));
+
+        // Learned-model shadow mode (M3): score every scanned domain with the trained
+        // GBDT and log disagreements against production verdicts. Read-only — the model's
+        // output never blocks or quarantines here, and the hook is fail-soft so a missing
+        // or corrupt weights file cannot break the watchdog.
+        try {
+          const threatSet = new Set(threats.map((t) => t.domain));
+          shadowScoreWatchdogDomains(
+            scan.results.map((r) => r.domain),
+            (d) => (threatSet.has(d) ? 'block' : 'allow'),
+          );
+        } catch (err) {
+          console.error('[Learned Shadow] sweep hook failed:', err);
+        }
 
         if (threats.length > 0) {
           const existingQuarantine: ThreatQuarantineItem[] = storeRef.get('aiThreatQuarantine') || [];
@@ -632,6 +772,26 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
           lastRun: new Date().toISOString(),
           lastThreatsFound: threats.length,
         });
+      }
+
+      // Adaptive cadence runs on EVERY sweep — including empty ones. A quiet
+      // network is exactly when the interval should stretch to save resources,
+      // and recording an empty flagged set still decays stale heat entries.
+      const heat = recordRadarHeat(storeRef, flaggedWithClients);
+      applyAdaptiveCadence(storeRef, heat);
+      // Re-arm the timer only when the adaptive interval actually changed —
+      // clearing and recreating an unchanged setInterval restarts the full
+      // interval countdown, which would continuously delay the next sweep.
+      const currentWatchdogForRearm = storeRef.get('aiWatchdogConfig');
+      if (currentWatchdogForRearm) {
+        const nextAdaptive = Math.max(
+          5,
+          Math.min(720, Math.round(currentWatchdogForRearm.adaptiveIntervalMinutes || configuredMinutes)),
+        );
+        if (nextAdaptive !== adaptiveMinutes) {
+          console.log(`[AI Watchdog] Adaptive cadence changed ${adaptiveMinutes}m -> ${nextAdaptive}m; re-arming timer`);
+          setupAiWatchdogTimer({ ...config, ...currentWatchdogForRearm }, storeRef);
+        }
       }
     } catch (err) {
       console.error('[AI Watchdog] Background scan error:', err);
@@ -733,7 +893,7 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
         const name = item?.[2];
         const status = item?.[4];
         if (name && (status === '2' || status === '3')) {
-          queries.push({ domain: name, client: item?.[3], blocked: false });
+          queries.push({ domain: name, client: item?.[3], timestamp: piholeEpochToIso(item?.[0]), blocked: false });
         }
       }
     }
@@ -749,6 +909,18 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
     }
 
     const scan = await service.scanQueryLog(queries, savedConfig);
+    // Feed the persistent heat map from live radar sessions as well
+    const liveClientByDomain = new Map<string, string | undefined>();
+    for (const q of queries) {
+      if (!liveClientByDomain.has(q.domain)) liveClientByDomain.set(q.domain, q.client);
+    }
+    const liveHeat = recordRadarHeat(
+      storeRef,
+      scan.results.filter((r) => r.verdict !== 'clean').map((r) => ({ ...r, client: liveClientByDomain.get(r.domain) })),
+    );
+    // Propagate heat-driven cadence so the idle background watchdog adapts
+    // while a live radar session is actively surfacing flagged traffic.
+    applyAdaptiveCadence(storeRef, liveHeat);
     currentLiveRadarSession.notice = undefined;
     currentLiveRadarSession.pollCount++;
     currentLiveRadarSession.lastPollTime = Date.now();
@@ -1087,6 +1259,21 @@ async function readSinkholeProbe(
   return { ok: res.ok, status: res.status, statusText: res.statusText, body: await res.text() };
 }
 
+/**
+ * Converts a Pi-hole query-log epoch-seconds timestamp (row field 0) to ISO 8601.
+ * Behavioral cadence analysis needs query timestamps; returns undefined for
+ * missing or malformed values rather than fabricating a time.
+ */
+function piholeEpochToIso(raw: unknown): string | undefined {
+  const seconds = typeof raw === 'number' ? raw : Number.parseInt(String(raw ?? ''), 10);
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  try {
+    return new Date(seconds * 1000).toISOString();
+  } catch {
+    return undefined;
+  }
+}
+
 async function loadStoredAdguardQueries(storeRef: ElectronStore<StoreSchema>, limit: number) {
   const user = (storeRef.get('adguardHomeUser') as string) || '';
   const pass = (storeRef.get('adguardHomePassword') as string) || '';
@@ -1315,6 +1502,30 @@ let feedServerPort = 9191;
 const sseClients = new Set<ServerResponse>();
 let sseHeartbeatTimer: NodeJS.Timeout | null = null;
 
+/**
+ * Serves of compiled feed files, so the Deploy Hub can tell whether a resolver is actually fetching.
+ *
+ * The scheduled `curl` in a Unbound recipe is the subscription, and the only local evidence that it
+ * exists is the request log. In-memory on purpose: "has anything fetched this since the hub
+ * started" is the question, and a persisted answer would be misleading after a restart.
+ */
+const feedServeLog = createFeedServeLog();
+
+/** Record a file serve, unless the reachability check is the client. */
+function recordFeedServe(
+  req: IncomingMessage,
+  path: string,
+  status: number,
+  bytes?: number,
+): void {
+  feedServeLog.record(
+    { headers: req.headers, peer: req.socket?.remoteAddress || 'unknown' },
+    path,
+    status,
+    bytes,
+  );
+}
+
 export interface BrowserTelemetryData {
   lastUpdated: string;
   trackersBlocked: number;
@@ -1368,6 +1579,169 @@ function getFeedServerStatus() {
     lanUrl: `http://${lanIp}:${feedServerPort}`,
     lanIp,
   };
+}
+
+/**
+ * This machine's configured DNS servers, for suggesting what to type.
+ *
+ * Read defensively: `getServers()` throws on a system with no resolver configuration, and a
+ * suggestion is not worth failing a check over.
+ */
+function systemDnsServers(): string[] {
+  try {
+    return getDnsServers() || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The addresses the check will use, or the reason it cannot.
+ *
+ * One function for the getter and the check, so the field the user sees and the address that is
+ * actually queried cannot disagree about what the default is.
+ */
+/**
+ * The parsed targets behind `unboundResolverSettings()`.
+ *
+ * Kept separate only because the check needs the address, not the label it was rendered as; both
+ * entrances run the same two pure decisions, so "what the field says" and "what gets queried" have
+ * one source of truth.
+ */
+function unboundResolverTargets(): {
+  primary: ReturnType<typeof resolveUnboundResolver>;
+  reference: ReturnType<typeof pickReferenceTarget>;
+} {
+  const primary = resolveUnboundResolver(store.get('unboundResolver'));
+  const reference = primary.ok
+    ? pickReferenceTarget(
+        primary.resolved.target,
+        store.get('unboundReferenceResolver'),
+        systemDnsServers(),
+      )
+    : { ok: false as const, message: primary.message };
+  return { primary, reference };
+}
+
+function unboundResolverSettings(): UnboundResolverSettings {
+  const { primary, reference } = unboundResolverTargets();
+
+  return {
+    address: store.get('unboundResolver') || '',
+    effective: primary.ok ? primary.resolved.target.label : null,
+    error: primary.ok ? null : primary.message,
+    isDefault: primary.ok ? primary.resolved.usedDefault : false,
+    referenceAddress: store.get('unboundReferenceResolver') || '',
+    referenceEffective: reference.ok ? reference.reference.target.label : null,
+    referenceError: reference.ok ? null : reference.message,
+    referenceSource: reference.ok ? reference.reference.source : 'none',
+    systemServers: systemDnsServers(),
+  };
+}
+
+/**
+ * The last reachability result, as the pane reads it back between checks.
+ *
+ * Stored rather than recomputed so opening the Unbound tab does not quietly query the user's
+ * resolver — a check that fires a DNS query on tab switch is a check nobody can predict.
+ */
+function getUnboundReachabilitySnapshot(): UnboundReachabilitySnapshot | null {
+  return store.get('unboundReachability') ?? null;
+}
+
+/**
+ * Fetch a feed URL the way a resolver's scheduled command would — minus the evidence.
+ *
+ * The probe header is what keeps this request out of the serve log: without it the check would
+ * always see itself arrive and report a fetch that only it made.
+ */
+async function fetchOwnFeed(
+  url: string,
+): Promise<{ ok: boolean; status?: number; error?: string; body?: string; viaLoopback?: boolean }> {
+  try {
+    const res = await fetch(url, {
+      headers: reachabilityProbeHeaders(),
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    return { ok: true, status: res.status, body: await res.text() };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Run one Unbound reachability check against live state.
+ *
+ * The self-fetch targets the address the recipe puts in the copy-paste command, because that is the
+ * one the resolver will use. It falls back to loopback and says so when the LAN address does not
+ * answer from this machine: a host firewall that blocks the hub's own LAN port would otherwise be
+ * reported as a broken feed, when the file is in fact being served.
+ */
+async function checkUnboundReachability(): Promise<UnboundReachability> {
+  const checkedAt = new Date().toISOString();
+  const status = getFeedServerStatus();
+  const exportFormat = store.get('exportFormat');
+  const feedFileName = unboundFeedFileName(exportFormat, store.get('savePath'));
+  const feedUrl = `${status.lanUrl}/${encodeURIComponent(feedFileName)}`;
+
+  let selfFetch = await fetchOwnFeed(feedUrl);
+  if (!selfFetch.ok && status.isRunning) {
+    const loopback = await fetchOwnFeed(
+      `http://127.0.0.1:${status.port}/${encodeURIComponent(feedFileName)}`,
+    );
+    if (loopback.ok) selfFetch = { ...loopback, viaLoopback: true };
+  }
+
+  const dropIn = parseUnboundDropIn(selfFetch.body ?? '');
+  const canaryDomain = pickCanaryDomain(dropIn.domains);
+  const previous = getUnboundReachabilitySnapshot();
+
+  const { primary, reference } = unboundResolverTargets();
+  let probe = null;
+  let probeSkipped: string | null = null;
+  if (!status.isRunning || !selfFetch.ok || dropIn.zones === 0) {
+    probeSkipped = 'The file has to be served before a resolver answer means anything.';
+  } else if (!canaryDomain) {
+    probeSkipped = 'No domain in the drop-in can be used as a test target.';
+  } else if (!primary.ok) {
+    probeSkipped = primary.message;
+  } else {
+    // A missing reference is not a reason to skip the check: it is the reason the verdict comes back
+    // unconfirmed rather than live, which is the honest reading of an unverified NXDOMAIN.
+    probe = await probeUnboundResolver({
+      target: primary.resolved.target,
+      canaryDomain,
+      controlDomain: RESOLVER_CONTROL_DOMAIN,
+      referenceTarget: reference.ok ? reference.reference.target : null,
+    });
+  }
+
+  const reachability = classifyUnboundReachability({
+    checkedAt,
+    feedUrl,
+    feedFileName,
+    feedServerRunning: status.isRunning,
+    selfFetch: {
+      ok: selfFetch.ok,
+      status: selfFetch.status,
+      error: selfFetch.error,
+      zones: dropIn.zones,
+      hasServerBlock: dropIn.hasServerBlock,
+      canaryDomain,
+      viaLoopback: selfFetch.viaLoopback,
+    },
+    serves: [...feedServeLog.entries()],
+    lastFetchedAt: previous?.fetchedAt ?? null,
+    lastCompiledAt: store.get('lastProcessTime') || null,
+    lastConfirmedAt: previous?.lastConfirmedAt ?? null,
+    probe,
+    probeSkipped,
+  });
+
+  store.set('unboundReachability', toReachabilitySnapshot(reachability));
+
+  return reachability;
 }
 
 async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>) {
@@ -1845,6 +2219,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
               }
 
               const payload = Buffer.from(filteredLines.join('\n'), 'utf8');
+              recordFeedServe(req, pathname, 200, payload.length);
               res.writeHead(200, {
                 'Content-Type': 'text/plain; charset=utf-8',
                 'Content-Length': payload.length,
@@ -1855,6 +2230,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
 
             const stat = await fs.stat(targetFilePath);
             if (stat.isFile()) {
+              recordFeedServe(req, pathname, 200, stat.size);
               res.writeHead(200, {
                 'Content-Type': 'text/plain; charset=utf-8',
                 'Content-Length': stat.size,
@@ -2241,10 +2617,19 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           (f) => f !== format && isValidFormat(f)
         );
         const outputDir = dirname(savePath);
+        // The extension has to match what the file is: a `.txt` holding an RPZ zone or a Privoxy
+        // action file reads as a plain list to every tool that opens it, including the user.
+        const additionalFormatExtensions: Partial<Record<FilterFormat, string>> = {
+          dnsmasq: '.conf',
+          unbound: '.conf',
+          shadowrocket: '.conf',
+          privoxy: '.action',
+          bind: '.rpz',
+        };
         for (const addFormat of validAdditional) {
           try {
             const addContent = generateFilterList(uniqueRules, metadata, addFormat);
-            const ext = addFormat === 'dnsmasq' ? '.conf' : '.txt';
+            const ext = additionalFormatExtensions[addFormat] ?? '.txt';
             const addPath = join(outputDir, `processed_${addFormat}${ext}`);
             await fs.writeFile(addPath, addContent, 'utf8');
             console.log(`[IPC Main] Additional export saved: ${addPath}`);
@@ -2617,6 +3002,52 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle('get-feed-server-status', async () => {
       return getFeedServerStatus();
     });
+
+    // --- Unbound Reachability ---
+    ipcMain.handle('get-unbound-reachability', async () => {
+      return getUnboundReachabilitySnapshot();
+    });
+
+    ipcMain.handle('check-unbound-reachability', async () => {
+      return await checkUnboundReachability();
+    });
+
+    ipcMain.handle('get-unbound-resolvers', async (): Promise<UnboundResolverSettings> => {
+      return unboundResolverSettings();
+    });
+
+    ipcMain.handle(
+      'set-unbound-resolvers',
+      async (
+        _event: IpcMainInvokeEvent,
+        values: { address?: string; referenceAddress?: string },
+      ): Promise<{ success: boolean; error?: string }> => {
+        const address = typeof values?.address === 'string' ? values.address.trim() : '';
+        const referenceAddress =
+          typeof values?.referenceAddress === 'string' ? values.referenceAddress.trim() : '';
+        // An empty value is allowed and means "fall back to the default", because clearing a wrong
+        // address has to be possible without inventing a correct one first.
+        if (address) {
+          const parsed = parseUnboundResolverAddress(address);
+          if (!parsed.ok) return { success: false, error: `Resolver: ${parsed.message}` };
+        }
+        if (referenceAddress) {
+          const parsed = parseUnboundResolverAddress(referenceAddress);
+          if (!parsed.ok) return { success: false, error: `Reference: ${parsed.message}` };
+        }
+        // Refused here rather than only at check time: a reference pointing at the resolver under
+        // test is a configuration that can never confirm anything, and saving it silently would
+        // leave the user waiting for a confirmation that cannot arrive.
+        const primary = resolveUnboundResolver(address);
+        if (primary.ok && referenceAddress) {
+          const reference = pickReferenceTarget(primary.resolved.target, referenceAddress, []);
+          if (!reference.ok) return { success: false, error: reference.message };
+        }
+        store.set('unboundResolver', address);
+        store.set('unboundReferenceResolver', referenceAddress);
+        return { success: true };
+      },
+    );
 
     ipcMain.handle('get-auto-start-feed-server', async () => {
       return Boolean(store.get('autoStartFeedServer'));
@@ -3026,6 +3457,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         apiKey: saved?.apiKey || '',
         apiEndpoint: saved?.apiEndpoint || '',
         modelName: saved?.modelName || '',
+        cascade: saved?.cascade || { enabled: false },
       };
     });
 
@@ -3129,6 +3561,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         }
         queries.push(...loaded.queries);
         const scan = await service.scanQueryLog(queries, activeConfig);
+        applyAdaptiveCadence(store, recordRadarHeat(store, scan.results.filter((r) => r.verdict !== 'clean')));
         return {
           ...scan,
           notice: loaded.unblockedCount === 0 ? emptyUnblockedNotice(limit) : undefined,
@@ -3153,11 +3586,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             queries.push({
               domain: name,
               client: item?.[3],
+              timestamp: piholeEpochToIso(item?.[0]),
               blocked: false,
             });
           }
         }
         const scan = await service.scanQueryLog(queries, activeConfig);
+        applyAdaptiveCadence(store, recordRadarHeat(store, scan.results.filter((r) => r.verdict !== 'clean')));
         return {
           ...scan,
           notice: queries.length === 0 ? emptyUnblockedNotice(limit) : undefined,
@@ -3282,6 +3717,15 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         autoQuarantineEntropyDga: true,
       }) as AiWatchdogConfig;
       const updated: AiWatchdogConfig = { ...current, ...cfg };
+      // Changing the base interval invalidates a previously suggested adaptive
+      // value — otherwise a stale adaptiveIntervalMinutes keeps overriding the
+      // user's new choice until the next sweep recomputes it.
+      if (cfg.intervalMinutes !== undefined && cfg.intervalMinutes !== current.intervalMinutes) {
+        delete updated.adaptiveIntervalMinutes;
+        // The old rationale no longer describes the (invalidated) suggestion.
+        delete updated.cadenceReason;
+        delete updated.cadenceUpdatedAt;
+      }
       store.set('aiWatchdogConfig', updated);
       setupAiWatchdogTimer(updated, store);
       return { success: true };
@@ -3337,6 +3781,80 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         count: globalMiniAiClassifier.getFeedbackCount(),
         feedback: globalMiniAiClassifier.exportFeedback(),
       };
+    });
+
+    // Reset Mini-AI feedback for one domain (or its generalized zone) [Beta]
+    ipcMain.handle('reset-mini-ai-feedback', async (_event, domain: string) => {
+      if (!domain || typeof domain !== 'string') {
+        return { success: false, error: 'Invalid domain parameter' };
+      }
+      const removed = globalMiniAiClassifier.deleteDomainFeedback(domain);
+      if (removed) {
+        store.set('miniAiFeedback', globalMiniAiClassifier.exportFeedback());
+      }
+      return { success: removed };
+    });
+
+    // Persistent Radar Heat Map summary [Beta]
+    ipcMain.handle('get-radar-heat-summary', async () => {
+      return summarizeHeatMap(store.get('radarHeatMap'));
+    });
+
+    // Clear persistent heat for a domain (and its zone) after allowlisting [Beta]
+    ipcMain.handle('clear-radar-heat-domain', async (_event, domain: string) => {
+      if (!domain || typeof domain !== 'string') {
+        return { success: false, error: 'Invalid domain parameter' };
+      }
+      store.set('radarHeatMap', clearHeatForDomain(store.get('radarHeatMap'), domain));
+      return { success: true };
+    });
+
+    // Ignore an offender: hide from Top Repeat Offenders without trusting it [Beta]
+    ipcMain.handle('ignore-radar-heat-domain', async (_event, domain: string) => {
+      if (!domain || typeof domain !== 'string') {
+        return { success: false, error: 'Invalid domain parameter' };
+      }
+      store.set('radarHeatMap', ignoreHeatDomain(store.get('radarHeatMap'), domain));
+      return { success: true };
+    });
+
+    // Restore a previously ignored offender [Beta]
+    ipcMain.handle('unignore-radar-heat-domain', async (_event, domain: string) => {
+      if (!domain || typeof domain !== 'string') {
+        return { success: false, error: 'Invalid domain parameter' };
+      }
+      store.set('radarHeatMap', unignoreHeatDomain(store.get('radarHeatMap'), domain));
+      return { success: true };
+    });
+
+    // AI Radar display preferences (power-user browsing aids) [Beta]
+    ipcMain.handle('get-radar-display-config', async () => {
+      const saved = store.get('radarDisplayConfig');
+      return {
+        showIgnoredOffenders: Boolean(saved?.showIgnoredOffenders),
+      };
+    });
+
+    ipcMain.handle('set-radar-display-config', async (_event, config: { showIgnoredOffenders?: boolean }) => {
+      if (!config || typeof config !== 'object') {
+        return { success: false, error: 'Invalid config parameter' };
+      }
+      const current = store.get('radarDisplayConfig') || { showIgnoredOffenders: false };
+      const next = {
+        showIgnoredOffenders: typeof config.showIgnoredOffenders === 'boolean'
+          ? config.showIgnoredOffenders
+          : Boolean(current.showIgnoredOffenders),
+      };
+      store.set('radarDisplayConfig', next);
+      // Live-update any open Radar view so the change applies instantly.
+      try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('radar-display-config-updated', next);
+        }
+      } catch {
+        // Window may be closing; ignore
+      }
+      return { success: true };
     });
 
     // Subdomain Clustering Compaction [Beta]
@@ -3528,6 +4046,33 @@ async function initialize() {
     registerIPCHandlers(store);
     await createWindow();
     createTray();
+
+    // ─── Reputation DB hot-patch refresh ────────────────────────────────────
+    // Pull the latest remote-patch.json so AI classifications pick up pushed
+    // list updates (new ad networks, false-positive removals) without waiting
+    // for an app release. The cache lives in a writable userData subdir.
+    try {
+      setDbCacheDirectory(join(app.getPath('userData'), 'reputation-db'));
+      void refreshDb().then((res) => {
+        console.log(
+          `[Reputation DB] ${
+            res.remoteLastFetched
+              ? `Remote patch applied (fetched ${res.remoteLastFetched})`
+              : 'No remote patch available — using bundled lists'
+          }`,
+        );
+      });
+      dbRefreshTimer = setInterval(() => {
+        void refreshDb().catch(() => {
+          // refreshDb never throws; catch defensively anyway
+        });
+      }, DB_REFRESH_INTERVAL_MS);
+      if (typeof dbRefreshTimer.unref === 'function') {
+        dbRefreshTimer.unref();
+      }
+    } catch (err) {
+      console.warn('[Reputation DB] Initial refresh failed:', err);
+    }
 
     // Auto-start local HTTP feed server if enabled in settings
     const shouldAutoStartFeed = Boolean(store.get('autoStartFeedServer'));

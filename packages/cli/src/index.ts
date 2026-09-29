@@ -16,6 +16,7 @@ export { DiffCommand } from "./commands/DiffCommand.js";
 export { DoctorCommand } from "./commands/DoctorCommand.js";
 export { ShellCommand } from "./commands/ShellCommand.js";
 export { ServeCommand } from "./commands/ServeCommand.js";
+export { CoverageCommand } from "./commands/CoverageCommand.js";
 
 // Export library functions
 export * from "./lib/logger.js";

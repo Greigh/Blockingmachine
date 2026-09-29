@@ -35,6 +35,38 @@ function generateHeader(
         "server:",
         "",
       ].join("\n");
+    case "shadowrocket":
+      // Comments are `#` and the rules live under a `[Rule]` section: the default `!` header this
+      // would otherwise fall through to is AdGuard syntax, which a Shadowrocket config rejects.
+      return [
+        "# " + meta.title,
+        "# Generated: " + meta.lastUpdated,
+        "# Format: Shadowrocket rule set (Surge-compatible)",
+        "[Rule]",
+        "",
+      ].join("\n");
+    case "privoxy":
+      // A Privoxy action file is section-based, so the block section opens before the patterns.
+      return [
+        "# " + meta.title,
+        "# Generated: " + meta.lastUpdated,
+        "# Format: Privoxy action file",
+        "{+block{Blockingmachine Blocklist}}",
+        "",
+      ].join("\n");
+    case "bind":
+      // A BIND Response Policy Zone is a master file: `;` comments, and an SOA before any record.
+      return [
+        "; " + meta.title,
+        "; Generated: " + meta.lastUpdated,
+        "; Format: BIND Response Policy Zone (RPZ)",
+        ";   zone \"rpz.blockingmachine\" { type master; file \"db.blockingmachine.rpz\"; };",
+        ";   response-policy { zone \"rpz.blockingmachine\"; };",
+        "$TTL 3600",
+        "@ IN SOA localhost. root.localhost. ( 1 3600 600 604800 86400 )",
+        "@ IN NS localhost.",
+        "",
+      ].join("\n");
     default:
       return [
         "! Title: " + meta.title,
@@ -70,9 +102,11 @@ function formatRuleForType(rule: StoredRule, format: SupportedFormat): string {
       if (!rule.domain) return "";
       return `local-zone: "${rule.domain}" redirect\nlocal-data: "${rule.domain} A 0.0.0.0"`;
     case "bind":
-      if (isException) return `# EXCEPTION: ${rule.raw}`;
+      if (isException) return `; EXCEPTION: ${rule.raw}`;
       if (!rule.domain) return "";
-      return `zone "${rule.domain}" { type master; file "null.zone.file"; };`;
+      // RPZ policy record. A per-domain master zone cannot load: BIND refuses a primary zone whose
+      // file holds no SOA, and one file cannot serve 100k origins.
+      return `${rule.domain} CNAME .`;
     case "privoxy":
       if (isException) return `# EXCEPTION: ${rule.raw}`;
       if (!rule.domain) return "";

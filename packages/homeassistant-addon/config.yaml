@@ -22,6 +22,7 @@ options:
     - adguard
     - hosts
     - domains
+    - unbound
   log_level: "info"
 schema:
   feed_port: int

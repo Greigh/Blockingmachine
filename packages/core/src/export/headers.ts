@@ -1,4 +1,5 @@
 import type { SupportedFormat, FilterListMetadata } from "../types.js";
+import { PRIVOXY_BLOCK_SECTION, RPZ_ZONE_PREAMBLE } from "./formatters.js";
 
 /** Prevent metadata from terminating a comment and adding active filter rules. */
 export function sanitizeHeaderMetadata(meta: FilterListMetadata): FilterListMetadata {
@@ -17,7 +18,9 @@ export function generateHeader(
   meta = sanitizeHeaderMetadata(meta);
   const isBangComment =
     format === "adguard" || format === "abp" || format === "all";
-  const c = isBangComment ? "! " : "# ";
+  // A BIND response policy zone is a master file, not `named.conf`: its comment character is `;`,
+  // and `#` there is a parse error rather than a comment.
+  const c = isBangComment ? "! " : format === "bind" ? "; " : "# ";
 
   // Common header for all formats
   const commonHeader = [
@@ -53,8 +56,8 @@ export function generateHeader(
       break;
     case "bind":
       additionalLines.push(
-        c + "Format: BIND",
-        c + "This file contains rules suitable for BIND DNS server",
+        c + "Format: BIND Response Policy Zone (RPZ)",
+        c + "One CNAME policy record per blocked name; CNAME . means NXDOMAIN.",
       );
       break;
     case "privoxy":
@@ -106,5 +109,27 @@ export function generateHeader(
   );
 
   if (format === "unbound") additionalLines.push("server:");
+  // A Privoxy action file is section-based: every URL pattern belongs to the action block above
+  // it, and a file that opens with bare patterns has no action to belong to. The block section is
+  // opened here, after the comments and before the first pattern.
+  if (format === "privoxy") additionalLines.push(PRIVOXY_BLOCK_SECTION);
+  // A BIND primary zone does not load without an SOA, so the preamble is part of the artifact
+  // rather than something the user is left to discover from a `no SOA` load failure.
+  if (format === "bind") {
+    additionalLines.push(
+      c + "Add it to named.conf:",
+      c + "  zone \"rpz.blockingmachine\" { type master; file \"db.blockingmachine.rpz\"; };",
+      c + "and inside options { }:",
+      c + "  response-policy { zone \"rpz.blockingmachine\"; };",
+      c + "A child bypass is emitted as CNAME rpz-passthru., which wins on the longest match.",
+      "",
+      ...RPZ_ZONE_PREAMBLE.split("\n"),
+    );
+  }
+  // A Shadowrocket/Surge config is INI-shaped: the rules live under a `[Rule]` section, and a
+  // file that is nothing but `DOMAIN-SUFFIX,…` lines has nowhere to be read from. The app also
+  // accepts a bare remote rule list, but a section header is what makes the same artifact valid
+  // as a full config, so it is emitted rather than left to the user to add.
+  if (format === "shadowrocket") additionalLines.push("[Rule]");
   return [...commonHeader, ...additionalLines].join("\n");
 }

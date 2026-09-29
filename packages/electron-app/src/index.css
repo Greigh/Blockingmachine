@@ -6432,6 +6432,144 @@ button.format-tile .format-target {
   gap: 14px;
 }
 
+/* Unbound reachability card */
+.unbound-reachability-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unbound-reachability-badge {
+  align-self: flex-start;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.unbound-reachability-badge.ok {
+  background: rgba(48, 209, 88, 0.14);
+  color: #1d8a3c;
+}
+
+.unbound-reachability-badge.warn {
+  background: rgba(255, 159, 10, 0.16);
+  color: #a86200;
+}
+
+.unbound-reachability-badge.off {
+  background: rgba(255, 69, 58, 0.14);
+  color: #c0392b;
+}
+
+.unbound-reachability-detail {
+  font-size: 12px;
+  color: var(--secondary-color);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.unbound-reachability-meta {
+  font-size: 11px;
+  color: var(--secondary-color);
+  opacity: 0.85;
+  margin: 0;
+}
+
+.unbound-reachability-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.unbound-reachability-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 8px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.unbound-reachability-row:last-child {
+  border-bottom: none;
+}
+
+.unbound-reachability-row-label {
+  color: var(--secondary-color);
+  flex-shrink: 0;
+}
+
+.unbound-reachability-row-value {
+  text-align: right;
+  word-break: break-word;
+  color: var(--text-color);
+}
+
+.unbound-reachability-row-value.ok {
+  color: #1d8a3c;
+}
+
+.unbound-reachability-row-value.warn {
+  color: #a86200;
+}
+
+.unbound-reachability-row-value.off {
+  color: #c0392b;
+}
+
+.unbound-reachability-next {
+  font-size: 12px;
+  color: var(--text-color);
+  line-height: 1.55;
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--primary-color);
+  background: rgba(0, 122, 255, 0.06);
+  border-radius: 0 6px 6px 0;
+}
+
+.unbound-resolver-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unbound-resolver-field label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--secondary-color);
+}
+
+.unbound-resolver-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.unbound-resolver-row input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-size: 13px;
+}
+
+.unbound-resolver-hint {
+  font-size: 11px;
+  color: var(--secondary-color);
+  line-height: 1.5;
+  margin: 0;
+}
+
 .deploy-hub-header {
   display: flex;
   justify-content: space-between;
@@ -6755,6 +6893,9 @@ button.format-tile .format-target {
 /* Platform Navigation Tabs (macOS Segmented Control) */
 .deploy-platform-tabs {
   display: flex;
+  /* Nine platform tabs no longer fit one row at the window's narrower widths, and the labels are
+     `nowrap`. Wrapping keeps every tab readable instead of letting them squash into ellipses. */
+  flex-wrap: wrap;
   background: var(--control-bg-color);
   border: 1px solid var(--border-color);
   border-radius: 10px;
@@ -8767,6 +8908,27 @@ button.format-tile .format-target {
   flex-wrap: wrap;
 }
 
+.watchdog-cadence-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+  min-width: 0;
+}
+
+.watchdog-cadence-reason {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--secondary-color);
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 .watchdog-status-tag {
   display: inline-flex;
   align-items: center;
@@ -9242,6 +9404,174 @@ button.format-tile .format-target {
   background: var(--control-bg-color);
   padding: 2px 8px;
   border-radius: 4px;
+}
+
+/* Triage cascade outcome for one result: which of the four things happened to it, and the
+   ambiguity score that decided which. The verdict chip cannot answer "was a model asked?", and
+   the score is what makes the answer checkable, so the two travel together. */
+.triage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.triage-chip .triage-chip-ambiguity {
+  font-weight: 600;
+  opacity: 0.9;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The score is toned by the bar the engine escalates on, so a row reads as "undecided" rather
+   than merely unusual at a glance. */
+.triage-chip.tone-high .triage-chip-ambiguity {
+  color: #fbbf24;
+}
+
+.triage-chip.tone-medium .triage-chip-ambiguity {
+  color: #a5b4fc;
+}
+
+.triage-chip.tone-low .triage-chip-ambiguity {
+  color: #34d399;
+}
+
+/* The grey buckets carry a brighter grey than `--secondary-color` (#98989d measures 3.95:1 on this
+   slab at 10px, under AA); #c7c7cc is ~6.7:1 and still reads quieter than the coloured buckets. */
+.triage-chip.screened-locally {
+  background: rgba(148, 163, 184, 0.12);
+  color: #c7c7cc;
+  border-color: rgba(148, 163, 184, 0.25);
+}
+
+.triage-chip.escalated {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.triage-chip.escalated.failed {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.32);
+}
+
+.triage-chip.contested {
+  background: rgba(239, 68, 68, 0.14);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.32);
+}
+
+.triage-chip.deferred {
+  background: rgba(148, 163, 184, 0.07);
+  color: #c7c7cc;
+  border-style: dashed;
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+.triage-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 12px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.triage-summary-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.16);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.triage-summary-text {
+  font-size: 11.5px;
+  color: var(--secondary-color);
+}
+
+.triage-summary-text.compact {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+}
+
+/* The cascade tints above are tuned for the dark surface. On the light theme (the default is
+   "system", so this is a first-run path, not an edge case) they wash out against white: measured
+   against the composited chip background they landed at 1.4-3.4:1. Each tone therefore darkens to
+   a 700-level shade, except amber, which needs 800 (700 still measured 4.4:1 there). */
+:root:not(.dark-theme) .triage-chip .triage-chip-ambiguity {
+  opacity: 1;
+}
+
+:root:not(.dark-theme) .triage-chip.tone-high .triage-chip-ambiguity {
+  color: #92400e;
+}
+
+:root:not(.dark-theme) .triage-chip.tone-medium .triage-chip-ambiguity {
+  color: #4338ca;
+}
+
+:root:not(.dark-theme) .triage-chip.tone-low .triage-chip-ambiguity {
+  color: #047857;
+}
+
+:root:not(.dark-theme) .triage-chip.screened-locally {
+  background: rgba(100, 116, 139, 0.1);
+  color: #475569;
+  border-color: rgba(100, 116, 139, 0.28);
+}
+
+:root:not(.dark-theme) .triage-chip.escalated {
+  background: rgba(99, 102, 241, 0.1);
+  color: #4338ca;
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+:root:not(.dark-theme) .triage-chip.escalated.failed {
+  background: rgba(180, 83, 9, 0.1);
+  color: #92400e;
+  border-color: rgba(180, 83, 9, 0.32);
+}
+
+:root:not(.dark-theme) .triage-chip.contested {
+  background: rgba(185, 28, 28, 0.09);
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.32);
+}
+
+:root:not(.dark-theme) .triage-chip.deferred {
+  background: rgba(100, 116, 139, 0.07);
+  color: #475569;
+  border-color: rgba(100, 116, 139, 0.4);
+}
+
+:root:not(.dark-theme) .triage-summary-row {
+  background: rgba(99, 102, 241, 0.05);
+  border-color: rgba(99, 102, 241, 0.18);
+}
+
+:root:not(.dark-theme) .triage-summary-label {
+  color: #4338ca;
+  background: rgba(99, 102, 241, 0.12);
+}
+
+:root:not(.dark-theme) .triage-summary-text {
+  color: #475569;
 }
 
 .threat-entropy-row {
@@ -11423,4 +11753,219 @@ select.stream-select.sort-select,
   align-items: center !important;
   gap: 6px !important;
   white-space: nowrap;
+}
+/* ==========================================================================
+   AI Radar — Top Repeat Offenders (Persistent Radar Heat Map) Card
+   ========================================================================== */
+
+.radar-heat-card {
+  background: var(--control-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.heat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.heat-title-inline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.heat-title-strong {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-color);
+  white-space: nowrap;
+}
+
+.heat-title-note {
+  font-size: 0.68rem;
+  color: var(--text-secondary, #94a3b8);
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+.heat-summary-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.heat-chip {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary, #94a3b8);
+  background: rgba(255, 255, 255, 0.03);
+  white-space: nowrap;
+}
+
+.heat-chip.hot {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.heat-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.heat-table th {
+  text-align: left;
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary, #94a3b8);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.heat-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-color);
+  vertical-align: middle;
+}
+
+.heat-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.heat-domain-cell {
+  font-family: var(--mono-font-family, ui-monospace, monospace);
+  font-size: 0.75rem;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.heat-lastseen-cell {
+  color: var(--text-secondary, #94a3b8);
+  white-space: nowrap;
+  font-size: 0.72rem;
+}
+
+.heat-flags-badge {
+  display: inline-block;
+  min-width: 34px;
+  text-align: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.heat-flags-badge.heat-low {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.25);
+}
+
+.heat-flags-badge.heat-warm {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.heat-flags-badge.heat-hot {
+  color: #fb923c;
+  background: rgba(251, 146, 60, 0.12);
+  border-color: rgba(251, 146, 60, 0.35);
+}
+
+.heat-flags-badge.heat-critical {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.heat-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* Heat card — ignore affordances */
+.heat-ignore-btn {
+  opacity: 0.85;
+}
+
+.heat-ignore-btn:hover {
+  opacity: 1;
+}
+
+.heat-ignored-section {
+  border-top: 1px dashed var(--border-color);
+  padding-top: 8px;
+  margin-top: 2px;
+}
+
+.heat-ignored-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  user-select: none;
+}
+
+.heat-ignored-toggle:hover {
+  color: var(--text-color);
+}
+
+.heat-ignored-chevron {
+  display: inline-block;
+  transition: transform 120ms ease;
+  font-size: 0.7rem;
+}
+
+.heat-ignored-note {
+  font-weight: 400;
+  font-style: italic;
+  opacity: 0.75;
+}
+
+.heat-table-ignored {
+  margin-top: 6px;
+  opacity: 0.8;
+}
+
+.heat-domain-ignored {
+  text-decoration: line-through;
+  text-decoration-color: rgba(148, 163, 184, 0.6);
+  text-decoration-thickness: 1px;
+}
+
+/* Inline ignored rows (global "show ignored offenders" preference) */
+.heat-row-ignored td {
+  opacity: 0.75;
+  background: rgba(148, 163, 184, 0.04);
 }

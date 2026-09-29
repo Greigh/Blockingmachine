@@ -1,0 +1,16 @@
+{
+  "source": "test set (feature v2)",
+  "n": 2289,
+  "target_recall": 0.9,
+  "block": {
+    "threshold": 0.36,
+    "precision": 0.9345570630486831,
+    "recall": 0.9021571648690293
+  },
+  "review": {
+    "threshold": 0.12,
+    "precision": 0.7945911139729556,
+    "recall": 0.9506933744221879
+  },
+  "note": "block threshold maximizes precision at target recall; review is a higher-recall triage band. Production gates still apply (allowlist first, shadow disagreement review)."
+}
