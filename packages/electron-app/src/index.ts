@@ -12,7 +12,6 @@ import {
   shell,
   session,
   Notification,
-  Tray,
   nativeImage,
   clipboard,
 } from 'electron';
@@ -99,6 +98,7 @@ import type {
   AiWatchdogConfig,
 } from './types';
 import { DaemonManager } from './daemonManager';
+import { TrayManager, type TraySharedState } from './trayManager';
 import { shadowScoreWatchdogDomains } from './learnedShadow';
 import {
   clearHeatForDomain,
@@ -1047,7 +1047,64 @@ function stopLiveRadarSession(storeRef: ElectronStore<StoreSchema>, reason?: str
   return currentLiveRadarSession;
 }
 
-let appTray: Tray | null = null;
+let trayManager: TrayManager | null = null;
+let trayStatusTimer: NodeJS.Timeout | null = null;
+/** Live compile progress mirrored to the tray while a compilation runs. */
+let trayCompileProgress: { status: string; percent: number } | null = null;
+/** True while the main-process compile pipeline is running. */
+let compileInFlight = false;
+/** Cached daemon status — `getStatus()` is async, the tray menu is sync. */
+let trayProtectionState: TraySharedState['protection'] = null;
+
+/**
+ * Pull a fresh DNS-daemon status into the cache and refresh the tray. Called on
+ * a slow timer and immediately after a protection toggle.
+ */
+async function refreshTrayProtection(): Promise<void> {
+  try {
+    const status = await daemonManager.getStatus();
+    trayProtectionState = {
+      enabled: Boolean(status.protectionEnabled),
+      status: status.status,
+    };
+  } catch {
+    trayProtectionState = null;
+  }
+  trayManager?.scheduleRebuild();
+}
+
+/** Snapshot of everything the tray menu renders. Never throws. */
+function getTraySharedState(): TraySharedState {
+  let lastRuleCount: number | null = null;
+  try {
+    const history = store.get('compilationHistory') as
+      | Array<{ uniqueRuleCount?: number }>
+      | undefined;
+    const fromHistory = history?.[0]?.uniqueRuleCount;
+    lastRuleCount =
+      typeof fromHistory === 'number'
+        ? fromHistory
+        : latestCompiledRules.length || null;
+  } catch {
+    lastRuleCount = latestCompiledRules.length || null;
+  }
+
+  let feedServer: TraySharedState['feedServer'] = null;
+  try {
+    const status = getFeedServerStatus();
+    feedServer = { isRunning: status.isRunning, lanUrl: status.lanUrl };
+  } catch {
+    feedServer = null;
+  }
+
+  return {
+    lastProcessTime: store.get('lastProcessTime') || null,
+    lastRuleCount,
+    compileProgress: trayCompileProgress,
+    feedServer,
+    protection: trayProtectionState,
+  };
+}
 
 function getAssetPath(filename: string): string {
   const assetCandidates = [
@@ -1086,109 +1143,60 @@ function getAppIcon(): Electron.NativeImage | undefined {
   return undefined;
 }
 
-function getTrayIcon(): Electron.NativeImage {
-  const isMac = process.platform === 'darwin';
-  if (isMac) {
-    const templateCandidate = getAssetPath('trayTemplate.png') || getAssetPath('trayTemplate@2x.png');
-    if (templateCandidate) {
-      try {
-        const loaded = nativeImage.createFromPath(templateCandidate);
-        if (!loaded.isEmpty()) {
-          const resized = loaded.resize({ width: 18, height: 18 });
-          resized.setTemplateImage(true);
-          return resized;
-        }
-      } catch {
-        // fallback
-      }
-    }
-  }
-
-  const iconPath = getAssetPath('Blockingmachine.png');
-  if (iconPath) {
-    try {
-      const loaded = nativeImage.createFromPath(iconPath);
-      if (!loaded.isEmpty()) {
-        const resized = loaded.resize({ width: 18, height: 18 });
-        if (isMac) {
-          resized.setTemplateImage(true);
-        }
-        return resized;
-      }
-    } catch {
-      // fallback
-    }
-  }
-  return nativeImage.createEmpty();
-}
-
 function createTray() {
   try {
-    const icon = getTrayIcon();
-    appTray = new Tray(icon);
-    appTray.setToolTip('Blockingmachine');
+    if (trayManager) {
+      trayManager.ensureTray();
+      return;
+    }
 
-    const contextMenu = Menu.buildFromTemplate([
-      { label: 'Blockingmachine', enabled: false },
-      { type: 'separator' },
-      {
-        label: 'Open Blockingmachine',
-        click: () => {
-          if (mainWindow) {
-            mainWindow.show();
-            mainWindow.focus();
-          }
-        },
+    trayManager = new TrayManager({
+      getMainWindow: () => mainWindow,
+      getSavePath: () => {
+        try {
+          const p = store.get('savePath');
+          return typeof p === 'string' && p ? p : null;
+        } catch {
+          return null;
+        }
       },
-      {
-        label: 'Compile Rules Now',
-        accelerator: 'Cmd+R',
-        click: () => {
-          if (mainWindow) {
-            mainWindow.show();
-            mainWindow.focus();
-            mainWindow.webContents.send('trigger-compile');
-          }
-        },
+      triggerCompile: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show();
+          mainWindow.focus();
+          mainWindow.webContents.send('trigger-compile');
+        }
       },
-      {
-        label: 'Deploy & Sync...',
-        click: () => {
-          if (mainWindow) {
-            mainWindow.show();
-            mainWindow.focus();
-            mainWindow.webContents.send('navigate-view', 'deploy');
-          }
-        },
+      isCompiling: () => compileInFlight,
+      setProtection: async (enabled: boolean) => {
+        const res = await daemonManager.toggleProtection(enabled);
+        if (res.success) {
+          trayProtectionState = {
+            enabled: Boolean(res.protectionEnabled),
+            status: res.protectionEnabled ? 'running' : 'paused',
+          };
+        }
+        return res.success;
       },
-      { type: 'separator' },
-      {
-        label: 'Preferences...',
-        accelerator: 'Cmd+,',
-        click: () => {
-          if (mainWindow) {
-            mainWindow.show();
-            mainWindow.focus();
-            mainWindow.webContents.send('open-settings');
-          }
-        },
+      flushDnsCache: async () => {
+        const res = await daemonManager.flushCache();
+        return res.success;
       },
-      { type: 'separator' },
-      {
-        label: 'Quit Blockingmachine',
-        accelerator: 'Cmd+Q',
-        click: () => app.quit(),
-      },
-    ]);
-    appTray.setContextMenu(contextMenu);
-    appTray.on('click', () => {
-      if (mainWindow) {
-        mainWindow.show();
-        mainWindow.focus();
-      }
+      getState: getTraySharedState,
     });
+    trayManager.ensureTray();
+
+    // Keep the daemon-state row honest without polling the control API hard.
+    if (!trayStatusTimer) {
+      trayStatusTimer = setInterval(() => {
+        void refreshTrayProtection();
+      }, 15_000);
+      trayStatusTimer.unref?.();
+    }
+    void refreshTrayProtection();
   } catch (err) {
     console.warn('Tray initialization skipped:', err);
+    trayManager = null;
   }
 }
 
@@ -2435,12 +2443,25 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       const startTime = Date.now();
       const sender = _event.sender;
       const sendProgress = (data: { status: string; percent: number }) => {
+        // Mirror progress into the menu-bar tray as well as the renderer.
+        trayCompileProgress = data;
+        trayManager?.onCompileProgress(data);
         if (sender && !sender.isDestroyed()) {
           sender.send('process-progress', data);
         }
       };
+      const finishCompile = (result: {
+        success: boolean;
+        ruleCount: number;
+        error?: string;
+      }) => {
+        compileInFlight = false;
+        trayCompileProgress = null;
+        trayManager?.onCompileCompleted(result);
+      };
 
       try {
+        compileInFlight = true;
         sendProgress({
           status: 'Loading sources...',
           percent: 5,
@@ -2451,6 +2472,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         );
 
         if (enabledSources.length === 0) {
+          // A configuration problem, not a failed compilation: refresh the tray
+          // quietly rather than firing a desktop notification at the user.
+          compileInFlight = false;
+          trayCompileProgress = null;
+          trayManager?.scheduleRebuild();
           return {
             success: false,
             error:
@@ -2741,6 +2767,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         }
 
         sendProgress({ status: 'Complete!', percent: 100 });
+        finishCompile({ success: true, ruleCount: uniqueRuleCount });
 
         const endTime = Date.now();
         console.log(`[IPC Main] Concurrent import process took ${endTime - startTime}ms.`);
@@ -2756,6 +2783,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         console.error('[IPC Main] Error during import process:', error);
         const errorMessage =
           error instanceof Error ? error.message : String(error);
+        finishCompile({ success: false, ruleCount: 0, error: errorMessage });
 
         return {
           success: false,
@@ -4109,13 +4137,17 @@ async function initialize() {
         clearInterval(liveRadarTimer);
         liveRadarTimer = null;
       }
-      if (appTray) {
+      if (trayStatusTimer) {
+        clearInterval(trayStatusTimer);
+        trayStatusTimer = null;
+      }
+      if (trayManager) {
         try {
-          appTray.destroy();
+          trayManager.destroy();
         } catch {
           // ignore
         }
-        appTray = null;
+        trayManager = null;
       }
     });
 
