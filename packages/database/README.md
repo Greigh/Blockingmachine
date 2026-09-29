@@ -182,5 +182,5 @@ BSD-3-Clause License — see [LICENSE](LICENSE) for details.
 ---
 
 <div align="center">
-  <strong>⚡ Powered by <a href="https://github.com/greigh/blockingmachine-cli">Blockingmachine CLI</a> | 🤖 Auto-updated daily</strong>
+  <strong>⚡ Powered by <a href="https://github.com/greigh/blockingmachine-cli">Blockingmachine CLI</a> | Auto-updated daily</strong>
 </div>
