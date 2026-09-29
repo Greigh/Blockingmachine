@@ -29,6 +29,7 @@
     "fit:element-weights": "node scripts/fit-element-weights.mjs --write",
     "check:element-weights": "node scripts/fit-element-weights.mjs --check",
     "build:hotlist": "node scripts/build-hot-list.mjs --write",
+    "ledger:merge": "node scripts/merge-browser-ledger.mjs",
     "check:hotlist": "node scripts/build-hot-list.mjs --check",
     "package:extension": "node scripts/package-extension.mjs",
     "package:all": "node scripts/package-all.mjs",

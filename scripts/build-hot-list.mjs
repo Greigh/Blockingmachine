@@ -68,6 +68,7 @@ async function load(relative) {
 
 const coverage = await load(join('coverage.js'));
 const replay = await load(join('ruleReplay.js'));
+const ledger = await load(join('ledgerAggregate.js'));
 const evaluator = await load(join('ai', 'domainEvaluator.js'));
 
 /** Repo-relative when inside the repo, so the header does not bake in a home directory. */
@@ -99,28 +100,27 @@ let measuredOn;
 
 if (values.has('--hits')) {
   const hitsPath = resolve(root, values.get('--hits'));
-  const totals = new Map();
-  const firedExceptions = new Set();
-  for (const line of readLines(hitsPath)) {
-    if (!line || line.startsWith('#') || line.startsWith('!')) continue;
-    let rule = line;
-    let count = 1;
-    const leading = line.match(/^(\d+)\s+(.+)$/);
-    const trailing = line.match(/^(.+?)\s+(\d+)$/);
-    if (leading) {
-      count = parseInt(leading[1], 10);
-      rule = leading[2].trim();
-    } else if (trailing) {
-      rule = trailing[1].trim();
-      count = parseInt(trailing[2], 10);
-    }
-    if (!rule || !Number.isFinite(count) || count <= 0) continue;
-    if (rule.startsWith('@@')) firedExceptions.add(rule);
-    else totals.set(rule, (totals.get(rule) ?? 0) + count);
-  }
-  hits = [...totals.entries()].map(([rule, count]) => ({ rule, count }));
-  exceptions = [...firedExceptions];
-  measuredOn = `${displayPath(hitsPath)} (browser-reported rule hits)`;
+  // One parser, in core, shared with the exporter that writes this format — a build that read the
+  // ledger with its own copy of the rules would drift from the thing that produced it.
+  const parsed = ledger.parseHitLedgerText(readFileSync(hitsPath, 'utf8'));
+  hits = parsed.hits;
+  exceptions = parsed.exceptions;
+
+  // Provenance when the file states it, so the generated header can say what the reduction is
+  // based on. A bare `<count> <rule>` file answers this with nothing, which is honest.
+  const sessions = parsed.header.sessions;
+  const days = parsed.header.days;
+  const span =
+    parsed.header['first seen'] && parsed.header['last seen']
+      ? ` ${parsed.header['first seen']}..${parsed.header['last seen']}`
+      : parsed.header['first seen']
+        ? ` on ${parsed.header['first seen']}`
+        : '';
+  const provenance =
+    sessions && days
+      ? `browser-reported rule hits: ${sessions} session${sessions === '1' ? '' : 's'} across ${days} day${days === '1' ? '' : 's'}${span}`
+      : 'browser-reported rule hits (no session provenance in the file)';
+  measuredOn = `${displayPath(hitsPath)} (${provenance})`;
 } else {
   const tracePath = resolve(root, values.get('--trace') ?? DEFAULT_TRACE);
   const hosts = readLines(tracePath).filter((line) => line && !line.startsWith('#') && !line.startsWith('!'));

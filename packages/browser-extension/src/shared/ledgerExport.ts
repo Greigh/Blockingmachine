@@ -1,0 +1,244 @@
+/**
+ * The extension's side of the browser-reported rule-hit ledger.
+ *
+ * The hot set has always been built from *a* measurement, and the honest one available to a browser
+ * extension is not a captured trace but the matches the browser itself applied. This module
+ * accumulates those into a **session report** — raw evidence, dated, one file per session — and the
+ * aggregation happens afterwards, in `packages/core/src/ledgerAggregate.ts`, where it can be tested
+ * over many sessions and re-run on the same input.
+ *
+ * The division is deliberate:
+ *
+ * - The browser reports what happened and stays dumb. It does not decide which rules are durable,
+ *   does not rank anything, and does not need to know what a hot set is. A session report it wrote
+ *   last month is still valid input.
+ * - The aggregate is reproducible. Because the browser exports sessions rather than a running
+ *   summary, the same files merged twice give the same ledger, and a user can see exactly which
+ *   session a number came from.
+ *
+ * Two rules the accumulation itself has to follow, both of which a naive tally gets wrong:
+ *
+ * 1. **A session that crosses midnight becomes two.** Durability is measured in distinct days, so a
+ *    report claiming one date for hits that happened on two would understate the evidence and make
+ *    the day count depend on when a browser happened to be opened.
+ * 2. **A match whose rule cannot be named is counted as unattributed, not guessed at.** The filter
+ *    text comes from loading the shipped rule files, which can fail; inventing a rule for a match
+ *    would put a fabricated entry into the file the hot set is built from, so an unnamed hit is
+ *    reported as a number the reader can see instead.
+ *
+ * Imported by the background and, for the export action, by the popup. Pure arithmetic and JSON —
+ * no `chrome` reference — so it is tested without a browser.
+ */
+
+/** Which reporting path produced these numbers, mirroring the popup's ledger status. */
+export type LedgerSessionFeed = 'live' | 'polled' | 'unknown';
+
+/** One rule's hits within one session. */
+export interface LedgerHitCount {
+  rule: string;
+  count: number;
+}
+
+/**
+ * One session, as exported.
+ *
+ * This is the shape `readBrowserLedgerSessions` accepts — an array of these, or an object with a
+ * `sessions` array, is exactly what `scripts/merge-browser-ledger.mjs --in` reads.
+ */
+export interface LedgerSessionReport {
+  startedAt: string;
+  endedAt?: string;
+  feed: LedgerSessionFeed;
+  hits: LedgerHitCount[];
+  exceptions?: string[];
+  /**
+   * Matches whose rule could not be named — usually a failed rule-file load.
+   *
+   * Reported rather than dropped: a ledger that silently omitted them would look like a session
+   * with fewer blocks, and the difference between "nothing matched" and "we cannot say what
+   * matched" is the difference between a small hot set and a broken one.
+   */
+  unattributed?: number;
+}
+
+/** The in-progress tally the background keeps in memory. */
+export interface LedgerSessionTally {
+  /** UTC date the tally belongs to; a rollover closes it. */
+  day: string;
+  startedAt: string;
+  feed: LedgerSessionFeed;
+  /** Rule text → hits. */
+  hits: Record<string, number>;
+  /** `@@` rules that fired, as a set of rule texts. */
+  exceptions: Record<string, true>;
+  unattributed: number;
+}
+
+/** Distinct rules kept per session before the smallest are dropped. */
+export const HIT_LEDGER_MAX_RULES = 5000;
+
+/** Storage key for the persisted sessions the export action writes out. */
+export const HIT_LEDGER_STORAGE_KEY = 'hitLedgerSessions';
+
+/** Sessions kept in storage; the oldest is dropped past this, since the newest are the ones a user exports. */
+export const HIT_LEDGER_MAX_SESSIONS = 50;
+
+/** The UTC date of a timestamp, as `YYYY-MM-DD`. */
+export function ledgerDayOf(date: Date | number): string {
+  const value = date instanceof Date ? date : new Date(date);
+  return value.toISOString().slice(0, 10);
+}
+
+/** Starts a tally for the current day. */
+export function startLedgerSession(now: Date | number, feed: LedgerSessionFeed): LedgerSessionTally {
+  const iso = new Date(now).toISOString();
+  return { day: ledgerDayOf(now), startedAt: iso, feed, hits: {}, exceptions: {}, unattributed: 0 };
+}
+
+/** Whether the day has rolled over since the tally started, so it has to be closed and reopened. */
+export function isNewLedgerDay(tally: LedgerSessionTally, now: Date | number): boolean {
+  return tally.day !== ledgerDayOf(now);
+}
+
+export interface RecordHitResult {
+  tally: LedgerSessionTally;
+  /** Rules dropped to stay under the cap, most-hit kept. */
+  dropped: number;
+  /** Whether the cap was reached by this hit (the caller may want to note it once). */
+  atCap: boolean;
+}
+
+/**
+ * Adds a match to the tally.
+ *
+ * `rule` is the filter text the browser applied, or `null` when it could not be resolved — which is
+ * counted, never invented. A rule already in the tally is incremented in place; hitting the cap
+ * evicts the least-fired rules, because a session is bounded but the ranking that matters happens
+ * later, over many sessions, where the tail is still visible.
+ */
+export function recordLedgerHit(
+  tally: LedgerSessionTally,
+  rule: string | null,
+  now: Date | number,
+  options: { maxRules?: number } = {},
+): RecordHitResult {
+  const maxRules = Math.max(1, Math.floor(options.maxRules ?? HIT_LEDGER_MAX_RULES));
+  const next: LedgerSessionTally = {
+    ...tally,
+    hits: { ...tally.hits },
+    exceptions: { ...tally.exceptions },
+  };
+
+  if (rule === null || rule === undefined) {
+    next.unattributed = tally.unattributed + 1;
+    return { tally: next, dropped: 0, atCap: false };
+  }
+
+  const trimmed = String(rule).trim();
+  if (!trimmed) {
+    next.unattributed = tally.unattributed + 1;
+    return { tally: next, dropped: 0, atCap: false };
+  }
+
+  // An `@@` rule allowed a request. It is kept on its own axis so the block counts stay block counts.
+  if (trimmed.startsWith('@@')) {
+    next.exceptions = { ...next.exceptions, [trimmed]: true };
+  } else {
+    next.hits = { ...next.hits, [trimmed]: (next.hits[trimmed] ?? 0) + 1 };
+  }
+
+  const keys = Object.keys(next.hits);
+  if (keys.length <= maxRules) return { tally: next, dropped: 0, atCap: keys.length === maxRules };
+
+  const evict = keys
+    .map((key) => ({ key, count: next.hits[key] }))
+    .sort((a, b) => a.count - b.count || a.key.localeCompare(b.key))
+    .slice(0, keys.length - maxRules);
+  for (const { key } of evict) delete next.hits[key];
+  void now;
+
+  return { tally: next, dropped: evict.length, atCap: true };
+}
+
+/** Closes a tally into an exportable report, or null when it holds nothing worth writing. */
+export function finalizeLedgerSession(
+  tally: LedgerSessionTally,
+  now: Date | number,
+): LedgerSessionReport | null {
+  const hits = Object.entries(tally.hits)
+    .map(([rule, count]) => ({ rule, count }))
+    .sort((a, b) => b.count - a.count || a.rule.localeCompare(b.rule));
+  const exceptions = Object.keys(tally.exceptions).sort();
+
+  if (hits.length === 0 && exceptions.length === 0 && tally.unattributed === 0) return null;
+
+  return {
+    startedAt: tally.startedAt,
+    endedAt: new Date(now).toISOString(),
+    feed: tally.feed,
+    hits,
+    ...(exceptions.length > 0 ? { exceptions } : {}),
+    ...(tally.unattributed > 0 ? { unattributed: tally.unattributed } : {}),
+  };
+}
+
+/**
+ * Appends a report to the stored list, oldest first, capped.
+ *
+ * The oldest sessions are dropped past the cap rather than the newest because the export exists to be
+ * run by the user: what they want to export is recent traffic, and a capped window that kept the
+ * oldest would hand them a ledger from months ago.
+ */
+export function appendLedgerSession(
+  stored: readonly LedgerSessionReport[] | null | undefined,
+  report: LedgerSessionReport,
+  options: { maxSessions?: number } = {},
+): LedgerSessionReport[] {
+  const maxSessions = Math.max(1, Math.floor(options.maxSessions ?? HIT_LEDGER_MAX_SESSIONS));
+  const list = Array.isArray(stored) ? [...stored] : [];
+  list.push(report);
+  return list.length > maxSessions ? list.slice(list.length - maxSessions) : list;
+}
+
+/** The JSON the merge tool reads. `{ sessions: [...] }` is what `readBrowserLedgerSessions` expects. */
+export function toLedgerExportJson(sessions: readonly LedgerSessionReport[]): string {
+  return `${JSON.stringify(
+    {
+      format: 'blockingmachine-hit-ledger',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      sessions: [...sessions],
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+/** `blockingmachine-hit-ledger-2026-09-29.json` — dated so several exports sort and merge in order. */
+export function ledgerExportFilename(now: Date | number): string {
+  return `blockingmachine-hit-ledger-${ledgerDayOf(now)}.json`;
+}
+
+/** One line for the popup: what the stored sessions add up to. */
+export function summarizeLedgerSessions(sessions: readonly LedgerSessionReport[]): string {
+  if (!Array.isArray(sessions) || sessions.length === 0) return 'No sessions recorded yet';
+  const rules = new Set<string>();
+  let hits = 0;
+  let unattributed = 0;
+  const days = new Set<string>();
+  for (const session of sessions) {
+    days.add(ledgerDayOf(new Date(session.startedAt)));
+    for (const hit of session.hits ?? []) {
+      rules.add(hit.rule);
+      hits += hit.count;
+    }
+    unattributed += session.unattributed ?? 0;
+  }
+  const parts = [
+    `${sessions.length} session${sessions.length === 1 ? '' : 's'}`,
+    `${days.size} day${days.size === 1 ? '' : 's'}`,
+    `${hits.toLocaleString()} hits on ${rules.size.toLocaleString()} rules`,
+  ];
+  if (unattributed > 0) parts.push(`${unattributed.toLocaleString()} unattributable`);
+  return parts.join(' · ');
+}

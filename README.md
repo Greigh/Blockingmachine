@@ -460,6 +460,40 @@ earn its place: **0% dead weight** against 99.941%. The 77 rules are a floor as 
 winners of one short session, so a longer one adds hot rules rather than removing them (the
 page-split check below is what keeps that from being taken on faith).
 
+### The Measurement Can Be Real Usage
+
+A trace is one browsing session, sampled, from one machine. The better evidence is the matches the
+browser itself applied, and the build already had a `--hits` path for it — the honest one, since
+paths, request types and initiators were all resolved by the browser rather than replayed by us.
+What was missing was anything that produced such a file, and any record of what it covered:
+
+```bash
+npm run ledger:merge -- --in export-1.json --in export-2.json --out ledger-hits.txt
+node scripts/build-hot-list.mjs --hits ledger-hits.txt --write   # or: npm run build:hotlist
+```
+
+The extension writes one JSON file per browsing session, and `ledger:merge` reduces any number of
+them. What that reduction is allowed to claim is where the care went:
+
+- **Durability is days, not hits.** One busy afternoon of one site can out-count a rule that quietly
+  fires every day for a month, so each rule carries its hit count *and* the distinct UTC days it
+  fired on, and `--min-days` is how you ask for rules that recur rather than rules that once
+  spiked. A session that crosses midnight is split in two, because one date for hits on two days
+  would understate the evidence.
+- **An exception is never counted as a block.** An `@@` rule that fired *allowed* a request;
+  tallying it with the blocks would build a hot set out of the rules that did the least work.
+- **A match whose rule cannot be named is counted, not guessed at.** The filter text needs a shipped
+  rule file loaded, which can fail — so those hits are reported as unattributable instead of being
+  invented into the list.
+- **Order must not matter.** The generated list is diff-checked, so the merge is commutative and
+  sorted deterministically; a build whose output depended on the order it read its files would fail
+  on the next machine.
+
+The provenance travels in the ledger's header, so the generated hot list says what it is based on —
+`12 sessions across 34 days (2026-08-01 to 2026-09-03)` — rather than leaving a reader to assume a
+week of real browsing. A hand-written `<count> <rule>` file still works and reports, honestly, that
+it carries no provenance.
+
 **It is not a general blocklist, and the measurement says so.** Deriving a hot set from half the
 session's pages and measuring it on the other half keeps only **38 of 93 blocks (40.9%)** — a
 per-session hot set is exact for the traffic it came from and loses most of what it has not seen.
