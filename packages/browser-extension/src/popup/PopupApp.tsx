@@ -7,7 +7,10 @@ import {
 } from '../shared/types.js';
 import { ElementScanPanel, type ElementScanResult } from './ElementScanPanel.js';
 import { LedgerStatusCard } from './LedgerStatusCard.js';
+import { LedgerExportCard } from './LedgerExportCard.js';
+import { downloadTextFile } from './downloadText.js';
 import type { LedgerStatus } from '../shared/ledgerStatus.js';
+import type { LedgerExportPayload } from '../shared/ledgerExport.js';
 import { formatTierCapacity, type StaticTierStatus } from '../shared/rulesetTiers.js';
 import { formatTierPlan, planTierSelection } from '../shared/tierPlanner.js';
 import {
@@ -93,6 +96,11 @@ export const PopupApp: React.FC = () => {
 
   const [mv3Status, setMv3Status] = useState<Mv3QuotaInfo | null>(null);
   const [ledgerStatus, setLedgerStatus] = useState<LedgerStatus | null>(null);
+  const [ledgerExport, setLedgerExport] = useState<Pick<
+    LedgerExportPayload,
+    'summary' | 'filename'
+  > | null>(null);
+  const [ledgerExportBusy, setLedgerExportBusy] = useState(false);
   const [sseStatus, setSseStatus] = useState<'connected' | 'connecting' | 'disconnected'>(
     'disconnected',
   );
@@ -210,6 +218,43 @@ export const PopupApp: React.FC = () => {
     if (ledger?.status) setLedgerStatus(ledger.status as LedgerStatus);
   }, []);
 
+  /**
+   * Reads what an export would cover, without exporting.
+   *
+   * The same message serves the readout and the button: the background's export is read-only, so
+   * asking on open costs a JSON serialisation of a bounded list and changes nothing.
+   */
+  const refreshLedgerExport = useCallback(async () => {
+    const res = await sendMessage<{ success?: boolean } & Partial<LedgerExportPayload>>({
+      type: 'EXPORT_HIT_LEDGER',
+    });
+    if (res?.success && typeof res.summary === 'string') {
+      setLedgerExport({ summary: res.summary, filename: res.filename ?? '' });
+    }
+  }, []);
+
+  const handleExportLedger = useCallback(async () => {
+    setLedgerExportBusy(true);
+    try {
+      // Re-requested rather than downloading what the card is showing: the popup can sit open
+      // while pages keep blocking, and the file should be the ledger as of the click.
+      const res = await sendMessage<{ success?: boolean } & Partial<LedgerExportPayload>>({
+        type: 'EXPORT_HIT_LEDGER',
+      });
+      if (!res?.success || typeof res.json !== 'string') {
+        flash('Could not read the hit ledger.', 'warn');
+        return;
+      }
+      downloadTextFile(res.filename || 'blockingmachine-hit-ledger.json', res.json);
+      if (typeof res.summary === 'string') {
+        setLedgerExport({ summary: res.summary, filename: res.filename ?? '' });
+      }
+      flash(res.sessions ? 'Hit ledger exported.' : 'Exported — no sessions recorded yet.');
+    } finally {
+      setLedgerExportBusy(false);
+    }
+  }, [flash]);
+
   const refreshTab = useCallback(async (id: number, url: string) => {
     const [telemetryRes, controlRes] = await Promise.all([
       sendMessage({ type: 'GET_TAB_TELEMETRY', payload: { tabId: id } }),
@@ -244,6 +289,7 @@ export const PopupApp: React.FC = () => {
 
     void refreshStatus();
     void refreshTiers();
+    void refreshLedgerExport();
     sendMessage({ type: 'GET_HA_CONFIG' }).then((res) => {
       if (mounted && res?.config) setHaConfig(res.config);
     });
@@ -251,7 +297,7 @@ export const PopupApp: React.FC = () => {
     return () => {
       mounted = false;
     };
-  }, [refreshStatus, refreshTab]);
+  }, [refreshStatus, refreshTab, refreshLedgerExport]);
 
   const site = view?.site || siteFromUrl(pageUrl);
   // One resolver for both the header and the switch, so the two can never
@@ -658,6 +704,13 @@ export const PopupApp: React.FC = () => {
           </section>
 
           <LedgerStatusCard status={ledgerStatus} />
+
+          <LedgerExportCard
+            summary={ledgerExport?.summary ?? null}
+            filename={ledgerExport?.filename ?? null}
+            onExport={() => void handleExportLedger()}
+            busy={ledgerExportBusy}
+          />
 
           <section className="settings-card">
             <div className="card-title">

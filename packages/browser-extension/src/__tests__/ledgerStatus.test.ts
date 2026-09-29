@@ -4,6 +4,7 @@ import {
   formatLedgerQuota,
   formatQuotaReset,
   ledgerFeedDetail,
+  ledgerFeedForSession,
   ledgerFeedFromAvailability,
   ledgerFeedLabel,
   ledgerFeedTone,
@@ -46,6 +47,16 @@ describe('ledgerFeedFromAvailability', () => {
     expect(ledgerFeedFromAvailability({ liveAvailable: false, pollAvailable: false })).toBe(
       'unavailable',
     );
+  });
+});
+
+describe('ledgerFeedForSession', () => {
+  test('names the two real paths and refuses to guess at the third', () => {
+    expect(ledgerFeedForSession('live')).toBe('live');
+    expect(ledgerFeedForSession('polled')).toBe('polled');
+    // A session written when nothing could feed the ledger says so, rather than claiming the
+    // better of the two sources.
+    expect(ledgerFeedForSession('unavailable')).toBe('unknown');
   });
 });
 

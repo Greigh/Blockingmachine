@@ -98,6 +98,8 @@ export interface ExtensionMessage {
     // ── Rule hit ledger (coverage measurement) ──
     | 'GET_RULE_HIT_STATS'
     | 'RESET_RULE_HIT_STATS'
+    // ── Browser-reported hit ledger (dated sessions for the hot set) ──
+    | 'EXPORT_HIT_LEDGER'
     | 'GET_HA_CONFIG'
     | 'SET_HA_CONFIG'
     | 'TEST_HA_CONNECTION'

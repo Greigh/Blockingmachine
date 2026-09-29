@@ -14,6 +14,8 @@
  * only reads the result.
  */
 
+import type { LedgerSessionFeed } from './ledgerExport.js';
+
 /** Which reporting path is filling the ledger. */
 export type LedgerFeed =
   /** `onRuleMatchedDebug`: every match, live, with the request URL (unpacked builds). */
@@ -22,6 +24,19 @@ export type LedgerFeed =
   | 'polled'
   /** Neither path exists, so nothing can feed the ledger. */
   | 'unavailable';
+
+/**
+ * The same source, named for a hit-ledger session record.
+ *
+ * The session format has an `unknown` case that the popup's status does not: a session can be
+ * written by a build that could not tell, and the exported file has to be readable by a merge that
+ * was told honestly rather than being handed the nearest of three words.
+ */
+export function ledgerFeedForSession(feed: LedgerFeed): LedgerSessionFeed {
+  if (feed === 'live') return 'live';
+  if (feed === 'polled') return 'polled';
+  return 'unknown';
+}
 
 /** How much of the browser's `getMatchedRules` quota is left inside the current window. */
 export interface LedgerQuotaView {
