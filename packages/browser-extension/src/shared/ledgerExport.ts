@@ -120,9 +120,15 @@ export function recordLedgerHit(
   tally: LedgerSessionTally,
   rule: string | null,
   now: Date | number,
-  options: { maxRules?: number } = {},
+  options: { maxRules?: number; amount?: number } = {},
 ): RecordHitResult {
   const maxRules = Math.max(1, Math.floor(options.maxRules ?? HIT_LEDGER_MAX_RULES));
+  // A polled batch reports how many times one rule matched in one tab, so a caller can add a whole
+  // batch in one call rather than looping — which matters at the cap, where every call re-sorts.
+  const amount =
+    Number.isFinite(options.amount) && (options.amount as number) > 0
+      ? Math.floor(options.amount as number)
+      : 1;
   const next: LedgerSessionTally = {
     ...tally,
     hits: { ...tally.hits },
@@ -130,21 +136,22 @@ export function recordLedgerHit(
   };
 
   if (rule === null || rule === undefined) {
-    next.unattributed = tally.unattributed + 1;
+    next.unattributed = tally.unattributed + amount;
     return { tally: next, dropped: 0, atCap: false };
   }
 
   const trimmed = String(rule).trim();
   if (!trimmed) {
-    next.unattributed = tally.unattributed + 1;
+    next.unattributed = tally.unattributed + amount;
     return { tally: next, dropped: 0, atCap: false };
   }
 
   // An `@@` rule allowed a request. It is kept on its own axis so the block counts stay block counts.
+  // The axis is a set of rules, not a hit count, so an amount adds nothing there.
   if (trimmed.startsWith('@@')) {
     next.exceptions = { ...next.exceptions, [trimmed]: true };
   } else {
-    next.hits = { ...next.hits, [trimmed]: (next.hits[trimmed] ?? 0) + 1 };
+    next.hits = { ...next.hits, [trimmed]: (next.hits[trimmed] ?? 0) + amount };
   }
 
   const keys = Object.keys(next.hits);
@@ -217,6 +224,23 @@ export function toLedgerExportJson(sessions: readonly LedgerSessionReport[]): st
 /** `blockingmachine-hit-ledger-2026-09-29.json` — dated so several exports sort and merge in order. */
 export function ledgerExportFilename(now: Date | number): string {
   return `blockingmachine-hit-ledger-${ledgerDayOf(now)}.json`;
+}
+
+/**
+ * What the popup receives when it asks to export the ledger.
+ *
+ * A plain data contract, so the background can build it and the popup can render it without either
+ * importing the other.
+ */
+export interface LedgerExportPayload {
+  /** Suggested download name, dated so several exports sort and merge in order. */
+  filename: string;
+  /** The file's contents, exactly as `scripts/merge-browser-ledger.mjs` wants to read them. */
+  json: string;
+  /** One line naming what the file covers, for the popup to show before the click. */
+  summary: string;
+  /** Sessions included, counting today's still-open one. */
+  sessions: number;
 }
 
 /** One line for the popup: what the stored sessions add up to. */

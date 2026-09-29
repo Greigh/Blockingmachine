@@ -472,8 +472,7 @@ npm run ledger:merge -- --in export-1.json --in export-2.json --out ledger-hits.
 node scripts/build-hot-list.mjs --hits ledger-hits.txt --write   # or: npm run build:hotlist
 ```
 
-The extension writes one JSON file per browsing session, and `ledger:merge` reduces any number of
-them. What that reduction is allowed to claim is where the care went:
+The extension writes one JSON file per browsing session — open the popup's *Hub* tab and click **Export ledger** — and `ledger:merge` reduces any number of them. What that reduction is allowed to claim is where the care went:
 
 - **Durability is days, not hits.** One busy afternoon of one site can out-count a rule that quietly
   fires every day for a month, so each rule carries its hit count *and* the distinct UTC days it

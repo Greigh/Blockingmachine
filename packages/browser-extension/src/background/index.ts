@@ -1,6 +1,8 @@
 import { DnrManager } from './dnrManager.js';
 import { RulesetManager } from './rulesetManager.js';
 import { RuleHitStats } from './ruleHitStats.js';
+import { LedgerSessionRecorder } from './ledgerSession.js';
+import { StaticRuleIndex } from './staticRuleIndex.js';
 import { SyncClient } from './syncClient.js';
 import { Mv3Guard } from './mv3Guard.js';
 import { LiveListener } from './liveListener.js';
@@ -31,7 +33,11 @@ import type {
   TrackerDetection,
 } from '../shared/types.js';
 import { STATIC_RULE_TIERS, type StaticTierId } from '../shared/rulesetTiers.js';
-import { ledgerFeedFromAvailability, type LedgerStatus } from '../shared/ledgerStatus.js';
+import {
+  ledgerFeedForSession,
+  ledgerFeedFromAvailability,
+  type LedgerStatus,
+} from '../shared/ledgerStatus.js';
 import { tierFromRulesetId } from '../shared/tierAttribution.js';
 import {
   DEFAULT_HUB_PORT,
@@ -59,6 +65,7 @@ import {
 const dnr = new DnrManager();
 const rulesets = new RulesetManager();
 const ruleHits = new RuleHitStats();
+const ledger = new LedgerSessionRecorder();
 const sync = new SyncClient();
 const haBridge = new HaBridge();
 
@@ -355,31 +362,20 @@ async function appendCustomRule(rule: string): Promise<boolean> {
  * ruleset files, indexed lazily and once per worker lifetime — without this the counts would be
  * keyed by an opaque `ruleset#id` pair that cannot be compared with the compiled list.
  */
-const staticRuleFilters = new Map<string, string>();
-let staticRuleIndexLoaded = false;
-
-async function ensureStaticRuleIndex(): Promise<void> {
-  if (staticRuleIndexLoaded) return;
-  staticRuleIndexLoaded = true;
-  for (const tier of STATIC_RULE_TIERS) {
-    try {
-      const response = await fetch(chrome.runtime.getURL(tier.path));
-      if (!response.ok) continue;
-      const rules = (await response.json()) as Array<{ id?: number; condition?: { urlFilter?: string } }>;
-      for (const rule of rules) {
-        const filter = rule?.condition?.urlFilter;
-        if (typeof rule?.id === 'number' && typeof filter === 'string') {
-          staticRuleFilters.set(`${tier.id}#${rule.id}`, filter);
-        }
-      }
-    } catch {
-      // A tier we cannot read simply goes unresolved; the rest of the ledger still works.
-    }
-  }
-}
+const staticRuleIndex = new StaticRuleIndex({
+  tiers: STATIC_RULE_TIERS,
+  readTier: async (path) => {
+    const response = await fetch(chrome.runtime.getURL(path));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  },
+});
 
 async function flushTelemetryReport(): Promise<void> {
   await ruleHits.flush();
+  // The hit ledger is persisted on the same beat, so a torn-down worker resumes the day it was
+  // browsing rather than starting a fresh session for the same date.
+  await ledger.flush();
   if (sessionTrackersBlocked === 0 && sessionElementsHidden === 0 && sessionThreatsDetected === 0) {
     return;
   }
@@ -745,6 +741,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await rulesets.load();
   await loadSiteControl();
   await ruleHits.load();
+  await ledger.load();
   // `syncAndApplyRules` reconciles the tiers (and any active global pause) as part of applying
   // the rule set, so an update cannot leave the manifest defaults enabled against the user's choice.
   await syncAndApplyRules();
@@ -775,6 +772,7 @@ void (async () => {
   await rulesets.load();
   await loadSiteControl();
   await ruleHits.load();
+  await ledger.load();
   await rulesets.setSuspended(siteControl.globalPaused);
 })().catch(() => {});
 
@@ -855,9 +853,8 @@ async function resolveMatchedFilter(
   // filter question cannot be answered.
   const tier = tierFromRulesetId(rulesetId);
   if (tier) {
-    await ensureStaticRuleIndex();
-    const filter = staticRuleFilters.get(`${rulesetId}#${ruleId}`);
-    return { filter, source: 'list', tier };
+    await staticRuleIndex.ensure();
+    return { filter: staticRuleIndex.filterFor(rulesetId, ruleId), source: 'list', tier };
   }
 
   return { source: 'list' };
@@ -869,6 +866,10 @@ async function applyMatches(
   dynamicRules?: DynamicRuleIndex,
 ): Promise<void> {
   if (matches.length === 0) return;
+
+  // Stamp the source onto every session this batch may open, so an export says which reporting
+  // path produced the numbers rather than leaving the reader to assume the better one.
+  ledger.setFeed(ledgerFeedForSession(ledgerStatus().feed));
 
   const index = dynamicRules ?? (await snapshotDynamicRules());
   const touched = new Map<number, TabTelemetry>();
@@ -901,6 +902,11 @@ async function applyMatches(
     // Attribution to the tier that shipped the rule, which is what lets a tier be judged on real
     // traffic rather than on how many rules it happens to contain.
     if (tier) ruleHits.recordTier(tier, count);
+    // The same match, dated into a session: this is the evidence the hot set is built from, where
+    // durability is distinct days rather than a hit total. A match whose filter could not be
+    // resolved is counted as unattributed — "we cannot say what matched" and "nothing matched" are
+    // different findings, and only one of them is a hole in the ledger.
+    ledger.record(filter ?? null, count, Date.now());
 
     if (match.host) {
       const existing = current.trackers.find((t) => t.domain === match.host);
@@ -1179,6 +1185,12 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
         .then(() => sendResponse({ success: true }))
         .catch((err) => sendResponse({ success: false, error: String(err) }));
       return true;
+
+    // Reads only: exporting must not close today's session, or exporting twice would split one
+    // day's evidence across two sessions and inflate every rule's recurrence count.
+    case 'EXPORT_HIT_LEDGER':
+      sendResponse({ success: true, ...ledger.exportPayload() });
+      return false;
 
     case 'SET_RULESET_TIERS': {
       const ids = message.payload?.ids;

@@ -34,6 +34,28 @@ describe('session tally', () => {
     ]);
   });
 
+  it('adds a whole batch in one call, which is what a polled match reports', () => {
+    let tally = startLedgerSession(date('2026-09-01T09:00:00Z'), 'polled');
+    // `getMatchedRules` reports how many times one rule matched in one tab, so the recorder adds a
+    // batch at once rather than looping — which matters at the cap, where every call re-sorts.
+    tally = recordLedgerHit(tally, '||ads.example^', 0, { amount: 40 }).tally;
+    tally = recordLedgerHit(tally, '||ads.example^', 0, { amount: 2 }).tally;
+
+    const report = finalizeLedgerSession(tally, date('2026-09-01T09:05:00Z'));
+    expect(report?.hits).toEqual([{ rule: '||ads.example^', count: 42 }]);
+  });
+
+  it('counts a whole unattributed batch, and treats a bad amount as one match', () => {
+    let tally = startLedgerSession(date('2026-09-01T09:00:00Z'), 'live');
+    tally = recordLedgerHit(tally, null, 0, { amount: 5 }).tally;
+    tally = recordLedgerHit(tally, '||ads.example^', 0, { amount: 0 }).tally;
+
+    const report = finalizeLedgerSession(tally, date('2026-09-01T09:05:00Z'));
+    expect(report?.unattributed).toBe(5);
+    // An amount of zero is not a way to record nothing quietly; it falls back to one match.
+    expect(report?.hits).toEqual([{ rule: '||ads.example^', count: 1 }]);
+  });
+
   it('keeps a firing exception off the block axis', () => {
     let tally = startLedgerSession(date('2026-09-01T09:00:00Z'), 'live');
     tally = recordLedgerHit(tally, '||ads.example^', 0).tally;
