@@ -1277,6 +1277,558 @@ export const ELEMENT_EVAL_CORPUS: ElementEvalCase[] = [
     minAction: 'hide',
     notes: 'The guard for the instrumentation cases above: a real 1x1 beacon still carries its tracker evidence and is still hidden.',
   },
+  // ─── Round three: enough cases per class for the A/B to be about anything ──────
+  //
+  // The claim the weight fit is judged on is a *case count*, and at 117 cases it rested
+  // on one. Every case where the fitted head and the hand-tuned head disagreed at all was
+  // `Content` — a third-party embed, a first-party panel, an asset host — so the held-out
+  // win was two cases of one family, and `order-tracking-panel` turned on a single feature
+  // weight: the hand-tuned head's margin over its runner-up there was 0.211. Worse, Ad,
+  // Tracker and Annoyance were already at 1.0 held-out accuracy for *both* heads, which
+  // is not evidence of anything. There was nothing in those classes for a fit to be
+  // better or worse at, so "2 wins, 0 regressions" was really "2 cases, and 22 others
+  // where no head could fail".
+  //
+  // These cases exist to put something at stake in every class, and the ones worth having
+  // are the near-boundary ones: a fingerprinting script served from a *public CDN*, a
+  // privacy panel whose own text says "analytics and advertising", a shop's own summer
+  // sale, a scheduler frame the page cannot work without, a 1×1 spacer image that is not
+  // a beacon because its host is the page's own. Each is labelled by what the element
+  // *is*, written before anything was measured against it, and the ledger of which cases
+  // changed hands is reported in the CHANGELOG rather than curated for a result.
+
+  // ─── Content that reads as a tracker: third-party frames the page needs ─────────
+  {
+    label: 'map-embed-frame',
+    family: 'media',
+    snapshot: snap('iframe', {
+      src: 'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d4820',
+      width: 600,
+      height: 450,
+      crossOriginFrame: true,
+    }),
+    expected: ['Content'],
+    maxAction: 'suggest',
+    notes: 'A store locator or a branch map. A third-party frame is not a tracker on its shape, and `maps` is not a measurement word.',
+  },
+  {
+    label: 'scheduler-embed-frame',
+    family: 'media',
+    snapshot: snap('iframe', {
+      src: 'https://calendly.com/sales/intro',
+      width: 640,
+      height: 700,
+      crossOriginFrame: true,
+    }),
+    expected: ['Content'],
+    maxAction: 'suggest',
+    notes: 'The booking widget a sales page is made of. Hiding it removes the only way to book.',
+  },
+  {
+    label: 'audio-player-embed',
+    family: 'media',
+    snapshot: snap('iframe', {
+      src: 'https://open.spotify.com/embed/track/4cOdK2wGLETKBW3PvgPWqT',
+      width: 300,
+      height: 380,
+      crossOriginFrame: true,
+    }),
+    expected: ['Content'],
+    maxAction: 'suggest',
+  },
+  {
+    label: 'code-playground-embed',
+    family: 'media',
+    snapshot: snap('iframe', {
+      src: 'https://codepen.io/anon/embed/abcdefg',
+      width: 800,
+      height: 600,
+      crossOriginFrame: true,
+    }),
+    expected: ['Content'],
+    maxAction: 'suggest',
+    notes: 'A live example in a tutorial. `pen` is not ad vocabulary, and the frame is the content.',
+  },
+  {
+    label: 'recording-widget-frame',
+    family: 'media',
+    snapshot: snap('iframe', {
+      src: 'https://example.recording-service.com/embed/player/xyz',
+      width: 720,
+      height: 405,
+      crossOriginFrame: true,
+    }),
+    expected: ['Content'],
+    maxAction: 'suggest',
+    notes: 'The same family as the video embeds, on a host nobody has a list entry for.',
+  },
+
+  // ─── Content that reads as a tracker: assets and first-party markup ────────────
+  {
+    label: 'third-party-image-cdn',
+    family: 'content',
+    snapshot: snap('img', {
+      classes: ['hero-photo'],
+      src: 'https://images.ctfassets.net/space/abc123/hero.jpg',
+      width: 1200,
+      height: 630,
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'A hero image off a third-party asset host. The host is not a measurement host and the image is not a box; that is the whole discriminator.',
+  },
+  {
+    label: 'public-cdn-library-script',
+    family: 'content',
+    snapshot: snap('script', {
+      src: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js',
+      width: 0,
+      height: 0,
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'A site loading a library from a public CDN. The counterpart to `fingerprintjs-on-public-cdn`, which is the same host and the opposite answer.',
+  },
+  {
+    label: 'layout-spacer-pixel',
+    family: 'content',
+    snapshot: snap('img', { src: '/assets/spacer.png', width: 1, height: 1 }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'The hard counterpart to `unknown-host-pixel`: a 1×1 image is a beacon because of where it is loaded from, and this one is loaded from the page\'s own path.',
+  },
+  {
+    label: 'tracking-preferences-section',
+    family: 'content',
+    snapshot: snap('section', {
+      id: 'tracking-preferences',
+      classes: ['preferences', 'tracking'],
+      text: 'Manage your tracking preferences',
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'The control a privacy law requires. The class is `tracking`; the element is the page telling you how to refuse it.',
+  },
+  {
+    label: 'privacy-summary-panel',
+    family: 'content',
+    snapshot: snap('div', {
+      classes: ['privacy-summary', 'notice'],
+      text: 'This site uses cookies for analytics and advertising, and shares your data with 42 partners.',
+      ancestors: ['footer'],
+    }),
+    expected: ['Content', 'Annoyance'],
+    maxAction: 'suggest',
+    notes: 'A consent summary whose text names both categories. Content about advertising is not an ad container, the same finding as `advertising-policy-body` in prose — and a notice in the footer is the `newsletter-signup-inline` case again, so both classes are defensible.',
+  },
+
+  // ─── Content that reads as an ad: the page's own commerce ──────────────────────
+  {
+    label: 'sale-section',
+    family: 'content',
+    snapshot: snap('section', {
+      classes: ['seasonal-sale'],
+      text: 'Summer sale — up to 40% off everything in store',
+      childCount: 12,
+      linkCount: 12,
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'A retailer\'s own sale, which is what the retailer is for. `sale` is ad vocabulary and the stock is the shop\'s own inventory.',
+  },
+  {
+    label: 'partner-logo-wall',
+    family: 'content',
+    snapshot: snap('div', {
+      classes: ['partners', 'logo-wall'],
+      childCount: 8,
+      linkCount: 8,
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'A "trusted by" strip. Eight children, none of them an ad, and hiding the row removes evidence the page is making.',
+  },
+  {
+    label: 'press-mentions-strip',
+    family: 'content',
+    snapshot: snap('aside', {
+      classes: ['press-mentions'],
+      text: 'As featured in the national papers and on the morning show',
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+  },
+  {
+    label: 'commission-disclosure-line',
+    family: 'content',
+    snapshot: snap('p', {
+      classes: ['affiliate-disclosure'],
+      text: 'We may earn a commission from links on this page. It does not cost you anything.',
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'The sentence that makes affiliate content honest. `affiliate`, `commission` and `links` are three ad-adjacent words in one legal line.',
+  },
+  {
+    label: 'comparison-table',
+    family: 'content',
+    snapshot: snap('table', {
+      classes: ['plan-comparison'],
+      childCount: 20,
+      linkCount: 4,
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'A pricing table. `plan` is how a subscription is written down, not how an ad is.',
+  },
+  {
+    label: 'featured-products-carousel',
+    family: 'content',
+    snapshot: snap('div', {
+      classes: ['featured-products', 'carousel'],
+      childCount: 12,
+      linkCount: 12,
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'A carousel of twelve products, which looks exactly like a repeated ad slot by shape and is nothing of the kind.',
+  },
+  {
+    label: 'event-promo-card',
+    family: 'content',
+    snapshot: snap('div', {
+      classes: ['event-promo'],
+      text: 'Webinar: how we cut fulfilment time by a third',
+      linkCount: 1,
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'The site promoting its own event. A promoted thing is not a promotion.',
+  },
+
+  // ─── Content that reads as an annoyance: chrome the page needs ─────────────────
+  {
+    label: 'javascript-required-notice',
+    family: 'content',
+    snapshot: snap('div', {
+      classes: ['js-required'],
+      text: 'This site requires JavaScript to display the article.',
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'The one element on a script-heavy page that is genuinely load-bearing.',
+  },
+  {
+    label: 'print-story-button',
+    family: 'content',
+    snapshot: snap('button', {
+      classes: ['print-story'],
+      text: 'Print',
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+  },
+  {
+    label: 'inline-login-prompt',
+    family: 'content',
+    snapshot: snap('div', {
+      classes: ['login-prompt'],
+      text: 'Sign in to save this story and get recommendations',
+      ancestors: ['article'],
+    }),
+    expected: ['Content', 'Annoyance'],
+    maxAction: 'suggest',
+    notes: 'In the flow of the story rather than over it, so it is a prompt and not an overlay.',
+  },
+
+  // ─── Tracker: the thin class, with the shapes that actually discriminate ───────
+  {
+    label: 'matomo-pixel',
+    family: 'pixel',
+    snapshot: snap('img', { src: 'https://cdn.matomo.example/piwik.php?idsite=4&rec=1', width: 1, height: 1 }),
+    expected: ['Tracker'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'amplitude-loader',
+    family: 'pixel',
+    snapshot: snap('script', { src: 'https://cdn.amplitude.com/libs/amplitude-8.10.0.min.js', width: 0, height: 0 }),
+    expected: ['Tracker'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'mixpanel-loader',
+    family: 'pixel',
+    snapshot: snap('script', { src: 'https://cdn.mxpnl.com/libs/mixpanel-2-latest.min.js', width: 0, height: 0 }),
+    expected: ['Tracker'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'fullstory-script',
+    family: 'pixel',
+    snapshot: snap('script', { src: 'https://cdn.fullstory.com/s/fs.js', width: 0, height: 0 }),
+    expected: ['Tracker'],
+    maxAction: 'hide',
+    minAction: 'hide',
+    notes: 'Session replay: it records the page you are reading, which is the definition rather than an inference.',
+  },
+  {
+    label: 'crazyegg-script',
+    family: 'pixel',
+    snapshot: snap('script', { src: 'https://cdn.crazyegg.com/pages/scripts/5.js', width: 0, height: 0 }),
+    expected: ['Tracker'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'mouseflow-recorder',
+    family: 'pixel',
+    snapshot: snap('script', { src: 'https://cdn.mouseflow.com/2s.js', width: 0, height: 0 }),
+    expected: ['Tracker'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'branch-attribution-sdk',
+    family: 'pixel',
+    snapshot: snap('script', { src: 'https://cdn.branch.io/branch-latest.min.js', width: 0, height: 0 }),
+    expected: ['Tracker'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'theadexus-tracking-pixel',
+    family: 'pixel',
+    snapshot: snap('img', { src: 'https://s.theadexus.com/img/vertex/267.gif', width: 1, height: 1 }),
+    expected: ['Tracker'],
+    maxAction: 'hide',
+    minAction: 'hide',
+    notes: 'Third-party measurement, and the host is not on any list a reader would recognise.',
+  },
+  {
+    label: 'moat-viewability-pixel',
+    family: 'pixel',
+    snapshot: snap('img', { src: 'https://moatads.serving-sys.com/99.gif', width: 1, height: 1 }),
+    expected: ['Tracker'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'adsrvr-insight-pixel',
+    family: 'pixel',
+    snapshot: snap('img', { src: 'https://insight.adsrvr.org/InsightPixelService/DeepView', width: 1, height: 1 }),
+    expected: ['Tracker', 'Ad'],
+    maxAction: 'hide',
+    minAction: 'hide',
+    notes: 'Trade Desk viewability: measurement *of an ad*, so Tracker and Ad are both honest names for it. What the corpus cares about is the axis both agree on — this is hidden.',
+  },
+  {
+    label: 'fingerprintjs-on-public-cdn',
+    family: 'pixel',
+    snapshot: snap('script', {
+      src: 'https://cdn.jsdelivr.net/npm/@fingerprintjs/fpjs@3.4.0/dist/fp.min.js',
+      width: 0,
+      height: 0,
+    }),
+    expected: ['Tracker'],
+    maxAction: 'suggest',
+    notes: 'The pair to `public-cdn-library-script`: same host, same tag, and the opposite answer because the library fingerprints the browser. Banded as *permitted* rather than required on purpose — the host is a CDN and the only evidence is a name in the path, which is one non-shape signal, and the product rule is that one of those may suggest but must not hide.',
+  },
+
+  // ─── Annoyances the first two rounds did not carry ────────────────────────────
+  {
+    label: 'newsletter-slidein',
+    family: 'nag',
+    snapshot: snap('div', {
+      classes: ['newsletter-slidein'],
+      position: 'fixed',
+      zIndex: 2147483000,
+      width: 380,
+      height: 320,
+      text: 'Get 10% off your first order. Unsubscribe any time.',
+    }),
+    expected: ['Annoyance'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'app-install-banner',
+    family: 'nag',
+    snapshot: snap('div', {
+      classes: ['smart-banner', 'app-install'],
+      position: 'fixed',
+      width: 420,
+      height: 96,
+      text: 'Open in the app',
+    }),
+    expected: ['Annoyance'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'exit-intent-offer',
+    family: 'nag',
+    snapshot: snap('div', {
+      classes: ['exit-intent', 'offer'],
+      position: 'fixed',
+      zIndex: 99999,
+      width: 500,
+      height: 260,
+      text: 'Wait! Take 15% off before you go.',
+    }),
+    expected: ['Annoyance'],
+    maxAction: 'hide',
+    minAction: 'hide',
+    notes: '`offer` and a percentage are the vocabulary of an ad, and what makes it a nag is that it is thrown over the page the user came to read.',
+  },
+  {
+    label: 'survey-widget-frame',
+    family: 'media',
+    snapshot: snap('iframe', {
+      src: 'https://survey.example.net/s/abc123',
+      width: 400,
+      height: 300,
+      crossOriginFrame: true,
+    }),
+    expected: ['Content', 'Annoyance'],
+    maxAction: 'suggest',
+    notes: 'A survey widget is a nag, and its markup is byte-for-byte the same shape as `embedded-chart-frame`: a cross-origin frame on a host with no ad, consent or nag vocabulary. Labeling it must-hide would be asking the model to act on something nothing in the element can distinguish, so it is labelled the way an unknown third-party frame is and a person decides it.',
+  },
+  {
+    label: 'back-to-top-button',
+    family: 'content',
+    snapshot: snap('button', {
+      classes: ['back-to-top'],
+      position: 'fixed',
+      width: 44,
+      height: 44,
+      text: '↑',
+    }),
+    expected: ['Content'],
+    maxAction: 'leave',
+    notes: 'Labelled Content on purpose: a reader who has scrolled two thousand pixels asked for this. It is written here as a fixed overlay with no ad, consent or nag vocabulary, which is the same argument `cookie-settings-button` makes for a control nobody should lose.',
+  },
+  {
+    label: 'sticky-share-bar',
+    family: 'nag',
+    snapshot: snap('div', {
+      classes: ['share-bar', 'sticky'],
+      position: 'fixed',
+      width: 56,
+      height: 260,
+      linkCount: 5,
+    }),
+    expected: ['Annoyance'],
+    maxAction: 'hide',
+    minAction: 'hide',
+    notes: 'Must-hide because it is an overlay: a fixed rail down the side of the story is the same shape as the push modals above, and the in-flow social cases below are where the suggest band belongs.',
+  },
+  {
+    label: 'cart-abandon-nudge',
+    family: 'nag',
+    snapshot: snap('div', {
+      classes: ['cart-nudge'],
+      text: 'You left something in your basket',
+    }),
+    expected: ['Content', 'Annoyance'],
+    maxAction: 'suggest',
+    notes: 'The `newsletter-signup-inline` treatment: a nudge in the flow of the page is a nag, but not an overlay to tear out, so both classes stand and hiding is forbidden.',
+  },
+  {
+    label: 'rating-prompt',
+    family: 'nag',
+    snapshot: snap('div', {
+      classes: ['rating-prompt', 'stars'],
+      text: 'Rate this article',
+    }),
+    expected: ['Content', 'Annoyance'],
+    maxAction: 'suggest',
+    notes: 'The same in-flow nudge as `cart-abandon-nudge`, and the same band.',
+  },
+
+  // ─── Ads the first two rounds did not carry ───────────────────────────────────
+  {
+    label: 'amazon-apstag-loader',
+    family: 'ad-container',
+    snapshot: snap('script', { src: 'https://c.amazon-adsystem.com/aax2/apstag.js', width: 0, height: 0 }),
+    expected: ['Ad'],
+    maxAction: 'hide',
+    minAction: 'hide',
+    notes: 'Ad *delivery* rather than a slot: a tag that decides what to fetch, not a container to remove.',
+  },
+  {
+    label: 'adthrive-wrapper',
+    family: 'ad-container',
+    snapshot: snap('div', {
+      classes: ['adthrive-ad', 'wrapper'],
+      width: 728,
+      height: 90,
+    }),
+    expected: ['Ad'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'openx-ad-frame',
+    family: 'ad-container',
+    snapshot: snap('iframe', {
+      src: 'https://s.openx.net/frame/abc123',
+      width: 300,
+      height: 250,
+      crossOriginFrame: true,
+    }),
+    expected: ['Ad'],
+    maxAction: 'hide',
+    minAction: 'hide',
+  },
+  {
+    label: 'inline-ad-figure',
+    family: 'ad-container',
+    snapshot: snap('figure', {
+      classes: ['inline-ad'],
+      width: 300,
+      height: 250,
+      childCount: 2,
+      linkCount: 1,
+    }),
+    expected: ['Ad'],
+    maxAction: 'hide',
+    minAction: 'hide',
+    notes: 'An ad dressed as a figure inside an article: the tag is `figure` because the slot wanted to look editorial.',
+  },
+  {
+    label: 'consent-gated-ad-slot',
+    family: 'ad-container',
+    snapshot: snap('div', {
+      id: 'consent-ad-slot',
+      classes: ['ad-slot'],
+      attributes: [attr('data-pending-consent', 'true')],
+      width: 300,
+      height: 250,
+    }),
+    expected: ['Ad'],
+    maxAction: 'hide',
+    minAction: 'hide',
+    notes: 'A slot that is empty until consent lands. An empty box is not the reason to leave an ad slot alone.',
+  },
+  {
+    label: 'ad-slot-with-label',
+    family: 'ad-container',
+    snapshot: snap('div', {
+      id: 'ad-slot-top',
+      classes: ['ad-unit'],
+      text: 'Advertisement',
+      width: 728,
+      height: 90,
+    }),
+    expected: ['Ad'],
+    maxAction: 'hide',
+    minAction: 'hide',
+    notes: 'The slot that carries the word as its text rather than its class — the case a class-only reader misses.',
+  },
 ];
 
 /** Cases where hiding is the required outcome — the product working as intended. */

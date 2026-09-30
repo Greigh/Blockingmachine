@@ -14,7 +14,7 @@
   "generatedFrom": "2026-09-29T09:30:40.000Z",
   "graded": {
     "corpus": "packages/core/src/ai/elementEvalCorpus.ts",
-    "cases": 117,
+    "cases": 162,
     "note": "Unchanged by this run. Nothing here feeds the weight fit, the harness or the calibration metric."
   },
   "stats": {
@@ -111,7 +111,7 @@
         "maxAction": "leave",
         "minAction": "leave",
         "notes": "Harvested from nytimes.com · div|promo · 2 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
-        "promoted": false
+        "promoted": true
       }
     },
     {
@@ -377,7 +377,7 @@
         "maxAction": "leave",
         "minAction": "leave",
         "notes": "Harvested from theguardian.com · div|promo · 1 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
-        "promoted": false
+        "promoted": true
       }
     },
     {

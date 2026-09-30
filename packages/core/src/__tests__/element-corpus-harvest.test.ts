@@ -332,8 +332,13 @@ describe('the committed live-scan harvest', () => {
 });
 
 describe('the graded corpus is untouched by any of this', () => {
-  it('is still 117 cases, and every case a harvest would propose is absent from it', () => {
-    expect(ELEMENT_EVAL_CORPUS).toHaveLength(117);
+  it('is still free of harvested cases, and every case a harvest would propose is absent from it', () => {
+    // The count itself moved: the corpus grew from 117 to 162 while this pipeline was
+    // built (see the round-three section in `elementEvalCorpus.ts`), all of it written by
+    // hand from real page shapes rather than promoted from a queue. What has not moved is
+    // the invariant — nothing harvested is graded — which is why the assertion is about the
+    // family rather than about a number.
+    expect(ELEMENT_EVAL_CORPUS.length).toBeGreaterThanOrEqual(117);
     // The queue is a separate artifact precisely so this holds: nothing harvested has been
     // promoted, and the labels in it are the six the live scan's own review made.
     const promotedLabels = ELEMENT_EVAL_CORPUS.filter((entry) => entry.family === 'harvest');

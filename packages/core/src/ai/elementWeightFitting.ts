@@ -19,27 +19,38 @@
  *     that changed hands, so a win that is really two trades is visible as such.
  *
  * The prior is a regulariser with a measured size, and its size is much smaller than it
- * first appeared. There are four classes × 26 parameters = 104 free numbers and 77
+ * first appeared. There are four classes × 26 parameters = 104 free numbers and 107
  * training elements, and the features are heavily correlated by construction (every
  * "strong token" family also sets its "weak token" partner), so centring a Gaussian prior
  * on the hand-tuned table is a real constraint: unregularised, the fit has to spend
  * examples separating features that co-occur. Measured by cross-validation over the
- * training cases, no regularisation at all is clearly the worst candidate (mean fold
- * logLoss 1.0929 against 0.5813 at strength 1), and the chosen strength has fallen from 5
- * to **1** as the selection moved from a single inner split to folding every training case
- * into validation. The data term is a class-balanced mean, so it sums to exactly one
- * example per case; strength 1 is therefore the hand-tuning being worth a single labelled
- * element against 77, i.e. the corpus outweighs the prior about **77:1** in the shipped
- * fit. `priorStrength` is measured in average-examples, so "1" reads plainly as "the prior
- * is worth one labelled element".
+ * training cases, the chosen strength has fallen from 5 to **1** as the selection moved
+ * from a single inner split to folding every training case into validation. The data term
+ * is a class-balanced mean, so it sums to exactly one example per case; strength 1 is
+ * therefore the hand-tuning being worth a single labelled element against 107, i.e. the
+ * corpus outweighs the prior about **107:1** in the shipped fit. `priorStrength` is
+ * measured in average-examples, so "1" reads plainly as "the prior is worth one labelled
+ * element".
  *
- * The same move improved what ships: mean held-out cross-entropy went from 0.1796 at
- * strength 5 to **0.1443** at strength 1. It is worth knowing where the evidence still
- * disagrees: an unregularised fit scores *better* on the 40 held-out cases (0.0877), which
- * its ~15-case validation folds are too small to see. The fold estimate is the honest one
- * to select on — the held-out set cannot choose the hyperparameter without becoming a
- * fitted quantity — so strength 1 ships, and the residual gap is recorded here rather than
- * tuned away, because the fix is more labelled cases, not a better hyperparameter.
+ * The prior's standing is narrower than it was at 117 cases, and the width is worth
+ * stating rather than quietly re-asserting. Five folds over 107 train on ~86 and score
+ * ~21 each, which was enough to show that *no* regularisation was the worst candidate
+ * (mean fold logLoss 1.0929 against 0.5813 at strength 1) and is no longer enough to say
+ * so: unregularised scores 0.6120 and only strengths 1 (0.5229) and 2 (0.5611) beat it,
+ * while 5, 10, 20 and 50 (0.6219 → 0.7376) are all worse. So the folds are a weak
+ * discriminator at the heavy-regularisation end, and the prior earns its place against the
+ * alternatives the selection actually chooses between rather than against its absence.
+ *
+ * On the 55 held-out cases the shipped strength leads the hand-tuned table on all three
+ * head metrics (cross-entropy 0.6193 → **0.4234**, accuracy 0.8545 → **0.9455**), and the
+ * shipped strength is not the one that set is best at: strength 2 scores fractionally
+ * lower held-out cross-entropy (0.4227) at the same accuracy, and the folds still choose 1.
+ * That is the point — the held-out set cannot pick the hyperparameter without becoming a
+ * fitted quantity. The residual disagreement has narrowed without closing: an unregularised
+ * fit is still *ahead* on held-out accuracy (0.9818 against 0.9455, two more cases), which
+ * the folds cannot see. So that gap is recorded rather than tuned away, because the fix is
+ * more labelled cases in the classes where the two heads currently agree on everything, not
+ * a better hyperparameter.
  *
  * Soft targets come from the corpus's own acceptance rule: `expected` lists every label
  * the case would accept, so the target distribution is uniform over exactly that set.
@@ -121,7 +132,7 @@ export interface ElementWeightFitOptions {
   /**
    * How much the prior counts, in average-examples. `5` means the pull toward `prior` is
    * worth five labelled elements. `0` disables the prior, which is not recommended:
-   * see the module note on why 104 parameters from 77 elements needs a centre.
+   * see the module note on why 104 parameters from 107 elements needs a centre.
    */
   priorStrength?: number;
   /** Full-batch Adam steps. */
