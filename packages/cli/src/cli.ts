@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 
 import dotenv from "dotenv";
-dotenv.config();
+// `quiet` because the loader's own banner goes to stdout, and stdout is where `--json` writes its
+// payload: a banner line above the document makes the document unparseable in exactly the way the
+// colourised logger does, and it is printed before any command gets a chance to decide whether the
+// run is machine-readable.
+dotenv.config({ quiet: true });
 
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { Command } from "commander";
-import { createLogger } from "./lib/logger.js";
+import { createLogger, writeJson } from "./lib/logger.js";
 import { loadConfig as loadConfigFromLib } from "./lib/config.js";
 import { CATEGORIES, type AppConfig, type RawConfig } from "./types.js";
 import { defaultMetaConfig } from "./lib/constants.js";
@@ -178,7 +182,9 @@ program
       if (result.success) {
         logger.info(result.message);
         if (cmdOptions.verbose && result.data) {
-          logger.info(JSON.stringify(result.data, null, 2));
+          // `--verbose` asks for the detail, and the detail is a payload: printed raw so a caller
+          // can pipe it into `jq`, like every other command's `--json`.
+          writeJson(result.data);
         }
       } else {
         logger.error(result.message);

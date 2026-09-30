@@ -32,6 +32,7 @@ import {
   type TierFileInput,
   type TierPlanComputation,
 } from "@blockingmachine/core";
+import { writeJson } from "../lib/logger.js";
 import fs from "fs/promises";
 import path from "path";
 import chalk from "chalk";
@@ -142,7 +143,9 @@ export class TierPlanCommand extends BaseCommand {
       };
 
       if (options.json) {
-        this.logger.info(JSON.stringify(data, null, 2));
+        // Not `this.logger`: the console transport timestamps and colourises, which makes the
+        // payload unparseable. `--json` promises a document.
+        writeJson(data);
         return this.success(data, "Tier plan computed");
       }
 

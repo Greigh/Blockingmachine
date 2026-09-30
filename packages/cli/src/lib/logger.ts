@@ -38,6 +38,24 @@ const format = winston.format.combine(
   }),
 );
 
+/**
+ * Writes a machine-readable result to stdout, bypassing the human log formatter entirely.
+ *
+ * `--json` output has to be a JSON document and nothing else, and the console transport cannot be
+ * asked for that: it prefixes a timestamp and a colourised level, and `colorize({ all: true })`
+ * wraps the whole message in ANSI escapes. Routing a payload through `logger.info` therefore made
+ * every `--json` path unparseable — `JSON.parse` of the output failed on the timestamp, not on the
+ * payload — which is a defect a machine consumer cannot work around and a human reader would never
+ * notice. The two outputs are different formats rather than two settings of one, so they leave by
+ * different doors: the human log keeps its colours, and the payload goes to stdout untouched.
+ *
+ * The file transports are deliberately not used either. A parseable result is what the caller asked
+ * for, and it belongs on stdout where the shell can pipe it.
+ */
+export function writeJson(payload: unknown): void {
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
 let cachedLogger: winston.Logger | null = null;
 let cachedDebug: boolean | null = null;
 
