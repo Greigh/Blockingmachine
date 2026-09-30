@@ -228,6 +228,51 @@ describe('tier compiler', () => {
     expect(ads).not.toContain('||plain-name.example^');
   });
 
+  test('places hosts that match no vocabulary in the residual, which is an opt-in tier by default', () => {
+    const input = writeInput('unclassifiable.txt', ['0.0.0.0 plain-domain-example.com']);
+    const result = runCompiler(['--input', input, '--budget', '1000', '--json']);
+
+    expect(result.status).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.unclassified).toBe(1);
+    // The default is opt-in on purpose: `tier_core` ships enabled on a fresh install, and most of
+    // a merged blocklist matches no vocabulary at all, so parking these there would silently make
+    // every user block thousands of hosts the classifier could not justify.
+    expect(report.residualTier).toBe('tier_ads');
+    expect(shippedHosts('tier_ads')).toContain('plain-domain-example.com');
+  });
+
+  test('an explicit --residual takes the unclassified hosts, including the enabled tier', () => {
+    const input = writeInput('unclassifiable.txt', ['0.0.0.0 plain-domain-example.com']);
+    // The short name is accepted, and this is the deliberate choice the opt-in default exists to
+    // make the operator spell out: unclassified hosts in the tier every fresh install enables.
+    const result = runCompiler(['--input', input, '--budget', '1000', '--residual', 'core', '--json']);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).residualTier).toBe('tier_core');
+    expect(shippedHosts('tier_core')).toContain('plain-domain-example.com');
+  });
+
+  test('refuses a --residual that is not a tier instead of quietly choosing one', () => {
+    const input = writeInput('unclassifiable.txt', ['0.0.0.0 plain-domain-example.com']);
+    const before = readTier('tier_core');
+
+    const typo = runCompiler(['--input', input, '--budget', '1000', '--residual', 'tier_adz']);
+    expect(typo.status).toBe(1);
+    expect(typo.stdout).toContain('--residual is not a tier');
+    // The valid names are printed, so the flag can be corrected without reading the source.
+    expect(typo.stdout).toContain('tier_annoyances');
+    // Nothing was written: the run failed before a plan was made, so the curated baseline is
+    // untouched rather than compiled under a tier the operator never named. The old fallback was
+    // `tier_core` — the one tier a fresh install enables — which is the worst place to guess.
+    expect(readTier('tier_core')).toEqual(before);
+
+    // A flag with no value at all is the same operator error and gets its own sentence.
+    const missing = runCompiler(['--input', input, '--budget', '1000', '--residual']);
+    expect(missing.status).toBe(1);
+    expect(missing.stdout).toContain('--residual needs a tier name');
+  });
+
   test('stays inside the budget and never exceeds the guaranteed static limit', () => {
     const hosts = Array.from({ length: 400 }, (_, i) => `0.0.0.0 host-${i}.budget-example.com`);
     const input = writeInput('large.txt', hosts);

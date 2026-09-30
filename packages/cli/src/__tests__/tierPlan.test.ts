@@ -11,6 +11,7 @@
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
+import { jest } from "@jest/globals";
 import { TierPlanCommand } from "../commands/TierPlanCommand.js";
 import { createLogger } from "../lib/logger.js";
 import { STATIC_RULE_TIERS, computeTierPlan } from "@blockingmachine/core";
@@ -183,13 +184,40 @@ describe("tier-plan", () => {
     expect(data.ledger.skipped).toBe(2);
   });
 
-  test("json output is machine-readable and carries the same plan", async () => {
+  test("--json writes a JSON document to stdout with none of the human log wrapped around it", async () => {
     const dir = await makeRulesDir();
     dirs.push(dir);
 
-    const res = await run(dir, { json: true });
+    // The defect this pins: the payload used to be logged through the winston console transport,
+    // which prefixes a timestamp and colourises the whole message, so `JSON.parse` of stdout failed
+    // on the timestamp and a machine consumer had no way around it. Asserting on `res.data` alone
+    // passes either way, which is why the earlier version of this test did not catch it — the
+    // output has to be parsed where the caller reads it, on stdout.
+    const writes: string[] = [];
+    const spy = jest
+      .spyOn(process.stdout, "write")
+      .mockImplementation(((chunk: string | Uint8Array) => {
+        writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+        return true;
+      }) as typeof process.stdout.write);
+    let res;
+    try {
+      res = await run(dir, { json: true });
+    } finally {
+      spy.mockRestore();
+    }
+
+    const output = writes.join("");
+    expect(output).not.toContain("\u001b");
+    const parsed = JSON.parse(output) as {
+      files: Array<{ id: string }>;
+      plan: { totalRules: number; benefitSource: string };
+    };
+    // Parseable is necessary but not sufficient: the document has to be *the same plan* the caller
+    // receives, or a machine consumer and a person would be looking at different answers.
+    expect(parsed).toMatchObject({ plan: { totalRules: 6, benefitSource: "coverage" } });
+    expect(parsed.files.map((f) => f.id)).toEqual(res.data.files.map((f: { id: string }) => f.id));
     expect(res.success).toBe(true);
-    expect(res.data).toMatchObject({ plan: { totalRules: 6, benefitSource: "coverage" } });
   });
 
   test("defaults to the tiers the manifest enables on a fresh install", async () => {

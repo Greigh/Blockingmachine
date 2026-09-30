@@ -340,7 +340,15 @@ describe('Mini-AI Domain Threat Classifier', () => {
       expect(logScan.totalQueriesAnalyzed).toBe(5);
       expect(logScan.flaggedCount).toBeGreaterThan(0);
       expect(logScan.cleanCount).toBeGreaterThan(0);
-      expect(elapsed).toBeLessThan(200); // 5 queries scanned in under 200ms
+      // The throughput claim is asserted on the work done rather than on the clock: five unique
+      // domains are scanned once each, not re-scanned per query, and the cache accounting says so
+      // deterministically. That is the regression a throughput check exists to catch.
+      expect(service.getCacheStats()).toMatchObject({ hits: 0, misses: 5 });
+      // Wall-clock is kept only as a smoke bound for a path that starts blocking on something.
+      // It is deliberately loose because an absolute millisecond budget measures the runner: the
+      // original 200 ms bound passed at 27 ms alone and failed at 771 ms when the full monorepo
+      // suite ran in parallel, while this scan is local CPU work that takes 4–25 ms warm.
+      expect(elapsed).toBeLessThan(4000);
     });
 
     it('protects Apple APNS on Akamai and Supabase project domains from false positive malware classification', async () => {

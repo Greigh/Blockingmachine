@@ -864,7 +864,24 @@ export function parseArgs(argv) {
     else if (arg === '--security') options.security = next();
     else if (arg === '--no-security') options.security = false;
     else if (arg === '--residual') {
-      options.residual = normalizeTierName(next()) || options.residual;
+      // Refused rather than defaulted, for the same reason `--hits` and `--security` refuse a
+      // file they cannot read: the residual decides where every host the classifier could not
+      // justify lands, so answering a typo with a *different* tier files thousands of hosts
+      // somewhere the operator did not choose. The old fallback was `tier_core` — the one tier
+      // enabled on a fresh install — which is the worst of the available places to put them by
+      // accident, and the default it was overwriting (`tier_ads`) is opt-in precisely so that
+      // unclassified hosts cannot silently change what every user blocks.
+      const requested = next();
+      const residual = requested === undefined ? null : normalizeTierName(requested);
+      if (!residual) {
+        throw new Error(
+          requested === undefined
+            ? `--residual needs a tier name: ${TIER_IDS.join(', ')}.`
+            : `--residual is not a tier: ${JSON.stringify(String(requested))}. ` +
+              `Name one of ${TIER_IDS.join(', ')} (the tier_ prefix is optional).`,
+        );
+      }
+      options.residual = residual;
     }
     else if (arg === '--shares') {
       for (const part of String(next()).split(',')) {
@@ -880,7 +897,6 @@ export function parseArgs(argv) {
     else if (arg === '--help' || arg === '-h') options.help = true;
   }
   if (!Number.isFinite(options.budget) || options.budget <= 0) options.budget = GUARANTEED_STATIC_RULES;
-  if (!TIER_IDS.includes(options.residual)) options.residual = 'tier_core';
   return options;
 }
 
@@ -1309,7 +1325,15 @@ export function checkCuratedBaseline({ rulesDir = RULES_DIR, quiet = false, cata
 }
 
 function main() {
-  const options = parseArgs(process.argv.slice(2));
+  // `parseArgs` throws on a flag the operator named but that cannot be honoured. Caught here so
+  // the refusal reads like every other one this script prints — one line, no stack trace, exit 1.
+  let options;
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    console.error(`❌ [Tiers] ${err?.message || err}`);
+    return 1;
+  }
   if (options.help) {
     // The header comment is the documentation, so print it with the comment syntax stripped
     // rather than maintaining a second copy that can drift.
