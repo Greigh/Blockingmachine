@@ -414,10 +414,11 @@ program
   .description("[Beta] Report which static tiers are worth keeping on, and at what capacity")
   .option("-d, --rules-dir <dir>", "Directory holding the tier_*.json rulesets", "rules")
   .option("--hits <file>", "Rule-hit ledger, as exported by the extension, to weight the plan by what blocked")
+  .option("--synced <file>", "The synced list the dynamic rules are built from, to report tiers it already covers")
   .option("-c, --capacity <number>", "Static slots to plan against", "30000")
   .option("-e, --enabled <ids>", "Comma-separated tiers to treat as currently on")
   .option("--json", "Output machine-readable JSON result")
-  .action(async (cmdOptions: { rulesDir?: string; hits?: string; capacity?: string; enabled?: string; json?: boolean }) => {
+  .action(async (cmdOptions: { rulesDir?: string; hits?: string; synced?: string; capacity?: string; enabled?: string; json?: boolean }) => {
     try {
       const config = await loadConfig();
       const cmd = new TierPlanCommand({ config, logger });
@@ -425,6 +426,7 @@ program
       const res = await cmd.execute({
         rulesDir: cmdOptions.rulesDir,
         hits: cmdOptions.hits,
+        synced: cmdOptions.synced,
         capacity: Number.isFinite(capacity) ? capacity : undefined,
         enabled: cmdOptions.enabled,
         json: cmdOptions.json,

@@ -41,6 +41,13 @@ export interface TierPlanOptions {
   rulesDir?: string;
   /** A rule-hit ledger, as the extension exports it. */
   hits?: string;
+  /**
+   * The synced list the dynamic rules are built from, i.e. `browser.txt`.
+   *
+   * Without it the command cannot say which tiers the dynamic rules already cover, which is a
+   * different question from which ones blocked and is answerable without a browser at all.
+   */
+  synced?: string;
   /** Static slots to plan against. Defaults to Chrome's guaranteed floor. */
   capacity?: number;
   /** Tiers to treat as currently on. Defaults to the manifest's enabled flags. */
@@ -83,11 +90,13 @@ export class TierPlanCommand extends BaseCommand {
       const rulesDir = options.rulesDir ?? "rules";
       const files = await readTierFiles(rulesDir);
       const ledgerText = options.hits ? await fs.readFile(options.hits, "utf8") : null;
+      const syncedText = options.synced ? await fs.readFile(options.synced, "utf8") : null;
       const enabled = parseEnabledTierIds(options.enabled, manifestDefaults());
 
       const result: TierPlanComputation = computeTierPlan({
         files,
         ledger: ledgerText === null ? null : { text: ledgerText },
+        synced: syncedText === null ? null : { text: syncedText },
         enabled,
         capacity: options.capacity,
       });
@@ -104,7 +113,13 @@ export class TierPlanCommand extends BaseCommand {
       const data = {
         rulesDir,
         capacity: result.capacitySlots,
-        files: result.rows.map(({ id, label, rules, hits }) => ({ id, label, rules, hits })),
+        files: result.rows.map(({ id, label, rules, hits, redundant }) => ({
+          id,
+          label,
+          rules,
+          hits,
+          redundant,
+        })),
         enabled,
         capacitySummary: result.capacity,
         plan: {
@@ -122,6 +137,8 @@ export class TierPlanCommand extends BaseCommand {
           ? { source: result.basis.source, reason: result.basis.reason, unmeasured: result.basis.unmeasured }
           : null,
         ledger: result.ledger,
+        synced: result.synced,
+        redundantTiers: result.redundantTiers,
       };
 
       if (options.json) {
@@ -181,6 +198,74 @@ export class TierPlanCommand extends BaseCommand {
       }
       for (const line of plan.explanation) this.logger.info(chalk.dim(`  ${line}`));
       this.logger.info("");
+
+      // Redundancy is printed as its own block rather than as a column on the rules table above,
+      // because it is a different comparison: the table asks what a tier holds, this asks how
+      // much of it the dynamic rules already hold. On the same line the two figures would read
+      // as one number.
+      if (result.synced) {
+        const byId = new Map(result.rows.map((row) => [row.id, row]));
+        this.logger.info(chalk.bold('  Redundant with the synced list'));
+        for (const id of result.redundantTiers) {
+          const row = byId.get(id);
+          this.logger.info(
+            `  ${(row?.label ?? id).padEnd(20)} ${(row?.redundant?.rules ?? 0).toLocaleString().padStart(8)} of ` +
+              `${(row?.rules ?? 0).toLocaleString()} rules  ${chalk.yellow('adds nothing')}`,
+          );
+        }
+        if (result.redundantTiers.length === 0) {
+          this.logger.info(
+            chalk.dim('  No tier is entirely redundant — every tier blocks hosts the synced list does not.'),
+          );
+        }
+        for (const row of result.rows) {
+          const r = row.redundant;
+          if (!r || r.complete || r.rules === 0) continue;
+          const share = ((r.rules / Math.max(1, row.rules)) * 100).toFixed(1);
+          this.logger.info(
+            chalk.dim(
+              `  ${row.label.padEnd(20)} ${r.rules.toLocaleString().padStart(8)} of ` +
+                `${row.rules.toLocaleString()} rules  ${share}% already blocked dynamically`,
+            ),
+          );
+        }
+        // Both halves of the read are printed. A synced list is mostly cosmetic and scoped rules
+        // that name no whole domain, so quoting only the host count would hide that most of the
+        // file was unusable to a comparison at the domain level — and a reader who assumed otherwise
+        // would read a small redundancy figure as a complete one.
+        this.logger.info(
+          chalk.dim(
+            `  diffed against ${result.synced.hosts.toLocaleString()} hosts the synced list blocks ` +
+              `(${result.synced.exceptions.toLocaleString()} excepted) from ${options.synced}`,
+          ),
+        );
+        this.logger.info(
+          chalk.dim(
+            `  ${result.synced.lines.toLocaleString()} blockable lines read, ` +
+              `${result.synced.skipped.toLocaleString()} naming no whole domain ` +
+              '(cosmetic filters and rules scoped to a request type, which a domain rule exceeds)',
+          ),
+        );
+        // A redundant tier is not a worthless one, and saying otherwise would be the more
+        // misleading of the two summaries. It is duplicated coverage, not absent coverage: the
+        // dynamic rules carry that host today, and a tier carrying it too is insurance for when
+        // they stop. It still costs static slots, which is the whole reason it is worth seeing.
+        this.logger.info(
+          chalk.dim(
+            '  Redundant is not the same as useless — these are rules the dynamic list also blocks today,'),
+        );
+        this.logger.info(
+          chalk.dim('  and they still cost static slots. They buy back coverage if the synced list drops them.'),
+        );
+        this.logger.info("");
+      } else {
+        this.logger.info(
+          chalk.dim(
+            '  No synced list given, so redundancy is unknown (--synced <browser.txt> to diff against the dynamic rules).',
+          ),
+        );
+        this.logger.info("");
+      }
 
       return this.success(data, "Tier plan computed");
     } catch (error) {

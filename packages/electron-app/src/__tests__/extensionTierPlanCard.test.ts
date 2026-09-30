@@ -17,10 +17,10 @@ const RESULT: TierPlanResult = {
   rulesDir: '/repo/packages/browser-extension/rules',
   capacitySlots: 12033,
   rows: [
-    { id: 'tier_core', label: 'Core shield', rules: 33, hits: 1204, errors: [] },
-    { id: 'tier_ads', label: 'Ad networks', rules: 23523, hits: 12, errors: [] },
-    { id: 'tier_privacy', label: 'Tracking & analytics', rules: 6009, hits: 0, errors: [] },
-    { id: 'tier_annoyances', label: 'Consent & nags', rules: 435, hits: 800, errors: [] },
+    { id: 'tier_core', label: 'Core shield', rules: 33, hits: 1204, redundant: { rules: 2, hosts: 2, complete: false }, errors: [] },
+    { id: 'tier_ads', label: 'Ad networks', rules: 23523, hits: 12, redundant: { rules: 19000, hosts: 18402, complete: false }, errors: [] },
+    { id: 'tier_privacy', label: 'Tracking & analytics', rules: 6009, hits: 0, redundant: { rules: 6009, hosts: 5911, complete: true }, errors: [] },
+    { id: 'tier_annoyances', label: 'Consent & nags', rules: 435, hits: 800, redundant: { rules: 0, hosts: 0, complete: false }, errors: [] },
   ],
   broken: [],
   plan: {
@@ -39,6 +39,9 @@ const RESULT: TierPlanResult = {
     unmeasured: [],
   },
   ledger: { lines: 71, skipped: 6, shared: 3 },
+  synced: { hosts: 122801, exceptions: 312, lines: 743634, skipped: 1200 },
+  syncedPath: '/Users/greigh/Documents/Blockingmachine/browser.txt',
+  redundantTiers: ['tier_privacy'],
 };
 
 function render(overrides: Partial<Parameters<typeof ExtensionTierPlanCard>[0]> = {}): string {
@@ -109,11 +112,72 @@ describe('hub extension tier plan card', () => {
   });
 
   it('says there was no ledger at all rather than implying a measurement of zero', () => {
-    const markup = render({ result: { ...RESULT, basis: null, ledger: null } });
+    // The rows have to carry null hits for this to be a test of the column at all. Leaving the
+    // fixture's measured numbers in place made the assertion below pass on an em dash inside the
+    // explanation string, which is a different part of the card entirely.
+    const markup = render({
+      result: {
+        ...RESULT,
+        basis: null,
+        ledger: null,
+        rows: RESULT.rows.map((row) => ({ ...row, hits: null })),
+      },
+    });
     expect(markup).toContain('No ledger was supplied');
     expect(markup).toContain('ranked by rule count');
-    // No ledger means the column is absent, not zero.
-    expect(markup).toContain('—');
+    // No ledger means the column reads as absent, not as zero. A "0" there is a claim that the
+    // tier was measured and never fired, which is the one thing an absent ledger cannot say.
+    // Scoped to the one row, because another tier's "0" in the redundancy column would otherwise
+    // satisfy a whole-table negative assertion and mask a real zero in the blocked column.
+    const coreRow = markup.slice(markup.indexOf('Core shield'), markup.indexOf('Ad networks'));
+    expect(coreRow).toContain('<td>—</td>');
+    expect(coreRow).not.toContain('<td>0</td>');
+  });
+
+  it('names the tier the synced list already blocks entirely', () => {
+    // The finding the comparison exists to produce. Four rows of numbers do not announce that one
+    // of them duplicates the dynamic rules, so the card says which tier and on what evidence.
+    const markup = render();
+    expect(markup).toContain('tier-plan-redundant');
+    expect(markup).toContain('nothing the synced list does not');
+    expect(markup).toContain('Tracking &amp; analytics');
+    expect(markup).toContain('122,801 blocked hosts');
+    expect(markup).toContain('/Users/greigh/Documents/Blockingmachine/browser.txt');
+  });
+
+  it('shows how much of every tier the dynamic rules already cover', () => {
+    const markup = render();
+    // Partly-redundant tiers stay in their own row rather than being named as findings: 19,000 of
+    // 23,523 is mostly duplicated, and mostly-duplicated is not the same decision as fully so.
+    expect(markup).toContain('19,000 of 23,523');
+    expect(markup).toContain('6,009 of 6,009');
+    expect(markup).toContain('2 of 33');
+  });
+
+  it('separates "not redundant" from "not compared"', () => {
+    // An empty cell reads as "nothing was redundant", which is the reassuring reading and the
+    // wrong one when the reason is that no synced list was found to diff against.
+    const compared = render({
+      result: { ...RESULT, redundantTiers: [] },
+    });
+    expect(compared).toContain('no tier is redundant with it');
+    expect(compared).not.toContain('tier-plan-redundant unknown');
+
+    const absent = render({
+      result: { ...RESULT, synced: null, syncedPath: null, redundantTiers: [] },
+    });
+    expect(absent).toContain('No synced list was found');
+    expect(absent).toContain('tier-plan-redundant unknown');
+    expect(absent).not.toContain('no tier is redundant with it');
+  });
+
+  it('says a redundant tier is not a worthless one', () => {
+    // The caveat is the difference between the card recommending a deletion and the card
+    // reporting a duplication. Static rules and dynamic rules are separate budgets, so a
+    // duplicated tier still buys coverage back if the synced list stops carrying those hosts.
+    const markup = render();
+    expect(markup).toContain('Redundant is not the same as useless');
+    expect(markup).toContain('still cost static slots');
   });
 
   it('reports the ledger it read, and the hosts two tiers both ship', () => {
@@ -129,7 +193,16 @@ describe('hub extension tier plan card', () => {
     const markup = render({
       result: {
         ...RESULT,
-        broken: [{ id: 'tier_ads', label: 'Ad networks', rules: 0, hits: null, errors: ['priority must be 1'] }],
+        broken: [
+          {
+            id: 'tier_ads',
+            label: 'Ad networks',
+            rules: 0,
+            hits: null,
+            redundant: { rules: 0, hosts: 0, complete: false },
+            errors: ['priority must be 1'],
+          },
+        ],
         rows: RESULT.rows.map((row) =>
           row.id === 'tier_ads' ? { ...row, errors: ['priority must be 1'] } : row,
         ),

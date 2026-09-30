@@ -1142,6 +1142,36 @@ function findTierRulesDir(): string | null {
   return null;
 }
 
+/**
+ * The synced list the extension's dynamic rules are built from, if this app has written one.
+ *
+ * Beside the compiled output, because that is the file the hub produces and the extension fetches
+ * — the same bytes, so a redundancy report can never be about a list the browser was never given.
+ * A checkout that has not compiled yet has no such file, and returns null: an empty list would
+ * claim every tier is entirely redundant, which is the loudest possible way to be wrong.
+ */
+function findSyncedListPath(): string | null {
+  const candidates: string[] = [];
+  const savePath = store.get('savePath');
+  if (typeof savePath === 'string' && isAbsolute(savePath)) {
+    candidates.push(join(dirname(savePath), 'browser.txt'));
+    candidates.push(join(dirname(savePath), 'adguardBrowser.txt'));
+  }
+  candidates.push(
+    join(app.getPath('documents'), 'Blockingmachine', 'browser.txt'),
+    join(app.getPath('documents'), 'Blockingmachine', 'adguardBrowser.txt'),
+    join(process.cwd(), 'packages/browser-extension/rules/browser.txt'),
+  );
+  for (const file of candidates) {
+    try {
+      if (existsSync(file)) return file;
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
 function getAssetPath(filename: string): string {  const assetCandidates = [
     join(process.resourcesPath, 'assets', filename),
     join(process.resourcesPath, filename),
@@ -3535,9 +3565,23 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           }
         }
 
+        // The synced list is found rather than chosen: the hub is what writes it, so the file it
+        // would be diffed against is already known. Absent one, `computeTierPlan` reports
+        // redundancy as unknown rather than as zero, so the card can say which of the two it is.
+        const syncedPath = findSyncedListPath();
+        let syncedText: string | null = null;
+        if (syncedPath) {
+          try {
+            syncedText = await fs.readFile(syncedPath, 'utf8');
+          } catch {
+            // A list that vanished between the check and the read is reported as absent.
+          }
+        }
+
         const result = computeTierPlan({
           files,
           ledger: ledgerText === null ? null : { text: ledgerText },
+          synced: syncedText === null ? null : { text: syncedText },
           enabled: parseEnabledTierIds(
             request?.enabled,
             manifestRuleResources().filter((entry) => entry.enabled).map((entry) => entry.id),
@@ -3571,6 +3615,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           ledger: result.ledger,
           ledgerPath: wanted,
           ledgerMissing,
+          synced: result.synced,
+          syncedPath: syncedText === null ? null : syncedPath,
+          redundantTiers: result.redundantTiers,
         };
       },
     );
