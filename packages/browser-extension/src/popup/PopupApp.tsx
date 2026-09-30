@@ -8,11 +8,12 @@ import {
 import { ElementScanPanel, type ElementScanResult } from './ElementScanPanel.js';
 import { LedgerStatusCard } from './LedgerStatusCard.js';
 import { LedgerExportCard } from './LedgerExportCard.js';
+import { TierDriftNotice } from './TierDriftNotice.js';
 import { TierPlanBasis } from './TierPlanBasis.js';
 import { downloadTextFile } from './downloadText.js';
 import type { LedgerStatus } from '../shared/ledgerStatus.js';
 import type { LedgerExportPayload } from '../shared/ledgerExport.js';
-import { formatTierCapacity, type StaticTierStatus } from '../shared/rulesetTiers.js';
+import { formatTierCapacity, type RulesetStatus } from '../shared/rulesetTiers.js';
 import { formatTierPlan, planTierSelection } from '../shared/tierPlanner.js';
 import {
   buildTierBlocking,
@@ -120,7 +121,7 @@ export const PopupApp: React.FC = () => {
   const [aiScan, setAiScan] = useState<ElementScanResult | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
 
-  const [tierStatus, setTierStatus] = useState<StaticTierStatus | null>(null);
+  const [tierStatus, setTierStatus] = useState<RulesetStatus | null>(null);
   const [tierHits, setTierHits] = useState<TierHitCounts>({});
   const [tierBusy, setTierBusy] = useState<string | null>(null);
 
@@ -204,7 +205,7 @@ export const PopupApp: React.FC = () => {
   /** Static ruleset tiers — shipped rules that never consume the dynamic quota. */
   const refreshTiers = useCallback(async () => {
     const res = await sendMessage({ type: 'GET_RULESET_TIERS' });
-    if (res?.success && res.status) setTierStatus(res.status as StaticTierStatus);
+    if (res?.success && res.status) setTierStatus(res.status as RulesetStatus);
     await refreshTierHits();
   }, [refreshTierHits]);
 
@@ -487,6 +488,29 @@ export const PopupApp: React.FC = () => {
     setTierBusy(null);
   }, [tierPlan, flash, refreshTiers]);
 
+  /**
+   * Asks the background to make the browser match what the user asked for — the saved selection
+   * while blocking is active, silence while it is paused everywhere.
+   *
+   * The drift notice is shown before this is clicked and stays up afterwards if it did not take:
+   * the one outcome worth flashing is that the browser still disagrees, because a silent failure
+   * here is exactly the state the notice exists to end.
+   */
+  const handleReapplyTiers = useCallback(async () => {
+    setTierBusy('__drift__');
+    const res = await sendMessage({ type: 'RECONCILE_RULESET_TIERS' });
+    const applied = res?.status as RulesetStatus | undefined;
+    if (!res?.success) {
+      flash(res?.error ?? 'Could not reconcile the tiers.', 'warn');
+    } else if (applied?.drift && !applied.drift.inSync) {
+      flash('The browser still disagrees with your saved selection.', 'warn');
+    } else {
+      flash('Reconciled the tiers with the browser.');
+    }
+    await refreshTiers();
+    setTierBusy(null);
+  }, [flash, refreshTiers]);
+
   const handlePicker = useCallback(async () => {
     await sendMessage({ type: 'START_ELEMENT_PICKER' });
     window.close();
@@ -751,6 +775,14 @@ export const PopupApp: React.FC = () => {
 
             {tierStatus && (
               <>
+                <TierDriftNotice
+                  drift={tierStatus.drift}
+                  tiers={tierStatus.tiers}
+                  suspended={tierStatus.suspended}
+                  onReapply={() => void handleReapplyTiers()}
+                  busy={tierBusy === '__drift__'}
+                />
+
                 <div className="ai-summary">
                   {formatTierCapacity(tierStatus)}
                   <span className="ai-summary-sub">{tierStatus.totalRules} shipped</span>

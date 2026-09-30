@@ -95,6 +95,7 @@ export interface ExtensionMessage {
     | 'GET_RULESET_TIERS'
     | 'SET_RULESET_TIER'
     | 'SET_RULESET_TIERS'
+    | 'RECONCILE_RULESET_TIERS'
     // ── Rule hit ledger (coverage measurement) ──
     | 'GET_RULE_HIT_STATS'
     | 'RESET_RULE_HIT_STATS'

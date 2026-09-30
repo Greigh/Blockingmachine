@@ -1263,6 +1263,18 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       rulesets.status().then((status) => sendResponse({ success: true, status }));
       return true;
 
+    // Reads the browser and repairs it to the state it should be in — the saved selection while
+    // blocking is active, silence while it is paused everywhere. `GET_RULESET_TIERS` can only
+    // report a disagreement; this is the call that can end one, which is why the drift notice
+    // offers it as a button rather than repairing behind the user's back.
+    case 'RECONCILE_RULESET_TIERS':
+      loadSiteControl()
+        .then((control) => rulesets.setSuspended(control.globalPaused))
+        .then(() => rulesets.status())
+        .then((status) => sendResponse({ success: true, status }))
+        .catch((err) => sendResponse({ success: false, error: String(err) }));
+      return true;
+
     case 'SET_RULESET_TIER': {
       const id = message.payload?.id;
       if (typeof id !== 'string') {
