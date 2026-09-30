@@ -31,6 +31,11 @@ export {
   HIGH_ABUSE_TLDS,
   SUSPICIOUS_AD_TOKENS,
   SUSPICIOUS_TRACKER_TOKENS,
+  // The hand-written half of the vocabulary, on its own. The tier derivation seeds from these and
+  // never from the shipped merge: the derived tokens are its output, so reading them back would
+  // make each run depend on the last.
+  HAND_WRITTEN_AD_TOKENS,
+  HAND_WRITTEN_TRACKER_TOKENS,
   SPECIFIC_NETWORK_TOKENS,
   DICTIONARY_COMPOUND_EXEMPTIONS,
   MULTI_TENANT_PLATFORMS,
@@ -64,8 +69,35 @@ export {
   getDbLists,
   refreshDb,
   getDbRefreshStatus,
+  withTemporaryVocabulary,
   type DbRefreshStatus,
 } from './reputation.js';
+
+// 2b. The tier/model agreement contract and the vocabulary derived from it. The families each
+// tier may be called are stated once here, so the suite that grades the shipped tiers and the
+// derivation that learns from them cannot disagree about what agreement means.
+export {
+  TIER_MODEL_FAMILIES,
+  TIER_VOCABULARY_SOURCES,
+  GENERIC_VOCABULARY_LABELS,
+  isUsableVocabularyToken,
+  vocabularyCandidatesFor,
+  tierVocabularySeeds,
+  compareTierVocabularyCorpus,
+  deriveTierVocabulary,
+  tierVocabularyProvenance,
+  renderTierVocabularyModule,
+  type DeriveTierVocabularyInput,
+  type TierVocabularyAttempt,
+  type TierVocabularyCorpusSample,
+  type TierVocabularyDerivation,
+  type TierVocabularyEvidence,
+  type TierVocabularyProvenance,
+  type TierVocabularyRejection,
+  type TierVocabularySeed,
+  type TierVocabularySeedCoverage,
+  type TierVocabularySeedSet,
+} from './tierVocabularyDerivation.js';
 
 export type {
   CorroborationAssessment,

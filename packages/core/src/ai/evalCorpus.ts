@@ -244,6 +244,14 @@ export const EVAL_CORPUS: EvalCase[] = [
   consumer('gitlab.com'),
   consumer('openstreetmap.org'),
   consumer('flightaware.com'),
+  // The consumer platforms whose *endpoint* zones the shipped tracking tiers block. They are here
+  // because a bare brand token is the shortcut that would call the site itself a tracker, and the
+  // corpus is where that has to be caught: a derivation that learns `tiktok` or `pinterest` from
+  // the endpoints the tiers ship is wrong unless these stay clean.
+  consumer('tiktok.com'),
+  consumer('pinterest.com'),
+  consumer('snapchat.com'),
+  consumer('facebook.com'),
 
   // ─── Device and IoT vendor services ────────────────────────────────────────
   device('diag.meethue.com'),

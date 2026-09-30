@@ -28,6 +28,8 @@
     "check:tiers": "node scripts/compile-tier-rulesets.mjs --check",
     "fit:element-weights": "node scripts/fit-element-weights.mjs --write",
     "check:element-weights": "node scripts/fit-element-weights.mjs --check",
+    "derive:vocabulary": "node scripts/derive-tier-vocabulary.mjs --write",
+    "check:vocabulary": "node scripts/derive-tier-vocabulary.mjs --check",
     "build:hotlist": "node scripts/build-hot-list.mjs --write",
     "ledger:merge": "node scripts/merge-browser-ledger.mjs",
     "check:hotlist": "node scripts/build-hot-list.mjs --check",
