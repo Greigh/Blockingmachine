@@ -1,6 +1,10 @@
 import { ELEMENT_HAND_TUNED_WEIGHTS, MiniAiElementClassifier } from '../ai/elementClassifier.js';
 import { ELEMENT_EVAL_CORPUS } from '../ai/elementEvalCorpus.js';
-import { evaluateElementClassifier, formatElementReport } from '../ai/elementEvaluation.js';
+import {
+  elementActionCalibrationPair,
+  evaluateElementClassifier,
+  formatElementReport,
+} from '../ai/elementEvaluation.js';
 
 /**
  * How much worse than the hand-tuned reference the shipped head's action-level ECE may be.
@@ -12,8 +16,8 @@ import { evaluateElementClassifier, formatElementReport } from '../ai/elementEva
 const ECE_REGRESSION_MARGIN = 0.005;
 
 /**
- * The same hold for the Brier score. On the acting cases the fitted head scores 0.0062
- * against the reference's 0.0059, a drift of +0.0003; the bound is kept so a later re-fit
+ * The same hold for the Brier score. On the scored cases the fitted head is 0.0033
+ * against the reference's 0.0030, a drift of +0.0003; the bound is kept so a later re-fit
  * cannot hide inside a statistic whose scale moved.
  */
 const BRIER_REGRESSION_MARGIN = 0.005;
@@ -91,20 +95,24 @@ describe('Element classifier evaluation', () => {
     // through the same harness, rather than as an absolute 0.1.
     //
     // The absolute bar had to go, and not because the new weights need the room. It was
-    // measuring the evidence-tier caps more than the weights: the harness derived an
-    // expectation to act from `maxAction`, so every case the corpus merely *permitted*
-    // acting on counted as a missed hide when the model correctly left it alone. Read that
-    // way the metric floored at the reference itself — 0.0999 against its own 0.1 gate — and
-    // no re-fit could beat it, so it was not measuring the weights at all.
+    // measuring the evidence-tier caps more than the weights, through two readings of the
+    // corpus the metric no longer makes: a `leave` verdict's confidence was read as an
+    // action probability (a class probability restated as a counterfactual), and a case
+    // the corpus merely *permitted* acting on was read as ground truth that acting
+    // happened — so a permitted suggest counted as a validated one. Read either way the
+    // metric floored near the reference itself and no re-fit could beat it, so it was not
+    // measuring the weights at all.
     //
-    // The metric has since been fixed rather than merely relaxed: a `leave` verdict is no
-    // longer scored, because its confidence is a class probability and not a probability
-    // that acting would have been right (see `elementActionCalibrationPair`). The number now
-    // averages over the 63 of 117 cases where the model acts; restraint is what
-    // `missedHides` and the action mix measure instead. On that corrected scale the two
-    // heads are close — reference 0.0424, shipped 0.0444, a delta of +0.0020 against a 0.005
-    // margin. The reference is a real competitor rather than a formality, being the
-    // centre the fit is pulled toward, so the bound is only asserted with it in the room.
+    // The metric has since been fixed rather than merely relaxed: only cases that state an
+    // expectation about acting are scored — `minAction` set (acting required) or
+    // `maxAction: 'leave'` (acting forbidden) — and the label is whether the verdict sits
+    // inside the required band (see `elementActionCalibrationPair`). That is 54 of 117
+    // cases: the must-hide set the model acts on. Restraint is what `missedHides` and the
+    // action mix measure instead. On that scale the two heads are close — reference 0.0346,
+    // shipped 0.0369, a delta of +0.0023 against a 0.005 margin. The reference is a real
+    // competitor rather than a formality, being the centre the fit is pulled toward, so
+    // the bound is only asserted with it in the room.
+    expect(report.calibration.scored).toBe(54);
     expect(report.calibration.ece).toBeLessThanOrEqual(referenceReport.calibration.ece + ECE_REGRESSION_MARGIN);
     expect(report.calibration.ece).toBeLessThan(referenceReport.calibration.ece + ECE_ABSOLUTE_HEADROOM);
     // The bound above is only meaningful if the reference is a real competitor.
@@ -112,8 +120,8 @@ describe('Element classifier evaluation', () => {
   });
 
   it('does not let the Brier score drift with it', () => {
-    // The same hold, on the other calibration statistic, over the same acting cases.
-    // Measured 0.0059 -> 0.0062 (+0.0003): the sharper head reorders its confidence without
+    // The same hold, on the other calibration statistic, over the same scored cases.
+    // Measured 0.0030 -> 0.0033 (+0.0003): the sharper head reorders its confidence without
     // making it meaningfully worse. What the fitted weights *do* improve is the head's own
     // probability calibration, a different quantity, measured on held-out cases in
     // element-weights-fit.test.ts.
@@ -189,5 +197,84 @@ describe('Element classifier evaluation', () => {
       expect(`${label}:${destroyed ? 'hidden' : 'left'}`).toBe(`${label}:left`);
     }
     expect(ELEMENT_EVAL_CORPUS.length).toBeGreaterThan(0);
+  });
+});
+
+describe('elementActionCalibrationPair', () => {
+  /** The minimum prediction shape the pair function reads: an action and a confidence. */
+  const prediction = (action: 'hide' | 'suggest' | 'leave', confidence = 80) =>
+    ({ action, confidence }) as Parameters<typeof elementActionCalibrationPair>[1];
+  const entry = (minAction?: 'hide' | 'suggest' | 'leave', maxAction: 'hide' | 'suggest' | 'leave' = 'hide') =>
+    ({ minAction, maxAction }) as Parameters<typeof elementActionCalibrationPair>[0];
+
+  it('scores an acting verdict inside the required band as 1', () => {
+    // The must-hide case: the corpus demands hiding, the model hid. The stated confidence
+    // is exactly the number the metric exists to grade.
+    expect(elementActionCalibrationPair(entry('hide', 'hide'), prediction('hide', 78))).toEqual({
+      predicted: 0.78,
+      actual: 1,
+    });
+  });
+
+  it('scores an undersold hide as 0, not as a validated action', () => {
+    // The regression this rule exists for: the corpus required a hide, the model merely
+    // suggested. Under `maxAction !== 'leave'` that labelled 1 — the corpus's permission
+    // was read as the model's vindication.
+    expect(elementActionCalibrationPair(entry('hide', 'hide'), prediction('suggest', 58)).actual).toBe(0);
+    expect(elementActionCalibrationPair(entry('hide', 'hide'), prediction('leave'))).toBeNull();
+  });
+
+  it('scores acting on a forbidden case as 0', () => {
+    // `maxAction: 'leave'` is the overconfidence direction: any verdict the model takes
+    // here is wrong regardless of how sure it is.
+    expect(elementActionCalibrationPair(entry(undefined, 'leave'), prediction('suggest', 60)).actual).toBe(0);
+    expect(elementActionCalibrationPair(entry(undefined, 'leave'), prediction('hide', 95)).actual).toBe(0);
+  });
+
+  it('does not score a case the corpus merely permits acting on', () => {
+    // 27 cases set `maxAction` above `leave` with no `minAction` — deliberately unlabeled
+    // about acting. Scoring them 1 claims the corpus validated acting; scoring them 0
+    // claims it forbade acting. Both readings let the metric be gamed by acting on exactly
+    // the cases nobody labelled, so the pair is null: a permitted suggest is not an
+    // expected action.
+    expect(elementActionCalibrationPair(entry(undefined, 'hide'), prediction('hide', 98))).toBeNull();
+    expect(elementActionCalibrationPair(entry(undefined, 'suggest'), prediction('suggest', 95))).toBeNull();
+    expect(elementActionCalibrationPair(entry(undefined, 'suggest'), prediction('leave'))).toBeNull();
+  });
+
+  it('never scores a leave verdict, even where acting was required', () => {
+    // Two reasons stack here: the confidence on a leave is a class probability rather than
+    // an action probability, and the case is already counted by `missedHides`. Scoring it
+    // on the number it never stated is the defect the metric shipped with.
+    expect(elementActionCalibrationPair(entry('hide', 'hide'), prediction('leave'))).toBeNull();
+  });
+
+  it('scores every acted case that states an expectation, and only those', () => {
+    // The corpus-level version of the rule: 54 must-hide cases state acting is required
+    // and 36 leave-only cases state it is forbidden; the 27 permitted-only cases state
+    // nothing. Whenever the model takes a verdict, the pair exists exactly for the cases
+    // that stated an expectation — what the metric averages over is decided by the
+    // corpus, not by where the model happens to act. A case the model left alone is never
+    // scored, so it asserts nothing here either way.
+    const classifier = new MiniAiElementClassifier();
+    let scored = 0;
+    for (const corpusEntry of ELEMENT_EVAL_CORPUS) {
+      const verdict = classifier.classify(corpusEntry.snapshot);
+      const pair = elementActionCalibrationPair(corpusEntry, verdict);
+      const states = corpusEntry.minAction !== undefined || corpusEntry.maxAction === 'leave';
+      if (verdict.action === 'leave') {
+        expect(pair).toBeNull();
+        continue;
+      }
+      if (states) {
+        expect(pair).not.toBeNull();
+        scored += 1;
+      } else {
+        expect(pair).toBeNull();
+      }
+    }
+    // 54: every must-hide case is acted on — `missedHides` and `undersoldHides` are pinned
+    // empty above — so the metric averages over exactly the required-acting set.
+    expect(scored).toBe(54);
   });
 });

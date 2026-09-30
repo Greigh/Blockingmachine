@@ -35,10 +35,10 @@ export const ELEMENT_FITTED_PROVENANCE: ElementWeightProvenance = {
     "fittedCorrect": 117
   },
   "actionCalibration": {
-    "baselineEce": 0.0424,
-    "fittedEce": 0.0444,
-    "baselineBrier": 0.0059,
-    "fittedBrier": 0.0062
+    "baselineEce": 0.0346,
+    "fittedEce": 0.0369,
+    "baselineBrier": 0.003,
+    "fittedBrier": 0.0033
   },
   "largestWeightChange": {
     "feature": "passiveSource",

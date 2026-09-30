@@ -12,6 +12,14 @@ Nothing here is scheduled. The list exists so nothing is *relied on* silently.
 
 ## Open
 
+### 5. The calibration metric's scored set is co-extensive with the model's acting set only while the safety pins hold
+
+- **Where:** `packages/core/src/ai/elementEvaluation.ts` (`elementActionCalibrationPair`), guarded in `packages/core/src/__tests__/element-ai-evaluation.test.ts`.
+- **What:** The corrected metric scores the 54 must-hide cases the model *acts on*. If a future weight change undersold one of those to `suggest`, that case would drop out of the calibration average via the leave-exclusion exactly when it becomes a calibration error — the average would shrink and possibly improve, absorbing the regression. Not silent today: `undersoldHides`/`missedHides` are pinned empty in the same suite, so the regression fails loudly there. The residual risk is only that the calibration number itself would look healthy while the safety assertion carried the whole load.
+- **Why left:** The obvious hardening (score an undersold hide as `actual: 0` even on a `leave`-flavoured minimum, or report `unscoredRegressions` beside `scored`) conflates two axes in one number; deciding between them is a metric-design call, not a bug.
+- **Fix shape:** Either widen the pair to score must-hide cases on any verdict (confidence on a `leave` stays uninterpreted, so the label would need a separate convention), or add a report field counting expectations the model dodged by staying silent, asserted non-decreasing.
+- **Verify:** A synthetic corpus entry with `minAction: 'hide'` that the shipped model leaves alone fails the calibration test rather than shrinking the average.
+
 ### 1. The popup reports a site pause or allowance the browser may not be enforcing
 
 - **Where:** `packages/browser-extension/src/shared/siteControl.ts` (`deriveShieldStatus`, ~line 174), `packages/browser-extension/src/background/index.ts` (`reconcileDynamicRules`, ~line 390).
@@ -48,6 +56,7 @@ Nothing here is scheduled. The list exists so nothing is *relied on* silently.
 
 ## Closed
 
+- **Element calibration scoring a permitted suggest as an expected action** — fixed (this commit, 2026-09-30). The pair now states ground truth only where the corpus requires or forbids acting; re-measured at 54 of 117 cases, reference ECE 0.0346 / shipped 0.0369. The residual softness is recorded as open flag 5.
 - **`--residual` silently falling back to `tier_core`** — fixed in `fb7bb83` (2026-09-29). Invalid names now refuse with the valid tiers listed; the parser's post-hoc guard is gone.
 - **`--json` payloads routed through the colourised logger** — fixed in `fb7bb83`. `writeJson` writes stdout untouched; `tier-plan --json` and `validate --verbose` use it; the tier-plan test parses the real stream.
 - **CI not running `check:vocabulary`** — fixed in `fb7bb83`. The "Verify generated artifacts" step re-derives the vocabulary on every push.

@@ -11,12 +11,12 @@
  *     had no business hiding. The target is zero, and it is the number to watch.
  *  2. **Coverage** — `missedHides` counts ads, trackers and nags left alone. This is
  *     the number to *improve*; it trades directly against safety only if the fixes
- *     are sloppy, which is why the corpus pins both directions.
- *  3. **Accuracy & calibration** — whether the class label means anything over every
- *     case, and whether the stated confidence means anything over the cases the model
- *     acted on (ECE and Brier). Acting is the only thing a confidence is attached to,
- *     so it is the only thing it can be honest or dishonest about; restraint is
- *     measured by `missedHides` and the action mix instead.
+ *     are sloppy, which is why the corpus pins both directions. * 3. **Accuracy & calibration** — whether the class label means anything over every
+ *     case, and whether the stated confidence means anything over the cases where the
+ *     corpus states an expectation about acting — required or forbidden — rather than
+ *     merely permitting it (ECE and Brier). Acting is the only thing a confidence is
+ *     attached to, so it is the only thing it can be honest or dishonest about;
+ *     restraint is measured by `missedHides` and the action mix instead.
  */
 
 import type { ElementAction, ElementClass, ElementPrediction, ElementSnapshot } from './elementClassifier.js';
@@ -35,34 +35,52 @@ export interface ElementActionCalibrationPair {
   actual: 0 | 1;
 }
 
+/** Acting gets more consequential as it gets more aggressive, so a band is comparable by rank. */
+const ACTION_RANK: Record<ElementAction, number> = { leave: 0, suggest: 1, hide: 2 };
+
 /**
- * The pair for one case, or `null` when there is nothing to score.
+ * The pair for one case, or `null` when the corpus states no expectation about acting.
  *
  * Calibration here is precision calibration: **when the model acts, is its stated
- * confidence the probability that acting was right?** That is a question the model
- * actually answers, because `confidence` travels with an action.
+ * confidence the probability that acting was right?** That question needs ground truth
+ * about acting, and the corpus states one only at the edges of its action band:
  *
- * It used to score every case, reading a `leave` verdict as `1 - confidence` — i.e.
- * taking a class probability ("84% sure this is Content") and reinterpreting it as an
- * action probability ("16% chance that hiding would have been right"). Nothing in the
- * model produces that second number, and the substitution was not cosmetic. Measured:
- * 36 of 117 cases are leave-only, most of them at 45–84% class confidence, and they
- * dragged the metric's floor to ~0.12 and made its ceiling move whenever a leave-only
- * case was added — including for the hand-tuned reference, by the same 0.021, which is
- * how a *threshold* got to be knife-edge without the weights changing at all.
+ *  - **Required** (`minAction: 'hide'`): acting is the job. The label is 1 when the
+ *    verdict sits inside the band and 0 when it does not — an undersold hide is a
+ *    calibration error, not a validated action.
+ *  - **Forbidden** (`maxAction: 'leave'`): acting is a defect. Any verdict the model
+ *    takes here is labelled 0, which is the only place overconfidence can show.
+ *  - **Merely permitted** (`minAction` unset, `maxAction` above `leave`): the corpus
+ *    deliberately says both acting and restraint are acceptable, so there is no honest
+ *    label — scoring it 1 would claim the corpus validated acting (a permitted suggest
+ *    counted as an expected one), scoring it 0 would claim it forbade acting. Either
+ *    reading lets the metric be gamed by acting on exactly the cases nobody labelled,
+ *    so the pair is `null`. These cases are not unmeasured: `destroyedContent`,
+ *    `undersoldHides`, `missedHides` and the action mix all still see them.
  *
- * Cases the model left alone are excluded rather than scored on a number it never
- * stated. They are not unmeasured: `missedHides` and `undersoldHides` count them, the
- * action mix shows them, and class accuracy still covers every case.
+ * A `leave` verdict is likewise never scored, for a second reason: its confidence is a
+ * class probability ("84% sure this is Content"), not an action probability ("16%
+ * chance that hiding would have been right"), and nothing in the model produces that
+ * second number. Scoring leaves anyway once dragged the metric's floor to ~0.10 and made
+ * its ceiling move whenever a leave-only case was added — including for the hand-tuned
+ * reference, which is how a *threshold* got to be knife-edge without the weights
+ * changing at all.
  */
 export function elementActionCalibrationPair(
   entry: ElementEvalCase,
   prediction: ElementPrediction,
 ): ElementActionCalibrationPair | null {
   if (prediction.action === 'leave') return null;
+  // `minAction` unset means the corpus requires nothing; unless acting is forbidden
+  // outright, the case carries no expectation to score against.
+  if (entry.minAction === undefined && entry.maxAction !== 'leave') return null;
+  const minimum = entry.minAction ?? 'leave';
+  const actingInsideTheBand =
+    ACTION_RANK[prediction.action] >= ACTION_RANK[minimum] &&
+    ACTION_RANK[prediction.action] <= ACTION_RANK[entry.maxAction];
   return {
     predicted: prediction.confidence / 100,
-    actual: entry.maxAction === 'leave' ? 0 : 1,
+    actual: actingInsideTheBand ? 1 : 0,
   };
 }
 
@@ -133,7 +151,7 @@ export interface ElementEvaluationReport {
   confusion: Array<{ expected: ElementClass; actual: ElementClass; count: number; examples: string[] }>;
   macroF1: number;
   weightedF1: number;
-  /** `scored` of the cases carried an action to calibrate; the rest were left alone. */
+  /** `scored` of the cases carried an expectation the model could be held to; the rest specified none. */
   calibration: { ece: number; brier: number; bins: number; scored: number; total: number };
   byFamily: Array<{ family: string; total: number; accuracy: number }>;
   actionMix: Record<ElementAction, number>;
@@ -309,7 +327,8 @@ export function formatElementReport(report: ElementEvaluationReport): string {
   lines.push(`  class accuracy        : ${(report.accuracy * 100).toFixed(1)}% (${report.correct}/${report.total})`);
   lines.push(`  macro F1              : ${report.macroF1.toFixed(3)}   weighted F1: ${report.weightedF1.toFixed(3)}`);
   lines.push(
-    `  acting calibration    : ECE ${report.calibration.ece.toFixed(3)}   Brier ${report.calibration.brier.toFixed(3)}   (${report.calibration.scored} of ${report.calibration.total} cases acted)`,
+    `  acting calibration    : ECE ${report.calibration.ece.toFixed(3)}   Brier ${report.calibration.brier.toFixed(3)}` +
+      `   (${report.calibration.scored} of ${report.calibration.total} cases stated an expectation about acting)`,
   );
   lines.push(`  actions               : ${report.actionMix.hide} hide, ${report.actionMix.suggest} suggest, ${report.actionMix.leave} leave`);
   lines.push('');
