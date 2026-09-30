@@ -9,6 +9,10 @@ import type {
 } from '../types/';
 import { ServiceMismatchBanner } from '../components/ServiceMismatchBanner';
 import { UnboundReachabilityCard } from '../components/UnboundReachabilityCard';
+import {
+  ExtensionTierPlanCard,
+  type TierPlanResult,
+} from '../components/ExtensionTierPlanCard';
 import type {
   UnboundReachability,
   UnboundReachabilitySnapshot,
@@ -98,6 +102,40 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
 
   // Home Assistant Live API inspector
   const [haApiPreview, setHaApiPreview] = useState<string | null>(null);
+  const [tierPlanState, setTierPlanState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [tierPlan, setTierPlan] = useState<TierPlanResult | null>(null);
+  const [tierPlanError, setTierPlanError] = useState<string | null>(null);
+
+  /**
+   * Reads the extension's tier plan from the main process.
+   *
+   * No capacity is sent, so the plan is computed against Chrome's guaranteed 30,000 — which is the
+   * honest number for a checkout, and is stated as such in the plan's own explanation. A figure
+   * the browser is actually granting cannot be known outside a browser, and inventing one here
+   * would make the hub's answer look like a measurement.
+   */
+  const loadTierPlan = useCallback(async () => {
+    if (!window.electron?.getExtensionTierPlan) return;
+    setTierPlanState((prev) => (prev === 'ready' ? prev : 'loading'));
+    try {
+      const res = await window.electron.getExtensionTierPlan();
+      if (!isMountedRef.current) return;
+      if (res?.ok) {
+        setTierPlan(res);
+        setTierPlanError(null);
+        setTierPlanState('ready');
+      } else {
+        setTierPlan(null);
+        setTierPlanError(res?.error ?? 'The tier plan is unavailable.');
+        setTierPlanState('error');
+      }
+    } catch (error) {
+      if (!isMountedRef.current) return;
+      setTierPlan(null);
+      setTierPlanError(error instanceof Error ? error.message : String(error));
+      setTierPlanState('error');
+    }
+  }, []);
   const [isTestingHaApi, setIsTestingHaApi] = useState(false);
 
   const handleInspectHaApi = async () => {
@@ -295,6 +333,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   // Load configuration & server status on mount
   useEffect(() => {
     isMountedRef.current = true;
+    void loadTierPlan();
 
     if (window.electron?.getExportFormat) {
       window.electron.getExportFormat().then((fmt) => {
@@ -1812,6 +1851,21 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                   </button>
                 </div>
               </div>
+
+              {/* Extension static tier capacity.
+
+                  Sits with the browser extension's own endpoints because that is what it is about:
+                  the four tier rulesets the extension ships, whether they fit, and what the plan
+                  is worth. The extension popup answers the same question against a live grant the
+                  hub cannot see, so this one asks for a capacity explicitly rather than reporting
+                  Chrome's guaranteed floor as though it were the real one. */}
+              <ExtensionTierPlanCard
+                state={tierPlanState}
+                result={tierPlan}
+                error={tierPlanError}
+                enabled={[]}
+                onRefresh={loadTierPlan}
+              />
 
               {/* Live Status Inspector */}
               <div className="deploy-tool-box">

@@ -441,6 +441,16 @@ export interface ElectronAPI {
   setSinkholeConfig: (config: Partial<SinkholeConfig>) => Promise<{ success: boolean; error?: string }>;
   syncSinkholes: () => Promise<{ results: SinkholeSyncResult[] }>;
   getSavePath: () => Promise<string>;
+  /**
+   * The extension's static tier capacity plan, computed from the tier rulesets on disk by the
+   * same `computeTierPlan` the CLI uses. `capacity` asks "what if the browser granted only this
+   * many slots", which is the question the hub can answer and a browser can only report.
+   */
+  getExtensionTierPlan: (request?: {
+    capacity?: number;
+    hitsPath?: string;
+    enabled?: string;
+  }) => Promise<import('../components/ExtensionTierPlanCard.js').TierPlanResponse>;
   setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;
   selectSavePath: () => Promise<string>;
   runImportProcess: () => Promise<ProcessingResult>;

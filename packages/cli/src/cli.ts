@@ -22,6 +22,7 @@ import { ServeCommand } from "./commands/ServeCommand.js";
 import { AiScanCommand } from "./commands/AiScanCommand.js";
 import { AiCrawlCommand } from "./commands/AiCrawlCommand.js";
 import { CoverageCommand } from "./commands/CoverageCommand.js";
+import { TierPlanCommand } from "./commands/TierPlanCommand.js";
 import { listRuleSnapshots, rollbackSnapshot } from "./lib/db.js";
 import { EXPORT_FORMATS, type SupportedFormat } from "@blockingmachine/core";
 import type { MetaConfig } from "./types.js";
@@ -408,10 +409,40 @@ program
     }
   });
 
+program
+  .command("tier-plan")
+  .description("[Beta] Report which static tiers are worth keeping on, and at what capacity")
+  .option("-d, --rules-dir <dir>", "Directory holding the tier_*.json rulesets", "rules")
+  .option("--hits <file>", "Rule-hit ledger, as exported by the extension, to weight the plan by what blocked")
+  .option("-c, --capacity <number>", "Static slots to plan against", "30000")
+  .option("-e, --enabled <ids>", "Comma-separated tiers to treat as currently on")
+  .option("--json", "Output machine-readable JSON result")
+  .action(async (cmdOptions: { rulesDir?: string; hits?: string; capacity?: string; enabled?: string; json?: boolean }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new TierPlanCommand({ config, logger });
+      const capacity = cmdOptions.capacity ? parseInt(cmdOptions.capacity, 10) : undefined;
+      const res = await cmd.execute({
+        rulesDir: cmdOptions.rulesDir,
+        hits: cmdOptions.hits,
+        capacity: Number.isFinite(capacity) ? capacity : undefined,
+        enabled: cmdOptions.enabled,
+        json: cmdOptions.json,
+      });
+      if (!res.success && !cmdOptions.json) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Tier plan failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
 const snapshotProgram = program
   .command("snapshot")
   .description("Manage database snapshots and rollbacks");
-
 snapshotProgram
   .command("list")
   .description("List all available rule snapshots")

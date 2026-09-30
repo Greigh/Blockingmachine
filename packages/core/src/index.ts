@@ -86,6 +86,8 @@ export * from "./coverage.js";
 // Browser-reported rule hits, aggregated across sessions — the evidence the trimmed hot set is
 // built from when it comes from real usage rather than a captured trace.
 export * from "./ledgerAggregate.js";
+export * from "./tiers.js";
+export * from "./tierPlanInput.js";
 export * from "./ruleHost.js";
 
 // Replaying captured requests through a compiled rule set (the offline half of a measurement)

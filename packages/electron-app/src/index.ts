@@ -83,6 +83,11 @@ import {
   evaluateDomainRules,
   filterDNSRules,
   filterBrowserRules,
+  STATIC_RULE_TIERS,
+  manifestRuleResources,
+  computeTierPlan,
+  parseEnabledTierIds,
+  type TierFileInput,
   type AiProviderConfig,
   type AiScanResult,
   type RawDnsQuery,
@@ -1109,8 +1114,35 @@ function getTraySharedState(): TraySharedState {
   };
 }
 
-function getAssetPath(filename: string): string {
-  const assetCandidates = [
+/**
+ * Where the extension's static tier rulesets are, if they are anywhere this app can see.
+ *
+ * Searched rather than configured because there are two legitimate answers and the hub runs in
+ * both: a checkout has them beside the extension package, and a packaged hub has them copied into
+ * its resources. A packaged *extension* is a build artifact the hub does not ship, so the third
+ * candidate is the one a user is most likely to be looking at when the feature appears not to
+ * work — hence the third path, and hence the handler's refusal to report a plan for nothing.
+ */
+function findTierRulesDir(): string | null {
+  const candidates = [
+    join(process.resourcesPath, 'assets', 'rules'),
+    join(process.resourcesPath, 'rules'),
+    join(app.getAppPath(), 'assets', 'rules'),
+    join(__dirname, '../../browser-extension/rules'),
+    join(process.cwd(), 'packages/browser-extension/rules'),
+    join(process.cwd(), 'rules'),
+  ];
+  for (const dir of candidates) {
+    try {
+      if (existsSync(dir) && existsSync(join(dir, 'tier_core.json'))) return dir;
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
+function getAssetPath(filename: string): string {  const assetCandidates = [
     join(process.resourcesPath, 'assets', filename),
     join(process.resourcesPath, filename),
     join(app.getAppPath(), 'assets', filename),
@@ -3434,6 +3466,107 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle('get-save-path', async (): Promise<string> => {
       return store.get('savePath');
     });
+
+    /**
+     * The extension's static tier capacity plan, computed from the tier rulesets on disk.
+     *
+     * The hub is where the extension is configured and packaged, and until now the one question
+     * that decided what a packaged build shipped — "will these four tiers fit, and which are worth
+     * keeping on?" — could only be answered inside a browser, against a live grant the hub cannot
+     * see. The arithmetic is `computeTierPlan` in core, the same function the CLI and the popup's
+     * planner use, so the three cannot report different plans for the same files; what this
+     * handler owns is finding the files and handing over bytes.
+     *
+     * The rules directory is searched rather than assumed. A packaged hub has the tier files under
+     * its resources; a checkout has them beside the extension, and a packaged *extension* is a
+     * build artifact this app does not ship. When none is found the handler says so instead of
+     * reporting a plan for an empty set, which would look like "everything fits".
+     */
+    ipcMain.handle(
+      'get-extension-tier-plan',
+      async (
+        _event: IpcMainInvokeEvent,
+        request?: { capacity?: number; hitsPath?: string; enabled?: string },
+      ) => {
+        const rulesDir = findTierRulesDir();
+        if (!rulesDir) {
+          return {
+            ok: false as const,
+            error:
+              'No tier ruleset directory was found. It sits beside the extension checkout at ' +
+              'packages/browser-extension/rules; a packaged hub does not ship one.',
+          };
+        }
+
+        const files: TierFileInput[] = [];
+        for (const tier of STATIC_RULE_TIERS) {
+          const file = join(rulesDir, basename(tier.path));
+          try {
+            files.push({ id: tier.id, rules: JSON.parse(await fs.readFile(file, 'utf8')) });
+          } catch (error) {
+            files.push({
+              id: tier.id,
+              rules: null,
+              readError: `cannot read ${file}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            });
+          }
+        }
+
+        // The ledger is optional and its absence is not an error: with no ledger the plan is
+        // ranked by rule count and says so, which is a true statement rather than a missing one.
+        let ledgerText: string | null = null;
+        if (typeof request?.hitsPath === 'string' && request.hitsPath.trim()) {
+          try {
+            ledgerText = await fs.readFile(request.hitsPath, 'utf8');
+          } catch (error) {
+            return {
+              ok: false as const,
+              error: `cannot read the ledger at ${request.hitsPath}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            };
+          }
+        }
+
+        const result = computeTierPlan({
+          files,
+          ledger: ledgerText === null ? null : { text: ledgerText },
+          enabled: parseEnabledTierIds(
+            request?.enabled,
+            manifestRuleResources().filter((entry) => entry.enabled).map((entry) => entry.id),
+          ),
+          capacity: typeof request?.capacity === 'number' ? request.capacity : undefined,
+        });
+
+        return {
+          ok: true as const,
+          rulesDir,
+          capacitySlots: result.capacitySlots,
+          rows: result.rows,
+          broken: result.broken,
+          plan: {
+            enabled: result.plan.enabled,
+            enabledRules: result.plan.enabledRules,
+            totalRules: result.plan.totalRules,
+            staticHeadroom: result.plan.staticHeadroom,
+            bindingConstraint: result.plan.bindingConstraint,
+            benefit: result.plan.benefit,
+            benefitSource: result.plan.benefitSource,
+            explanation: result.plan.explanation,
+          },
+          basis: result.basis
+            ? {
+                source: result.basis.source,
+                reason: result.basis.reason,
+                unmeasured: result.basis.unmeasured,
+              }
+            : null,
+          ledger: result.ledger,
+        };
+      },
+    );
 
     ipcMain.handle(
       'set-save-path',
