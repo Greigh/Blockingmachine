@@ -662,6 +662,121 @@ export function planListRules(
   };
 }
 
+/**
+ * Which half of the extension's rules a dynamic rule belongs to, decided by its priority.
+ *
+ * The two halves are installed by different parts of the extension and have to be replaceable
+ * independently: the user's own decisions (a paused site, an allowed domain) live at
+ * {@link PRIORITY_USER_ALLOW} and above, and every rule a compiled list produces lives below it,
+ * because that is what makes an explicit decision outrank the list by construction. `planSiteControlRules`
+ * only ever emits the first family and `planListRules` only ever the second, so a rule's priority is a
+ * reliable statement about where it came from rather than a heuristic.
+ */
+export type DynamicRuleFamily = 'user' | 'list';
+
+/** The family a rule belongs to, read from the priority the browser reports. */
+export function ruleFamily(priority: number | undefined): DynamicRuleFamily {
+  return (priority ?? 0) >= PRIORITY_USER_ALLOW ? 'user' : 'list';
+}
+
+/** The browser's dynamic rules, split by the family that installed them. */
+export interface InstalledRuleFamilies {
+  /** Rules the user's own decisions produced. */
+  user: chrome.declarativeNetRequest.Rule[];
+  /** Rules compiled from a list — the synced blocklist and the user's custom rules. */
+  list: chrome.declarativeNetRequest.Rule[];
+}
+
+/**
+ * A stable identity for one rule, used to compare what the extension would install with what the
+ * browser already holds.
+ *
+ * Deliberately built from the fields DNR actually matches on, sorted where order is not meaningful:
+ * two rules that agree on all of these are the same rule to the browser, whatever their ids are, and
+ * ids are exactly what changes between two installs of the same plan.
+ */
+function ruleKey(
+  priority: number | undefined,
+  action: string,
+  urlFilter: string,
+  resourceTypes: readonly string[] | undefined,
+): string {
+  return `${priority ?? 0}|${action}|${urlFilter}|${[...(resourceTypes ?? [])].sort().join(',')}`;
+}
+
+/** The identity of a rule this extension is about to install. */
+export function plannedRuleKey(rule: PlannedRule): string {
+  return ruleKey(rule.priority, rule.action, rule.pattern, rule.resourceTypes);
+}
+
+/** The identity of a rule the browser is holding. */
+export function installedRuleKey(rule: chrome.declarativeNetRequest.Rule): string {
+  return ruleKey(
+    rule.priority,
+    rule.action?.type ?? '',
+    rule.condition?.urlFilter ?? '',
+    rule.condition?.resourceTypes as readonly string[] | undefined,
+  );
+}
+
+/**
+ * Whether the user's own decisions are already installed exactly as the browser reports them.
+ *
+ * The comparison runs in both directions on purpose. A decision with no rule behind it means the
+ * user is not getting what they asked for — a pause that is not pausing — while a rule with no
+ * decision behind it is blocking the user asked to allow, which is the more expensive direction to
+ * be wrong in. The caller supplies the browser's reading, so this is a reconcile rather than a
+ * belief: nothing here decides what the browser holds.
+ *
+ * A global pause is the empty case rather than a plan of its own, because that is what the pause
+ * installs: no rules at all, for either family.
+ */
+export function userDecisionsAreInstalled(
+  families: InstalledRuleFamilies,
+  control: SiteControlOptions = {},
+): boolean {
+  const expected = (control.globalPaused ? [] : planSiteControlRules(control)).map(plannedRuleKey).sort();
+  const installed = families.user.map(installedRuleKey).sort();
+  return expected.length === installed.length && expected.every((key, index) => key === installed[index]);
+}
+
+/**
+ * Whether every rule the user saved by hand has a rule installed for it.
+ *
+ * The same question as {@link userDecisionsAreInstalled}, asked of the other half of the user's own
+ * state: "block this domain" from the context menu and a quarantine rule both write to storage and
+ * then apply, and an apply that throws leaves the decision saved and unenforced. Unlike the pause
+ * and allow decisions these are compiled by the list planner, so they arrive in the list family and
+ * are invisible to a check that only looks at priorities.
+ *
+ * Compared on the filter rather than on the whole rule, deliberately. The planner merges and bounds,
+ * so the rule a saved line ends up as depends on what else was in the batch — whereas the filter is
+ * the thing the user asked for. A stricter comparison could never be satisfied for a line the
+ * planner merges, and a check that can never be satisfied is a repair loop rather than a reconcile.
+ *
+ * A line the planner refuses outright contributes no filter, so it is not required: the rule was
+ * never installable, and asking for it forever would be asking the wrong question.
+ *
+ * The decisions are planned *with* the caller's site control, and the call is answered by the pause
+ * when there is one, because a rule that is legitimately absent must not read as a rule that failed
+ * to install. A saved rule the user has since allowed the domain of is suppressed by the planner on
+ * purpose, and a global pause installs nothing at all; treating either as a missing rule would make
+ * this a repair that runs on every worker start and never converges.
+ */
+export function customRulesAreInstalled(
+  families: InstalledRuleFamilies,
+  customRules: readonly string[],
+  control: SiteControlOptions = {},
+): boolean {
+  if (customRules.length === 0) return true;
+  if (control.globalPaused) return true;
+
+  const installedFilters = new Set(
+    families.list.map((rule) => rule.condition?.urlFilter).filter((filter): filter is string => Boolean(filter)),
+  );
+  return planListRules([...customRules], control).rules.every((rule) => installedFilters.has(rule.pattern));
+}
+
 export class DnrManager {
   private nextRuleId = 1;
 
@@ -671,24 +786,63 @@ export class DnrManager {
   }
 
   /**
+   * Reads the browser's dynamic rules, split into the user's own rules and the list-derived ones.
+   *
+   * Returns null rather than an empty pair when the browser will not answer, because "no rules"
+   * and "no reading" lead to opposite decisions: the first is a reason to install, the second is a
+   * reason to leave the browser alone.
+   */
+  async installedFamilies(): Promise<InstalledRuleFamilies | null> {
+    try {
+      const rules = await chrome.declarativeNetRequest.getDynamicRules();
+      const families: InstalledRuleFamilies = { user: [], list: [] };
+      for (const rule of rules) families[ruleFamily(rule.priority)].push(rule);
+      return families;
+    } catch (err) {
+      console.warn('[DNR] Could not read the browser\'s dynamic rules:', err);
+      return null;
+    }
+  }
+
+  /**
    * Updates dynamic DNR rules from a set of domain/adblock strings, plus the
    * user's per-site decisions (pauses and explicit domain allowances).
    * Respects browser dynamic rule quotas and prioritizes exceptions and high-priority rules.
+   *
+   * Reads the browser's current rules first, in both directions of the change:
+   *
+   *  - They are what gets removed, so this can never leave a rule behind that the caller did not
+   *    ask for, and never remove one by guessing at an id range.
+   *  - They are what is *kept* when `replaceInstalledList` is false. A service worker that has not
+   *    fetched the list yet holds no lines to compile, and the destructive reading of "no lines" is
+   *    to clear the blocklist and re-add nothing — turning a site pause into an unscanned browser.
+   *    The installed rules from the last successful compilation are the only copy of that list the
+   *    extension has, and they are a faithful one: the planner below is the same pure function that
+   *    produced them. So the list family is left exactly as the browser holds it, minus the rules
+   *    this call's own lines supersede, and only the user's decisions are replaced.
    */
-  async updateDynamicRules(ruleLines: string[], control: SiteControlOptions = {}): Promise<number> {
+  async updateDynamicRules(
+    ruleLines: string[],
+    control: SiteControlOptions = {},
+    options: { replaceInstalledList?: boolean } = {},
+  ): Promise<number> {
+    const replaceInstalledList = options.replaceInstalledList !== false;
+
     const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
-    const removeRuleIds = existingRules.map((r) => r.id);
+    const installedUserRules = existingRules.filter((rule) => ruleFamily(rule.priority) === 'user');
+    const installedListRules = existingRules.filter((rule) => ruleFamily(rule.priority) === 'list');
 
     // User-authored rules are allocated first so they survive quota trimming.
     const userRules = planSiteControlRules(control);
 
     // Master pause: install no rules at all. The pause is a storage-level
     // decision (see shared/siteControl), so the user's allowances survive it and
-    // come back the moment blocking is resumed.
+    // come back the moment blocking is resumed. Both families go: the promise is
+    // that nothing is blocked, and the tiers are silenced by the caller.
     if (control.globalPaused) {
       try {
         await chrome.declarativeNetRequest.updateDynamicRules({
-          removeRuleIds,
+          removeRuleIds: [...installedUserRules, ...installedListRules].map((rule) => rule.id),
           addRules: [],
         });
       } catch (err) {
@@ -703,8 +857,36 @@ export class DnrManager {
       MV3_LIMITS.DEFAULT_MAX_DYNAMIC_RULES;
     const quotaCap = Math.min(MV3_LIMITS.SAFE_DYNAMIC_WATERMARK, Math.max(1000, maxQuota - 500));
 
-    // User rules are already allocated, so the blocklist budget is what remains.
-    const plan = planListRules(ruleLines, control, Math.max(0, quotaCap - userRules.length));
+    // The installed list rules this call is about to re-plan: the subset whose urlFilter the
+    // caller's own lines produce (the user's custom rules, in the preserving case). Comparing on the
+    // filter rather than on the whole rule is deliberate — it also retires a *stale* variant of a
+    // filter the fresh plan no longer wants, such as a scoped rule whose scope was edited.
+    const ownedFilters = replaceInstalledList
+      ? null
+      : new Set(
+          planListRules(ruleLines, control, Math.max(0, quotaCap - userRules.length)).rules.map(
+            (rule) => rule.pattern,
+          ),
+        );
+    const keptListRules =
+      ownedFilters === null
+        ? []
+        : installedListRules.filter((rule) => !ownedFilters.has(rule.condition?.urlFilter ?? ''));
+    const removeRuleIds = [
+      ...installedUserRules.map((rule) => rule.id),
+      ...(ownedFilters === null
+        ? installedListRules
+        : installedListRules.filter((rule) => ownedFilters.has(rule.condition?.urlFilter ?? ''))
+      ).map((rule) => rule.id),
+    ];
+
+    // The blocklist budget is what remains after the user's rules *and* whatever of the last
+    // compilation is being kept, so a preserving call cannot push the total past the watermark.
+    const plan = planListRules(
+      ruleLines,
+      control,
+      Math.max(0, quotaCap - userRules.length - keptListRules.length),
+    );
     if (plan.overflow > 0) {
       console.warn(
         `[Mv3Guard] Rule list exceeds safe MV3 dynamic limit (${quotaCap}). Bound ${plan.rules.length} rules, ${plan.overflow} overflow rules pruned. Use @blockingmachine/system-daemon for unlimited network-level filtering.`
@@ -716,7 +898,7 @@ export class DnrManager {
       'allowAllRequests') as chrome.declarativeNetRequest.RuleActionType;
 
     const addRules: chrome.declarativeNetRequest.Rule[] = [];
-    let nextRuleId = 1;
+    let nextRuleId = keptListRules.reduce((max, rule) => Math.max(max, rule.id), 0) + 1;
 
     for (const planned of [...userRules, ...plan.rules]) {
       const action =
@@ -757,6 +939,9 @@ export class DnrManager {
       throw err;
     }
 
-    return addRules.length;
+    // What the browser is holding now, not what this call added: the popup's fallback count is a
+    // statement about installed protection, and a preserving call adds few rules while keeping
+    // thousands.
+    return keptListRules.length + addRules.length;
   }
 }

@@ -1,5 +1,6 @@
-import { DnrManager } from './dnrManager.js';
+import { DnrManager, customRulesAreInstalled, userDecisionsAreInstalled } from './dnrManager.js';
 import { RulesetManager } from './rulesetManager.js';
+import { ALARM_PERIODIC_SYNC, ALARM_TELEMETRY_PUSH, reconcileAlarms } from './alarmSchedule.js';
 import { RuleHitStats } from './ruleHitStats.js';
 import { LedgerSessionRecorder } from './ledgerSession.js';
 import { StaticRuleIndex } from './staticRuleIndex.js';
@@ -44,6 +45,7 @@ import {
   STORAGE_KEY_COSMETICS,
   STORAGE_KEY_COSMETICS_ENABLED,
   STORAGE_KEY_CUSTOM_RULES,
+  STORAGE_KEY_LAST_SYNC_AT,
   STORAGE_KEY_SITE_CONTROL,
   STORAGE_KEY_USER_COSMETICS,
 } from '../shared/constants.js';
@@ -143,10 +145,45 @@ let sessionElementsHidden = 0;
 let sessionThreatsDetected = 0;
 const sessionRecentTrackers: Map<string, number> = new Map();
 
-/** Most recent blocklist lines, kept so site toggles can re-apply without a fetch. */
+/**
+ * Most recent blocklist lines, kept so site toggles can re-apply without a fetch.
+ *
+ * In memory, and deliberately not the only copy of anything: when this is empty — which is the state
+ * of every service worker that has not fetched yet, and MV3 tears workers down constantly — the
+ * installed dynamic rules from the last successful compilation stand in for it. See
+ * `applyCurrentRules`, which asks the DNR manager to keep what the browser holds rather than replace
+ * it with nothing.
+ */
 let lastSyncedNetworkRules: string[] = [];
+/**
+ * What the browser is holding, as of the last read.
+ *
+ * A reading rather than a ledger of this worker's own calls: the popup shows this next to a live
+ * quota bar, and two numbers about the same rules that disagree is worse than one that is missing.
+ */
 let lastAppliedRuleCount = 0;
 let lastSyncAt: number | null = null;
+
+/** Persists when the list was last fetched, so the readout survives the worker that fetched it. */
+async function saveLastSyncAt(at: number): Promise<void> {
+  lastSyncAt = at;
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEY_LAST_SYNC_AT]: at });
+  } catch (err) {
+    console.warn('[Blockingmachine] Could not persist the last sync time:', err);
+  }
+}
+
+/** Restores the last sync time, which belongs to the profile rather than to this worker. */
+async function loadLastSyncAt(): Promise<void> {
+  try {
+    const stored = await chrome.storage.local.get(STORAGE_KEY_LAST_SYNC_AT);
+    const at = stored?.[STORAGE_KEY_LAST_SYNC_AT];
+    if (typeof at === 'number' && Number.isFinite(at)) lastSyncAt = at;
+  } catch {
+    // A missing timestamp is reported as never synced, which is the honest answer when unknown.
+  }
+}
 
 const liveListener = new LiveListener('http://127.0.0.1:9191/v1/events', {
   onRulesUpdated: async () => {
@@ -309,14 +346,69 @@ async function applyCurrentRules(): Promise<number> {
     // paused, which is what repairs an update that reset those rulesets to the manifest defaults.
     await rulesets.setSuspended(siteControl.globalPaused);
     const customRules = await loadCustomRules();
+    // `replaceInstalledList` is the whole guard: this runs on every local decision — a paused site,
+    // an allowed domain, a new custom rule — and a worker that has not fetched the list yet holds no
+    // lines to compile. Rebuilding the dynamic rules from an empty list would spend a site pause by
+    // deleting the entire blocklist, and the popup would still report the shield as active because
+    // the decisions are in storage. The installed rules are the last compilation's own output, so a
+    // call without the list keeps them and replaces only the user's decisions.
     lastAppliedRuleCount = await dnr.updateDynamicRules(
       [...customRules, ...lastSyncedNetworkRules],
       siteControl,
+      { replaceInstalledList: lastSyncedNetworkRules.length > 0 },
     );
     return lastAppliedRuleCount;
   } catch (err) {
     console.warn('[Blockingmachine] Failed to apply dynamic rules:', err);
     return 0;
+  }
+}
+
+/**
+ * Reads the browser's dynamic rules and repairs whatever storage says should be installed.
+ *
+ * The dynamic half of the extension had no reconcile at all: the tiers were repaired on every worker
+ * start (`RulesetManager.setSuspended`) while the rules the user's own decisions produce were only
+ * ever installed at the moment the decision was made. A decision whose `applyCurrentRules` call threw
+ * — a quota rejection, a torn-down worker, a browser that was mid-update — therefore stayed in
+ * storage and never reached the browser, and the popup read the storage back and reported a pause
+ * that was not pausing. **Both** halves of what the user asked for are checked, because they arrive
+ * in different families: the pause and allow decisions are the high-priority rules, and a rule saved
+ * by hand is compiled by the list planner and lands with the blocklist.
+ *
+ * This is the same reconcile the rulesets get, against a different API: read the browser, keep the
+ * count it reports, and install only when there is a difference. Nothing is remembered from the last
+ * worker — there is nothing to remember, because the browser is holding the answer.
+ *
+ * The list family is repaired by fetching rather than by keeping a copy. An empty list family means
+ * there is no compiled blocklist installed at all — a fresh profile, or a browser that lost its
+ * rules — and re-fetching is the only repair that does not need a multi-megabyte list duplicated
+ * into storage. It is self-limiting: once a sync has succeeded the family is not empty, so this asks
+ * for a fetch once per profile rather than once per worker start. While blocking is paused
+ * everywhere the family is *supposed* to be empty, so the pause is not mistaken for damage.
+ */
+async function reconcileDynamicRules(): Promise<void> {
+  const families = await dnr.installedFamilies();
+  // No reading, no safe repair: leaving the browser alone is the only honest option, and the next
+  // worker start will ask again.
+  if (!families) return;
+
+  const installed = families.user.length + families.list.length;
+  lastAppliedRuleCount = installed;
+
+  // Both halves of what the user asked for, since they arrive in different families: the pause and
+  // allow decisions are the high-priority rules, and a rule the user saved by hand is compiled by
+  // the list planner and lands with the blocklist.
+  const customRules = await loadCustomRules();
+  if (
+    !userDecisionsAreInstalled(families, siteControl) ||
+    !customRulesAreInstalled(families, customRules, siteControl)
+  ) {
+    await applyCurrentRules();
+    return;
+  }
+  if (families.list.length === 0 && !siteControl.globalPaused) {
+    await syncAndApplyRules();
   }
 }
 
@@ -333,7 +425,7 @@ async function syncAndApplyRules(): Promise<number> {
         `[Blockingmachine] Stored ${cosmeticSelectors.length} dynamic cosmetic element-hiding selectors.`
       );
     }
-    lastSyncAt = Date.now();
+    await saveLastSyncAt(Date.now());
     const count = await applyCurrentRules();
     console.log(`[Blockingmachine] Successfully applied ${count} dynamic DNR network rules.`);
     await pruneOrphanedTabTelemetry();
@@ -732,14 +824,23 @@ if (chrome.contextMenus) {
 
 // ─── Lifecycle ────────────────────────────────────────────────────────────────
 
+// `onStartup` fires once per browser launch and `onInstalled` does not, so this is the one event
+// that can notice a browser which came back without its alarms. The worker-start block below asks
+// the same question for the case where the worker is woken for some other reason first.
+chrome.runtime.onStartup.addListener(() => {
+  void reconcileAlarms();
+});
+
 chrome.runtime.onInstalled.addListener(async () => {
   console.log('[Blockingmachine Extension] Installed. Initializing alarms, live listener, and rules...');
-  chrome.alarms.create('bm-periodic-sync', { periodInMinutes: 60 });
-  chrome.alarms.create('bm-telemetry-push', { periodInMinutes: 2 });
+  // Reconciled rather than created outright, like everywhere else the browser holds the state:
+  // an update keeps the alarms it already had, and `onInstalled` is not the only caller.
+  await reconcileAlarms();
   setupContextMenus();
   liveListener.start();
   await rulesets.load();
   await loadSiteControl();
+  await loadLastSyncAt();
   await ruleHits.load();
   await ledger.load();
   // `syncAndApplyRules` reconciles the tiers (and any active global pause) as part of applying
@@ -748,9 +849,9 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === 'bm-periodic-sync') {
+  if (alarm.name === ALARM_PERIODIC_SYNC) {
     await syncAndApplyRules();
-  } else if (alarm.name === 'bm-telemetry-push') {
+  } else if (alarm.name === ALARM_TELEMETRY_PUSH) {
     // In a packed build this is the only thing that keeps per-tab counters moving between popup
     // visits; `reconcileActiveTab` no-ops outright when the debug event is available.
     await reconcileActiveTab();
@@ -761,19 +862,29 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // Restore persisted site decisions before the first sync of this worker lifetime.
 void loadSiteControl();
 
-// A service worker is torn down and restarted constantly, so the browser's rulesets are reconciled
-// against storage on every start rather than trusted to have survived — including the paused case,
-// where they must come back silenced. Reading the browser is what makes this a reconcile rather
-// than a blind re-issue: an update that reset the rulesets to the manifest defaults, or a user who
-// disabled and re-enabled the extension, is repaired here instead of leaving the popup reporting
-// tiers the browser has switched off. The rule hit ledger is restored likewise, so counts survive
-// the worker being killed mid-page.
+// A service worker is torn down and restarted constantly, so everything the extension persists is
+// reconciled against the browser on every start rather than trusted to have survived:
+//
+//   - the tiers, including the paused case, where they must come back silenced;
+//   - the rules the user's own decisions produce, which are compared against the browser's own
+//     dynamic rules and re-installed when a decision never made it (see `reconcileDynamicRules`);
+//   - the periodic alarms, which are browser state that Chrome documents as clearable, and without
+//     which nothing would ever sync again.
+//
+// Reading the browser is what makes each of these a reconcile rather than a blind re-issue: an
+// update that reset the rulesets to the manifest defaults, a user who disabled and re-enabled the
+// extension, or a profile that came back without its alarms is repaired here instead of leaving the
+// popup reporting tiers the browser has switched off. The rule hit ledger is restored likewise, so
+// counts survive the worker being killed mid-page.
 void (async () => {
   await rulesets.load();
   await loadSiteControl();
+  await loadLastSyncAt();
   await ruleHits.load();
   await ledger.load();
   await rulesets.setSuspended(siteControl.globalPaused);
+  await reconcileAlarms();
+  await reconcileDynamicRules();
 })().catch(() => {});
 
 liveListener.start();

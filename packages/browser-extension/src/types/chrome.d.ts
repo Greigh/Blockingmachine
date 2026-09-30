@@ -175,6 +175,15 @@ declare namespace chrome {
 
     export function create(name: string, alarmInfo: AlarmCreateInfo): void;
 
+    /**
+     * Every alarm the browser is currently holding, which is the only way to find out whether one
+     * this extension created still exists — alarms are browser state and can be cleared under it.
+     */
+    export function getAll(): Promise<Alarm[]>;
+
+    /** Cancels one alarm by name, or every alarm when called with no argument. */
+    export function clear(name?: string): Promise<boolean>;
+
     export interface AlarmEvent {
       addListener(callback: (alarm: Alarm) => void): void;
     }
@@ -244,7 +253,13 @@ declare namespace chrome {
       ): void;
     }
 
+    export interface ExtensionStartedEvent {
+      addListener(callback: () => void): void;
+    }
+
     export const onInstalled: ExtensionInstalledEvent;
+    /** Fires once per browser launch, which `onInstalled` does not. */
+    export const onStartup: ExtensionStartedEvent;
     export const onMessage: ExtensionMessageEvent;
     export function sendMessage(message: any, responseCallback?: (response: any) => void): Promise<any>;
   }
