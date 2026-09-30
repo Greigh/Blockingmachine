@@ -985,6 +985,24 @@ body {
   color: var(--text-primary);
 }
 
+/* What the plan was weighted by: measured blocks, or rule counts because nothing measured. */
+.tier-plan-basis {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--bg-subtle, rgba(127, 127, 127, 0.08));
+}
+
+/* Evidence is the interesting state, so it is the one that reads as deliberate rather than as a
+   caveat. `data-basis` is the styling hook and the test hook: the text alone would not say
+   whether the plan changed basis. */
+.tier-plan-basis[data-basis='evidence'] {
+  color: var(--text-primary);
+  border-left: 2px solid var(--accent-color, #4a9eff);
+}
+
 .tier-plan-why {
   margin: 0;
   padding-left: 14px;
