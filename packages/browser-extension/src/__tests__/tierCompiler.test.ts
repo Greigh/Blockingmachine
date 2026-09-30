@@ -22,6 +22,12 @@ import { ALL_STATIC_TIER_IDS, validateTierRuleset } from '../shared/rulesetTiers
 // any build), so the two readers are pinned against each other here instead — from the specific
 // module, so the suite does not drag in the whole package.
 import { parseHitLedgerText } from '../../../core/src/ledgerAggregate.js';
+// Core owns the host extractor the hub writes the attribution files with. The compiler has its
+// own copy for the same reason it has its own ledger reader — it runs before core is built — so
+// the two are pinned against each other here rather than trusted to stay in step. The pin goes
+// through the compiler's own report rather than importing the script, which is also the level at
+// which the agreement actually matters: what the compiler placed, not what a function returns.
+import { extractHostFromRule as coreExtractHostFromRule } from '../../../core/src/ruleHost.js';
 
 const COMPILER = fileURLToPath(new URL('../../../../scripts/compile-tier-rulesets.mjs', import.meta.url));
 
@@ -111,6 +117,14 @@ function writeInput(name: string, lines: string[]): string {
   writeFileSync(path, `${lines.join('\n')}\n`, 'utf8');
   return path;
 }
+
+/** Hosts in a fixed input order, so "last in the list" is a statement about the fixture. */
+const adsHosts = (count: number) =>
+  Array.from({ length: count }, (_, i) => `host-${String(i).padStart(2, '0')}.adnet-example.com`);
+
+/** The hosts that made it into a tier, in the order the file holds them. */
+const shippedHosts = (tier: string) =>
+  readTier(tier).map((rule) => rule.condition.urlFilter.replace(/^\|\||\^$/g, ''));
 
 /** A blocklist in the shapes the hub actually emits, plus everything that must be refused. */
 const MIXED_INPUT = [
@@ -343,13 +357,6 @@ describe('tier compiler', () => {
  * wrong.
  */
 describe('tier compiler · ranking the cut by rule-hit evidence', () => {
-  /** Hosts in a fixed input order, so "last in the list" is a statement about the fixture. */
-  const adsHosts = (count: number) =>
-    Array.from({ length: count }, (_, i) => `host-${String(i).padStart(2, '0')}.adnet-example.com`);
-
-  /** The hosts that made it into a tier, in the order the file holds them. */
-  const shippedHosts = (tier: string) => readTier(tier).map((rule) => rule.condition.urlFilter.replace(/^\|\||\^$/g, ''));
-
   test('spends the budget on measured hosts instead of the front of the list', () => {
     const ads = writeInput('ads.txt', adsHosts(20));
     // The two busiest hosts are last in the input, which is the whole point: input order would
@@ -580,5 +587,266 @@ describe('tier compiler · ranking the cut by rule-hit evidence', () => {
     expect(report.skipped).toBe(core.exceptions.length + 1);
     expect(report.header.sessions).toBe('3');
     expect(report.header.days).toBe('2');
+  });
+});
+
+/**
+ * `--attribution`: placing a host from the hub's own category instead of from its name.
+ *
+ * The vocabulary this replaces is not merely weak, it is wrong in a specific way — it cannot tell
+ * a host that is *only* an ad host from one that a publisher filed as an ad and two tracking
+ * lists, because both look like words in a name. So these tests check the placement of hosts the
+ * two methods would place *differently*, not merely that a flag is accepted.
+ */
+describe('compile-tier-rulesets — per-category attribution', () => {
+  /** Writes an attribution directory in the shape the desktop hub produces. */
+  function writeAttribution(
+    name: string,
+    files: Record<string, string[]>,
+    manifestOverrides: Record<string, unknown> = {},
+  ): string {
+    const dir = join(workDir, name);
+    mkdirSync(dir, { recursive: true });
+    const categories = Object.keys(files);
+    const counts: Record<string, number> = {};
+    for (const [category, lines] of Object.entries(files)) {
+      writeFileSync(join(dir, `${category}.txt`), lines.join('\n') + '\n', 'utf8');
+      counts[category] = new Set(lines).size;
+    }
+    writeFileSync(
+      join(dir, 'manifest.json'),
+      JSON.stringify(
+        {
+          format: 'blockingmachine-category-attribution',
+          version: 1,
+          counts,
+          hosts: new Set(Object.values(files).flat()).size,
+          contested: 0,
+          unusableRules: 0,
+          categories,
+          empty: [],
+          ...manifestOverrides,
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    return dir;
+  }
+
+  test('places a host by the category its publisher filed it under, not by its name', () => {
+    // The name says tracker. The publisher says ads. The category wins, and the vocabulary
+    // would have put this host in tier_privacy.
+    const input = writeInput('list.txt', ['||tracker-widget-example.com^', '||plain-example.com^']);
+    const attribution = writeAttribution('attr-ok', {
+      ads: ['||tracker-widget-example.com^'],
+      privacy: ['||plain-example.com^'],
+    });
+
+    const report = JSON.parse(
+      runCompiler(['--input', input, '--attribution', attribution, '--budget', '8', '--json']).stdout,
+    );
+    expect(report.attribution.placedByAttribution).toBe(2);
+    expect(report.attribution.placedByVocabulary).toBe(0);
+    expect(shippedHosts('tier_ads')).toContain('tracker-widget-example.com');
+    expect(shippedHosts('tier_privacy')).toContain('plain-example.com');
+  });
+
+  test('a category beats the curated seed only where the seed says nothing', () => {
+    // `curated-ads.example.com` is in the baseline for this suite; a category claiming it must
+    // not move it, or a regenerated diff would touch the hand-picked part of the file.
+    const input = writeInput('list.txt', ['||curated-ads.example.com^', '||fresh-example.com^']);
+    const attribution = writeAttribution('attr-curated', { privacy: ['||curated-ads.example.com^'] });
+
+    runCompiler(['--input', input, '--attribution', attribution, '--budget', '8']);
+    expect(shippedHosts('tier_ads')).toContain('curated-ads.example.com');
+    expect(shippedHosts('tier_privacy')).not.toContain('curated-ads.example.com');
+  });
+
+  test('resolves a host several publishers claimed by a stated precedence', () => {
+    // ads + privacy + annoyances, all three true at once. One tier has to win, and the count of
+    // such hosts is reported so a taxonomy that coarse is visible rather than assumed.
+    const input = writeInput('list.txt', [
+      '||contested-example.com^',
+      '||ads-and-privacy-example.com^',
+    ]);
+    const attribution = writeAttribution('attr-contested', {
+      ads: ['||contested-example.com^', '||ads-and-privacy-example.com^'],
+      privacy: ['||contested-example.com^', '||ads-and-privacy-example.com^'],
+      annoyances: ['||contested-example.com^'],
+    });
+
+    const result = runCompiler([
+      '--input', input, '--attribution', attribution, '--budget', '8', '--json',
+    ]);
+    const report = JSON.parse(result.stdout);
+    expect(report.attribution.contested).toBe(2);
+    // Annoyances is the most specific claim; ads outranks privacy.
+    expect(shippedHosts('tier_annoyances')).toContain('contested-example.com');
+    expect(shippedHosts('tier_ads')).toContain('ads-and-privacy-example.com');
+  });
+
+  test('leaves security and unbreak to the residual, and says so by name', () => {
+    // Routing the security lists into the always-on tier would put malware hosts in the tier that
+    // ships enabled, which is the one thing the tier/model agreement check exists to catch. The
+    // decision is the compiler's to report, not the reader's to discover.
+    const input = writeInput('list.txt', ['||threat-gateway-example.com^', '||allowed-example.com^']);
+    const attribution = writeAttribution('attr-security', {
+      security: ['||threat-gateway-example.com^'],
+      unbreak: ['||allowed-example.com^'],
+    });
+
+    const result = runCompiler([
+      '--input', input, '--attribution', attribution, '--budget', '8',
+    ]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('no tier for: security, unbreak');
+    // The residual is the opt-in tier, so nothing lands in the default-on one.
+    expect(shippedHosts('tier_ads')).toContain('threat-gateway-example.com');
+    expect(shippedHosts('tier_core')).not.toContain('threat-gateway-example.com');
+  });
+
+  test('a security host with a malware name still reaches the always-on tier, as it always did', () => {
+    // The vocabulary fallback is not neutral, and pretending otherwise would be the more flattering
+    // bug. `CORE_INDICATORS` is checked before the residual, so a host named for what it is —
+    // `malware`, `phishing`, `scam` — has always gone to `tier_core` even when the hub filed it
+    // under `security` and `security` maps to no tier. Attribution does not change that, and this
+    // pins the behaviour so it is a decision rather than an accident: it is the *only* route by
+    // which a security-list host reaches the always-on tier, and it is name-based, so a publisher
+    // that files a threat domain under an unremarkable name gets the opt-in treatment instead.
+    const input = writeInput('list.txt', ['||malware-gateway-example.com^']);
+    const attribution = writeAttribution('attr-core-ind', { security: ['||malware-gateway-example.com^'] });
+
+    runCompiler(['--input', input, '--attribution', attribution, '--budget', '8']);
+    expect(shippedHosts('tier_core')).toContain('malware-gateway-example.com');
+
+    // Same host, no attribution at all: the identical placement, which is the point — this path
+    // belongs to the vocabulary, not to the categories.
+    const plain = writeInput('plain.txt', ['||malware-gateway-example.com^']);
+    runCompiler(['--input', plain, '--budget', '8']);
+    expect(shippedHosts('tier_core')).toContain('malware-gateway-example.com');
+  });
+
+  test('falls back to vocabulary only for a host the hub had no category for', () => {
+    const input = writeInput('list.txt', [
+      '||tracker-widget-example.com^', // categorised as an ad, despite the name
+      '||banner-host-example.com^', // uncategorised, but `banner` is in the ad vocabulary
+      '||nothingrecognisable-example.com^', // uncategorised and unnamed
+    ]);
+    const attribution = writeAttribution('attr-partial', {
+      ads: ['||tracker-widget-example.com^'],
+    });
+
+    const report = JSON.parse(
+      runCompiler(['--input', input, '--attribution', attribution, '--budget', '8', '--json']).stdout,
+    );
+    expect(report.attribution.placedByAttribution).toBe(1);
+    expect(report.attribution.placedByVocabulary).toBe(1);
+    expect(report.unclassified).toBe(1);
+    // The report states the split, so a partial attribution cannot read as a full one.
+    expect(report.attribution.hosts).toBe(1);
+  });
+
+  test('says plainly when nothing was attributed rather than implying it was', () => {
+    const input = writeInput('list.txt', ['||adnet-example.com^']);
+    const result = runCompiler(['--input', input, '--budget', '8']);
+    expect(result.stdout).toContain('no per-category attribution given');
+  });
+
+  test('refuses a missing directory instead of quietly guessing', () => {
+    const input = writeInput('list.txt', ['||adnet-example.com^']);
+    const result = runCompiler(['--input', input, '--attribution', join(workDir, 'nope'), '--json']);
+    expect(result.status).not.toBe(0);
+    // `runCompiler` folds stderr into stdout, so a refusal is readable the same way either way.
+    expect(result.stdout).toContain('attribution directory not found');
+  });
+
+  test('refuses a manifest that is not one, rather than half-reading it', () => {
+    const input = writeInput('list.txt', ['||adnet-example.com^']);
+    const dir = writeAttribution('attr-wrong', { ads: ['||adnet-example.com^'] });
+    writeFileSync(
+      join(dir, 'manifest.json'),
+      JSON.stringify({ format: 'something-else', categories: ['ads'] }),
+      'utf8',
+    );
+
+    const result = runCompiler(['--input', input, '--attribution', dir, '--json']);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain('not a Blockingmachine attribution manifest');
+  });
+
+  test('names a category the manifest promises but the directory lacks', () => {
+    // Otherwise a deleted file reads as a category that simply matched nothing, which is the one
+    // reading that would quietly shrink a user's blocking.
+    const input = writeInput('list.txt', ['||adnet-example.com^']);
+    const dir = writeAttribution('attr-short', { ads: ['||adnet-example.com^'] });
+    writeFileSync(
+      join(dir, 'manifest.json'),
+      JSON.stringify(
+        { format: 'blockingmachine-category-attribution', version: 1, categories: ['ads', 'privacy'], counts: { ads: 1, privacy: 1 }, hosts: 1, contested: 0, unusableRules: 0, empty: [] },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    const result = runCompiler(['--input', input, '--attribution', dir, '--budget', '8']);
+    expect(result.stdout).toContain('privacy (file missing)');
+  });
+
+  test('is deterministic: the same attribution produces byte-identical tiers', () => {
+    const input = writeInput('list.txt', [
+      ...adsHosts(12).map((host) => `||${host}^`),
+      '||tracker-widget-example.com^',
+    ]);
+    const attribution = writeAttribution('attr-det', {
+      ads: adsHosts(6).map((host) => `||${host}^`),
+      privacy: ['||tracker-widget-example.com^'],
+    });
+
+    expect(runCompiler(['--input', input, '--attribution', attribution, '--budget', '8']).status).toBe(0);
+    const first = ALL_STATIC_TIER_IDS.map((tier) => readFileSync(join(workDir, 'rules', `${tier}.json`), 'utf8'));
+
+    expect(runCompiler(['--input', input, '--attribution', attribution, '--budget', '8']).status).toBe(0);
+    const second = ALL_STATIC_TIER_IDS.map((tier) => readFileSync(join(workDir, 'rules', `${tier}.json`), 'utf8'));
+
+    expect(second).toEqual(first);
+  });
+
+  test('reads attribution through the same shapes core writes, agreeing host for host', () => {
+    // The compiler carries its own `extractHostFromLine` so it can run before core is built, and
+    // core owns a second one for the hub that writes these files. This is what keeps the two
+    // copies from drifting — and it is why an attribution file can be a plain blocklist rather
+    // than a format of its own.
+    const shapes = [
+      '||ads.example.com^',
+      '0.0.0.0 hosts.example.com',
+      'address=/dnsmasq.example.com/0.0.0.0',
+      'local-zone: "unbound.example.com"',
+      '||modifiers.example.com^$third-party',
+      '||UPPER.Example.COM^',
+      '||blocked.example.com^$badfilter',
+    ];
+    // What core says these are, computed here rather than asserted as a constant, so a change to
+    // core's extractor has to be acknowledged in this test rather than silently diverging.
+    const coreHosts = shapes.map(coreExtractHostFromRule).filter((host): host is string => !!host);
+
+    const dir = writeAttribution('attr-shapes', { ads: shapes });
+    const input = writeInput('list.txt', shapes);
+    // A budget that leaves room: the four curated baseline hosts are served first, and at
+    // `--budget 8` the share cap drops two of these regardless of attribution.
+    const report = JSON.parse(
+      runCompiler(['--input', input, '--attribution', dir, '--budget', '40', '--json']).stdout,
+    );
+
+    // The compiler's reader found exactly what core's did — six of the seven, with the seventh
+    // naming a directive rather than a zone.
+    expect(report.attribution.hosts).toBe(coreHosts.length);
+    expect(coreHosts).toHaveLength(6);
+    for (const host of coreHosts) {
+      expect(shippedHosts('tier_ads')).toContain(host);
+    }
+    expect(shippedHosts('tier_ads')).not.toContain('blocked.example.com');
   });
 });

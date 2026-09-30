@@ -65,6 +65,32 @@
  * With `--hits`, rule ids follow measured usefulness; without it, they follow input order.
  * Either way the output is byte-identical for identical inputs, so `--check` stays a diff.
  *
+ * ## Placing a host in a tier, exactly
+ *
+ * The vocabulary above is a guess, and on the hub's real list it placed 12,552 of 122,801 hosts
+ * — the rest matched no word in any list, and a host whose name happens to contain `track` was
+ * filed as tracking whether or not it was. The desktop hub does not have to guess: every rule it
+ * parses carries the category its *publisher* filed it under, and every compilation now writes
+ * that down as one blocklist per category beside the other outputs.
+ *
+ * `--attribution <dir>` reads those and places each host from the publisher's own category, with
+ * hostname vocabulary demoted to the fallback for a host the hub had no category for. The
+ * vocabulary it replaces placed **12,444 of the hub's 122,801 hosts (10.1%)** and left the other
+ * 110,249 unclassified; the categories exist for every host a publisher listed, so the two
+ * numbers are not close. The report says which of the two produced each plan rather than leaving
+ * it to be assumed.
+ *
+ * How much of a *given* list is covered depends on which sources were enabled for the hub
+ * compilation that produced it, so it is reported per run and not claimed here: a build with
+ * `--attribution` against a hub output whose sources were the project's nine local modules
+ * covers only what those modules list. The honest measurement is a number from a real
+ * compilation, which is why the report prints one rather than this comment asserting a figure.
+ *
+ * A host listed by several publishers is claimed by several categories and resolved by a stated
+ * precedence; the count of such hosts is reported, because a taxonomy that coarse should be
+ * visible. Three hub categories map to no tier on purpose — `security`, `unbreak` and
+ * `anti-circumvention` — and `CATEGORY_TIERS` says why at length.
+ *
  * ## Determinism
  *
  * The same inputs always produce byte-identical tier files: hosts keep the order they
@@ -88,16 +114,20 @@
  *   node scripts/compile-tier-rulesets.mjs
  *   node scripts/compile-tier-rulesets.mjs --input filters/output/hosts.txt --budget 20000
  *   node scripts/compile-tier-rulesets.mjs --hits ledger-hits.txt
+ *   node scripts/compile-tier-rulesets.mjs --attribution path/to/categories
  *   node scripts/compile-tier-rulesets.mjs --check
  *   node scripts/compile-tier-rulesets.mjs --json
  *
  * Where the evidence comes from:
  *   npm run ledger:merge -- --in export-1.json --in export-2.json --out ledger-hits.txt
  *   node scripts/compile-tier-rulesets.mjs --hits ledger-hits.txt
+ *
+ * The attribution directory is written by the desktop hub on every compilation, beside the
+ * compiled lists it already produces (<savePath directory>/categories).
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve, relative, basename } from 'node:path';
+import { dirname, resolve, relative, basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -291,22 +321,146 @@ export function parseBlocklist(text, { into, seen } = {}) {
 }
 
 /**
+ * The hub's source categories, and the tier each one means.
+ *
+ * A mapping, not a derivation: the two vocabularies were built by different people for different
+ * purposes, and a category only lands on a tier where the *publisher's* claim matches the tier's
+ * purpose. `social` is filed under annoyances because that tier is where consent and nagging
+ * lives and a social widget is the same class of intrusion from the user's side.
+ *
+ * Three categories deliberately map to nothing:
+ *
+ *   - **`security`** is the interesting one. "Threat & Malicious Domain Defense" and "OISD
+ *     Blocklist Small" are exactly what the always-on tier is *for*, so mapping them to
+ *     `tier_core` is the obvious move and is not taken here. A host from those lists is, by the
+ *     publisher's own statement, malware or a phishing domain — and the always-on tier is graded
+ *     against the classifier that must agree with it, so filing 300-odd malware hosts into the
+ *     tier that ships enabled turns the model/tier agreement check into a question that can only
+ *     be answered by weakening it. A tier the user cannot see the contents of, cannot turn off
+ *     piecemeal, and that the radar calls a contradiction is a worse default than an opt-in one.
+ *     The categories are still *emitted* and counted, so an operator who wants them can route
+ *     them with `--input tier_core=security.txt` and take the consequence knowingly.
+ *   - **`unbreak` and `anti-circumvention`** are allowlists and filter-bypass reports. Blocking
+ *     them is a category error regardless of which tier receives them.
+ *   - **`custom` and `uncategorised`** are the user's own additions and the parser's fallback.
+ *     Attributing those to a tier would be inventing a publisher's opinion that does not exist.
+ *
+ * A category that arrives and is not in this map is reported by name, so adding a list to the
+ * catalog surfaces as a named line in the report rather than silently landing in the residual.
+ */
+export const CATEGORY_TIERS = {
+  ads: 'tier_ads',
+  privacy: 'tier_privacy',
+  annoyances: 'tier_annoyances',
+  social: 'tier_annoyances',
+};
+
+/**
+ * Chooses between the tiers a host's categories map to.
+ *
+ * A host in both an ad and a privacy list is both, and one tier has to win. Annoyances wins
+ * because it is the most specific claim — a consent host that is also an ad host is still
+ * something the user was nagged about — and ads wins over privacy because an ad host that is
+ * also a tracker is blocked for a reason the user will recognise, whereas the reverse reads as
+ * a list that over-reaches. The alternatives are not lost: they are counted as *contested*, and
+ * the report says how many hosts had to choose, so a taxonomy this coarse is visible rather
+ * than assumed.
+ */
+export function chooseTier(categories) {
+  // Takes an iterable rather than an array because the caller holds a `Set` per host, and the
+  // distinction between one category and three is exactly what this function is deciding on.
+  const tiers = [...new Set([...categories].map((c) => CATEGORY_TIERS[c]).filter(Boolean))];
+  if (tiers.length === 0) return null;
+  if (tiers.includes('tier_annoyances')) return 'tier_annoyances';
+  if (tiers.includes('tier_ads')) return 'tier_ads';
+  return 'tier_privacy';
+}
+
+/**
+ * Reads the per-category outputs the desktop hub writes beside its compiled lists.
+ *
+ * The manifest is read first and is not decoration: it names the categories, so a category file
+ * with no manifest entry is reported rather than skipped, and a manifest that is not this
+ * format is refused outright rather than half-read. Each file is read with the same
+ * `extractHostFromLine` the input side uses, which is what lets an attribution file be a plain
+ * blocklist rather than a format of its own.
+ */
+export function readAttribution(dir) {
+  const manifestPath = join(dir, 'manifest.json');
+  if (!existsSync(manifestPath)) {
+    throw new Error(
+      `attribution manifest not found: ${displayPath(manifestPath)}. The hub writes it beside ` +
+        'the compiled lists in <output>/categories; run a hub compilation, or drop the flag.',
+    );
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  if (manifest?.format !== 'blockingmachine-category-attribution') {
+    throw new Error(
+      `${displayPath(manifestPath)} is not a Blockingmachine attribution manifest ` +
+        `(format: ${JSON.stringify(manifest?.format ?? null)}).`,
+    );
+  }
+
+  const hostCategories = new Map();
+  const byCategory = new Map();
+  const unmapped = new Set();
+  let claimed = 0;
+
+  for (const category of manifest.categories ?? []) {
+    const path = join(dir, `${category}.txt`);
+    if (!existsSync(path)) {
+      // Named rather than skipped: a manifest promising a file that is not there is the one
+      // failure mode that would otherwise look like a category that simply matched nothing.
+      unmapped.add(`${category} (file missing)`);
+      continue;
+    }
+    const tier = CATEGORY_TIERS[category] ?? null;
+    if (!tier) unmapped.add(category);
+
+    const hosts = new Set();
+    parseBlocklist(readFileSync(path, 'utf8'), { into: hosts });
+    byCategory.set(category, hosts);
+
+    for (const host of hosts) {
+      let cats = hostCategories.get(host);
+      if (!cats) {
+        cats = new Set();
+        hostCategories.set(host, cats);
+      }
+      if (!cats.has(category)) claimed += 1;
+      cats.add(category);
+    }
+  }
+
+  return { manifest, hostCategories, byCategory, unmapped: [...unmapped], claimed };
+}
+
+/**
  * Chooses the tier for one host.
  *
  * Precedence, highest first:
  *   1. the tier the host already occupies in the curated files (never re-tiered);
- *   2. security indicators → the default-on tier;
- *   3. consent/nag vocabulary → annoyances (the URL classifier has no such category, and
+ *   2. the tier the hub's own per-category output attributes it to (`--attribution`);
+ *   3. security indicators → the default-on tier;
+ *   4. consent/nag vocabulary → annoyances (the URL classifier has no such category, and
  *      consent hosts are otherwise indistinguishable from ordinary third parties);
- *   4. ad network vocabulary → ads;
- *   5. tracking vocabulary → privacy.
+ *   5. ad network vocabulary → ads;
+ *   6. tracking vocabulary → privacy.
  *
  * A host that matches nothing is *unclassified* and left for the caller to place, so the
  * residual is a reported number rather than a silent assumption.
+ *
+ * The vocabulary steps are now the fallback rather than the method, which is the point of the
+ * whole change: on the hub's real list they placed 12,444 of 122,801 hosts and left 110,249
+ * unclassified, and they are still here for a host the hub had no category for — a custom rule,
+ * or a list added after the last compilation.
  */
-export function assignTier(host, curatedTierByHost) {
+export function assignTier(host, curatedTierByHost, hostTierByHost) {
   const curated = curatedTierByHost.get(host);
   if (curated) return curated;
+
+  const attributed = hostTierByHost?.get(host);
+  if (attributed) return attributed;
 
   const tokens = new Set(hostTokens(host));
   const matches = (vocabulary) => vocabulary.some((token) => tokens.has(token));
@@ -594,6 +748,10 @@ export function parseArgs(argv) {
     // No default: see the header. A default evidence file would make the plan depend on a
     // locally generated artifact, which is how `--check` came to fail on every compiled machine.
     hits: null,
+    // Also no default: the attribution directory only exists once the desktop hub has run a
+    // compilation, and a compiler that silently fell back to vocabulary when it was absent would
+    // be making the same promise the flag exists to keep.
+    attribution: null,
     rulesDir: RULES_DIR,
     countsPath: GENERATED_COUNTS_PATH,
     cataloguePath: CATALOGUE_PATH,
@@ -614,6 +772,7 @@ export function parseArgs(argv) {
       });
     } else if (arg === '--budget') options.budget = Number.parseInt(next(), 10);
     else if (arg === '--hits') options.hits = next();
+    else if (arg === '--attribution') options.attribution = next();
     else if (arg === '--residual') {
       options.residual = normalizeTierName(next()) || options.residual;
     }
@@ -679,6 +838,47 @@ export function compile(options) {
     };
   }
 
+  // The hub's own per-category attribution, read before the blocklists for the same reason the
+  // ledger is: a bad path should fail before the work rather than after it. Unlike the ledger,
+  // an absent directory is an error rather than a fallback, because the flag is a statement about
+  // how the plan was built — an unlabelled vocabulary guess under `--attribution` would be a lie
+  // about the provenance of every rule in the output.
+  let attribution = null;
+  if (options.attribution) {
+    const dir = resolve(options.attribution);
+    if (!existsSync(dir)) {
+      throw new Error(
+        `--attribution directory not found: ${displayPath(dir)}. The desktop hub writes one ` +
+          'beside its compiled lists (<savePath directory>/categories) on every compilation.',
+      );
+    }
+    const read = readAttribution(dir);
+
+    // host -> tier, collapsing the category set once per host rather than per candidate. The
+    // contested count is taken here, where a host is seen, because a host that appears in three
+    // ad lists is one host that chose, not three.
+    const hostTierByHost = new Map();
+    let contested = 0;
+    for (const [host, categories] of read.hostCategories) {
+      const tier = chooseTier(categories);
+      if (!tier) continue;
+      if (categories.size > 1) contested += 1;
+      hostTierByHost.set(host, tier);
+    }
+
+    attribution = {
+      source: displayPath(dir),
+      categories: read.manifest.categories ?? [],
+      hosts: read.hostCategories.size,
+      tiered: hostTierByHost.size,
+      claimed: read.claimed,
+      contested,
+      unmapped: read.unmapped,
+      manifestHosts: read.manifest.hosts ?? null,
+      hostTierByHost,
+    };
+  }
+
   const available = [];
   const seen = { lines: 0 };
   const untieredHosts = new Set();
@@ -719,11 +919,20 @@ export function compile(options) {
     }
   }
 
+  // How each host reached its tier, counted as it is placed. The three numbers together are the
+  // answer to "is this plan measured or guessed", and printing only the total would hide the
+  // difference between a fully attributed compile and one that silently fell back to vocabulary.
+  let placedByAttribution = 0;
+  let placedByVocabulary = 0;
+
   for (const host of untieredHosts) {
     if (claimed.has(host)) continue;
     claimed.add(host);
-    const tier = assignTier(host, curatedTierByHost) || options.residual;
-    if (!assignTier(host, curatedTierByHost)) unclassified += 1;
+    const tier =
+      assignTier(host, curatedTierByHost, attribution?.hostTierByHost) || options.residual;
+    if (attribution?.hostTierByHost.has(host)) placedByAttribution += 1;
+    else if (assignTier(host, curatedTierByHost)) placedByVocabulary += 1;
+    else unclassified += 1;
     byTier.get(tier).push(host);
   }
 
@@ -827,6 +1036,22 @@ export function compile(options) {
       attributedHosts: TIER_IDS.reduce((sum, tier) => sum + attributedByTier.get(tier).length, 0),
       unclassified,
       residualTier: options.residual,
+      // Null unless `--attribution` was given, for the same reason as `hitEvidence`: a report
+      // that always claimed attribution would make a vocabulary guess indistinguishable from a
+      // publisher's own filing.
+      attribution: attribution
+        ? {
+            source: attribution.source,
+            categories: attribution.categories,
+            hosts: attribution.hosts,
+            tiered: attribution.tiered,
+            claimed: attribution.claimed,
+            contested: attribution.contested,
+            unmapped: attribution.unmapped,
+            placedByAttribution,
+            placedByVocabulary,
+          }
+        : null,
       budget: options.budget,
       counts,
       omitted,
@@ -1066,6 +1291,36 @@ function main() {
       }
     } else {
       console.log('   ranked  no rule-hit evidence given — tiers are in input order (--hits <ledger>)');
+    }
+    if (report.attribution) {
+      const a = report.attribution;
+      // The line a reader actually needs: how much of what ships came from the hub's own
+      // filing rather than a hostname guess, and what the guess still had to cover.
+      const placed = a.placedByAttribution + a.placedByVocabulary + report.unclassified;
+      const pct = placed > 0 ? ((a.placedByAttribution / placed) * 100).toFixed(1) : '0.0';
+      console.log(
+        `   exact    ${a.placedByAttribution.toLocaleString()} of ${placed.toLocaleString()} hosts ` +
+          `attributed by the hub's own categories (${pct}%) · ` +
+          `${a.placedByVocabulary.toLocaleString()} by hostname vocabulary · ` +
+          `${report.unclassified.toLocaleString()} unclassified`,
+      );
+      console.log(
+        `            ${a.hosts.toLocaleString()} hosts across ${a.categories.length} categor` +
+          `${a.categories.length === 1 ? 'y' : 'ies'} in ${a.source}` +
+          (a.contested > 0
+            ? ` · ${a.contested.toLocaleString()} claimed by more than one and resolved by precedence`
+            : ''),
+      );
+      if (a.unmapped.length > 0) {
+        console.log(
+          `            no tier for: ${a.unmapped.join(', ')} (counted, left to the residual)`,
+        );
+      }
+    } else {
+      console.log(
+        '   exact    no per-category attribution given — tiers are placed by hostname vocabulary ' +
+          '(--attribution <hub output>/categories)',
+      );
     }
     if (report.unclassified > 0) {
       console.log(
