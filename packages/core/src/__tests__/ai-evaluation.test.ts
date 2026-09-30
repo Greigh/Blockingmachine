@@ -46,17 +46,25 @@ describe('Mini-AI evaluation corpus', () => {
 
   it('catches the threats its evidence could see, and misses nothing name-evident', () => {
     // Missing a threat whose name gives it away is a model defect. Missing an
-    // ordinary-looking name (comscore.com, bat.bing.com) is a list-coverage gap
-    // and is reported separately — averaging the two would hide real defects.
+    // ordinary-looking name (bat.bing.com, browser.sentry-cdn.com) is a list-coverage
+    // gap and is reported separately — averaging the two would hide real defects.
     expect(report.triage.lexicalCases).toBeGreaterThanOrEqual(60);
     expect(report.triage.lexicalRecall).toBeGreaterThanOrEqual(0.95);
     expect(report.triage.lexicalMisses).toEqual([]);
   });
 
   it('keeps the number of list-coverage gaps in sight', () => {
-    // Not a pass/fail on the model: this number should go down as curated lists
-    // grow, and it should never grow silently.
-    expect(report.triage.coverageGaps.length).toBeLessThanOrEqual(5);
+    // Not a pass/fail on the model: this number should go down as curated lists grow,
+    // and it should never grow silently. It was 5 until the token lists gained the SSP
+    // and measurement vendors the shipped static tiers carry (`33across`, `magnite`,
+    // `comscore`, `ct.pinterest` and the rest) — the local screen now places 3 of those
+    // 5 by itself. The ceiling is a ratchet, so it moves down with the measurement: the
+    // remaining pair are genuinely list-only, and the failure this guards against is a
+    // change that quietly adds a third.
+    expect(report.triage.coverageGaps.map((miss) => miss.domain)).toEqual([
+      'bat.bing.com',
+      'browser.sentry-cdn.com',
+    ]);
   });
 
   it('holds its overall quality above the recorded baseline', () => {

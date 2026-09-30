@@ -75,6 +75,16 @@ export const SUSPICIOUS_AD_TOKENS = [
   'adroll', 'adsterra', 'adhese', 'adthink', 'adthrive', 'advertserve',
   'adpushup', 'adprime', 'adrecovery', 'adfox', 'adfrontiers', 'adglare',
   'aniview', 'spotscaler', 'brid', 'vidazoo', 'jwplatformads', 'minutemedia',
+  // SSPs, exchanges and ad networks carried by the shipped static tiers.
+  //
+  // These are the vendors whose *company name* is the whole signal: an SSP called
+  // `magnite` reads as an ordinary eight-character word to every lexical feature here,
+  // which is how a curated blocklist ends up shipping hosts the classifier calls clean.
+  // Each was verified to place its own domain in Advertising and to leave the eval
+  // corpus's clean cases alone; `supersonicads` and `stickyadstv` are long enough to
+  // also match as substrings, which is the wanted behaviour for their regional hostnames.
+  '33across', 'adcash', 'brightcom', 'juicyads', 'lijit', 'magnite',
+  'mopub', 'sonobi', 'stickyadstv', 'supersonicads', 'tremorhub', 'zemanta',
 ] as const;
 
 /**
@@ -108,6 +118,24 @@ export const SUSPICIOUS_TRACKER_TOKENS = [
   // Identity / CIAM telemetry
   'segment', 'rudderstack', 'mparticle', 'lytics', 'tealium', 'ensighten',
   'exponea', 'blueconic', 'bloomreach', 'optimoroute', 'salesforceanalytics',
+  // Measurement, session-replay and personalisation vendors carried by the shipped
+  // static tiers, for the same reason as the ad block above: the product name is the
+  // only signal there is.
+  'abtasty', 'addthis', 'addtoany', 'clicktale', 'comscore', 'dynamicyield',
+  'fpjs', 'imrworldwide', 'kameleoon', 'nielsen', 'sharethis',
+  // Two consumer platforms are tracked at a dedicated endpoint rather than across the
+  // whole zone, so the token is the endpoint rather than the brand. A bare `pinterest`
+  // or `tiktok` token would call the consumer site itself a tracker — true of neither,
+  // and the kind of false positive this list exists to avoid.
+  //
+  // `ct.pinterest` places its host. `business-api.tiktok` does not: the `-api` label makes
+  // the infrastructure pass call it a verified endpoint on a readable domain, and
+  // `knownSafeInfra` outranks every token here by design. It is kept because it is true of
+  // the endpoint and it holds the telemetry probability up (0.04 → 0.12), so the host is
+  // not silently blank — but a host whose only signal is a token on a trusted platform's
+  // API zone will still read clean, and that is the precedence working, not this list
+  // being incomplete.
+  'ct.pinterest', 'business-api.tiktok',
 ] as const;
 
 /** One hit on these names is enough to call a host an ad or tracker network. */
