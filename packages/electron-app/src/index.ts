@@ -76,6 +76,7 @@ import {
   buildCategoryAttribution,
   toCategoryBlocklist,
   toAttributionManifest,
+  extractHostFromRule,
   refreshDb,
   setDbCacheDirectory,
   checkRuleConflict,
@@ -2845,6 +2846,66 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           );
         } catch (attrErr) {
           console.error('[IPC Main] Failed to write per-category outputs:', attrErr);
+        }
+
+        // The embedded classifier's own malware and phishing verdicts.
+        //
+        // `tier_security` is the one static tier whose contents are not a publisher's claim: a
+        // host is in it because the model this extension ships said that host is malware or
+        // phishing. That verdict exists only where the classifier has been run over a real list,
+        // which is here — so it is written here, beside the lists it is a verdict *about*, and
+        // `compile-tier-rulesets.mjs --security` reads it back. Writing it from the same
+        // deduplicated array the other outputs come from is what keeps the verdicts and the
+        // blocklist they describe from being produced from two different inputs.
+        //
+        // Measured on the real 190,035-host browser list this is ~162s and yields 6,392 verdicts,
+        // so it is the slowest part of a compilation and the duration is logged. It is not run in
+        // the background: the file has to exist before `npm run package:extension` compiles the
+        // tiers, and a verdict file written after the packaging step read it would be a tier built
+        // from last week's model.
+        try {
+          const candidates = new Set<string>();
+          for (const rule of uniqueRules) {
+            // `extractHostFromRule` refuses `@@` exceptions, cosmetic filters and scoped rules, so
+            // an allow rule can never become a block rule here — the same refusal the tier
+            // compiler and the ledger reader rely on.
+            const host = extractHostFromRule(rule?.raw);
+            if (host) candidates.add(host);
+          }
+
+          const classifyStartedAt = Date.now();
+          const verdicts: string[] = [];
+          for (const host of candidates) {
+            const prediction = globalMiniAiClassifier.classify(host);
+            if (prediction.category === 'Malware/Phishing') verdicts.push(host);
+          }
+          const elapsed = Date.now() - classifyStartedAt;
+
+          // Sorted, so two compilations that reach the same verdicts produce the same bytes and a
+          // diff shows a real change rather than a reordering. The header states the provenance,
+          // because a tier that ships a model's opinion should say whose opinion it was and when.
+          verdicts.sort();
+          const malwarePath = join(outputDir, 'malware.txt');
+          await fs.writeFile(
+            malwarePath,
+            [
+              '! Title: Mini-AI Malware & Phishing Verdicts',
+              '! Description: Hosts the embedded on-device classifier labelled Malware/Phishing.',
+              '! Source: model verdict, not a publisher list — see the tier/model agreement suite.',
+              `! Generated: ${new Date().toISOString()}`,
+              `! Hosts classified: ${candidates.size.toLocaleString()}`,
+              '',
+              ...verdicts.map((host) => `||${host}^`),
+              '',
+            ].join('\n'),
+            'utf8',
+          );
+          console.log(
+            `[IPC Main] Malware verdicts saved: ${verdicts.length.toLocaleString()} of ` +
+              `${candidates.size.toLocaleString()} hosts classified in ${(elapsed / 1000).toFixed(1)}s -> ${malwarePath}`,
+          );
+        } catch (verdictErr) {
+          console.error('[IPC Main] Failed to write malware verdicts:', verdictErr);
         }
 
         // Record in compilation history

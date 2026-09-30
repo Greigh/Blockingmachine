@@ -326,6 +326,13 @@ describe('RulesetManager status', () => {
     const status = await manager.status();
 
     expect(status.availableStaticRules).toBeNull();
-    expect(status.tiers).toHaveLength(4);
+    expect(status.tiers).toHaveLength(5);
+    expect(status.tiers.map((tier) => tier.id)).toEqual([
+      'tier_core',
+      'tier_ads',
+      'tier_privacy',
+      'tier_annoyances',
+      'tier_security',
+    ]);
   });
 });

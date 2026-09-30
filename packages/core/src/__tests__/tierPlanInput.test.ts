@@ -39,6 +39,10 @@ const files = {
   tier_ads: tierFile(['ads.example.com', 'shared.example.com']),
   tier_privacy: tierFile(['privacy.example.com']),
   tier_annoyances: tierFile(['consent.example.com']),
+  // Empty, and that is a valid file for this tier rather than a defect to report: `tier_security`
+  // holds the classifier's verdicts, so a checkout that has never run the classifier ships it with
+  // no rules at all and the validator is told so by the catalogue's `curatedSeed: false`.
+  tier_security: tierFile([]),
 };
 
 const ALL: StaticTierId[] = STATIC_RULE_TIERS.map((tier) => tier.id);
@@ -105,9 +109,28 @@ describe('computeTierPlan', () => {
     // Not the catalogue's curated numbers: a packaged build ships tens of thousands per tier, and
     // a plan computed from the baseline would be a plan about a different bundle.
     const result = computeTierPlan(input());
-    expect(result.rows.map((row) => row.rules)).toEqual([2, 2, 1, 1]);
+    expect(result.rows.map((row) => row.rules)).toEqual([2, 2, 1, 1, 0]);
     expect(result.plan.totalRules).toBe(6);
     expect(result.plan.benefitSource).toBe('coverage');
+  });
+
+  test('grades a tier that carries no rules rather than waiting for a sample', () => {
+    // `tier_security` ships empty on every machine that has not run the classifier, so it has
+    // nothing to block with and no amount of traffic will ever measure it. Grading it — rather
+    // than leaving it silent — is what keeps it from holding every plan on the rule-count basis
+    // for good, because the planner refuses the evidence basis while any tier is unmeasured.
+    const result = computeTierPlan(
+      input({
+        ledger: { text: '900 ||core.example.com^\n900 ||ads.example.com^\n900 ||privacy.example.com^\n900 ||consent.example.com^' },
+      }),
+    );
+
+    expect(result.basis?.source).toBe('evidence');
+    expect(result.plan.benefitSource).toBe('evidence');
+    // Nothing to measure, so it is not in the weighting either — and the four tiers that do carry
+    // rules are.
+    expect(result.basis?.benefits).not.toHaveProperty('tier_security');
+    expect(result.basis?.reason).toContain('across 4 tiers');
   });
 
   test('refuses to plan a tier whose file is invalid, and says which', () => {

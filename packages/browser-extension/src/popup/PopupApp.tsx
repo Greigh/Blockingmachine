@@ -412,6 +412,9 @@ export const PopupApp: React.FC = () => {
         id: tier.id,
         label: tier.label,
         category: tier.category,
+        // The live count, so a tier that carries nothing is graded on that rather than reported as
+        // a silent one waiting for traffic that would never make it fire.
+        ruleCount: tier.ruleCount,
       })),
       enabledIds: tierStatus.tiers.filter((tier) => tier.enabled).map((tier) => tier.id),
       hits: tierHits,

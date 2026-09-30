@@ -23,9 +23,14 @@
  */
 
 
-export type StaticTierId = 'tier_core' | 'tier_ads' | 'tier_privacy' | 'tier_annoyances';
+export type StaticTierId =
+  | 'tier_core'
+  | 'tier_ads'
+  | 'tier_privacy'
+  | 'tier_annoyances'
+  | 'tier_security';
 
-export type StaticTierCategory = 'core' | 'ads' | 'privacy' | 'annoyances';
+export type StaticTierCategory = 'core' | 'ads' | 'privacy' | 'annoyances' | 'security';
 
 export interface StaticRuleTier {
   id: StaticTierId;
@@ -46,6 +51,18 @@ export interface StaticRuleTier {
    * arithmetic on counts must go through `tierRuleCount()` instead of reading this directly.
    */
   ruleCount: number;
+  /**
+   * Whether the checked-in file is hand-curated content or only a placeholder.
+   *
+   * Four tiers are seeded by hand and compiled *additively* on top, so an empty file for one of
+   * them is a build defect — someone lost the baseline. `tier_security` is the other shape: it has
+   * no curated seed at all, because its contents are the classifier's own verdicts, which exist
+   * only where a machine has run the classifier over a real blocklist. An empty file for it is the
+   * correct state of a fresh checkout rather than a mistake, and the three places that assert "a
+   * tier is non-empty" — the ruleset validator, the compiler's `--check`, and the tier/model
+   * agreement suite — read this flag to tell the two apart instead of being loosened for everyone.
+   */
+  curatedSeed: boolean;
 }
 
 /**
@@ -73,6 +90,7 @@ export const STATIC_RULE_TIERS: readonly StaticRuleTier[] = [
     category: 'core',
     defaultEnabled: true,
     ruleCount: 24,
+    curatedSeed: true,
   },
   {
     id: 'tier_ads',
@@ -82,6 +100,7 @@ export const STATIC_RULE_TIERS: readonly StaticRuleTier[] = [
     category: 'ads',
     defaultEnabled: false,
     ruleCount: 36,
+    curatedSeed: true,
   },
   {
     id: 'tier_privacy',
@@ -91,6 +110,7 @@ export const STATIC_RULE_TIERS: readonly StaticRuleTier[] = [
     category: 'privacy',
     defaultEnabled: false,
     ruleCount: 36,
+    curatedSeed: true,
   },
   {
     id: 'tier_annoyances',
@@ -100,6 +120,23 @@ export const STATIC_RULE_TIERS: readonly StaticRuleTier[] = [
     category: 'annoyances',
     defaultEnabled: false,
     ruleCount: 22,
+    curatedSeed: true,
+  },
+  {
+    id: 'tier_security',
+    label: 'Threat & malware',
+    description:
+      'Hosts the embedded classifier calls malware or phishing. Opt-in, and the only tier whose contents are a model verdict rather than a publisher list.',
+    path: 'rules/tier_security.json',
+    category: 'security',
+    // Off, and not as a matter of taste. This is the one tier whose contents cannot be audited by
+    // reading a filter list — a host is here because a model said so — and it is the one whose
+    // contents are, by the publisher's own claim elsewhere, the highest-cost thing to get wrong in
+    // either direction. Shipping that enabled would block on the strength of a verdict the user
+    // cannot see the reasoning for and cannot narrow.
+    defaultEnabled: false,
+    ruleCount: 0,
+    curatedSeed: false,
   },
 ] as const;
 
@@ -276,17 +313,33 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Whether a tier is allowed to ship an empty file.
+ *
+ * Only the tiers with no curated seed are, and the reason is in `StaticRuleTier.curatedSeed`: an
+ * empty file for a hand-curated tier means someone lost the baseline, while an empty file for the
+ * classifier-sourced tier means nobody has run the classifier on this machine yet. Both are
+ * "empty", and only one of them is a defect, so the two cannot share a check.
+ */
+export function tierAllowsEmpty(tierId: string): boolean {
+  return TIER_BY_ID.get(tierId as StaticTierId)?.curatedSeed === false;
+}
+
+/**
  * Validates a tier ruleset before it is trusted, mirroring what Chrome's DNR engine
  * rejects — plus the one policy rule this project adds: tiers may only ship bottom-priority
  * block rules, so a tier can never outrank a user's own decision.
  */
-export function validateTierRuleset(rules: unknown, tierId: string): TierValidationResult {
+export function validateTierRuleset(
+  rules: unknown,
+  tierId: string,
+  options: { allowEmpty?: boolean } = {},
+): TierValidationResult {
   const errors: string[] = [];
 
   if (!Array.isArray(rules)) {
     return { ok: false, ruleCount: 0, errors: [`${tierId}: ruleset is not a JSON array`] };
   }
-  if (rules.length === 0) {
+  if (rules.length === 0 && !(options.allowEmpty ?? tierAllowsEmpty(tierId))) {
     errors.push(`${tierId}: ruleset is empty`);
   }
 
@@ -487,11 +540,28 @@ export function planTierSelection(input: TierPlanInput): TierPlan {
       : enabledRuleCount + liveAvailable;
 
   // ── Benefit basis ──────────────────────────────────────────────────────────────
+  // A tier carrying no rules is exempt from the gate for the same reason `planTierBenefits` drops
+  // it before asking: it cannot block, so no amount of traffic will ever measure it, and demanding
+  // a number for it would pin every plan to rule counts for good. It is no hole in the comparison
+  // either — with no rules it costs no slots, so whether the search includes it or not changes
+  // nothing it trades against. Strictly zero rather than falsy, so a caller that left the field
+  // out is not silently excused from measurement.
+  const carriesNoRules = (tier: TierPlanCandidate): boolean =>
+    isFiniteNumber(tier?.ruleCount) && tier.ruleCount <= 0;
+  // `some` as well as `every`, so a choice between tiers that all carry nothing is not reported as
+  // evidence-weighted on the strength of a rule nobody measured.
   const everyTierMeasured =
-    tiers.length > 0 && tiers.every((tier) => isFiniteNumber(tier?.benefit));
+    tiers.length > 0 &&
+    tiers.some((tier) => isFiniteNumber(tier?.benefit)) &&
+    tiers.every((tier) => isFiniteNumber(tier?.benefit) || carriesNoRules(tier));
   const benefitSource: TierPlan['benefitSource'] = everyTierMeasured ? 'evidence' : 'coverage';
-  const benefitOf = (tier: TierPlanCandidate): number =>
-    benefitSource === 'evidence' ? Math.max(0, tier.benefit as number) : Math.max(0, tier.ruleCount);
+  const benefitOf = (tier: TierPlanCandidate): number => {
+    if (benefitSource !== 'evidence') return Math.max(0, tier.ruleCount);
+    // Read rather than cast: the exempt tier above is the one candidate that arrives here without
+    // a number, and a `NaN` scored against every other candidate would fail every comparison and
+    // take the search with it. Zero is what an empty ruleset has earned.
+    return isFiniteNumber(tier.benefit) ? Math.max(0, tier.benefit) : 0;
+  };
 
   // ── Selection ──────────────────────────────────────────────────────────────────
   const keepIndexes = tiers
@@ -769,6 +839,17 @@ export type TierHitCounts = Partial<Record<StaticTierId, number>>;
 export const TIER_HIT_MIN_SAMPLE = 50;
 
 export type TierBlockingVerdict =
+  /**
+   * Carries no rules, so it has nothing to block with.
+   *
+   * The one verdict that is a fact about the ruleset rather than about traffic, and the only silent
+   * one that more traffic cannot resolve: a ruleset with no rules never matches anything, so its
+   * silence is structural. That is why it is graded here rather than left to look idle — "turn this
+   * off" is the wrong advice for a tier that has already proved nothing, and a tier that can never
+   * be measured must not be able to hold a plan on the rule-count basis forever. `tier_security`
+   * ships empty on a machine that has never run the classifier, which is the ordinary case.
+   */
+  | 'empty'
   /** Blocked something since it was switched on. */
   | 'productive'
   /** Enabled, with a real sample behind it, and it still never matched. */
@@ -782,6 +863,16 @@ export interface TierAttributionCandidate {
   id: StaticTierId;
   label: string;
   category: StaticTierCategory;
+  /**
+   * Rules the tier actually carries, when the caller knows.
+   *
+   * Optional on purpose, and an absent count is **not** a zero: a caller that never reads the tier
+   * files — a diagnostics view listing the catalogue — has not told us its tiers are empty, and
+   * grading them `empty` would excuse them from evidence they may well have. Only a caller holding
+   * the compiled files, which is every caller that grades real traffic, can say a tier carries
+   * nothing.
+   */
+  ruleCount?: number;
 }
 
 export interface TierBlockingInput {
@@ -885,6 +976,20 @@ export function planTierBenefits(summary: TierBlockingSummary): PlanBenefitView 
   const views = summary?.tiers ?? [];
   const observed = summary?.observed === true;
 
+  /**
+   * Tiers there is something left to measure about, which is every tier that has rules.
+   *
+   * The gate below refuses the evidence basis while any tier is unmeasured, and that is right for
+   * a tier carrying rules with no sample behind them: another session on answers it. It is wrong
+   * for a tier carrying nothing, because nothing will ever answer it — so such a tier is taken out
+   * of the question instead of being counted as an unanswered one. Without this, the tier that
+   * ships empty on every machine that has never run the classifier would hold the plan on rule
+   * counts for good, which is the opposite of what the gate is for.
+   *
+   * Read off the verdict rather than a fresh count so the two cannot disagree about the same tier.
+   */
+  const graded = views.filter((view) => view.verdict !== 'empty');
+
   // Asked as a question about *history* rather than read off the verdict, because the two differ
   // in exactly the case that matters: `buildTierBlocking` calls a switched-off tier `disabled`
   // whatever its counts say, because for the blocking card "is it idle" is the wrong question
@@ -902,7 +1007,22 @@ export function planTierBenefits(summary: TierBlockingSummary): PlanBenefitView 
     return { benefits: null, source: 'coverage', unmeasured: [], reason: 'No tiers to plan.' };
   }
 
-  const unmeasured = views.filter((view) => !hasMeasurement(view));
+  // Everything left is empty, so there is likewise nothing to weigh. Distinguished from the case
+  // above because the cause is different and only one of the two is worth acting on: a machine
+  // whose classifier has not been run yet gets a different answer from one with no tiers at all.
+  if (graded.length === 0) {
+    return {
+      benefits: null,
+      source: 'coverage',
+      unmeasured: [],
+      reason:
+        'Planned by rule count: no tier here carries rules yet, so there is nothing for the ledger ' +
+        'to measure. This becomes a plan weighted by what actually blocked once the tiers are ' +
+        'compiled.',
+    };
+  }
+
+  const unmeasured = graded.filter((view) => !hasMeasurement(view));
 
   if (unmeasured.length > 0) {
     const labels = unmeasured.map(
@@ -922,15 +1042,15 @@ export function planTierBenefits(summary: TierBlockingSummary): PlanBenefitView 
   }
 
   const benefits: TierHitCounts = {};
-  for (const view of views) benefits[view.id] = view.hits;
-  const idleCount = views.filter((view) => view.hits === 0).length;
+  for (const view of graded) benefits[view.id] = view.hits;
+  const idleCount = graded.filter((view) => view.hits === 0).length;
   return {
     benefits,
     source: 'evidence',
     unmeasured: [],
     reason:
       `Weighted by what actually blocked: ${summary.totalHits.toLocaleString()} attributed ` +
-      `block${summary.totalHits === 1 ? '' : 's'} across ${views.length} tier${views.length === 1 ? '' : 's'}` +
+      `block${summary.totalHits === 1 ? '' : 's'} across ${graded.length} tier${graded.length === 1 ? '' : 's'}` +
       `${idleCount > 0 ? `, including ${idleCount} that never fired` : ''}.`,
   };
 }
@@ -948,7 +1068,13 @@ export function formatTierBlocking(
 ): string {
   if (summary.totalHits <= 0) return 'No tier blocks recorded yet';
   const firing = summary.tiers.filter((tier) => tier.hits > 0).length;
-  return `${summary.totalHits.toLocaleString()} blocks from ${firing} of ${summary.tiers.length} tiers`;
+  // Tiers carrying no rules are left out of the denominator. They cannot block, so including them
+  // would present an unwinnable tier as a failure — "2 of 5" reads as three tiers that have been
+  // given their chance and wasted it, when one of them was never able to take it. The popup's own
+  // list still shows every tier; this sentence only grades the ones that were in the running.
+  const inPlay = summary.tiers.filter((tier) => tier.verdict !== 'empty').length;
+  const total = Math.max(inPlay, firing);
+  return `${summary.totalHits.toLocaleString()} blocks from ${firing} of ${total} tiers`;
 }
 
 /**
@@ -970,9 +1096,18 @@ export function buildTierBlocking(input: TierBlockingInput): TierBlockingSummary
 
   const views: TierBlockingView[] = counted.map(({ tier, hits: tierHits }) => {
     const isEnabled = enabled.has(tier.id);
-    // Order matters: a disabled tier is never idle, a tier that fired is never idle, and only
-    // once the ledger has a real sample does silence count against a tier.
-    const verdict: TierBlockingVerdict = !isEnabled
+    // A count of zero is a tier that cannot block, and is deliberately narrower than "no count".
+    const noRules =
+      typeof tier.ruleCount === 'number' && Number.isFinite(tier.ruleCount) && tier.ruleCount <= 0;
+    // A tier carrying no rules is `empty` first, whatever its switch says, because it is the only
+    // verdict here that names a fact about the ruleset rather than about traffic or about the
+    // switch: an empty ruleset is empty whether it is on or off, and "switch it on" and "give it
+    // more traffic" both promise a way forward that it cannot take. The rest of the order is
+    // unchanged — a disabled tier is never idle, and only once the ledger has a real sample does
+    // silence count against a tier.
+    const verdict: TierBlockingVerdict = noRules
+      ? 'empty'
+      : !isEnabled
       ? 'disabled'
       : tierHits > 0
       ? 'productive'

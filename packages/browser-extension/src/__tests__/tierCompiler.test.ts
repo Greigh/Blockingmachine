@@ -805,10 +805,15 @@ describe('compile-tier-rulesets — per-category attribution', () => {
       privacy: ['||tracker-widget-example.com^'],
     });
 
-    expect(runCompiler(['--input', input, '--attribution', attribution, '--budget', '8']).status).toBe(0);
+    // `--budget 20` where the other cases use 8. With five tiers sharing the pool the annoyances
+    // cap rounds to nothing at 8, so its single curated host is left unserved and the compiler
+    // refuses the run outright rather than dropping it — which is the right refusal, and not what
+    // this case is about. At 20 every tier's curated seed fits and the redistribution this test
+    // needs still runs.
+    expect(runCompiler(['--input', input, '--attribution', attribution, '--budget', '20']).status).toBe(0);
     const first = ALL_STATIC_TIER_IDS.map((tier) => readFileSync(join(workDir, 'rules', `${tier}.json`), 'utf8'));
 
-    expect(runCompiler(['--input', input, '--attribution', attribution, '--budget', '8']).status).toBe(0);
+    expect(runCompiler(['--input', input, '--attribution', attribution, '--budget', '20']).status).toBe(0);
     const second = ALL_STATIC_TIER_IDS.map((tier) => readFileSync(join(workDir, 'rules', `${tier}.json`), 'utf8'));
 
     expect(second).toEqual(first);

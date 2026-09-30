@@ -888,6 +888,14 @@ body {
   border-left-color: var(--tone-annoyance);
 }
 
+/* The threat tier gets the danger rail rather than a tone from the element palette, because that
+   palette has no malware class to reuse — an element is an ad, a tracker, a nag or content, and a
+   host the classifier calls malicious is none of the four. Red also carries the one thing this row
+   has to say for itself: it ships off, and it is the only tier whose contents are a model's word. */
+.tier-row.tone-security {
+  border-left-color: var(--danger);
+}
+
 .tier-main {
   display: flex;
   flex-direction: column;
