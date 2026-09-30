@@ -201,4 +201,96 @@ describe("tier-plan", () => {
     const data = res.data as { enabled: string[] };
     expect(data.enabled).toEqual(["tier_core", "tier_ads"]);
   });
+
+  test("--synced reports which tiers the dynamic rules already cover", async () => {
+    const dir = await makeRulesDir({
+      // tier_privacy ships one host and the synced list blocks it, so it adds nothing. The other
+      // three each ship a host the list does not cover.
+      tier_ads: rules(["ads.example.com", "shared.example.com", "extra-ads.example.com"]),
+      tier_privacy: rules(["privacy.example.com"]),
+      tier_annoyances: rules(["consent.example.com", "nag.example.com"]),
+    });
+    dirs.push(dir);
+    const synced = path.join(dir, "browser.txt");
+    await fs.writeFile(
+      synced,
+      ["! title", "||shared.example.com^", "||ads.example.com^", "||privacy.example.com^", "||consent.example.com^"].join("\n"),
+      "utf8",
+    );
+
+    const res = await run(dir, { synced });
+    expect(res.success).toBe(true);
+    const data = res.data as {
+      redundantTiers: string[];
+      synced: { hosts: number; exceptions: number; lines: number; skipped: number };
+      files: Array<{ id: string; rules: number; redundant: { rules: number; complete: boolean } | null }>;
+    };
+    expect(data.redundantTiers).toEqual(["tier_privacy"]);
+    expect(data.synced).toEqual({ hosts: 4, exceptions: 0, lines: 4, skipped: 0 });
+    // Every tier is diffed, not only the finding, so the numbers beside them are readable.
+    expect(data.files.find((f) => f.id === "tier_core")?.redundant).toEqual({
+      rules: 1,
+      hosts: 1,
+      complete: false,
+    });
+    expect(data.files.find((f) => f.id === "tier_ads")?.redundant?.rules).toBe(2);
+  });
+
+  test("redundancy is unknown rather than zero when no synced list is given", async () => {
+    // The distinction the flag exists to preserve: a table of zeroes would claim every tier adds
+    // something, which is a statement about a comparison nobody ran.
+    const dir = await makeRulesDir();
+    dirs.push(dir);
+
+    const res = await run(dir);
+    const data = res.data as {
+      redundantTiers: string[];
+      synced: unknown;
+      files: Array<{ redundant: unknown }>;
+    };
+    expect(data.synced).toBeNull();
+    expect(data.redundantTiers).toEqual([]);
+    expect(data.files.every((f) => f.redundant === null)).toBe(true);
+  });
+
+  test("an exception in the synced list keeps a tier out of the finding", async () => {
+    // The tier would be entirely duplicated by host match alone. The exception is what makes it
+    // the only thing still blocking that host, so it is not redundant after all.
+    const dir = await makeRulesDir({
+      tier_privacy: rules(["excepted.example.com"]),
+    });
+    dirs.push(dir);
+    const synced = path.join(dir, "browser.txt");
+    await fs.writeFile(synced, "||excepted.example.com^\n@@||excepted.example.com^\n", "utf8");
+
+    const res = await run(dir, { synced });
+    const data = res.data as { redundantTiers: string[]; synced: { exceptions: number } };
+    expect(data.synced.exceptions).toBe(1);
+    expect(data.redundantTiers).not.toContain("tier_privacy");
+  });
+
+  test("the same files produce the same redundancy in core", async () => {
+    // The CLI and the hub's card render one computation, so a disagreement about the same bytes
+    // would be invisible to both.
+    const dir = await makeRulesDir();
+    dirs.push(dir);
+    const syncedPath = path.join(dir, "browser.txt");
+    await fs.writeFile(syncedPath, "||core.example.com^\n||shared.example.com^\n", "utf8");
+
+    const res = await run(dir, { synced: syncedPath });
+    const data = res.data as { redundantTiers: string[] };
+
+    const expected = computeTierPlan({
+      files: [
+        { id: "tier_core", rules: rules(["core.example.com", "shared.example.com"]) },
+        { id: "tier_ads", rules: rules(["ads.example.com", "shared.example.com"]) },
+        { id: "tier_privacy", rules: rules(["privacy.example.com"]) },
+        { id: "tier_annoyances", rules: rules(["consent.example.com"]) },
+      ],
+      synced: { text: "||core.example.com^\n||shared.example.com^\n" },
+      enabled: ["tier_core"],
+    });
+    expect(data.redundantTiers).toEqual(expected.redundantTiers);
+    expect(data.redundantTiers).toEqual(["tier_core"]);
+  });
 });

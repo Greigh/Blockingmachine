@@ -13,11 +13,26 @@ import React from 'react';
  * runs, so this card and `blockingmachine tier-plan` cannot disagree about the same files.
  */
 
+/**
+ * How much of a tier the synced list already blocks.
+ *
+ * `complete` is carried separately from the ratio rather than derived from it in the view: a tier
+ * that is 90% duplicated is still load-bearing for the other 10%, and a card that showed only a
+ * percentage would invite reading a mostly-redundant tier as a fully redundant one.
+ */
+export interface TierPlanRedundancy {
+  rules: number;
+  hosts: number;
+  complete: boolean;
+}
+
 export interface TierPlanRow {
   id: string;
   label: string;
   rules: number;
   hits: number | null;
+  /** Null means no synced list was compared, which is not the same as nothing being redundant. */
+  redundant: TierPlanRedundancy | null;
   errors: string[];
 }
 
@@ -43,6 +58,17 @@ export interface TierPlanResult {
   ledgerPath?: string | null;
   /** Set when a chosen ledger could not be read, so the plan fell back rather than errored. */
   ledgerMissing?: string | null;
+  /** What the synced list was read as, or null when no list was found to diff against. */
+  synced?: {
+    hosts: number;
+    exceptions: number;
+    lines: number;
+    skipped: number;
+  } | null;
+  /** The synced list this plan was diffed against. */
+  syncedPath?: string | null;
+  /** Tiers that block nothing the synced list does not. */
+  redundantTiers?: string[] | null;
 }
 
 export interface TierPlanFailure {
@@ -108,9 +134,12 @@ export const ExtensionTierPlanCard: React.FC<ExtensionTierPlanCardProps> = ({
     );
   }
 
-  const { plan, basis, ledger, capacitySlots, rows, broken } = result;
+  const { plan, basis, ledger, capacitySlots, rows, broken, synced } = result;
   const active = new Set(enabled.length > 0 ? enabled : plan.enabled);
   const free = Math.max(0, capacitySlots - plan.enabledRules);
+  // Only the tiers that add nothing at all are named as findings. A partly-duplicated tier is
+  // reported in its own row; listing it here too would bury the tiers that are actually droppable.
+  const redundantTiers = new Set(result.redundantTiers ?? []);
 
   return (
     <div className="desktop-card tier-plan-card">
@@ -145,6 +174,7 @@ export const ExtensionTierPlanCard: React.FC<ExtensionTierPlanCardProps> = ({
                 <th scope="col">Tier</th>
                 <th scope="col">Rules</th>
                 <th scope="col">Blocked</th>
+                <th scope="col">Already dynamic</th>
                 <th scope="col">In plan</th>
               </tr>
             </thead>
@@ -159,6 +189,16 @@ export const ExtensionTierPlanCard: React.FC<ExtensionTierPlanCardProps> = ({
                     </th>
                     <td>{row.rules.toLocaleString()}</td>
                     <td>{row.hits === null ? '—' : row.hits.toLocaleString()}</td>
+                    {/* An em dash when no list was compared, because "nothing was compared" and
+                        "nothing was redundant" are different facts and the second one is the
+                        reassuring reading of an empty cell. */}
+                    <td className={redundantTiers.has(row.id) ? 'tier-plan-redundant-all' : undefined}>
+                      {row.redundant === null
+                        ? '—'
+                        : row.redundant.rules === 0
+                          ? '0'
+                          : `${row.redundant.rules.toLocaleString()} of ${row.rules.toLocaleString()}`}
+                    </td>
                     {/* Three states, because they are three different facts: kept by the plan,
                         dropped from a tier that is currently on, and left out of a plan that never
                         had it on. Collapsing the last two is how a user's own choice ends up
@@ -193,6 +233,45 @@ export const ExtensionTierPlanCard: React.FC<ExtensionTierPlanCardProps> = ({
                 ? `, ${ledger.shared.toLocaleString()} matching a host two tiers both ship`
                 : ''}
               {result.ledgerPath ? ` · ${result.ledgerPath}` : ''}
+            </p>
+          )}
+
+          {/* The redundancy finding is stated in words before the number, because the number alone
+              ("29,412 of 30,000") reads as a quality bar rather than as "this tier duplicates the
+              dynamic rules". It is checked against the same list the extension actually fetches,
+              so a tier named here is one the browser is already covering without it. */}
+          {synced ? (
+            redundantTiers.size > 0 ? (
+              <p className="tier-plan-redundant">
+                {redundantTiers.size === 1 ? 'One tier blocks' : `${redundantTiers.size} tiers block`}{' '}
+                nothing the synced list does not:{' '}
+                {rows
+                  .filter((row) => redundantTiers.has(row.id))
+                  .map((row) => row.label)
+                  .join(', ')}
+                . Diffed against {synced.hosts.toLocaleString()} blocked hosts
+                {result.syncedPath ? ` in ${result.syncedPath}` : ''}.
+              </p>
+            ) : (
+              <p className="tier-plan-redundant none">
+                Every tier blocks something the synced list does not — no tier is redundant with it.
+              </p>
+            )
+          ) : (
+            <p className="tier-plan-redundant unknown">
+              No synced list was found, so no tier could be checked for redundancy. Compile a list
+              in the hub and this fills in.
+            </p>
+          )}
+
+          {synced && redundantTiers.size > 0 && (
+            // Said in the same breath as the finding, because the finding on its own reads as
+            // "delete these". A redundant tier is duplicated coverage, not absent coverage: it is
+            // what still blocks those hosts if the dynamic list stops carrying them.
+            <p className="tier-plan-redundant-caveat">
+              Redundant is not the same as useless: these are rules the dynamic list also blocks
+              today, they still cost static slots, and they buy back coverage if the synced list
+              drops them.
             </p>
           )}
 
