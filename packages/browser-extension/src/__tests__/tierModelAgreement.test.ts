@@ -14,19 +14,26 @@
  *   - **The model never contradicts a tier.** Across all 118 curated hosts, not one is classified
  *     into a different blocking family — no ad host called a tracker, no tracker called malware.
  *     Every disagreement is instead the model failing to place a host at all (`Clean`).
- *   - **It fails to place 46 of them** — 12 ad, 13 privacy and 21 annoyance hosts — always as
- *     `Clean` and always at 74–88%, under the 90% mark past which a clean verdict is an assertion
- *     rather than a shrug. That is the same weak band the triage cascade escalates, so these hosts
- *     are that cascade's documented reason for existing rather than a bug in the list.
+ *   - **It fails to place 22 of them** — 1 privacy and 21 annoyance host — always as `Clean` and
+ *     always at 74–88%, under the 90% mark past which a clean verdict is an assertion rather than a
+ *     shrug. That is the same weak band the triage cascade escalates, so these hosts are that
+ *     cascade's documented reason for existing rather than a bug in the list. The count was 46
+ *     until the classifier's token lists gained the vendors these tiers carry; 24 hosts moved out
+ *     of the pin because of it, and the two that did not are the two different kinds of remaining
+ *     gap — see `TOLERATED_MISSES`.
  *   - **The always-on Core shield tier gets no such latitude**: every host it ships is recognised.
  *     That tier is enabled on a fresh install, so it does not get the benefit of the doubt.
  *   - **`tier_annoyances` is the vocabulary gap in its purest form**: 21 of its 22 hosts have no
  *     word in the classifier's category set at all, because there is no "annoyance" category to
- *     have. Which is exactly why that tier ships disabled.
+ *     have. Which is exactly why that tier ships disabled. This is the larger half of what remains
+ *     and the half that is *not* fixable by teaching the model names.
  *
- * The disagreement set is *pinned* rather than the assertion being loosened. A host added to a tier
- * the model cannot account for fails this suite, and so does a model that learns a host it used to
- * miss — until the pin is updated. A bug list that cannot go stale is a bug list nobody trusts.
+ * The disagreement set is *pinned* rather than the assertion being loosened, and it has to hold its
+ * own weight: 24 of the 46 original entries are gone, and every one of them left because the
+ * classifier learned the vendor rather than because the pin was relaxed. What is left is pinned for
+ * two different reasons and the list says which is which. A host added to a tier the model cannot
+ * account for fails this suite, and so does a model that learns a host it used to miss — until the
+ * pin is updated. A bug list that cannot go stale is a bug list nobody trusts.
  *
  * ## Why a packaged build is graded differently
  *
@@ -83,34 +90,31 @@ const TIER_FAMILIES: Partial<Record<StaticTierId, readonly Category[]>> = {
  * be a real contradiction and has to be fixed rather than recorded.
  */
 const TOLERATED_MISSES: Partial<Record<StaticTierId, readonly string[]>> = {
-  tier_ads: [
-    '33across.com',
-    'adcash.com',
-    'brightcom.com',
-    'juicyads.com',
-    'lijit.com',
-    'magnite.com',
-    'mopub.com',
-    'sonobi.com',
-    'stickyadstv.com',
-    'supersonicads.com',
-    'tremorhub.com',
-    'zemanta.com',
-  ],
+  /**
+   * `tier_ads` is now empty, and that is the point of the exercise.
+   *
+   * Twelve SSPs and exchanges — Magnite, MoPub, Sonobi, 33Across and the rest — used to sit here
+   * because the classifier had no token for them: a company whose name is an ordinary word looks
+   * like nothing to a lexical model, so the tier shipped hosts the model called clean. Each is now
+   * a token in `SUSPICIOUS_AD_TOKENS`, and the tier requires agreement with no exceptions.
+   *
+   * The key is deleted rather than left as an empty array, so a host added to this tier falls
+   * through the `?? []` default and fails the pin comparison instead of being silently tolerated.
+   */
+  // tier_ads: no entries.
   tier_privacy: [
-    'abtasty.com',
-    'addthis.com',
-    'addtoany.com',
+    /**
+     * Pinned for a reason that is not a vocabulary gap, and it is the more interesting entry.
+     *
+     * `business-api.tiktok` *is* now a tracker token, and it does lift the model's telemetry
+     * probability on this host (0.04 → 0.12). It does not change the verdict, because the `-api`
+     * label makes the infrastructure pass classify the host as a verified endpoint on a readable
+     * domain, and `knownSafeInfra` outranks every token in the model by design. That precedence is
+     * correct — an API zone on a major platform is exactly the shape a naive token match gets wrong
+     * — so the honest record is that this tier ships a host the model is configured to trust, and
+     * the suite should keep saying so rather than have the token added until the number goes green.
+     */
     'business-api.tiktok.com',
-    'clicktale.net',
-    'comscore.com',
-    'ct.pinterest.com',
-    'dynamicyield.com',
-    'fpjs.io',
-    'imrworldwide.com',
-    'kameleoon.eu',
-    'nielsen.com',
-    'sharethis.com',
   ],
   tier_annoyances: [
     'cookiebot.com',
