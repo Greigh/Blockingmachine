@@ -99,6 +99,9 @@ Corpus: **117/117** class-and-action correct for both the hand-tuned reference a
 fitted table; held-out 40 cases, accuracy **0.90 → 0.95**, logLoss 0.2528 → 0.1796,
 Brier 0.128 → 0.0902, 2 wins and no regressions. The weights were refitted and the drift
 test (`npm run check:element-weights`) confirms the checked-in table is a fresh fit.
+*(That is the corpus as it stood after this scan. It has since grown to **162** cases
+holding 161, with 6 held-out wins against 1 regression — the two findings below say what
+moved, and neither is this scan's result.)*
 
 Live pages, actionable verdicts:
 
@@ -136,11 +139,23 @@ from 5 to **1**: the hand-tuned centre is worth one labelled element against 77,
 corpus outweighs it about **77:1**. The change is visible in what ships: mean held-out
 cross-entropy **0.1796 → 0.1443** and held-out accuracy **0.90 → 0.95**.
 
-What it did not do is close the gap the finding named. Unregularised still generalises
-better on the 40 held-out cases (0.0877 against 0.1443) — the folds train on ~62 cases and
-cannot see the difference. Selecting on the held-out set would make that set a fitted
-quantity, so strength 1 ships and the residual gap is recorded rather than tuned away. The
-fix for it is more labelled cases, not a better hyperparameter.
+What it did not do is close the gap the finding named. Unregularised still generalised
+better on the 40 held-out cases (0.0877 against 0.1443) — the folds trained on ~62 cases and
+could not see the difference. Selecting on the held-out set would make that set a fitted
+quantity, so strength 1 shipped and the residual gap was recorded rather than tuned away.
+The fix named for it was more labelled cases, not a better hyperparameter.
+
+**It half worked, and it is worth saying which half.** On the corpus of 162 the ordering
+has crossed on cross-entropy — unregularised 0.4404 against the shipped 0.4234 — and
+unregularised is still ahead on held-out *accuracy*, 0.9818 against 0.9455. So the extra
+labelled cases closed the cross-entropy half of the gap and nothing at all of the accuracy
+half. A second recorded claim moved with it: "no regularisation is the worst candidate"
+was true on the 117-case folds (1.0929 against 0.5813) and is not now, where unregularised
+scores 0.6120 and only strengths 1 (0.5229) and 2 (0.5611) beat it while 5, 10, 20 and 50
+(0.6219 → 0.7376) are all worse. The folds are a weaker discriminator at the
+heavy-regularisation end than they were on a smaller corpus, so the suite now asserts the
+narrower true thing — the selected strength beats unregularised *and* is the best
+regularised score — instead of a claim the numbers stopped supporting.
 
 **2. The action-calibration metric could not score a `leave` verdict.** `elementEvaluation.ts`
 read a leave verdict's confidence as `1 − p(acting is right)`, but that confidence is a
@@ -150,10 +165,12 @@ cases moved it from 0.1016 to 0.1228 **for the hand-tuned reference and the fitt
 alike** — the scale tracked corpus composition, not the weights.
 
 `elementActionCalibrationPair` now returns `null` for a `leave` verdict, so the metric
-averages over the cases where the model actually acts (**63 of 117**) and the report prints
+averages over the cases where the model actually acts — **74 of 162**, after the corpus
+grew by 45 cases, up from 63 of 117 when this section was written — and the report prints
 that coverage beside the number. Restraint is measured separately, by `missedHides`,
-`undersoldHides` and the action mix (`61 hide, 2 suggest, 54 leave`). On the corrected
-scale the two heads are close — reference ECE 0.0424, shipped 0.0444, a delta of +0.0020 —
-and the Brier scores are 0.0059 and 0.0062. The regression bound that replaced the frozen
-absolute bar is stated relative to that reference, which is what the old metric's
-knife-edge `0.11` backstop should have been from the start.
+`undersoldHides` and the action mix (now `81 hide, 3 suggest, 78 leave`). On the corrected
+scale the two heads are close, and the numbers are quoted against the corpus that exists
+rather than the one this scan was written against: reference ECE **0.0351**, shipped
+**0.0377**, a delta of +0.0026, with Brier scores of 0.0031 and 0.0033. The regression bound
+that replaced the frozen absolute bar is stated relative to that reference, which is what
+the old metric's knife-edge `0.11` backstop should have been from the start.

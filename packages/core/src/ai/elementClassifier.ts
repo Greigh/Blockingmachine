@@ -435,7 +435,9 @@ export const ELEMENT_TRACKER_WEAK_TOKENS: readonly string[] = [
   'statistics',
   'metrics',
   'tracking',
-  'track',
+  // `track` was here and is deliberately not any more: it is the same ordinary product
+  // word the comment above warns about. `tracking` and `trackers` are what a page that
+  // means measurement writes, and one word is enough to tell them apart.
   'conversion',
   'conversions',
   'attribution',
@@ -508,7 +510,13 @@ export const ELEMENT_NAG_MARKERS: readonly string[] = [
   'newsletter-modal',
   'newsletter-popup',
   'newsletter-signup',
+  'newsletter-slidein',
+  'newsletter-slide-in',
   'app-interstitial',
+  'app-install',
+  'appinstall',
+  'exit-intent',
+  'exitintent',
   'subscribe-modal',
   'subscribe-popup',
   'signup-modal',
@@ -706,6 +714,9 @@ export const ELEMENT_SOURCE_HOST_KINDS: Readonly<Record<string, ElementSourceKin
   'fullstory.com': 'measurement',
   'clarity.ms': 'measurement',
   'mixpanel.com': 'measurement',
+  // Mixpanel serves its library from `cdn.mxpnl.com`, so the brand entry above never fired
+  // for the loader that is actually on the page.
+  'mxpnl.com': 'measurement',
   'amplitude.com': 'measurement',
   'heapanalytics.com': 'measurement',
   'segment.io': 'measurement',
@@ -743,7 +754,15 @@ export const ELEMENT_SOURCE_HOST_KINDS: Readonly<Record<string, ElementSourceKin
   'unpkg.com': 'cdn',
 };
 
-/** Ad/consent keywords inside a resource path — supporting evidence only. */
+/**
+ * Ordinary ad/consent keywords inside a resource path — supporting evidence only.
+ *
+ * Suppressed when the host is a known CDN, a measurement host or an ad network, because a
+ * path says nothing there: jsDelivr and friends serve every library there is, so
+ * `analytics` in a path can be a charting package. That suppression is right for this
+ * table and wrong for {@link ELEMENT_URL_PATH_VENDOR_PATH_TOKENS}, which is why the two
+ * are separate tables rather than one list with a rule attached to some of its entries.
+ */
 export const ELEMENT_URL_PATH_TOKENS: readonly string[] = [
   'ads',
   'ad',
@@ -751,17 +770,38 @@ export const ELEMENT_URL_PATH_TOKENS: readonly string[] = [
   'pagead',
   'adframe',
   'advertisement',
-  'gtm',
-  'gtag',
   'analytics',
   'collect',
   'beacon',
   'pixel',
-  'track',
+  // `track` was here and is deliberately not any more. In a *path* it is almost never
+  // measurement: `/embed/track/<id>` is a song, `/track/<id>` is a parcel or a race result,
+  // and `track` is a repository branch. It named an annoyance and hid an embedded music
+  // player at 62% — the same ordinary-word trap the tracker vocabulary has to avoid.
   'tracking',
   'consent',
   'cookie',
   'cmp',
+] as const;
+
+/**
+ * Tracking *products* named in a resource path, counted on any host.
+ *
+ * A vendor's own name is not an ordinary word and does not stop being evidence because a
+ * CDN served the file: `fingerprintjs` is in that path because the library is
+ * FingerprintJS, and a CDN that hosts both `chart.js` and `@fingerprintjs/fpjs` says
+ * nothing about which one it just handed over. This is what `fingerprintjs-on-public-cdn`
+ * in the corpus is about — a fingerprinting script the model could not see at all, because
+ * the only evidence that identifies it was suppressed by a rule written for `chart.js`.
+ *
+ * One such atom is still a single non-shape signal, so it can suggest and never hides: the
+ * split widens what the model can *name*, not what it is allowed to do.
+ */
+export const ELEMENT_URL_PATH_VENDOR_PATH_TOKENS: readonly string[] = [
+  'gtm',
+  'gtag',
+  'fingerprintjs',
+  'fpjs',
 ] as const;
 
 /** Consent markers that are CMP vendor names rather than generic English words. */
@@ -898,6 +938,7 @@ const TRACKER_WEAK_SET = new Set(ELEMENT_TRACKER_WEAK_TOKENS);
 const CONSENT_WEAK_SET = new Set(ELEMENT_CONSENT_WEAK_TOKENS);
 const SOCIAL_WEAK_SET = new Set(ELEMENT_SOCIAL_WEAK_TOKENS);
 const URL_PATH_TOKEN_SET = new Set(ELEMENT_URL_PATH_TOKENS);
+const URL_PATH_VENDOR_SET = new Set(ELEMENT_URL_PATH_VENDOR_PATH_TOKENS);
 const AD_ATTRIBUTE_NAME_SET = new Set(AD_ATTRIBUTE_NAMES);
 const TRACKER_ATTRIBUTE_NAME_SET = new Set(TRACKER_ATTRIBUTE_NAMES);
 const SOURCE_ATTRIBUTE_SET = new Set(SOURCE_ATTRIBUTES);
@@ -1005,7 +1046,11 @@ function pathTokensOf(raw: string): string[] {
     );
     const atoms: string[] = [];
     for (const token of tokenizeElementIdentifier(`${url.pathname} ${url.search}`)) {
-      if (URL_PATH_TOKEN_SET.has(token)) atoms.push(token);
+      // Both tables are searched here, not just the ordinary-word one: this function
+      // reports what a path *says*, and which of the two rules a given atom then answers to
+      // is decided by the caller. Filtering on one table here is what made a vendor name
+      // invisible the moment it was given its own rule.
+      if (URL_PATH_TOKEN_SET.has(token) || URL_PATH_VENDOR_SET.has(token)) atoms.push(token);
       if (atoms.length >= 8) break;
     }
     return atoms;
@@ -1332,9 +1377,18 @@ export function analyzeElement(snapshot: ElementSnapshot): ElementFeatureAnalysi
   if (adWeak) add('ad-weak-marker');
   if (layoutWord) add('layout-marker');
   if (socialWeak) add('weak-marker');
-  if (urlPathTokens.length > 0 && !adStrong && !adAttribute && sourceKind === 'none' && sourceVerdictCategory === '') {
-    add('url-path');
-  }
+  // Two different questions about a resource path, kept apart because they have different
+  // answers. An *ordinary* word in a path is evidence only when the host leaves the path
+  // meaningful (`sourceKind === 'none'`); a *vendor* name in a path is evidence whatever
+  // the host, because the name is the product. Both are still one non-shape signal, so
+  // either can suggest and neither can hide.
+  const genericPathToken = firstMatchingToken(urlPathTokens, URL_PATH_TOKEN_SET);
+  const vendorPathToken = firstMatchingToken(urlPathTokens, URL_PATH_VENDOR_SET);
+  const pathSaysSomething =
+    genericPathToken !== null
+      ? sourceKind === 'none' && !adStrong && !adAttribute
+      : vendorPathToken !== null;
+  if (pathSaysSomething && sourceVerdictCategory === '') add('url-path');
 
   return {
     features,

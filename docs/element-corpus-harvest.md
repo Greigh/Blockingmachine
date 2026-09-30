@@ -66,9 +66,12 @@ What a click *can* honestly state is the action, because that is the consequenti
 
 The queue is written to its own artifact,
 `packages/core/src/ai/data/element-harvest-candidates.json`, and **nothing that grades, fits
-or calibrates imports it**. The graded corpus is `elementEvalCorpus.ts`, and it is unchanged:
-117 cases, 54 of them scored for action calibration, reference ECE 0.0346 and shipped
-0.0369, weight table not refitted.
+or calibrates imports it**. This change added no case to the graded corpus: when the
+pipeline landed, `elementEvalCorpus.ts` held 117 cases with 54 of them scored for action
+calibration (reference ECE 0.0346, shipped 0.0369) and the weight table not refitted. It now
+holds **162** cases with **74** scored (reference ECE 0.0351, shipped 0.0377) — grown by
+hand in `elementEvalCorpus.ts` and **not** by promoting anything out of this queue, which is
+the separation above doing its job rather than being overtaken by it.
 
 Promotion is a person editing the corpus. The queue helps them by marking a candidate whose
 shape and action band a corpus case already pins as `promoted`, so the queue **drains** as
@@ -119,18 +122,29 @@ fixes that scan produced. Running the pipeline over it:
 ```
 16 records → 10 candidates from 5 hosts
   6 labelled, 0 unlabelled · 6 repeat sightings merged
-  6 already promoted (the six cases the scan's fixes added) · 4 awaiting review
+  8 already promoted · 2 awaiting review
 ```
 
-The four awaiting review are worth reading, because they are the argument for the whole
+The two awaiting review are worth reading, because they are the argument for the whole
 exercise:
 
-- three are cross-promotion modules (`.g-promo-slim`, `.live-updates-promo`,
-  `.top-fronts-banner-ad-container`) that the model already leaves alone. A verdict-scoped
-  harvest would never have collected them; the reviewer's `keep` is the whole record.
 - one is the NYT's hidden `tpc-check` frame — `Tracker/hide 98%`, the file's only `hide`
   label, and the one real detection the reviewer agreed with. A corpus grown only from
   complaints would have had no idea it was worth keeping.
+- one is the Guardian's own ad-named promo div — `theguardian.com/div|ad — Content/leave
+  84%` — which the model already leaves alone. A verdict-scoped harvest would never have
+  collected it; the reviewer's `keep` is the whole record.
+
+**The queue has drained from 4 to 2, and the two that left are the queue working.** Both
+were `div|promo` on a news site, marked `keep` by the reviewer — the publisher's own
+promotion, which the model already leaves alone. A hand-written case now pins that shape
+(`event-promo-card`: "a promoted thing is not a promotion"), so both candidates are reported
+as `promoted` and stop being proposed. That is the intended loop end to end: a person
+declines to remove an element, the case lands in the corpus, and the queue stops asking.
+It is also a live demonstration of the limitation below — the NYT's `.g-promo-slim` and
+`.live-updates-promo` are two different modules that share the `div|promo` signature, so
+the one promoted case retires the *pair* as a single queue entry, and the drained entry
+still carries two sightings.
 
 ## The limitation this found
 
