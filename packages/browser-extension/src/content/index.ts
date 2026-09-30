@@ -2,6 +2,7 @@ import { injectCosmeticStyles } from './cosmeticHider.js';
 import { ElementPicker } from './elementPicker.js';
 import { ElementAiScanner } from './elementScanner.js';
 import { loadElementFeedback } from './elementAiFeedback.js';
+import { captureDecision, captureScannedElements } from './elementHarvestCapture.js';
 import { showToast } from './pageToast.js';
 import {
   STORAGE_KEY_COSMETICS,
@@ -61,6 +62,26 @@ function install(): void {
   }
 
   // ─── Cosmetics ──────────────────────────────────────────────────────────────
+
+  /**
+   * Hands captured elements to the service worker, which owns the one buffer.
+   *
+   * Capture rides along with two things the user already asked for — a page scan and a
+   * decision about an element — and never runs on its own, so nothing is recorded from a
+   * page the user did not interact with. A failed send is deliberately silent: the scan
+   * or the decision already succeeded, and telling the user their browsing could not be
+   * contributed to a corpus is a worse answer than not contributing it.
+   */
+  function harvest(records: unknown[]): void {
+    if (records.length === 0) return;
+    try {
+      chrome.runtime.sendMessage({ type: 'HARVEST_ELEMENTS', payload: { records } }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch {
+      // No service worker, or a frame going away mid-send. Neither is worth surfacing.
+    }
+  }
 
   async function applyCosmetics(): Promise<void> {
     try {
@@ -201,6 +222,11 @@ function install(): void {
         // Report what the element AI would do on this page without touching it.
         try {
           const result = scanner.scan();
+          // The scan found real elements and the user asked to hear about them, so the
+          // same elements are captured on the way past — unlabelled, because nobody has
+          // ruled on them yet. See `elementHarvestCapture.ts` for why that is the only
+          // kind of record that can be taken without asking.
+          harvest(captureScannedElements(result.candidates, { host: location.hostname, now: Date.now() }));
           sendResponse({
             success: true,
             scanned: result.scanned,
@@ -245,6 +271,17 @@ function install(): void {
           return false;
         }
         const keep = message.payload?.action === 'keep';
+        // A decision is the one thing a person says about an element, so it is the one
+        // thing worth keeping: captured with the decision attached, it is the only route
+        // by which a harvested element ever gets a label.
+        harvest([
+          captureDecision(
+            element,
+            scanner.classifyElement(element, false),
+            keep ? 'keep' : 'hide',
+            { host: location.hostname, now: Date.now() },
+          ),
+        ]);
         void (keep ? picker.keepElement(element) : picker.markElement(element, 'hide')).then((ok) =>
           sendResponse({ success: ok }),
         );

@@ -1237,6 +1237,21 @@ body {
   gap: 6px;
 }
 
+/*
+ * The harvest row sits below the scan's own actions and is deliberately quieter than
+ * them: it is an offer to hand over captured elements, not a blocking control, and it
+ * should not read as the same weight of decision as "Hide all 2".
+ */
+.ai-harvest {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border, rgba(148, 163, 184, 0.18));
+}
+
+.ai-harvest .card-hint {
+  margin-bottom: 8px;
+}
+
 .ai-actions .chip-btn {
   flex: 1;
 }

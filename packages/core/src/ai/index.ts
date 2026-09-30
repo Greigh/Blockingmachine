@@ -211,6 +211,33 @@ export {
   type MiniAiElementClassifierOptions,
 } from './elementClassifier.js';
 
+// 7d. Corpus candidates harvested from real pages. A model's verdict is provenance, not a
+// label, so nothing here can label a candidate and nothing here is imported by the harness
+// that grades `ELEMENT_EVAL_CORPUS`.
+export {
+  HARVEST_TEXT_LIMIT,
+  HARVEST_DEFAULT_MAX_AGE_DAYS,
+  HARVEST_DEFAULT_PER_HOST,
+  HARVEST_DEFAULT_TOTAL,
+  isHarvestedHumanDecision,
+  redactHarvestSnapshot,
+  harvestCandidateId,
+  sanitizeHarvestedElement,
+  sanitizeHarvestedElements,
+  renderHarvestFile,
+  parseHarvestFile,
+  selectHarvestCandidates,
+  proposeHarvestEvalCase,
+  formatHarvestReport,
+  type HarvestedVerdict,
+  type HarvestedHumanDecision,
+  type HarvestedElement,
+  type SanitizedHarvestedElement,
+  type ElementHarvestCandidate,
+  type ElementHarvestOptions,
+  type ElementHarvestSelection,
+} from './elementCorpusHarvest.js';
+
 // 7c. Triage Cascade (screen everything locally, escalate only the undecided)
 export {
   HIGH_PRECISION_FAMILIES,

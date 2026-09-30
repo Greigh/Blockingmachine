@@ -53,6 +53,12 @@ jobs:
           # gate re-derives it here from the rules on disk — the same input a release uses — and
           # fails if the checked-in module no longer matches what the tiers justify.
           npm run check:vocabulary
+          # The element corpus candidate queue is derived from the harvested real elements on
+          # disk, and it is a queue rather than a corpus: this verifies the generated file
+          # still matches a fresh harvest, and that nothing in it has quietly become a graded
+          # case. Age is measured against the newest capture, not the clock, so the check is a
+          # plain diff rather than a date that expires.
+          npm run check:element-candidates
           # The tier rulesets are a hand-curated baseline in the repository and a compiled plan in
           # a packaged build; the check is provenance-aware, so this verifies the baseline's shape
           # and counts rather than comparing it to a hub list CI does not have.

@@ -12,6 +12,30 @@ Nothing here is scheduled. The list exists so nothing is *relied on* silently.
 
 ## Open
 
+### 6. The harvest queue keys on the classifier's signature, so two different modules that share a token collapse
+
+- **Where:** `packages/core/src/ai/elementCorpusHarvest.ts` (`selectHarvestCandidates`, keyed on `harvestCandidateId(host, signature)`), visible in the generated `packages/core/src/ai/data/element-harvest-candidates.json`.
+- **What:** A candidate is one shape on one host, and the shape is the classifier's own signature — `div|promo` for both the NYT's `.g-promo-slim` and its `.live-updates-promo`. Those are two different first-party modules, and the committed capture merges them into a single candidate with two sightings, keeping only the first record's snapshot. The live evidence is in the queue itself: `nytimes.com/div|promo — Content/leave 84%, 2 sighting(s)`. Keying more finely is not a one-line change, because the same key is what a *promoted* corpus case is matched against — a finer key that a case does not cover would report an already-pinned shape as still awaiting review, which is the more misleading of the two errors.
+- **Why left:** The signature is the right key for the decision that actually matters (does a corpus case already cover this?), and the harvest is a review queue rather than a measurement, so a merged candidate costs a reviewer one glance rather than a wrong number. Choosing a second key means deciding what a corpus case covers when two shapes share a token, which is a question about the corpus rather than about the harvest.
+- **Fix shape:** Key candidates on `signature` plus the leading class or id, and match promoted cases on the same pair — falling back to the bare signature when a case has no leading identifier, so a promoted case still covers the shapes it actually generalises to. Then the two NYT modules are separate entries.
+- **Verify:** The committed capture queues `nytimes.com/div|promo` as two candidates with one sighting each, and a promoted case whose snapshot has no class still marks the shapes it covers.
+
+### 7. A harvested `hide` decision is a statement about one element, and a corpus case is a statement about a shape
+
+- **Where:** `packages/core/src/ai/elementCorpusHarvest.ts` (`proposeHarvestEvalCase`, the `hide` branch).
+- **What:** Marking one element `hide` teaches the model that *that shape* is removed everywhere, and the proposal turns it into a must-hide case with the three removal classes. A person who hid a sticky newsletter modal on one site has said something true about that element and something broader about the shape, and the queue cannot tell the two apart. Promote enough such cases and the corpus grows a generalisation nobody checked. Nothing is broken today — promotion is a deliberate edit and the case note says the class is unresolved — but the note is the only guard.
+- **Why left:** The alternative is a second label (`hide once`, `hide always`) which is a picker change, and a picker that asks two questions to collect one bit of evidence is a worse product than one that asks the question it can answer.
+- **Fix shape:** Have the proposal record the *scope* it was derived from (`element` vs `shape`) and have promotion require an explicit scope choice; or weight a harvested must-hide case below a written one in the fit, so a queue cannot outvote the corpus.
+- **Verify:** A synthetic candidate with a `hide` decision and one sighting cannot raise the must-hide count on its own; promoting it explicitly can.
+
+### 8. The hostname calibration gates are absolute while the element ones became reference-relative
+
+- **Where:** `packages/core/src/__tests__/ai-evaluation.test.ts:80-81` asserts `report.calibration.ece <= 0.15` and `report.calibration.brier <= 0.12` in absolute terms.
+- **What:** The element calibration bounds were rewritten as margins against the hand-tuned reference (`ECE_REGRESSION_MARGIN = 0.005`, `ECE_ABSOLUTE_HEADROOM = 0.02`, both relative) when the metric was corrected in `29e7f15`, because an absolute bar on a metric whose scale moved is a bar that quietly becomes a knife-edge. The hostname gates have the same shape and have not had it: they are frozen numbers whose meaning depends on a metric definition that has changed twice in this project's history.
+- **Why left:** Out of scope for the element-calibration fix, which was about the element corpus. It is recorded here rather than left in a review comment, which is the whole reason this file exists.
+- **Fix shape:** Re-express both as a margin over `ELEMENT_HAND_TUNED_WEIGHTS`-style reference for the hostname model, plus an absolute headroom, the way `packages/core/src/__tests__/element-ai-evaluation.test.ts` now does.
+- **Verify:** A deliberately worse weight set fails the hostname calibration suite on the margin rather than needing the absolute number to be lowered.
+
 ### 5. The calibration metric's scored set is co-extensive with the model's acting set only while the safety pins hold
 
 - **Where:** `packages/core/src/ai/elementEvaluation.ts` (`elementActionCalibrationPair`), guarded in `packages/core/src/__tests__/element-ai-evaluation.test.ts`.

@@ -26,6 +26,11 @@
       "import": "./dist/ai/elementClassifier.js",
       "require": "./dist/ai/elementClassifier.js"
     },
+    "./element-harvest": {
+      "types": "./dist/ai/elementCorpusHarvest.d.ts",
+      "import": "./dist/ai/elementCorpusHarvest.js",
+      "require": "./dist/ai/elementCorpusHarvest.js"
+    },
     "./package.json": "./package.json",
     "./tiers": {
       "types": "./dist/tiers.d.ts",

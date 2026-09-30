@@ -1,0 +1,43 @@
+# Blockingmachine element harvest — the real capture the live scan recorded.
+#
+# The real capture the live scan recorded, transcribed: the original recv-0*.json files lived in a
+# scratch directory that was deliberately never committed, so these are the same elements as they
+# were on the page, with the verdict the shipping model gave them BEFORE the five fixes that scan
+# produced. Replaying them is how the harvest pipeline is tested against data nobody wrote for it:
+# all six shapes were false positives, and four of them were hidden outright.
+# Class and action are the report's own words. Confidence is stated only for the 33 spurious hides
+# (98%); elsewhere it is the tier value the reported evidence implies. No candidate is ever labelled
+# from it — these six are labelled by the person who reviewed them and called each one content.
+# Sightings are capped at three per shape where the report counted more (MDN saw 5 scripts, the
+# Guardian 8 scripts and 3 photos, GitHub 5 scripts and 7 footer links); the count that matters to
+# the report is in the sightings field either way.
+#
+# The last five records are the other half of that day: the shapes the reviewer looked at and
+# deliberately left alone. They are here because a queue that only ever holds defects is a queue
+# that cannot tell a reviewer what to keep. Two of them are shapes the model already leaves alone
+# and would never be harvested on its own, and one is a real detection the reviewer agreed with, so
+# it carries the only 'hide' label in this file.
+#
+# Format: one element per line. The extension writes this shape on export, the hub reads it,
+# and scripts/harvest-element-candidates.mjs --in turns it into the corpus candidate queue.
+#
+# Class and action are the live-scan report's own words. Confidence is stated only for the 33
+# spurious hides (98%); elsewhere it is the tier value the reported evidence implies. No candidate is
+# ever labelled from it — these are labelled by the person who reviewed them and called each one
+# content, or, for the last record, agreed it should be removed.
+{"host":"developer.mozilla.org","capturedAt":1790673120000,"verdict":{"elementClass":"Tracker","action":"hide","confidence":98},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"script","src":"/static/client/runtime.ca87e9225e95e2dc.js","width":0,"height":0}}
+{"host":"developer.mozilla.org","capturedAt":1790673124000,"verdict":{"elementClass":"Tracker","action":"hide","confidence":98},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"script","src":"/static/client/runtime.ca87e9225e95e2dc.js","width":0,"height":0}}
+{"host":"en.wikipedia.org","capturedAt":1790673243000,"verdict":{"elementClass":"Tracker","action":"hide","confidence":98},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"img","classes":["mw-logo-icon"],"src":"/static/images/icons/enwiki-25.svg","width":0,"height":0}}
+{"host":"theguardian.com","capturedAt":1790673360000,"verdict":{"elementClass":"Tracker","action":"hide","confidence":98},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"img","classes":["dcr-11wzo8p"],"src":"https://i.guim.co.uk/img/uploads/2026/09/29/Crowds_flock.jpg","width":0,"height":0}}
+{"host":"theguardian.com","capturedAt":1790673365000,"verdict":{"elementClass":"Tracker","action":"hide","confidence":98},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"img","classes":["dcr-11wzo8p"],"src":"https://i.guim.co.uk/img/uploads/2026/09/29/Crowds_flock.jpg","width":0,"height":0}}
+{"host":"theguardian.com","capturedAt":1790673480000,"verdict":{"elementClass":"Tracker","action":"hide","confidence":98},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"img","classes":["dcr-11wzo8p"],"src":"https://i.guim.co.uk/img/uploads/2026/09/29/Referees_warm.jpg","width":0,"height":0}}
+{"host":"github.com","capturedAt":1790673600000,"verdict":{"elementClass":"Tracker","action":"hide","confidence":98},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"script","src":"https://github.githubassets.com/assets/environment-20e1f7ec.js","width":0,"height":0}}
+{"host":"github.com","capturedAt":1790673605000,"verdict":{"elementClass":"Tracker","action":"hide","confidence":98},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"script","src":"https://github.githubassets.com/assets/environment-20e1f7ec.js","width":0,"height":0}}
+{"host":"github.com","capturedAt":1790673720000,"verdict":{"elementClass":"Ad","action":"hide","confidence":98},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"div","id":"_R_ad_","classes":["Primer_Brand__ActionMenu-module__ActionMenu"],"attributes":[{"name":"data-analytics-event","value":"{\"action\":\"open\"}"}],"text":"Star"}}
+{"host":"github.com","capturedAt":1790673840000,"verdict":{"elementClass":"Tracker","action":"suggest","confidence":84},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"a","classes":["SocialLinks-module__iconLink"],"attributes":[{"name":"data-analytics-event","value":"{\"category\":\"Footer\",\"action\":\"click\"}"}],"href":"https://www.linkedin.com/company/github","text":""}}
+{"host":"github.com","capturedAt":1790673841000,"verdict":{"elementClass":"Tracker","action":"suggest","confidence":84},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"a","classes":["SocialLinks-module__iconLink"],"attributes":[{"name":"data-analytics-event","value":"{\"category\":\"Footer\",\"action\":\"click\"}"}],"href":"https://www.linkedin.com/company/github","text":""}}
+{"host":"theguardian.com","capturedAt":1790673960000,"verdict":{"elementClass":"Content","action":"leave","confidence":84},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"div","classes":["g-promo-slim"]}}
+{"host":"theguardian.com","capturedAt":1790674000000,"verdict":{"elementClass":"Content","action":"leave","confidence":84},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"div","classes":["top-fronts-banner-ad-container"]}}
+{"host":"nytimes.com","capturedAt":1790674200000,"verdict":{"elementClass":"Content","action":"leave","confidence":84},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"div","classes":["g-promo-slim"]}}
+{"host":"nytimes.com","capturedAt":1790674220000,"verdict":{"elementClass":"Content","action":"leave","confidence":84},"human":{"action":"keep","at":1790676300000},"snapshot":{"tag":"div","classes":["live-updates-promo"]}}
+{"host":"nytimes.com","capturedAt":1790674240000,"verdict":{"elementClass":"Tracker","action":"hide","confidence":98},"human":{"action":"hide","at":1790676300000},"snapshot":{"tag":"iframe","id":"3pCheckIframeId","src":"https://static01.nyt.com/ads/tpc-check.html","width":0,"height":0,"inFrame":true,"crossOriginFrame":true,"visible":false}}

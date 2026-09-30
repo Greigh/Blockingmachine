@@ -46,6 +46,12 @@ contextBridge.exposeInMainWorld('electron', {
   selectTierLedger: () => ipcRenderer.invoke('select-tier-ledger') as Promise<string>,
   /** Forgets the chosen ledger, so the plan falls back to rule count. */
   clearTierLedger: () => ipcRenderer.invoke('clear-tier-ledger') as Promise<string>,
+  /** Reads the element harvest the browser exported, for the corpus queue. */
+  getElementHarvest: () => ipcRenderer.invoke('get-element-harvest'),
+  /** Picks and remembers the element harvest file. Returns '' when cancelled. */
+  selectElementHarvest: () => ipcRenderer.invoke('select-element-harvest') as Promise<string>,
+  /** Forgets the chosen harvest, and deletes the file. */
+  clearElementHarvest: () => ipcRenderer.invoke('clear-element-harvest') as Promise<string>,
   setSavePath: (path: string) => ipcRenderer.invoke('set-save-path', path),
   selectSavePath: () => ipcRenderer.invoke('select-save-path') as Promise<string>,
   getExportFormat: () => ipcRenderer.invoke('get-export-format'),

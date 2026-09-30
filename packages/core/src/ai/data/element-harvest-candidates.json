@@ -1,0 +1,486 @@
+{
+  "generated": "npm run harvest:elements -- --write",
+  "note": [
+    "Generated from harvested real element captures. Imported by nothing that grades, fits or",
+    "calibrates: the graded corpus is packages/core/src/ai/elementEvalCorpus.ts, and a candidate",
+    "enters it only when a person promotes it. `human: null` means nobody has ruled on this shape,",
+    "so no case may be written for it; `observed` is what the model said at capture time and is",
+    "provenance, not a label. Text is truncated to what the classifier can use and no URL is kept."
+  ],
+  "sources": [
+    "packages/core/src/ai/data/element-harvest.jsonl"
+  ],
+  "records": 16,
+  "generatedFrom": "2026-09-29T09:30:40.000Z",
+  "graded": {
+    "corpus": "packages/core/src/ai/elementEvalCorpus.ts",
+    "cases": 117,
+    "note": "Unchanged by this run. Nothing here feeds the weight fit, the harness or the calibration metric."
+  },
+  "stats": {
+    "hosts": 5,
+    "queued": 10,
+    "labelled": 10,
+    "unlabelled": 0,
+    "duplicates": 6,
+    "stale": 0,
+    "rejected": 0,
+    "capped": 0
+  },
+  "candidates": [
+    {
+      "id": "theguardian.com/img|dcr",
+      "host": "theguardian.com",
+      "signature": "img|dcr",
+      "firstSeen": 1790673360000,
+      "lastSeen": 1790673480000,
+      "sightings": 3,
+      "observed": {
+        "elementClass": "Tracker",
+        "action": "hide",
+        "confidence": 98
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "img",
+        "classes": [
+          "dcr-11wzo8p"
+        ],
+        "src": "https://i.guim.co.uk/img/uploads/2026/09/29/Crowds_flock.jpg",
+        "width": 0,
+        "height": 0
+      },
+      "case": {
+        "label": "harvest-theguardian-com-img-dcr",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "img",
+          "classes": [
+            "dcr-11wzo8p"
+          ],
+          "src": "https://i.guim.co.uk/img/uploads/2026/09/29/Crowds_flock.jpg",
+          "width": 0,
+          "height": 0
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "leave",
+        "minAction": "leave",
+        "notes": "Harvested from theguardian.com · img|dcr · 3 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "promoted": true
+      }
+    },
+    {
+      "id": "nytimes.com/div|promo",
+      "host": "nytimes.com",
+      "signature": "div|promo",
+      "firstSeen": 1790674200000,
+      "lastSeen": 1790674220000,
+      "sightings": 2,
+      "observed": {
+        "elementClass": "Content",
+        "action": "leave",
+        "confidence": 84
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "div",
+        "classes": [
+          "g-promo-slim"
+        ]
+      },
+      "case": {
+        "label": "harvest-nytimes-com-div-promo",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "div",
+          "classes": [
+            "g-promo-slim"
+          ]
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "leave",
+        "minAction": "leave",
+        "notes": "Harvested from nytimes.com · div|promo · 2 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "promoted": false
+      }
+    },
+    {
+      "id": "github.com/a|social",
+      "host": "github.com",
+      "signature": "a|social",
+      "firstSeen": 1790673840000,
+      "lastSeen": 1790673841000,
+      "sightings": 2,
+      "observed": {
+        "elementClass": "Tracker",
+        "action": "suggest",
+        "confidence": 84
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "a",
+        "classes": [
+          "SocialLinks-module__iconLink"
+        ],
+        "attributes": [
+          {
+            "name": "data-analytics-event",
+            "value": "{\"category\":\"Footer\",\"action\":\"click\"}"
+          }
+        ],
+        "href": "https://www.linkedin.com/company/github",
+        "text": ""
+      },
+      "case": {
+        "label": "harvest-github-com-a-social",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "a",
+          "classes": [
+            "SocialLinks-module__iconLink"
+          ],
+          "attributes": [
+            {
+              "name": "data-analytics-event",
+              "value": "{\"category\":\"Footer\",\"action\":\"click\"}"
+            }
+          ],
+          "href": "https://www.linkedin.com/company/github",
+          "text": ""
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "leave",
+        "minAction": "leave",
+        "notes": "Harvested from github.com · a|social · 2 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "promoted": true
+      }
+    },
+    {
+      "id": "github.com/script",
+      "host": "github.com",
+      "signature": "script",
+      "firstSeen": 1790673600000,
+      "lastSeen": 1790673605000,
+      "sightings": 2,
+      "observed": {
+        "elementClass": "Tracker",
+        "action": "hide",
+        "confidence": 98
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "script",
+        "src": "https://github.githubassets.com/assets/environment-20e1f7ec.js",
+        "width": 0,
+        "height": 0
+      },
+      "case": {
+        "label": "harvest-github-com-script",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "script",
+          "src": "https://github.githubassets.com/assets/environment-20e1f7ec.js",
+          "width": 0,
+          "height": 0
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "leave",
+        "minAction": "leave",
+        "notes": "Harvested from github.com · script · 2 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "promoted": true
+      }
+    },
+    {
+      "id": "developer.mozilla.org/script",
+      "host": "developer.mozilla.org",
+      "signature": "script",
+      "firstSeen": 1790673120000,
+      "lastSeen": 1790673124000,
+      "sightings": 2,
+      "observed": {
+        "elementClass": "Tracker",
+        "action": "hide",
+        "confidence": 98
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "script",
+        "src": "/static/client/runtime.ca87e9225e95e2dc.js",
+        "width": 0,
+        "height": 0
+      },
+      "case": {
+        "label": "harvest-developer-mozilla-org-script",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "script",
+          "src": "/static/client/runtime.ca87e9225e95e2dc.js",
+          "width": 0,
+          "height": 0
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "leave",
+        "minAction": "leave",
+        "notes": "Harvested from developer.mozilla.org · script · 2 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "promoted": true
+      }
+    },
+    {
+      "id": "nytimes.com/iframe|3pcheckiframeid",
+      "host": "nytimes.com",
+      "signature": "iframe|3pcheckiframeid",
+      "firstSeen": 1790674240000,
+      "lastSeen": 1790674240000,
+      "sightings": 1,
+      "observed": {
+        "elementClass": "Tracker",
+        "action": "hide",
+        "confidence": 98
+      },
+      "human": {
+        "action": "hide",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "iframe",
+        "id": "3pCheckIframeId",
+        "src": "https://static01.nyt.com/ads/tpc-check.html",
+        "width": 0,
+        "height": 0,
+        "inFrame": true,
+        "crossOriginFrame": true,
+        "visible": false
+      },
+      "case": {
+        "label": "harvest-nytimes-com-iframe-3pcheckiframeid",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "iframe",
+          "id": "3pCheckIframeId",
+          "src": "https://static01.nyt.com/ads/tpc-check.html",
+          "width": 0,
+          "height": 0,
+          "inFrame": true,
+          "crossOriginFrame": true,
+          "visible": false
+        },
+        "expected": [
+          "Ad",
+          "Tracker",
+          "Annoyance"
+        ],
+        "maxAction": "hide",
+        "minAction": "hide",
+        "notes": "Harvested from nytimes.com · iframe|3pcheckiframeid · 1 sighting(s); a person marked this element \"hide\", which fixes the action and not the class. Name the class before promoting — `expected[0]` is canonical and is currently a placeholder.",
+        "promoted": false
+      }
+    },
+    {
+      "id": "theguardian.com/div|ad",
+      "host": "theguardian.com",
+      "signature": "div|ad",
+      "firstSeen": 1790674000000,
+      "lastSeen": 1790674000000,
+      "sightings": 1,
+      "observed": {
+        "elementClass": "Content",
+        "action": "leave",
+        "confidence": 84
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "div",
+        "classes": [
+          "top-fronts-banner-ad-container"
+        ]
+      },
+      "case": {
+        "label": "harvest-theguardian-com-div-ad",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "div",
+          "classes": [
+            "top-fronts-banner-ad-container"
+          ]
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "leave",
+        "minAction": "leave",
+        "notes": "Harvested from theguardian.com · div|ad · 1 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "promoted": false
+      }
+    },
+    {
+      "id": "theguardian.com/div|promo",
+      "host": "theguardian.com",
+      "signature": "div|promo",
+      "firstSeen": 1790673960000,
+      "lastSeen": 1790673960000,
+      "sightings": 1,
+      "observed": {
+        "elementClass": "Content",
+        "action": "leave",
+        "confidence": 84
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "div",
+        "classes": [
+          "g-promo-slim"
+        ]
+      },
+      "case": {
+        "label": "harvest-theguardian-com-div-promo",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "div",
+          "classes": [
+            "g-promo-slim"
+          ]
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "leave",
+        "minAction": "leave",
+        "notes": "Harvested from theguardian.com · div|promo · 1 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "promoted": false
+      }
+    },
+    {
+      "id": "github.com/div|primer",
+      "host": "github.com",
+      "signature": "div|primer",
+      "firstSeen": 1790673720000,
+      "lastSeen": 1790673720000,
+      "sightings": 1,
+      "observed": {
+        "elementClass": "Ad",
+        "action": "hide",
+        "confidence": 98
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "div",
+        "id": "_R_ad_",
+        "classes": [
+          "Primer_Brand__ActionMenu-module__ActionMenu"
+        ],
+        "attributes": [
+          {
+            "name": "data-analytics-event",
+            "value": "{\"action\":\"open\"}"
+          }
+        ],
+        "text": "Star"
+      },
+      "case": {
+        "label": "harvest-github-com-div-primer",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "div",
+          "id": "_R_ad_",
+          "classes": [
+            "Primer_Brand__ActionMenu-module__ActionMenu"
+          ],
+          "attributes": [
+            {
+              "name": "data-analytics-event",
+              "value": "{\"action\":\"open\"}"
+            }
+          ],
+          "text": "Star"
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "leave",
+        "minAction": "leave",
+        "notes": "Harvested from github.com · div|primer · 1 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "promoted": true
+      }
+    },
+    {
+      "id": "en.wikipedia.org/img|mw",
+      "host": "en.wikipedia.org",
+      "signature": "img|mw",
+      "firstSeen": 1790673243000,
+      "lastSeen": 1790673243000,
+      "sightings": 1,
+      "observed": {
+        "elementClass": "Tracker",
+        "action": "hide",
+        "confidence": 98
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "img",
+        "classes": [
+          "mw-logo-icon"
+        ],
+        "src": "/static/images/icons/enwiki-25.svg",
+        "width": 0,
+        "height": 0
+      },
+      "case": {
+        "label": "harvest-en-wikipedia-org-img-mw",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "img",
+          "classes": [
+            "mw-logo-icon"
+          ],
+          "src": "/static/images/icons/enwiki-25.svg",
+          "width": 0,
+          "height": 0
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "leave",
+        "minAction": "leave",
+        "notes": "Harvested from en.wikipedia.org · img|mw · 1 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "promoted": true
+      }
+    }
+  ]
+}

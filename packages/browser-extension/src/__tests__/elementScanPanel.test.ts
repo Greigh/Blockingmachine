@@ -73,7 +73,11 @@ function scanResult(overrides: Partial<ElementScanResult> = {}): ElementScanResu
   };
 }
 
-function render(scan: ElementScanResult | null, busy = false): string {
+function render(
+  scan: ElementScanResult | null,
+  busy = false,
+  harvest: { summary: string; filename: string; busy: boolean } | null = null,
+): string {
   return renderToStaticMarkup(
     createElement(ElementScanPanel, {
       scan,
@@ -81,6 +85,8 @@ function render(scan: ElementScanResult | null, busy = false): string {
       onScan: jest.fn(),
       onHide: jest.fn(),
       onHighlight: jest.fn(),
+      harvest,
+      onExportHarvest: jest.fn(),
     }),
   );
 }
@@ -191,5 +197,31 @@ describe('popup element scan panel', () => {
     expect(busy).toContain('Scanning…');
     expect(busy).toContain('<button class="chip-btn" disabled="">Scanning…</button>');
     expect(busy).toContain('<button class="chip-btn primary" disabled="">Hide all 2</button>');
+  });
+
+  it('offers the harvest export with its count, and says what happens to the buffer', () => {
+    // No readout yet (the background has not answered): no offer, because a button that
+    // cannot say what it would export is a button nobody can consent to.
+    expect(render(scanResult())).not.toContain('Export captured elements');
+
+    const withHarvest = render(scanResult(), false, {
+      summary: '7 element(s) from 3 site(s), 2 with a decision from you.',
+      filename: 'blockingmachine-element-harvest-2026-09-30.jsonl',
+      busy: false,
+    });
+    expect(withHarvest).toContain('Export captured elements');
+    expect(withHarvest).toContain('7 element(s) from 3 site(s), 2 with a decision from you.');
+    // The export is destructive, so the title says so rather than leaving it to be found
+    // out after the fact.
+    expect(withHarvest).toContain('clears this buffer');
+    expect(withHarvest).toContain('ai-harvest');
+
+    const busy = render(scanResult(), false, {
+      summary: '7 element(s) from 3 site(s), 2 with a decision from you.',
+      filename: 'x.jsonl',
+      busy: true,
+    });
+    expect(busy).toContain('Exporting…');
+    expect(busy).toContain('disabled=""');
   });
 });

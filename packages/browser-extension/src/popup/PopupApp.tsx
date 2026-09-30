@@ -13,6 +13,7 @@ import { TierPlanBasis } from './TierPlanBasis.js';
 import { downloadTextFile } from './downloadText.js';
 import type { LedgerStatus } from '../shared/ledgerStatus.js';
 import type { LedgerExportPayload } from '../shared/ledgerExport.js';
+import type { ElementHarvestExport as ElementHarvestExportPayload } from '../background/elementHarvestStore.js';
 import { formatTierCapacity, type RulesetStatus } from '../shared/rulesetTiers.js';
 import { formatTierPlan, planTierSelection } from '../shared/tierPlanner.js';
 import {
@@ -105,6 +106,8 @@ export const PopupApp: React.FC = () => {
     'summary' | 'filename'
   > | null>(null);
   const [ledgerExportBusy, setLedgerExportBusy] = useState(false);
+  const [elementHarvest, setElementHarvest] = useState<{ summary: string; filename: string } | null>(null);
+  const [elementHarvestBusy, setElementHarvestBusy] = useState(false);
   const [sseStatus, setSseStatus] = useState<'connected' | 'connecting' | 'disconnected'>(
     'disconnected',
   );
@@ -237,6 +240,43 @@ export const PopupApp: React.FC = () => {
     }
   }, []);
 
+  /**
+   * Reads what the element harvest holds, without taking it.
+   *
+   * Same contract as the ledger readout: the count is on screen every time the popup
+   * opens, so the read must not be a drain, or the number would describe something the
+   * user could no longer export.
+   */
+  const refreshElementHarvest = useCallback(async () => {
+    const res = await sendMessage<{ success?: boolean } & Partial<ElementHarvestExportPayload>>({
+      type: 'EXPORT_ELEMENT_HARVEST',
+    });
+    if (res?.success && typeof res.summary === 'string') {
+      setElementHarvest({ summary: res.summary, filename: res.filename ?? '' });
+    }
+  }, []);
+
+  const handleExportElementHarvest = useCallback(async () => {
+    setElementHarvestBusy(true);
+    try {
+      const res = await sendMessage<{ success?: boolean } & Partial<ElementHarvestExportPayload>>({
+        type: 'EXPORT_ELEMENT_HARVEST',
+        payload: { drain: true },
+      });
+      if (!res?.success || typeof res.json !== 'string') {
+        flash('Could not export the captured elements.', 'warn');
+        return;
+      }
+      downloadTextFile(res.filename || 'blockingmachine-element-harvest.jsonl', res.json, 'application/x-ndjson');
+      if (typeof res.summary === 'string') {
+        setElementHarvest({ summary: res.summary, filename: res.filename ?? '' });
+      }
+      flash('Captured elements exported.');
+    } finally {
+      setElementHarvestBusy(false);
+    }
+  }, [flash]);
+
   const handleExportLedger = useCallback(async () => {
     setLedgerExportBusy(true);
     try {
@@ -294,6 +334,7 @@ export const PopupApp: React.FC = () => {
     void refreshStatus();
     void refreshTiers();
     void refreshLedgerExport();
+    void refreshElementHarvest();
     sendMessage({ type: 'GET_HA_CONFIG' }).then((res) => {
       if (mounted && res?.config) setHaConfig(res.config);
     });
@@ -301,7 +342,7 @@ export const PopupApp: React.FC = () => {
     return () => {
       mounted = false;
     };
-  }, [refreshStatus, refreshTab, refreshLedgerExport]);
+  }, [refreshStatus, refreshTab, refreshLedgerExport, refreshElementHarvest]);
 
   const site = view?.site || siteFromUrl(pageUrl);
   // One resolver for both the header and the switch, so the two can never
@@ -626,6 +667,8 @@ export const PopupApp: React.FC = () => {
             onScan={() => void runAiScan()}
             onHide={(selectors) => void blockAiFindings(selectors)}
             onHighlight={() => void highlightAiFindings()}
+            harvest={elementHarvest ? { ...elementHarvest, busy: elementHarvestBusy } : null}
+            onExportHarvest={() => void handleExportElementHarvest()}
           />
 
           <section className="trackers-section">
