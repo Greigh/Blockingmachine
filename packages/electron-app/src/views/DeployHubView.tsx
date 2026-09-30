@@ -118,6 +118,8 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     if (!window.electron?.getExtensionTierPlan) return;
     setTierPlanState((prev) => (prev === 'ready' ? prev : 'loading'));
     try {
+      // No arguments: the main process supplies the remembered ledger itself, so a plan cannot
+      // silently revert to rule counts because this view forgot to pass one.
       const res = await window.electron.getExtensionTierPlan();
       if (!isMountedRef.current) return;
       if (res?.ok) {
@@ -136,6 +138,24 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
       setTierPlanState('error');
     }
   }, []);
+
+  /**
+   * Points the plan at a rule-hit ledger, or forgets the one it has.
+   *
+   * The hub holds no measurement of its own — the extension accumulates the blocks and the user
+   * exports them — so weighting the plan by anything real starts with picking that file. Choosing
+   * it reloads immediately rather than waiting for a restart, because the whole point is to watch
+   * the plan change basis while looking at it.
+   */
+  const chooseTierLedger = useCallback(async () => {
+    const picked = await window.electron?.selectTierLedger?.();
+    if (picked) await loadTierPlan();
+  }, [loadTierPlan]);
+
+  const clearTierLedger = useCallback(async () => {
+    await window.electron?.clearTierLedger?.();
+    await loadTierPlan();
+  }, [loadTierPlan]);
   const [isTestingHaApi, setIsTestingHaApi] = useState(false);
 
   const handleInspectHaApi = async () => {
@@ -1865,6 +1885,8 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
                 error={tierPlanError}
                 enabled={[]}
                 onRefresh={loadTierPlan}
+                onChooseLedger={chooseTierLedger}
+                onClearLedger={clearTierLedger}
               />
 
               {/* Live Status Inspector */}

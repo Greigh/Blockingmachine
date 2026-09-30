@@ -39,6 +39,10 @@ export interface TierPlanResult {
   };
   basis: { source: 'evidence' | 'coverage'; reason: string; unmeasured: string[] } | null;
   ledger: { lines: number; skipped: number; shared: number } | null;
+  /** The ledger this plan was weighted by, if one was chosen. */
+  ledgerPath?: string | null;
+  /** Set when a chosen ledger could not be read, so the plan fell back rather than errored. */
+  ledgerMissing?: string | null;
 }
 
 export interface TierPlanFailure {
@@ -55,6 +59,10 @@ export interface ExtensionTierPlanCardProps {
   /** Tiers the user has switched on, used to mark the current selection in the list. */
   enabled?: readonly string[];
   onRefresh?: () => void;
+  /** Chooses the browser's rule-hit ledger, so the plan can be weighted by measurement. */
+  onChooseLedger?: () => void;
+  /** Forgets the chosen ledger and re-plans by rule count. */
+  onClearLedger?: () => void;
 }
 
 const STATE_BY_TIER: Record<string, string> = {
@@ -70,6 +78,8 @@ export const ExtensionTierPlanCard: React.FC<ExtensionTierPlanCardProps> = ({
   error,
   enabled = [],
   onRefresh,
+  onChooseLedger,
+  onClearLedger,
 }) => {
   if (state === 'loading') {
     return (
@@ -168,6 +178,13 @@ export const ExtensionTierPlanCard: React.FC<ExtensionTierPlanCardProps> = ({
               'No ledger was supplied, so this plan is ranked by rule count. Export one from the extension popup to weight it by what actually blocked.'}
           </p>
 
+          {result.ledgerMissing && (
+            <p className="tier-plan-ledger tier-plan-ledger-missing">
+              The ledger you chose could not be read ({result.ledgerMissing}), so this plan fell back
+              to rule count. Re-export it from the extension popup, or choose it again.
+            </p>
+          )}
+
           {ledger && (
             <p className="tier-plan-ledger">
               {ledger.lines.toLocaleString()} measured lines
@@ -175,9 +192,31 @@ export const ExtensionTierPlanCard: React.FC<ExtensionTierPlanCardProps> = ({
               {ledger.shared > 0
                 ? `, ${ledger.shared.toLocaleString()} matching a host two tiers both ship`
                 : ''}
-              .
+              {result.ledgerPath ? ` · ${result.ledgerPath}` : ''}
             </p>
           )}
+
+          {/* Without this the hub is structurally incapable of ever weighting by measurement: it
+              has no ledger of its own, because the extension accumulates the measurement and the
+              user exports it. */}
+          <div className="tier-plan-ledger-actions">
+            {result.ledgerPath && !result.ledgerMissing ? (
+              <>
+                <span className="tier-plan-ledger-path">{result.ledgerPath}</span>
+                {onClearLedger && (
+                  <button type="button" className="tier-plan-link" onClick={onClearLedger}>
+                    Forget
+                  </button>
+                )}
+              </>
+            ) : (
+              onChooseLedger && (
+                <button type="button" className="tier-plan-link" onClick={onChooseLedger}>
+                  {result.ledgerMissing ? 'Choose the ledger again' : 'Weight by a rule-hit ledger…'}
+                </button>
+              )
+            )}
+          </div>
 
           <ul className="tier-plan-why">
             {plan.explanation.map((line) => (

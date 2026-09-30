@@ -42,6 +42,10 @@ contextBridge.exposeInMainWorld('electron', {
     hitsPath?: string;
     enabled?: string;
   }) => ipcRenderer.invoke('get-extension-tier-plan', request),
+  /** Picks and remembers the browser's rule-hit ledger. Returns '' when cancelled. */
+  selectTierLedger: () => ipcRenderer.invoke('select-tier-ledger') as Promise<string>,
+  /** Forgets the chosen ledger, so the plan falls back to rule count. */
+  clearTierLedger: () => ipcRenderer.invoke('clear-tier-ledger') as Promise<string>,
   setSavePath: (path: string) => ipcRenderer.invoke('set-save-path', path),
   selectSavePath: () => ipcRenderer.invoke('select-save-path') as Promise<string>,
   getExportFormat: () => ipcRenderer.invoke('get-export-format'),

@@ -3516,17 +3516,22 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
         // The ledger is optional and its absence is not an error: with no ledger the plan is
         // ranked by rule count and says so, which is a true statement rather than a missing one.
+        // A ledger that *was* chosen and has since moved is a different thing, and says so.
+        const wanted = typeof request?.hitsPath === 'string' && request.hitsPath.trim()
+          ? request.hitsPath
+          : typeof store.get('tierLedgerPath') === 'string' && store.get('tierLedgerPath')
+            ? (store.get('tierLedgerPath') as string)
+            : null;
+
         let ledgerText: string | null = null;
-        if (typeof request?.hitsPath === 'string' && request.hitsPath.trim()) {
+        let ledgerMissing: string | null = null;
+        if (wanted) {
           try {
-            ledgerText = await fs.readFile(request.hitsPath, 'utf8');
+            ledgerText = await fs.readFile(wanted, 'utf8');
           } catch (error) {
-            return {
-              ok: false as const,
-              error: `cannot read the ledger at ${request.hitsPath}: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            };
+            ledgerMissing = `${wanted} — ${
+              error instanceof Error ? error.message : String(error)
+            }`;
           }
         }
 
@@ -3564,6 +3569,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               }
             : null,
           ledger: result.ledger,
+          ledgerPath: wanted,
+          ledgerMissing,
         };
       },
     );
@@ -3622,6 +3629,45 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         console.error('[IPC Main] Error showing save dialog:', error);
         return ''; // Return empty string on error
       }
+    });
+
+    /**
+     * Picks the browser's rule-hit ledger, and remembers it.
+     *
+     * The hub has no ledger of its own: the extension accumulates the measurement and exports it
+     * from its popup, so the only place a per-tier block count exists is a file the user chose to
+     * keep. Remembering it matters more here than it looks — a plan weighted by measurement and a
+     * plan weighted by rule count can disagree completely, so a hub that quietly reverted to rule
+     * counts on every launch would be answering a different question each time it was opened.
+     *
+     * The file is not required. A path that has since moved is reported as gone rather than
+     * silently ignored, because "the ledger you picked is missing" and "you have no ledger" lead
+     * to different decisions about which one to go and get.
+     */
+    ipcMain.handle('select-tier-ledger', async () => {
+      try {
+        const result = await dialog.showOpenDialog({
+          title: 'Select the browser rule-hit ledger',
+          defaultPath: store.get('tierLedgerPath') || undefined,
+          filters: [
+            { name: 'Ledger files', extensions: ['txt', 'json'] },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+          properties: ['openFile'],
+        });
+        if (result.canceled || !result.filePaths?.length) return '';
+        const selectedPath = result.filePaths[0];
+        store.set('tierLedgerPath', selectedPath);
+        return selectedPath;
+      } catch (error) {
+        console.error('[IPC Main] Error showing ledger dialog:', error);
+        return '';
+      }
+    });
+
+    ipcMain.handle('clear-tier-ledger', async () => {
+      store.set('tierLedgerPath', '');
+      return '';
     });
 
     ipcMain.handle('get-export-format', async () => {
