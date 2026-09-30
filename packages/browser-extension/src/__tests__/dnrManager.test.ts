@@ -1,5 +1,18 @@
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
-import { DnrManager, parseFilterRule, planListRules } from '../background/dnrManager.js';
+import {
+  DnrManager,
+  customRulesAreInstalled,
+  installedRuleKey,
+  parseFilterRule,
+  planListRules,
+  planSiteControlRules,
+  plannedRuleKey,
+  ruleFamily,
+  userDecisionsAreInstalled,
+  type InstalledRuleFamilies,
+  type PlannedRule,
+} from '../background/dnrManager.js';
+import { PRIORITY_SITE_PAUSE, PRIORITY_USER_ALLOW } from '../shared/constants.js';
 
 describe('DnrManager', () => {
   let mockGetDynamicRules: any;
@@ -383,5 +396,318 @@ describe('DnrManager', () => {
     const allow = added.find((r) => String(r.condition.urlFilter).includes('tracker.example'));
     expect(allow?.action.type).toBe('allow');
     expect(allow?.priority).toBe(500);
+  });
+});
+
+// ── Reading the browser's rules instead of assuming them ───────────────────────────────────────
+
+/** A dynamic rule as Chrome reports it, with only the fields the manager compares. */
+function installedRule(
+  id: number,
+  options: {
+    priority?: number;
+    actionType?: string;
+    urlFilter?: string;
+    resourceTypes?: string[];
+    initiatorDomains?: string[];
+  } = {},
+): any {
+  return {
+    id,
+    priority: options.priority ?? 1,
+    action: { type: options.actionType ?? 'block' },
+    condition: {
+      urlFilter: options.urlFilter ?? `||listed-${id}.example^`,
+      resourceTypes: options.resourceTypes ?? ['script'],
+      ...(options.initiatorDomains ? { initiatorDomains: options.initiatorDomains } : {}),
+    },
+  };
+}
+
+/** The browser's shape, built from a rule this extension planned. */
+function asInstalled(rule: PlannedRule, id: number): any {
+  return {
+    id,
+    priority: rule.priority,
+    action: { type: rule.action },
+    condition: { urlFilter: rule.pattern, resourceTypes: [...rule.resourceTypes] },
+  };
+}
+
+/** Installs a stub whose dynamic rules are the ones the test says the browser holds. */
+function installInstalledRules(rules: any[], maxDynamic = 30000) {
+  const getDynamicRules = (jest.fn() as any).mockResolvedValue(rules);
+  const updateDynamicRules = (jest.fn() as any).mockResolvedValue(undefined);
+  (globalThis as any).chrome = {
+    declarativeNetRequest: {
+      MAX_NUMBER_OF_DYNAMIC_AND_MATCHED_RULES: maxDynamic,
+      RuleActionType: { BLOCK: 'block', ALLOW: 'allow' },
+      getDynamicRules,
+      updateDynamicRules,
+    },
+  };
+  return { getDynamicRules, updateDynamicRules };
+}
+
+describe('DnrManager reading the installed rules', () => {
+  test('splits the browser’s rules by the family that installed them', async () => {
+    installInstalledRules([
+      installedRule(1, { priority: 1 }),
+      installedRule(2, { priority: PRIORITY_USER_ALLOW, actionType: 'allow' }),
+      installedRule(3, { priority: PRIORITY_SITE_PAUSE, actionType: 'allowAllRequests' }),
+      // A rule with no priority at all cannot have come from the user's decisions, which always
+      // carry one; reading it as list-derived keeps it out of the family the user's are replaced in.
+      installedRule(4, { priority: undefined }),
+    ]);
+
+    const families = await new DnrManager().installedFamilies();
+    expect(families).not.toBeNull();
+    expect(families!.list.map((rule) => rule.id)).toEqual([1, 4]);
+    expect(families!.user.map((rule) => rule.id)).toEqual([2, 3]);
+  });
+
+  test('returns no reading rather than an empty rule set when the browser will not answer', async () => {
+    // "No rules" and "no reading" lead to opposite decisions, so they are not the same value.
+    installInstalledRules([]);
+    (globalThis as any).chrome.declarativeNetRequest.getDynamicRules = (jest.fn() as any).mockRejectedValue(
+      new Error('boom'),
+    );
+    await expect(new DnrManager().installedFamilies()).resolves.toBeNull();
+  });
+
+  test('classifies a rule by priority, which is what the families are separated by', () => {
+    expect(ruleFamily(undefined)).toBe('list');
+    expect(ruleFamily(1)).toBe('list');
+    expect(ruleFamily(PRIORITY_USER_ALLOW - 1)).toBe('list');
+    expect(ruleFamily(PRIORITY_USER_ALLOW)).toBe('user');
+    expect(ruleFamily(PRIORITY_SITE_PAUSE)).toBe('user');
+  });
+});
+
+describe('DnrManager against the user’s own decisions', () => {
+  const control = { pausedSites: ['news.example'], allowedDomains: ['cdn.example'] };
+  const familiesOf = (rules: any[]): InstalledRuleFamilies => {
+    const families: InstalledRuleFamilies = { user: [], list: [] };
+    for (const rule of rules) families[ruleFamily(rule.priority)].push(rule);
+    return families;
+  };
+
+  test('recognises its own decisions once the browser is holding them', () => {
+    // The round trip, taken through both directions of the comparison: what the extension would
+    // install, encoded the way Chrome reports it, has to read back as installed.
+    const planned = planSiteControlRules(control);
+    expect(planned.length).toBe(2);
+
+    const installed = familiesOf(planned.map((rule, index) => asInstalled(rule, index + 1)));
+    expect(userDecisionsAreInstalled(installed, control)).toBe(true);
+  });
+
+  test('sees a decision that never reached the browser', () => {
+    // A pause whose apply threw: storage holds it, the browser does not. This is the case the
+    // startup reconcile exists for, and it has to be a difference in this direction or the popup
+    // keeps reporting a pause that is not pausing.
+    const planned = planSiteControlRules(control);
+    const installed = familiesOf(planned.slice(0, 1).map((rule, index) => asInstalled(rule, index + 1)));
+
+    expect(userDecisionsAreInstalled(installed, control)).toBe(false);
+    expect(userDecisionsAreInstalled(familiesOf([]), control)).toBe(false);
+  });
+
+  test('sees a rule the user has since withdrawn', () => {
+    // The other direction, which is the more expensive one to be wrong in: a rule still installed
+    // that no decision asks for is blocking something the user allowed.
+    const stale = planSiteControlRules({ allowedDomains: ['old.example'] }).map((rule) => asInstalled(rule, 1));
+    expect(userDecisionsAreInstalled(familiesOf(stale), control)).toBe(false);
+    expect(userDecisionsAreInstalled(familiesOf(stale), { allowedDomains: ['old.example'] })).toBe(true);
+  });
+
+  test('treats a global pause as the absence of rules, which is what it installs', () => {
+    expect(userDecisionsAreInstalled(familiesOf([]), { globalPaused: true })).toBe(true);
+    const stillPausing = planSiteControlRules({ pausedSites: ['news.example'] }).map((rule) => asInstalled(rule, 1));
+    expect(userDecisionsAreInstalled(familiesOf(stillPausing), { globalPaused: true })).toBe(false);
+  });
+
+  test('compares rules rather than counts, so a swap is not mistaken for agreement', () => {
+    const one = planSiteControlRules({ allowedDomains: ['a.example'] }).map((rule) => asInstalled(rule, 1));
+    expect(userDecisionsAreInstalled(familiesOf(one), { allowedDomains: ['b.example'] })).toBe(false);
+  });
+});
+
+describe('DnrManager against the user’s custom rules', () => {
+  // A custom rule is compiled by the list planner, so it lands in the *list* family where nothing
+  // looks at priorities. It still has to be checked against the browser, because a rule the user
+  // saved by hand and an apply that threw is a decision that silently never happened.
+  const familiesWith = (filters: string[]): InstalledRuleFamilies => ({
+    user: [],
+    list: filters.map((filter, index) => ({ ...installedRule(index + 1, { urlFilter: filter }) })),
+  });
+
+  test('recognises a saved rule that is installed', () => {
+    expect(customRulesAreInstalled(familiesWith(['||saved.example^']), ['||saved.example^'])).toBe(true);
+  });
+
+  test('sees a saved rule the browser never got', () => {
+    expect(customRulesAreInstalled(familiesWith(['||other.example^']), ['||saved.example^'])).toBe(false);
+    expect(customRulesAreInstalled(familiesWith([]), ['||saved.example^'])).toBe(false);
+  });
+
+  test('asks for nothing when the user has saved nothing', () => {
+    expect(customRulesAreInstalled(familiesWith([]), [])).toBe(true);
+  });
+
+  test('does not demand a rule the planner refuses, which could never be installed', () => {
+    // A check that can never be satisfied is a repair loop, not a reconcile.
+    expect(customRulesAreInstalled(familiesWith([]), ['||co.uk^', '! a comment'])).toBe(true);
+  });
+
+  test('matches on the filter, so a merged or bounded install still counts', () => {
+    // Two saved lines that the planner folds into one rule still leave their filter installed.
+    const saved = ['||same.example^$domain=a.example', '||same.example^$domain=b.example'];
+    expect(customRulesAreInstalled(familiesWith(['||same.example^']), saved)).toBe(true);
+  });
+
+  test('does not ask for a saved rule the user has since allowed the domain of', () => {
+    // The planner suppresses it on purpose, so its absence is the decision working. Reading that as
+    // a missing rule would be a repair that runs on every worker start and never converges.
+    const saved = ['||tracker.example^'];
+    expect(customRulesAreInstalled(familiesWith([]), saved, { allowedDomains: ['tracker.example'] })).toBe(true);
+    // Without the allowance the same absence is a rule that never landed.
+    expect(customRulesAreInstalled(familiesWith([]), saved)).toBe(false);
+  });
+
+  test('asks for nothing at all while blocking is paused everywhere', () => {
+    expect(customRulesAreInstalled(familiesWith([]), ['||saved.example^'], { globalPaused: true })).toBe(true);
+  });
+});
+
+describe('DnrManager preserving the installed list', () => {
+  test('leaves the blocklist alone when the caller has no list to replace it with', async () => {
+    // The failure this guards: a worker that has not fetched yet holds no lines, and rebuilding the
+    // dynamic rules from an empty list clears every blocking rule the extension has. A site pause
+    // must never cost the blocklist.
+    const stub = installInstalledRules([installedRule(3, { priority: 1, urlFilter: '||blocked.example^' })]);
+
+    const count = await new DnrManager().updateDynamicRules(
+      [],
+      { pausedSites: ['news.example'] },
+      { replaceInstalledList: false },
+    );
+
+    const call = stub.updateDynamicRules.mock.calls[0][0] as { removeRuleIds: number[]; addRules: any[] };
+    expect(call.removeRuleIds).toEqual([]);
+    expect(call.addRules.map((rule) => rule.condition.urlFilter)).toEqual(['||news.example^']);
+    // The installed rule is still there, so the count reports the browser's total rather than what
+    // this call added.
+    expect(count).toBe(2);
+  });
+
+  test('still replaces the rules its own lines produce, so a custom rule is not installed twice', async () => {
+    const stub = installInstalledRules([
+      installedRule(3, { priority: 1, urlFilter: '||tracker.example^' }),
+      installedRule(4, { priority: 1, urlFilter: '||other.example^' }),
+    ]);
+
+    const count = await new DnrManager().updateDynamicRules(
+      ['||tracker.example^'],
+      {},
+      { replaceInstalledList: false },
+    );
+
+    const call = stub.updateDynamicRules.mock.calls[0][0] as { removeRuleIds: number[]; addRules: any[] };
+    // Only the rule this call's own line produced is retired; the rest of the list family stays.
+    expect(call.removeRuleIds).toEqual([3]);
+    expect(call.addRules.map((rule) => rule.condition.urlFilter)).toEqual(['||tracker.example^']);
+    expect(count).toBe(2);
+  });
+
+  test('replaces the user’s decisions in both directions, and only those', async () => {
+    const stub = installInstalledRules([
+      installedRule(2, { priority: 1, urlFilter: '||blocked.example^' }),
+      installedRule(9, { priority: PRIORITY_SITE_PAUSE, actionType: 'allowAllRequests', urlFilter: '||old.example^' }),
+    ]);
+
+    await new DnrManager().updateDynamicRules(
+      [],
+      { pausedSites: ['new.example'] },
+      { replaceInstalledList: false },
+    );
+
+    const call = stub.updateDynamicRules.mock.calls[0][0] as { removeRuleIds: number[]; addRules: any[] };
+    // The stale pause goes, the blocklist does not, and the new pause arrives.
+    expect(call.removeRuleIds).toEqual([9]);
+    expect(call.addRules.map((rule) => rule.condition.urlFilter)).toEqual(['||new.example^']);
+  });
+
+  test('allocates new ids above whatever it kept, so a preserved rule cannot be overwritten', async () => {
+    const stub = installInstalledRules([
+      installedRule(7, { priority: 1, urlFilter: '||blocked.example^' }),
+      installedRule(9, { priority: PRIORITY_USER_ALLOW, actionType: 'allow', urlFilter: '||old.example^' }),
+    ]);
+
+    await new DnrManager().updateDynamicRules(
+      [],
+      { allowedDomains: ['new.example'] },
+      { replaceInstalledList: false },
+    );
+
+    const call = stub.updateDynamicRules.mock.calls[0][0] as { addRules: any[] };
+    expect(call.addRules.map((rule) => rule.id)).toEqual([8]);
+  });
+
+  test('keeps the rule set inside the watermark it preserved rules against', async () => {
+    // The kept rules are counted against the budget, not on top of it: preserving 400 rules and
+    // planning a full budget of new ones would be how the extension exceeds a quota it thought it
+    // was inside.
+    const kept = Array.from({ length: 400 }, (_, index) =>
+      installedRule(index + 1, { priority: 1, urlFilter: `||kept-${index}.example^` }),
+    );
+    installInstalledRules(kept, 1000);
+    const lines = Array.from({ length: 1000 }, (_, index) => `||host-${index}.example^`);
+
+    const count = await new DnrManager().updateDynamicRules(lines, {}, { replaceInstalledList: false });
+
+    // quotaCap is 1,000 here (the floor of the available quota), so 400 kept leaves 600 to install.
+    expect(count).toBeLessThanOrEqual(1000);
+    expect(count).toBe(kept.length + 600);
+  });
+
+  test('clears both families when the user pauses everywhere, even while preserving', async () => {
+    // The pause promises that nothing is blocked, and it has to be able to say so for the list rules
+    // too — a preserving call that kept them would leave the browser blocking under a "Paused" UI.
+    const stub = installInstalledRules([
+      installedRule(3, { priority: 1 }),
+      installedRule(9, { priority: PRIORITY_SITE_PAUSE, actionType: 'allowAllRequests' }),
+    ]);
+
+    const count = await new DnrManager().updateDynamicRules([], { globalPaused: true }, { replaceInstalledList: false });
+
+    const call = stub.updateDynamicRules.mock.calls[0][0] as { removeRuleIds: number[]; addRules: any[] };
+    expect([...call.removeRuleIds].sort()).toEqual([3, 9]);
+    expect(call.addRules).toEqual([]);
+    expect(count).toBe(0);
+  });
+
+  test('replaces both families by default, which is what a sync asks for', async () => {
+    const stub = installInstalledRules([
+      installedRule(3, { priority: 1 }),
+      installedRule(9, { priority: PRIORITY_SITE_PAUSE, actionType: 'allowAllRequests' }),
+    ]);
+
+    await new DnrManager().updateDynamicRules(['||fresh.example^'], { pausedSites: ['news.example'] });
+
+    const call = stub.updateDynamicRules.mock.calls[0][0] as { removeRuleIds: number[] };
+    expect([...call.removeRuleIds].sort()).toEqual([3, 9]);
+  });
+
+  test('agrees with itself about a rule after a round trip through the browser', async () => {
+    // A rule the extension installs and then reads back has to key the same, or the startup
+    // reconcile would re-install a working decision on every worker start.
+    const stub = installInstalledRules([]);
+    const planned = planSiteControlRules({ pausedSites: ['news.example'] })[0];
+
+    await new DnrManager().updateDynamicRules([], { pausedSites: ['news.example'] }, { replaceInstalledList: false });
+    const added = (stub.updateDynamicRules.mock.calls[0][0] as { addRules: any[] }).addRules[0];
+
+    expect(installedRuleKey(added)).toBe(plannedRuleKey(planned));
   });
 });

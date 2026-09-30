@@ -16,6 +16,16 @@ export const STORAGE_KEY_SITE_CONTROL = 'bm_site_control';
 export const STORAGE_KEY_ELEMENT_AI_FEEDBACK = 'bm_element_ai_feedback';
 /** Which static DeclarativeNetRequest ruleset tiers the user has enabled. */
 export const STORAGE_KEY_STATIC_TIERS = 'bm_static_tiers';
+/**
+ * When the compiled list was last fetched.
+ *
+ * Stored because it is a fact about the profile rather than about the service worker that observed
+ * it. The rules themselves are read back from the browser (`getDynamicRules`) rather than stored —
+ * they are browser state and the browser already holds them — but a timestamp has no browser-side
+ * equivalent, and without it the popup reports "never synced" beside a rule count that is plainly
+ * not zero.
+ */
+export const STORAGE_KEY_LAST_SYNC_AT = 'bm_last_sync_at';
 /** Per-rule match counts gathered from real browsing, for coverage analysis. */
 export const STORAGE_KEY_RULE_HITS = 'bm_rule_hits';
 /** Which shipped static tier produced each block, so a tier can be judged on real traffic. */
