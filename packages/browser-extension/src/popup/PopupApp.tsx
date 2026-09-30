@@ -8,6 +8,7 @@ import {
 import { ElementScanPanel, type ElementScanResult } from './ElementScanPanel.js';
 import { LedgerStatusCard } from './LedgerStatusCard.js';
 import { LedgerExportCard } from './LedgerExportCard.js';
+import { TierPlanBasis } from './TierPlanBasis.js';
 import { downloadTextFile } from './downloadText.js';
 import type { LedgerStatus } from '../shared/ledgerStatus.js';
 import type { LedgerExportPayload } from '../shared/ledgerExport.js';
@@ -15,6 +16,8 @@ import { formatTierCapacity, type StaticTierStatus } from '../shared/rulesetTier
 import { formatTierPlan, planTierSelection } from '../shared/tierPlanner.js';
 import {
   buildTierBlocking,
+  planTierBenefits,
+
   formatTierBlocking,
   type TierBlockingView,
   type TierHitCounts,
@@ -393,38 +396,14 @@ export const PopupApp: React.FC = () => {
   );
 
   /**
-   * The capacity-aware plan: which tiers are worth keeping on, given the static slots the
-   * browser is *actually* granting and how full the synced list is.
-   *
-   * Recomputed from live status rather than assuming the guaranteed 30,000, because that
-   * figure is a floor drawn from a pool shared with every other installed extension — when it
-   * is congested, the tiers no longer all fit and something has to give.
-   */
-  const tierPlan = useMemo(() => {
-    if (!tierStatus) return null;
-    return planTierSelection({
-      tiers: tierStatus.tiers.map((candidate) => ({
-        id: candidate.id,
-        label: candidate.label,
-        ruleCount: candidate.ruleCount,
-      })),
-      enabledRuleCount: tierStatus.enabledRules,
-      availableStaticRules: tierStatus.availableStaticRules,
-      dynamic: mv3Status
-        ? { used: mv3Status.dynamicRulesCount, max: mv3Status.maxDynamicRules }
-        : null,
-      suspended: tierStatus.suspended,
-      currentEnabled: tierStatus.tiers.filter((candidate) => candidate.enabled).map((c) => c.id),
-    });
-  }, [tierStatus, mv3Status]);
-
-  /**
    * How much each tier has really blocked.
    *
    * Graded from the ledger instead of from rule counts, which is the whole point: a tier shipping
    * thousands of rules that has never fired looks exactly like a valuable one if all you show is
    * how many rules it carries. The verdicts are gated on there being enough traffic to judge, so a
    * freshly enabled tier is reported as unproven rather than idle.
+   *
+   * Computed before the plan because the plan is weighted by it — see `planTierBenefits`.
    */
   const tierBlocking = useMemo(() => {
     if (!tierStatus) return null;
@@ -438,6 +417,48 @@ export const PopupApp: React.FC = () => {
       hits: tierHits,
     });
   }, [tierStatus, tierHits]);
+
+  /**
+   * The capacity-aware plan: which tiers are worth keeping on, given the static slots the
+   * browser is *actually* granting and how full the synced list is.
+   *
+   * Recomputed from live status rather than assuming the guaranteed 30,000, because that
+   * figure is a floor drawn from a pool shared with every other installed extension — when it
+   * is congested, the tiers no longer all fit and something has to give.
+   *
+   * Weighted by the ledger's measured blocks when the ledger has judged every tier, and by rule
+   * count when it has not — so the two bases are never mixed, and which one produced this plan is
+   * stated below it rather than left to be inferred from the outcome.
+   */
+  const tierPlan = useMemo(() => {
+    if (!tierStatus) return null;
+    const benefits = tierBlocking ? planTierBenefits(tierBlocking) : null;
+    return planTierSelection({
+      tiers: tierStatus.tiers.map((candidate) => ({
+        id: candidate.id,
+        label: candidate.label,
+        ruleCount: candidate.ruleCount,
+        // Left `undefined` when the ledger cannot judge, because a partial set would make the
+        // planner fall back to coverage anyway while looking measured in the report.
+        ...(benefits?.benefits?.[candidate.id] === undefined
+          ? {}
+          : { benefit: benefits.benefits[candidate.id] }),
+      })),
+      enabledRuleCount: tierStatus.enabledRules,
+      availableStaticRules: tierStatus.availableStaticRules,
+      dynamic: mv3Status
+        ? { used: mv3Status.dynamicRulesCount, max: mv3Status.maxDynamicRules }
+        : null,
+      suspended: tierStatus.suspended,
+      currentEnabled: tierStatus.tiers.filter((candidate) => candidate.enabled).map((c) => c.id),
+    });
+  }, [tierStatus, mv3Status, tierBlocking]);
+
+  /** What the plan was weighted by, and why — shown next to the plan it explains. */
+  const tierPlanBasis = useMemo(
+    () => (tierBlocking ? planTierBenefits(tierBlocking) : null),
+    [tierBlocking],
+  );
 
   const tierUsage = useMemo(() => {
     const byId = new Map<string, TierBlockingView>();
@@ -762,6 +783,7 @@ export const PopupApp: React.FC = () => {
                       )}
                     </div>
                     <div className="tier-plan-summary">{formatTierPlan(tierPlan)}</div>
+                    {tierPlanBasis && <TierPlanBasis basis={tierPlanBasis} />}
                     <ul className="tier-plan-why">
                       {tierPlan.explanation.map((line) => (
                         <li key={line}>{line}</li>

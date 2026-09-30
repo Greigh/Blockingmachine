@@ -337,6 +337,19 @@ export function planTierSelection(input: TierPlanInput): TierPlan {
     );
   }
 
+  // What the plan was worth, in the units it was worth. Without this the reader cannot tell a plan
+  // that kept three tiers because they earn their slots from one that kept three because they were
+  // small, which is the whole difference between the two bases and the reason a plan is chosen.
+  if (tiers.length > 0) {
+    explanation.push(
+      benefitSource === 'evidence'
+        ? `Ranked by measured blocking: ${bestBenefit.toLocaleString()} requests actually blocked by the ` +
+            `selected tiers, against ${tiers.length} tier${tiers.length === 1 ? '' : 's'} of shipped rules.`
+        : `Ranked by rule count — ${bestBenefit.toLocaleString()} shipped rules, because a tier's size is ` +
+            `all the planner knows when nothing has measured what it blocks.`,
+    );
+  }
+
   for (const entry of disabled) {
     explanation.push(`${entry.label}: ${entry.reason}`);
   }
