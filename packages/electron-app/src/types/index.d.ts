@@ -349,6 +349,14 @@ export interface StoreSchema {
    * that reverted to rule counts on each launch would answer a different question every time.
    */
   tierLedgerPath?: string;
+  /**
+   * The element harvest the browser exported, if the user has pointed the hub at one.
+   *
+   * Remembered for the same reason the tier ledger is: the queue is built from a file on
+   * disk, and a hub that forgot the path each launch would report an empty corpus
+   * contribution every time it was opened and quietly stop asking.
+   */
+  elementHarvestPath?: string;
   exportFormat: FilterFormat;
   additionalFormats?: FilterFormat[];
   autoSchedule?: 'disabled' | '12h' | '24h' | 'weekly';
@@ -463,6 +471,10 @@ export interface ElectronAPI {
   /** Picks and remembers the browser's rule-hit ledger for the plan. Empty string when cancelled. */
   selectTierLedger: () => Promise<string>;
   clearTierLedger: () => Promise<string>;
+  /** What the chosen element harvest holds, and what queue it would produce. */
+  getElementHarvest: () => Promise<import('../elementHarvest.js').ElementHarvestSummary>;
+  selectElementHarvest: () => Promise<string>;
+  clearElementHarvest: () => Promise<string>;
   setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;
   selectSavePath: () => Promise<string>;
   runImportProcess: () => Promise<ProcessingResult>;

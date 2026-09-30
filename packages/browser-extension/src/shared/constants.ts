@@ -14,6 +14,15 @@ export const STORAGE_KEY_COSMETICS_ENABLED = 'bm_cosmetics_enabled';
 export const STORAGE_KEY_SITE_CONTROL = 'bm_site_control';
 /** Element Mini-AI user corrections: signature → bias (-1 keep, +1 hide). */
 export const STORAGE_KEY_ELEMENT_AI_FEEDBACK = 'bm_element_ai_feedback';
+/**
+ * Real elements captured from pages, waiting to be exported into the corpus queue.
+ *
+ * Deliberately not merged with the feedback above: that is a weight per signature the
+ * classifier reads back on the next page, and this is page data a person has not
+ * reviewed yet. Mixing them would either teach the model from unreviewed captures or
+ * bury the captures under weights, and the two have opposite lifetimes.
+ */
+export const STORAGE_KEY_ELEMENT_HARVEST = 'bm_element_harvest';
 /** Which static DeclarativeNetRequest ruleset tiers the user has enabled. */
 export const STORAGE_KEY_STATIC_TIERS = 'bm_static_tiers';
 /**

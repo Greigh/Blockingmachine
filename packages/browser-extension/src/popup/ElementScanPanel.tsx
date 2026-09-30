@@ -41,6 +41,15 @@ export interface ElementScanPanelProps {
   /** No selectors means "hide everything the scan found". */
   onHide: (selectors?: string[]) => void;
   onHighlight: () => void;
+  /**
+   * What the corpus harvest currently holds, as a line of prose plus the export callback.
+   *
+   * Passed in rather than imported: the panel must not reach for the core package at
+   * runtime, and the numbers it shows (how many real elements, how many of them carry a
+   * decision) are already words by the time they get here.
+   */
+  harvest: { summary: string; filename: string; busy: boolean } | null;
+  onExportHarvest: () => void;
 }
 
 /** How many groups the panel lists before the rest are left to the page outline. */
@@ -52,7 +61,15 @@ const MARKERS: Record<ElementScanEvidenceRow['strength'], string> = {
   context: '·',
 };
 
-export function ElementScanPanel({ scan, busy, onScan, onHide, onHighlight }: ElementScanPanelProps) {
+export function ElementScanPanel({
+  scan,
+  busy,
+  onScan,
+  onHide,
+  onHighlight,
+  harvest,
+  onExportHarvest,
+}: ElementScanPanelProps) {
   return (
     <section className="settings-card ai-card">
       <div className="section-head">
@@ -119,6 +136,25 @@ export function ElementScanPanel({ scan, busy, onScan, onHide, onHighlight }: El
             )}
           </div>
         </>
+      )}
+
+      {harvest && (
+        <div className="ai-harvest">
+          <p className="card-hint">
+            Scans and your own decisions also collect the elements they saw, so the element
+            corpus can grow from real pages instead of from guesswork. {harvest.summary}
+          </p>
+          <div className="ai-actions">
+            <button
+              className="chip-btn"
+              disabled={harvest.busy}
+              onClick={onExportHarvest}
+              title="Writes a file of captured elements for the corpus queue, and clears this buffer"
+            >
+              {harvest.busy ? 'Exporting…' : 'Export captured elements'}
+            </button>
+          </div>
+        </div>
       )}
     </section>
   );

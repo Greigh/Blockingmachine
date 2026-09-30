@@ -124,6 +124,9 @@ export interface ExtensionMessage {
     | 'BLOCK_AI_CANDIDATES'
     | 'ELEMENT_AI_FEEDBACK'
     | 'ELEMENT_AI_VERDICT'
+    // ── Corpus harvest (content → background, and the export the hub reads) ──
+    | 'HARVEST_ELEMENTS'
+    | 'EXPORT_ELEMENT_HARVEST'
     | 'PING';
   payload?: any;
 }

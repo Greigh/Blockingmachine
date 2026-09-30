@@ -3,6 +3,7 @@ import { RulesetManager } from './rulesetManager.js';
 import { ALARM_PERIODIC_SYNC, ALARM_TELEMETRY_PUSH, reconcileAlarms } from './alarmSchedule.js';
 import { RuleHitStats } from './ruleHitStats.js';
 import { LedgerSessionRecorder } from './ledgerSession.js';
+import { exportElementHarvest, previewElementHarvest, storeHarvestRecords } from './elementHarvestStore.js';
 import { StaticRuleIndex } from './staticRuleIndex.js';
 import { SyncClient } from './syncClient.js';
 import { Mv3Guard } from './mv3Guard.js';
@@ -1314,6 +1315,30 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
     case 'EXPORT_HIT_LEDGER':
       sendResponse({ success: true, ...ledger.exportPayload() });
       return false;
+
+    // The element corpus is hand-written, which is how it came to miss 52 wrong verdicts
+    // across five real pages (`docs/element-classifier-live-scan.md`). These two messages
+    // are the other half of that: content scripts push what they saw, and the hub drains
+    // the buffer into the candidate queue. Nothing here labels anything — a record
+    // carries a label only if a person made a decision about that element.
+    case 'HARVEST_ELEMENTS':
+      storeHarvestRecords(message.payload?.records).then((kept) =>
+        sendResponse({ success: true, kept }),
+      );
+      return true;
+
+    case 'EXPORT_ELEMENT_HARVEST': {
+      // Reading the buffer and taking it are separate, the way they are for the hit
+      // ledger: the popup asks what an export would cover every time it opens, and a
+      // preview that drained would make the count on screen unexportable.
+      const take = message.payload?.drain === true;
+      const pending = take ? exportElementHarvest() : previewElementHarvest();
+      pending.then(
+        (payload) => sendResponse({ success: true, ...payload }),
+        (err) => sendResponse({ success: false, error: String(err) }),
+      );
+      return true;
+    }
 
     case 'SET_RULESET_TIERS': {
       const ids = message.payload?.ids;

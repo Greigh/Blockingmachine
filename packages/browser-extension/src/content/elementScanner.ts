@@ -20,6 +20,7 @@ import {
   MiniAiElementClassifier,
   type ElementClass,
   type ElementPrediction,
+  type ElementSnapshot,
 } from '@blockingmachine/core/element-ai';
 import { validateCosmeticSelector } from '../shared/cosmeticRules.js';
 import { elementAiEvidenceRows, elementAiLine, type ElementAiEvidenceRow } from '../shared/elementAiDisplay.js';
@@ -30,6 +31,15 @@ import { createSelectorEngine, type SelectorEngine } from './selectorEngine.js';
 export interface ElementAiCandidate {
   element: Element;
   prediction: ElementPrediction;
+  /**
+   * The snapshot the verdict was actually computed from.
+   *
+   * The two-pass scan builds a cheap snapshot and may replace it with a
+   * computed-style one, so a harvest that re-read the element afterwards could
+   * record facts the model never saw. Keeping the snapshot means a captured
+   * element describes the same evidence as the verdict beside it.
+   */
+  snapshot: ElementSnapshot;
 }
 
 export interface ElementAiGroup {
@@ -147,7 +157,8 @@ export class ElementAiScanner {
       if (isOwnUi(node)) continue;
       if (!isCandidateElement(node)) continue;
 
-      let prediction = this.classifier.classify(snapshotElement(node, { computed: false, ancestors: true }));
+      let snapshot = snapshotElement(node, { computed: false, ancestors: true });
+      let prediction = this.classifier.classify(snapshot);
 
       // Confirm with computed style when the cheap pass found *something* — the
       // missing piece it could not see is overlay geometry.
@@ -155,11 +166,12 @@ export class ElementAiScanner {
       const couldBeOverlay = !prediction.evidenceFamilies.includes('overlay-shape');
       if (hasEvidence && couldBeOverlay && confirmations < this.maxConfirmations) {
         confirmations++;
-        prediction = this.classifier.classify(snapshotElement(node, { computed: true, ancestors: true }));
+        snapshot = snapshotElement(node, { computed: true, ancestors: true });
+        prediction = this.classifier.classify(snapshot);
       }
 
       if (prediction.action === 'leave' || prediction.elementClass === 'Content') continue;
-      candidates.push({ element: node, prediction });
+      candidates.push({ element: node, prediction, snapshot });
     }
 
     const deduped = this.dropNestedDuplicates(candidates);

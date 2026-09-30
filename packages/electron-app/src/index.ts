@@ -25,6 +25,11 @@ if (isDev) {
 import Store from 'electron-store';
 import type { ElectronStore, StoreSchema } from './types';
 import {
+  clearElementHarvest,
+  rememberedElementHarvestPath,
+  summarizeElementHarvest,
+} from './elementHarvest';
+import {
   describeUrlEndpoint,
   formatSinkholeError,
   normalizeAdguardDirectPort,
@@ -3775,6 +3780,47 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     ipcMain.handle('clear-tier-ledger', async () => {
       store.set('tierLedgerPath', '');
+      return '';
+    });
+
+    /**
+     * Reads the element harvest the browser exported, for the corpus queue.
+     *
+     * A file the user chose, in the same spirit as the tier ledger: the hub has no element
+     * data of its own, so this is a readout rather than a measurement. A path that has
+     * since moved reads as `present: false` with the rest still zeroed, because "the
+     * harvest you picked is gone" and "you never picked one" call for different actions
+     * and the pane has to be able to tell them apart.
+     */
+    ipcMain.handle('get-element-harvest', async () =>
+      summarizeElementHarvest(rememberedElementHarvestPath(store)),
+    );
+
+    ipcMain.handle('select-element-harvest', async () => {
+      try {
+        const result = await dialog.showOpenDialog({
+          title: 'Select the exported element harvest',
+          defaultPath: store.get('elementHarvestPath') || undefined,
+          filters: [
+            { name: 'Harvest files', extensions: ['jsonl', 'json', 'txt'] },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+          properties: ['openFile'],
+        });
+        if (result.canceled || !result.filePaths?.length) return '';
+        const selectedPath = result.filePaths[0];
+        store.set('elementHarvestPath', selectedPath);
+        return selectedPath;
+      } catch (error) {
+        console.error('[IPC Main] Error showing element harvest dialog:', error);
+        return '';
+      }
+    });
+
+    ipcMain.handle('clear-element-harvest', async () => {
+      const chosen = rememberedElementHarvestPath(store);
+      clearElementHarvest(chosen);
+      store.set('elementHarvestPath', '');
       return '';
     });
 
