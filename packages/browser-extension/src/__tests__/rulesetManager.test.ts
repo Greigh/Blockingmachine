@@ -336,3 +336,84 @@ describe('RulesetManager status', () => {
     ]);
   });
 });
+
+describe('RulesetManager drift (browser vs saved selection)', () => {
+  test('reports agreement when the browser holds exactly the saved selection', async () => {
+    installChrome({ stored: ['tier_core', 'tier_ads'], enabledRulesets: ['tier_ads', 'tier_core'] });
+    const manager = new RulesetManager();
+    await manager.load();
+
+    const status = await manager.status();
+    expect(status.drift).toEqual({ known: true, unexpected: [], missing: [], inSync: true });
+  });
+
+  test('names a tier the browser has on that the user turned off', async () => {
+    // The over-blocking direction, and the one storage alone can never reveal: the switch says off
+    // while the browser is shipping that tier's rules.
+    installChrome({ stored: ['tier_core'], enabledRulesets: ['tier_core', 'tier_security'] });
+    const manager = new RulesetManager();
+    await manager.load();
+
+    const status = await manager.status();
+    expect(status.drift.unexpected).toEqual(['tier_security']);
+    expect(status.drift.missing).toEqual([]);
+    expect(status.drift.inSync).toBe(false);
+  });
+
+  test('names a selected tier the browser has off', async () => {
+    // The under-blocking direction: the popup used to report these as on because storage said so.
+    installChrome({ stored: ['tier_ads'], enabledRulesets: [] });
+    const manager = new RulesetManager();
+    await manager.load();
+
+    const status = await manager.status();
+    expect(status.drift.missing).toEqual(['tier_ads']);
+    expect(status.drift.inSync).toBe(false);
+  });
+
+  test('reports unknown rather than agreement when the browser will not answer', async () => {
+    installChrome({ stored: ['tier_core'], getEnabledThrows: true });
+    const manager = new RulesetManager();
+    await manager.load();
+
+    const status = await manager.status();
+    expect(status.drift.known).toBe(false);
+    expect(status.drift.inSync).toBe(false);
+  });
+
+  test('reports unknown rather than agreement where the ruleset API does not exist', async () => {
+    installChrome({ stored: ['tier_core'], missingApi: true });
+    const manager = new RulesetManager();
+    await manager.load();
+
+    const status = await manager.status();
+    expect(status.drift.known).toBe(false);
+  });
+
+  test('reading the status never repairs, so the disagreement stays visible', async () => {
+    const stub = installChrome({ stored: ['tier_ads'], enabledRulesets: ['tier_core'] });
+    const manager = new RulesetManager();
+    await manager.load();
+
+    await manager.status();
+    expect(stub.updateEnabledRulesets).not.toHaveBeenCalled();
+  });
+
+  test('while paused, silence is agreement and a tier still on is drift', async () => {
+    const stub = installChrome({ stored: ['tier_core'], enabledRulesets: [] });
+    const manager = new RulesetManager();
+    await manager.load();
+    await manager.setSuspended(true);
+
+    const silenced = await manager.status();
+    // The selection is deliberately not reported as missing while paused: the pause is supposed to
+    // silence it, so the expected state is no tiers at all.
+    expect(silenced.drift).toEqual({ known: true, unexpected: [], missing: [], inSync: true });
+
+    // A tier the pause did not silence is the failure the pause promises not to have.
+    stub.getEnabledRulesets.mockResolvedValue(['tier_core']);
+    const stillOn = await manager.status();
+    expect(stillOn.drift.unexpected).toEqual(['tier_core']);
+    expect(stillOn.drift.inSync).toBe(false);
+  });
+});

@@ -940,6 +940,58 @@ body {
   padding: 6px 8px;
 }
 
+/*
+ * The browser's enabled tiers disagreeing with the saved selection. Amber rather than red: the
+ * difference is a real loss or addition of blocking, not a fault to alarm about, and it is
+ * normally a click away from being fixed.
+ */
+.tier-drift {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 6px;
+  padding: 7px 9px;
+}
+
+/* A browser that would not answer: unknown, which is not the same claim as a disagreement. */
+.tier-drift.unknown {
+  color: var(--text-secondary);
+  background: rgba(148, 163, 184, 0.1);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+.tier-drift-title {
+  font-weight: 700;
+}
+
+.tier-drift-detail {
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.tier-drift-action {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-contrast, #fff);
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.tier-drift-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 /* Capacity-aware plan: the recommendation plus the tradeoff behind it. */
 .tier-plan {
   display: flex;

@@ -9,6 +9,7 @@ import {
   PRIORITY_STATIC_TIER,
   STATIC_RULE_TIERS,
   buildTierStatus,
+  compareRulesetState,
   diffRulesets,
   formatTierCapacity,
   isTierId,
@@ -164,6 +165,69 @@ describe('ruleset diffing', () => {
   test('is a no-op when nothing changed, so no wakeup is wasted', () => {
     const enabled = ['tier_core', 'tier_ads'];
     expect(diffRulesets(enabled, enabled)).toEqual({ enableRulesetIds: [], disableRulesetIds: [] });
+  });
+});
+
+describe('browser/saved ruleset comparison', () => {
+  test('reports agreement only when the browser answered and both directions are empty', () => {
+    expect(compareRulesetState(['tier_core', 'tier_ads'], ['tier_ads', 'tier_core'])).toEqual({
+      known: true,
+      unexpected: [],
+      missing: [],
+      inSync: true,
+    });
+  });
+
+  test('names the tiers the browser has on that the selection does not', () => {
+    // The over-blocking direction: the user turned these off and the browser is shipping them.
+    const drift = compareRulesetState(['tier_core'], ['tier_core', 'tier_security']);
+    expect(drift.unexpected).toEqual(['tier_security']);
+    expect(drift.missing).toEqual([]);
+    expect(drift.inSync).toBe(false);
+  });
+
+  test('names the tiers the selection has on that the browser does not', () => {
+    // The under-blocking direction: the switches say these are on and nothing is blocking.
+    const drift = compareRulesetState(['tier_ads', 'tier_core'], ['tier_core']);
+    expect(drift.missing).toEqual(['tier_ads']);
+    expect(drift.unexpected).toEqual([]);
+  });
+
+  test('reports both directions at once rather than one standing for the other', () => {
+    const drift = compareRulesetState(['tier_privacy'], ['tier_ads', 'tier_core']);
+    expect(drift.unexpected).toEqual(['tier_core', 'tier_ads']);
+    expect(drift.missing).toEqual(['tier_privacy']);
+    expect(drift.inSync).toBe(false);
+  });
+
+  test('an unreadable browser is unknown, never agreement', () => {
+    // The distinction the type exists for: an empty diff for a browser that said nothing would be
+    // the popup reporting a state it never verified.
+    expect(compareRulesetState(['tier_core'], null)).toEqual({
+      known: false,
+      unexpected: [],
+      missing: [],
+      inSync: false,
+    });
+  });
+
+  test('an empty browser reading is a real reading: every selected tier is missing', () => {
+    const drift = compareRulesetState(['tier_core'], []);
+    expect(drift.known).toBe(true);
+    expect(drift.missing).toEqual(['tier_core']);
+    expect(drift.inSync).toBe(false);
+  });
+
+  test('ignores ids outside the catalogue on both sides', () => {
+    const drift = compareRulesetState(['tier_core', 'someone_elses'], ['tier_core', 'not_a_tier']);
+    expect(drift).toEqual({ known: true, unexpected: [], missing: [], inSync: true });
+  });
+
+  test('orders both directions by the catalogue, not by either input', () => {
+    // Two surfaces rendering the same drift must not need their own sort to agree on it.
+    const drift = compareRulesetState(['tier_annoyances', 'tier_ads'], ['tier_security', 'tier_privacy']);
+    expect(drift.missing).toEqual(['tier_ads', 'tier_annoyances']);
+    expect(drift.unexpected).toEqual(['tier_privacy', 'tier_security']);
   });
 });
 

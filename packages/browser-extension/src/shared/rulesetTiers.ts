@@ -21,6 +21,7 @@ import { GENERATED_TIER_COUNTS, GENERATED_TIER_SOURCE } from './tierCounts.gener
 import {
   summarizeTierCapacity as summarizeWithCounts,
   buildTierStatus as buildStatusWithCounts,
+  type RulesetDrift,
   type StaticRuleTier,
   type StaticTierId,
   type StaticTierStatus,
@@ -31,6 +32,18 @@ import {
 // `summarizeTierCapacity` and `buildTierStatus` are the same functions as core's with this
 // bundle's counts bound in, which is the only difference between them.
 export * from '@blockingmachine/core/tiers';
+
+/**
+ * A tier status plus what the browser is actually holding.
+ *
+ * `StaticTierStatus` describes the saved selection — what the user asked for — because that is what
+ * every surface can compute without a browser. `drift` is the one fact only a browser can supply:
+ * whether the ruleset grant it is enforcing matches that selection. They travel together so no
+ * renderer can show the toggles without also being able to see the disagreement.
+ */
+export interface RulesetStatus extends StaticTierStatus {
+  drift: RulesetDrift;
+}
 
 /**
  * The rule count actually shipped for a tier.

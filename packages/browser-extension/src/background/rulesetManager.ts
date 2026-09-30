@@ -1,11 +1,12 @@
 import {
   DEFAULT_ENABLED_TIER_IDS,
   buildTierStatus,
+  compareRulesetState,
   diffRulesets,
   isTierId,
   resolveEnabledTierIds,
+  type RulesetStatus,
   type StaticTierId,
-  type StaticTierStatus,
 } from '../shared/rulesetTiers.js';
 import { STORAGE_KEY_STATIC_TIERS } from '../shared/constants.js';
 
@@ -49,6 +50,25 @@ export class RulesetManager {
     return [...this.enabled];
   }
 
+  /**
+   * Reads the browser's own enabled tier rulesets, or `null` when it will not say.
+   *
+   * `null` rather than an empty array, because the two lead to opposite decisions everywhere this
+   * is read: an empty list is a *reading* that every tier is off, while no reading means the
+   * browser's state has to be left alone. Ids outside the catalogue are dropped — the manifest
+   * declares only tiers, so anything else is a stale reading rather than a ruleset to reason about.
+   */
+  private async readBrowserTierIds(): Promise<StaticTierId[] | null> {
+    const dnr = chrome.declarativeNetRequest;
+    if (!dnr?.getEnabledRulesets) return null;
+    try {
+      return (await dnr.getEnabledRulesets()).filter(isTierId);
+    } catch (err) {
+      console.warn('[Rulesets] Could not read enabled rulesets:', err);
+      return null;
+    }
+  }
+
   private async persist(): Promise<void> {
     try {
       await chrome.storage.local.set({ [STORAGE_KEY_STATIC_TIERS]: this.enabled });
@@ -65,17 +85,12 @@ export class RulesetManager {
    */
   async sync(): Promise<RulesetSyncResult> {
     const dnr = chrome.declarativeNetRequest;
-    if (!dnr?.updateEnabledRulesets || !dnr?.getEnabledRulesets) return { ...NOTHING_TO_DO };
+    if (!dnr?.updateEnabledRulesets) return { ...NOTHING_TO_DO };
 
-    let current: string[];
-    try {
-      current = await dnr.getEnabledRulesets();
-    } catch (err) {
-      // Without a reading there is no safe diff. Enabling every tier to "be sure" would be
-      // worse than leaving the browser's own state untouched.
-      console.warn('[Rulesets] Could not read enabled rulesets:', err);
-      return { ...NOTHING_TO_DO };
-    }
+    // Without a reading there is no safe diff. Enabling every tier to "be sure" would be worse
+    // than leaving the browser's own state untouched.
+    const current = await this.readBrowserTierIds();
+    if (current === null) return { ...NOTHING_TO_DO };
 
     const patch = diffRulesets(current, this.enabled);
     if (patch.enableRulesetIds.length === 0 && patch.disableRulesetIds.length === 0) {
@@ -110,16 +125,11 @@ export class RulesetManager {
 
     if (suspended) {
       // Only the tiers actually on need silencing, and re-reading the browser's state keeps this
-      // honest after a worker restart where nothing is in memory yet.
-      let toDisable: string[] = [...this.enabled];
-      if (dnr.getEnabledRulesets) {
-        try {
-          const current = await dnr.getEnabledRulesets();
-          toDisable = current.filter((id) => isTierId(id));
-        } catch {
-          // Fall back to the selection, which is the best available answer.
-        }
-      }
+      // honest after a worker restart where nothing is in memory yet. A browser that will not
+      // answer still gets the saved selection disabled: pausing has to be best-effort rather than
+      // skippable, and every id in the selection is a ruleset this bundle declares, so disabling
+      // one that is already off is a no-op.
+      const toDisable = (await this.readBrowserTierIds()) ?? [...this.enabled];
       if (toDisable.length === 0) return;
       await dnr.updateEnabledRulesets({ disableRulesetIds: toDisable });
       return;
@@ -155,8 +165,20 @@ export class RulesetManager {
     return this.setEnabledTierIds([...next]);
   }
 
-  /** Current tier state plus optional live diagnostics from the browser. */
-  async status(): Promise<StaticTierStatus> {
+  /**
+   * Current tier state, live diagnostics, and whether the browser agrees with the selection.
+   *
+   * The browser is read rather than assumed, because this is the surface a user checks to decide
+   * whether their switches mean anything: the saved selection is what the toggles render, and
+   * `drift` is the one fact only the browser can supply — whether that selection is what it is
+   * actually enforcing. The disagreement is *reported* rather than repaired here, deliberately: a
+   * repair on read would erase the evidence before anyone could see it, so the popup offers the
+   * reconcile as a button instead.
+   *
+   * While paused everywhere the expected state is *no* tiers, so the comparison asks whether the
+   * pause actually landed rather than reporting the whole selection as missing.
+   */
+  async status(): Promise<RulesetStatus> {
     let availableStaticRules: number | null = null;
     try {
       const dnr = chrome.declarativeNetRequest;
@@ -166,6 +188,8 @@ export class RulesetManager {
     } catch {
       // Diagnostics only; a missing count must never block the toggle UI.
     }
-    return buildTierStatus(this.enabled, availableStaticRules, this.suspended);
+    const expected = this.suspended ? [] : this.enabled;
+    const drift = compareRulesetState(expected, await this.readBrowserTierIds());
+    return { ...buildTierStatus(this.enabled, availableStaticRules, this.suspended), drift };
   }
 }

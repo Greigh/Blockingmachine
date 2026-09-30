@@ -196,6 +196,63 @@ export function diffRulesets(
   };
 }
 
+/**
+ * Where the browser's enabled rulesets differ from the selection the user saved.
+ *
+ * These are two different facts, and every surface used to render the first while calling it the
+ * second: storage holds what the user asked for, the browser's ruleset grant holds what is actually
+ * blocking. A disagreement must not be silently repaired and forgotten — a browser that refuses the
+ * repair keeps the drift, and the toggles would go on describing a blocking state that does not
+ * exist — so it is modelled explicitly and shown alongside the selection it disagrees with.
+ *
+ * `known` is the honesty flag rather than a third direction: a browser that would not answer has
+ * not agreed with anything, and an empty diff for it would be the exact assumption this type
+ * exists to stop.
+ */
+export interface RulesetDrift {
+  /** False when the browser would not report its enabled rulesets. Unknown is not agreement. */
+  known: boolean;
+  /** Tiers the browser has on that the saved selection does not name. */
+  unexpected: StaticTierId[];
+  /** Tiers the saved selection names that the browser has off. */
+  missing: StaticTierId[];
+  /** True only when the browser answered and both directions came back empty. */
+  inSync: boolean;
+}
+
+/**
+ * Compares a saved selection against the browser's own enabled rulesets.
+ *
+ * Ids outside the catalogue are ignored on both sides rather than reported: the browser's list can
+ * only name rulesets the manifest declared, so a comparison that counted anything else would
+ * invent drift out of a stale reading. Both directions come back in *catalogue* order rather than
+ * input order, so two surfaces rendering the same drift agree on the order without sorting.
+ *
+ * `browserIds === null` means the browser would not answer — no `getEnabledRulesets`, or a call
+ * that threw — and is deliberately distinct from an empty array, which is a real reading that says
+ * every tier is off.
+ */
+export function compareRulesetState(
+  desiredIds: readonly string[],
+  browserIds: readonly string[] | null,
+): RulesetDrift {
+  if (browserIds === null) return { known: false, unexpected: [], missing: [], inSync: false };
+  const desired = new Set(desiredIds.filter(isTierId));
+  const browser = new Set(browserIds.filter(isTierId));
+  const unexpected = STATIC_RULE_TIERS.filter(
+    (tier) => browser.has(tier.id) && !desired.has(tier.id),
+  ).map((tier) => tier.id);
+  const missing = STATIC_RULE_TIERS.filter(
+    (tier) => desired.has(tier.id) && !browser.has(tier.id),
+  ).map((tier) => tier.id);
+  return {
+    known: true,
+    unexpected,
+    missing,
+    inSync: unexpected.length === 0 && missing.length === 0,
+  };
+}
+
 export interface TierCapacitySummary {
   enabledTiers: number;
   totalTiers: number;
