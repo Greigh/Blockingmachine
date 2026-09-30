@@ -37,6 +37,11 @@ contextBridge.exposeInMainWorld('electron', {
   getCustomRules: () => ipcRenderer.invoke('get-custom-rules'),
   setCustomRules: (rules: string) => ipcRenderer.invoke('save-custom-rules', rules),
   getSavePath: () => ipcRenderer.invoke('get-save-path'),
+  getExtensionTierPlan: (request?: {
+    capacity?: number;
+    hitsPath?: string;
+    enabled?: string;
+  }) => ipcRenderer.invoke('get-extension-tier-plan', request),
   setSavePath: (path: string) => ipcRenderer.invoke('set-save-path', path),
   selectSavePath: () => ipcRenderer.invoke('select-save-path') as Promise<string>,
   getExportFormat: () => ipcRenderer.invoke('get-export-format'),

@@ -11969,3 +11969,140 @@ select.stream-select.sort-select,
   opacity: 0.75;
   background: rgba(148, 163, 184, 0.04);
 }
+
+/* Extension static tier capacity: what a packaged build ships, whether it fits, and what the
+   plan was worth. The basis line is the load-bearing part — a plan ranked by rule count looks
+   identical to one ranked by measurement unless it says which. */
+.tier-plan-card {
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.tier-plan-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.tier-plan-card-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tier-plan-card-sub {
+  margin: 0 0 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.tier-plan-card-empty,
+.tier-plan-card-error {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.tier-plan-card-error {
+  color: var(--danger, #ef4444);
+}
+
+.tier-plan-refresh {
+  background: transparent;
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.25));
+  border-radius: 5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 3px 9px;
+}
+
+.tier-plan-refresh:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color, #4a9eff);
+}
+
+.tier-plan-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-bottom: 10px;
+}
+
+.tier-plan-table th,
+.tier-plan-table td {
+  padding: 5px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color, rgba(148, 163, 184, 0.15));
+}
+
+.tier-plan-table thead th {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.tier-plan-table tbody th {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.tier-plan-row.kept th,
+.tier-plan-row.kept td {
+  color: var(--text-primary);
+}
+
+/* A row the plan dropped, and a tier the user has off, are different facts. */
+.tier-plan-row:not(.kept) td {
+  color: var(--text-secondary);
+}
+
+.tier-plan-tier-id {
+  display: block;
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+.tier-plan-basis {
+  margin: 0 0 4px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+/* Evidence is the state worth noticing, so it reads as deliberate rather than as a caveat. */
+.tier-plan-basis.basis-evidence {
+  color: var(--text-primary);
+  border-left: 2px solid var(--accent-color, #4a9eff);
+}
+
+.tier-plan-ledger {
+  margin: 0 0 8px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.tier-plan-why {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tier-plan-why li {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}

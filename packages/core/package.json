@@ -26,7 +26,12 @@
       "import": "./dist/ai/elementClassifier.js",
       "require": "./dist/ai/elementClassifier.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./tiers": {
+      "types": "./dist/tiers.d.ts",
+      "import": "./dist/tiers.js",
+      "require": "./dist/tiers.js"
+    }
   },
   "license": "BSD-3-Clause",
   "scripts": {

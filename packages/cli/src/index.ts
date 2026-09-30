@@ -17,6 +17,8 @@ export { DoctorCommand } from "./commands/DoctorCommand.js";
 export { ShellCommand } from "./commands/ShellCommand.js";
 export { ServeCommand } from "./commands/ServeCommand.js";
 export { CoverageCommand } from "./commands/CoverageCommand.js";
+export { TierPlanCommand } from "./commands/TierPlanCommand.js";
+export type { TierPlanOptions } from "./commands/TierPlanCommand.js";
 
 // Export library functions
 export * from "./lib/logger.js";
