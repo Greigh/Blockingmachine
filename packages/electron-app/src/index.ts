@@ -73,6 +73,9 @@ import {
   isDomainCoveredByRules,
   globalMiniAiClassifier,
   compactSubdomainRules,
+  buildCategoryAttribution,
+  toCategoryBlocklist,
+  toAttributionManifest,
   refreshDb,
   setDbCacheDirectory,
   checkRuleConflict,
@@ -2716,6 +2719,70 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           });
         } catch (segErr) {
           console.error('[IPC Main] Failed to write segregated dns/browser endpoints:', segErr);
+        }
+
+        // Per-category compiled outputs.
+        //
+        // The packaged extension used to decide which of its four static tiers a host belongs to
+        // by tokenising the hostname against vocabulary derived from the curated tier files, and
+        // on this list that failed to place 90% of hosts. The publisher's own category is right
+        // here and was never written down, so it is written down now: one blocklist per category
+        // next to the other compiled outputs, which is what `compile-tier-rulesets.mjs
+        // --attribution` reads instead of guessing.
+        //
+        // Built from `sourceResults`, not from `uniqueRules`, because a host listed by six
+        // publishers is one host with six categories and the deduplicated array keeps only the
+        // first — the attribution is built before that information is thrown away.
+        try {
+          // Keyed by the category each *rule* resolved to, not the category its source declares.
+          // The rule's own resolution is the publisher's filing after the URL was looked up in
+          // the catalog, which is strictly better than a stored setting a user may have edited
+          // since — and a custom list the user added carries no stored category at all, in which
+          // case the parser's `uncategorised` is the honest answer and lands in the residual.
+          const byCategoryRules = new Map<string, StoredRule[]>();
+          for (const res of sourceResults) {
+            for (const rule of res.rules ?? []) {
+              const category =
+                rule?.metadata?.sourceInfo?.category ||
+                res.source.category ||
+                'uncategorised';
+              const bucket = byCategoryRules.get(category);
+              if (bucket) bucket.push(rule);
+              else byCategoryRules.set(category, [rule]);
+            }
+          }
+          const attribution = buildCategoryAttribution(
+            [...byCategoryRules].map(([category, rules]) => ({ category, rules })),
+          );
+          const categoriesDir = join(outputDir, 'categories');
+          await fs.mkdir(categoriesDir, { recursive: true });
+          // Only categories that actually have hosts get a file, and the manifest names exactly
+          // those — so "the manifest promised a file that is not here" stays a real signal rather
+          // than the everyday case of a category with nothing blockable in it.
+          for (const category of attribution.categories) {
+            const hosts = attribution.byCategory.get(category);
+            if (!hosts || hosts.size === 0) continue;
+            await fs.writeFile(
+              join(categoriesDir, `${category}.txt`),
+              toCategoryBlocklist(hosts),
+              'utf8',
+            );
+          }
+          const manifest = toAttributionManifest(attribution);
+          await fs.writeFile(
+            join(categoriesDir, 'manifest.json'),
+            `${JSON.stringify(manifest, null, 2)}\n`,
+            'utf8',
+          );
+          console.log(
+            `[IPC Main] Category attribution saved: ${manifest.hosts} hosts across ` +
+              `${manifest.categories.length} categor${manifest.categories.length === 1 ? 'y' : 'ies'} ` +
+              `(${manifest.contested} claimed by more than one` +
+              `${manifest.empty.length > 0 ? `, ${manifest.empty.length} with nothing blockable: ${manifest.empty.join(', ')}` : ''}` +
+              `) -> ${categoriesDir}`,
+          );
+        } catch (attrErr) {
+          console.error('[IPC Main] Failed to write per-category outputs:', attrErr);
         }
 
         // Record in compilation history

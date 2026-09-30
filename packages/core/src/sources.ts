@@ -871,6 +871,27 @@ export const sourceCategories: SourceCategoryMap = Object.fromEntries(
   ]),
 );
 
+// Every profile is also reachable by its URL.
+//
+// The parser is handed the URL — `downloadAndParseSource` calls `parseFilterList(content, url)` —
+// so a name-only map meant every rule in a hub compilation resolved to `unknown`, untrusted,
+// priority 0. `sourceNames` covers the remote list URLs and bridges them to a name, but the nine
+// curated modules the project ships locally are addressed as `./filters/modules/...` and appear
+// in no such map, so the alias route alone would still leave the project's own lists uncategorised
+// — the ones that carry the most precisely-worded intent in the catalog. Registering the URL
+// beside the name derives both from the one list that is actually authoritative, so a profile
+// added to the catalog is categorised without a second edit, and a URL nobody recognises still
+// falls through to `unknown` rather than guessing from the shape of the string.
+for (const profile of CURATED_SOURCE_PROFILES) {
+  if (profile.url && !sourceCategories[profile.url]) {
+    sourceCategories[profile.url] = {
+      category: profile.category,
+      trusted: profile.trusted,
+      priority: profile.priority,
+    };
+  }
+}
+
 // Backward compatibility aliases for sourceCategories
 sourceCategories["uBlock Filters"] = {
   category: "ads",

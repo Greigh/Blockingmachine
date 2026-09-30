@@ -1,5 +1,5 @@
 import { isValidDomainName } from "./utils/ruleSyntax.js";
-import { sourceCategories, type SourceInfo } from "./sources.js";
+import { sourceCategories, sourceNames, type SourceInfo } from "./sources.js";
 import { type RuleType, type RuleMetadata } from "./RuleStore.js";
 
 // --- Helper Functions (for domain/selector extraction) ---
@@ -113,6 +113,33 @@ export function extractSelector(originalRule: string): string | null {
 
 // --- Main Function ---
 
+/**
+ * Resolves a rule's publisher to its category, by name or by URL.
+ *
+ * The two keys were the same concept written down once each and never joined. `sourceCategories`
+ * is built from the curated profiles and keyed by *name* (26 of 26 resolve by name, 0 by URL),
+ * while the parser is handed the source **URL** — `downloadAndParseSource` calls
+ * `parseFilterList(content, url)` — so every lookup missed and every rule in the hub's compiled
+ * output was categorised `unknown`, untrusted, priority 0. The category was not missing data;
+ * it was a key that did not match.
+ *
+ * `sourceNames` is the project's own URL -> name map, and using it rather than parsing the URL
+ * means a rule from a list the catalog knows resolves to that list's category, while an
+ * arbitrary user-supplied list still falls through to `unknown` rather than guessing. Both keys
+ * are tried, because callers legitimately pass either: the store and the legacy name aliases
+ * are name-keyed while the download path is URL-keyed.
+ */
+export function resolveSourceInfo(source: string): SourceInfo {
+  if (source && Object.prototype.hasOwnProperty.call(sourceCategories, source)) {
+    return sourceCategories[source]!;
+  }
+  const name = sourceNames[source];
+  if (name && Object.prototype.hasOwnProperty.call(sourceCategories, name)) {
+    return sourceCategories[name]!;
+  }
+  return { category: "unknown", trusted: false, priority: 0 };
+}
+
 export function createRuleMetadata(
   source: string,
   type: RuleType,
@@ -120,11 +147,7 @@ export function createRuleMetadata(
 ): RuleMetadata {
   const domain = cleanDomainPattern(rule);
   const selector = extractSelector(rule);
-  const sourceInfo: SourceInfo = sourceCategories[source] || {
-    category: "unknown",
-    trusted: false,
-    priority: 0,
-  };
+  const sourceInfo: SourceInfo = resolveSourceInfo(source);
 
   return {
     sources: [source],

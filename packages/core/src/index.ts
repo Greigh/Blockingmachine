@@ -24,7 +24,7 @@ export {
   RuleDeduplicator,
   type MergedRuleMetadata,
 } from "./RuleDeduplicator.js";
-export { createRuleMetadata, cleanDomainPattern } from "./createMetadata.js";
+export { createRuleMetadata, cleanDomainPattern, resolveSourceInfo } from "./createMetadata.js";
 export {
   filterLists,
   sourceCategories,
@@ -86,6 +86,7 @@ export * from "./coverage.js";
 // Browser-reported rule hits, aggregated across sessions — the evidence the trimmed hot set is
 // built from when it comes from real usage rather than a captured trace.
 export * from "./ledgerAggregate.js";
+export * from "./ruleHost.js";
 
 // Replaying captured requests through a compiled rule set (the offline half of a measurement)
 export * from "./ruleReplay.js";
