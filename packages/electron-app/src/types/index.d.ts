@@ -340,6 +340,15 @@ export interface StoreSchema {
   customRules: string;
   theme: ThemeType;
   savePath: string;
+  /**
+   * The browser's rule-hit ledger the extension tier plan is weighted by.
+   *
+   * The hub accumulates no measurement of its own, so this is the only way its plan can be ranked
+   * by what actually blocked rather than by how many rules a tier ships. Remembered deliberately: a
+   * plan weighted by measurement and one weighted by rule count can disagree completely, so a hub
+   * that reverted to rule counts on each launch would answer a different question every time.
+   */
+  tierLedgerPath?: string;
   exportFormat: FilterFormat;
   additionalFormats?: FilterFormat[];
   autoSchedule?: 'disabled' | '12h' | '24h' | 'weekly';
@@ -451,6 +460,9 @@ export interface ElectronAPI {
     hitsPath?: string;
     enabled?: string;
   }) => Promise<import('../components/ExtensionTierPlanCard.js').TierPlanResponse>;
+  /** Picks and remembers the browser's rule-hit ledger for the plan. Empty string when cancelled. */
+  selectTierLedger: () => Promise<string>;
+  clearTierLedger: () => Promise<string>;
   setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;
   selectSavePath: () => Promise<string>;
   runImportProcess: () => Promise<ProcessingResult>;

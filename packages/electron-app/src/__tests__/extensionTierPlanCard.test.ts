@@ -140,6 +140,48 @@ describe('hub extension tier plan card', () => {
     expect(markup).not.toContain('11,565 free');
   });
 
+  it('offers to choose a ledger, because the hub holds no measurement of its own', () => {
+    // Without this the card is structurally incapable of ever being weighted by measurement: the
+    // extension accumulates the blocks and the user exports them, so pointing at that file is the
+    // whole mechanism.
+    let chosen = 0;
+    const markup = render({ onChooseLedger: () => { chosen += 1; } });
+    expect(markup).toContain('Weight by a rule-hit ledger');
+    expect(chosen).toBe(0);
+  });
+
+  it('shows the chosen ledger and offers to forget it', () => {
+    let cleared = 0;
+    const markup = render({
+      result: { ...RESULT, ledgerPath: '/Users/greigh/Downloads/hit-ledger.json' },
+      onClearLedger: () => { cleared += 1; },
+      onChooseLedger: () => {},
+    });
+    expect(markup).toContain('/Users/greigh/Downloads/hit-ledger.json');
+    expect(markup).toContain('Forget');
+    expect(cleared).toBe(0);
+  });
+
+  it('says a chosen ledger is gone rather than quietly planning by rule count', () => {
+    // "The ledger you picked is missing" and "you have no ledger" lead to different decisions
+    // about which one to go and get, so they are not the same message.
+    const markup = render({
+      result: {
+        ...RESULT,
+        basis: null,
+        ledger: null,
+        ledgerPath: '/Users/greigh/Downloads/moved.json',
+        ledgerMissing: '/Users/greigh/Downloads/moved.json — ENOENT',
+      },
+      onChooseLedger: () => {},
+    });
+    expect(markup).toContain('could not be read');
+    expect(markup).toContain('Choose the ledger again');
+    expect(markup).toContain('tier-plan-ledger-missing');
+    // The plan still renders, ranked by rule count, and says so rather than erroring the card.
+    expect(markup).toContain('No ledger was supplied');
+  });
+
   it('reports a missing ruleset directory as an error, not an empty plan', () => {
     // "Everything fits" over zero tiers looks exactly like a good result, and is not one.
     const markup = render({
