@@ -451,10 +451,14 @@ export function computeTierPlan(input: ComputeTierPlanInput): TierPlanComputatio
     }
     basis = planTierBenefits(
       buildTierBlocking({
+        // The counts come along so a tier that carries no rules is graded `empty` rather than
+        // silent. `tier_security` is exactly that on a machine that has not run the classifier,
+        // and a tier that can never be measured must not hold the plan on the rule-count basis.
         tiers: STATIC_RULE_TIERS.map((tier) => ({
           id: tier.id,
           label: tier.label,
           category: tier.category,
+          ruleCount: countOf(tier),
         })),
         enabledIds: input.enabled,
         hits: ledger.hits,

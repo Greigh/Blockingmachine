@@ -19,11 +19,18 @@ import {
 import { planTierSelection } from '../shared/tierPlanner.js';
 import { STATIC_RULE_TIERS } from '../shared/rulesetTiers.js';
 
-/** The real catalogue, so the tests exercise the shipped labels and order. */
+/**
+ * The real catalogue, so the tests exercise the shipped labels and order.
+ *
+ * The rule counts come along because the popup passes the live ones: they are how a tier that
+ * carries nothing is told apart from a tier that carries rules and has not fired, and the shipped
+ * catalogue says `tier_security` carries none.
+ */
 const CATALOGUE: TierAttributionCandidate[] = STATIC_RULE_TIERS.map((tier) => ({
   id: tier.id,
   label: tier.label,
   category: tier.category,
+  ruleCount: tier.ruleCount,
 }));
 
 const ALL_IDS = CATALOGUE.map((tier) => tier.id);
@@ -62,6 +69,7 @@ describe('buildTierBlocking — restraint', () => {
       'productive',
       'unobserved',
       'unobserved',
+      'empty',
     ]);
   });
 
@@ -108,6 +116,38 @@ describe('buildTierBlocking — restraint', () => {
     expect(summary.minSample).toBe(5);
     expect(summary.idle).toHaveLength(3);
   });
+
+  test('grades a tier carrying no rules as empty, not as a silent one', () => {
+    // The shipped `tier_security` on a machine that has never run the classifier: off, because
+    // there is nothing in it to switch on, behind a ledger with a real sample. `idle` would call it
+    // a tier that had its chance and produced nothing and offer to turn it off; `disabled` would
+    // call the switch the reason for its silence. Neither is the truth about a ruleset with no
+    // rules in it — and only one of the three keeps it out of the plan's evidence gate.
+    const summary = buildTierBlocking({
+      tiers: [
+        { id: 'tier_core', label: 'Core shield', category: 'core', ruleCount: 24 },
+        { id: 'tier_security', label: 'Threat & malware', category: 'security', ruleCount: 0 },
+      ],
+      enabledIds: ['tier_core'],
+      hits: { tier_core: 900 },
+    });
+
+    expect(summary.observed).toBe(true);
+    expect(summary.tiers.map((tier) => tier.verdict)).toEqual(['productive', 'empty']);
+    expect(summary.idle).toEqual([]);
+  });
+
+  test('does not count a tier that carries no rules toward the tiers that blocked nothing', () => {
+    const summary = buildTierBlocking({
+      tiers: CATALOGUE,
+      enabledIds: ALL_IDS,
+      hits: { tier_core: 900, tier_ads: 100 },
+    });
+
+    // Four tiers were in the running, not five: "2 of 5" would report an unwinnable tier as one
+    // that was given its chance and wasted it.
+    expect(summary.summary).toBe('1,000 blocks from 2 of 4 tiers');
+  });
 });
 
 describe('buildTierBlocking — attribution', () => {
@@ -119,12 +159,13 @@ describe('buildTierBlocking — attribution', () => {
     });
 
     expect(summary.totalHits).toBe(100);
-    expect(summary.tiers.map((tier) => tier.hits)).toEqual([25, 60, 15, 0]);
+    expect(summary.tiers.map((tier) => tier.hits)).toEqual([25, 60, 15, 0, 0]);
     expect(summary.tiers.map((tier) => tier.verdict)).toEqual([
       'productive',
       'productive',
       'productive',
       'idle',
+      'empty',
     ]);
     expect(Math.round(summary.tiers[1].share * 100)).toBe(60);
     expect(summary.tiers.map((tier) => tier.share).reduce((sum, share) => sum + share, 0)).toBeCloseTo(1);
@@ -154,7 +195,7 @@ describe('buildTierBlocking — attribution', () => {
     });
 
     expect(summary.totalHits).toBe(12);
-    expect(summary.tiers.map((tier) => tier.hits)).toEqual([0, 0, 0, 12]);
+    expect(summary.tiers.map((tier) => tier.hits)).toEqual([0, 0, 0, 12, 0]);
   });
 
   test('survives empty and malformed input', () => {
@@ -307,6 +348,45 @@ describe('planTierBenefits — whether the ledger may weight the plan', () => {
     expect(view.source).toBe('coverage');
     expect(view.reason).toBe('No tiers to plan.');
   });
+
+  test('a tier that carries no rules does not hold the plan on rule counts', () => {
+    // The failure this pins, and the reason the empty tier is graded rather than left silent:
+    // `tier_security` ships switched off and empty, so if an empty tier counted as an unmeasured
+    // one the gate would refuse the evidence basis on every machine that has never run the
+    // classifier — which is every fresh install — and every plan would be weighted by rule count
+    // instead of by what blocked. Forever.
+    const summary = buildTierBlocking({
+      tiers: CATALOGUE,
+      // The shipped state: core on, the threat tier off because there is nothing in it.
+      enabledIds: ['tier_core'],
+      hits: { tier_core: 900, tier_ads: 40, tier_privacy: 40, tier_annoyances: 20 },
+    });
+    const view = planTierBenefits(summary);
+
+    expect(byId(summary).get('tier_security')?.verdict).toBe('empty');
+    expect(view.source).toBe('evidence');
+    expect(view.unmeasured).toEqual([]);
+    // It is not part of what the plan is weighted by, because it has nothing to weigh.
+    expect(view.benefits).not.toHaveProperty('tier_security');
+    expect(view.reason).toContain('1,000 attributed blocks across 4 tiers');
+  });
+
+  test('a catalogue of empty tiers is nothing to weigh, not evidence of anything', () => {
+    // Every tier a future compiled-only one, before anything has been compiled: there is no
+    // number to reach for, and claiming the plan was weighted by measurement would be worse than
+    // saying it was planned by size.
+    const view = planTierBenefits(
+      buildTierBlocking({
+        tiers: CATALOGUE.map((tier) => ({ ...tier, ruleCount: 0 })),
+        enabledIds: ALL_IDS,
+        hits: {},
+      }),
+    );
+
+    expect(view.source).toBe('coverage');
+    expect(view.benefits).toBeNull();
+    expect(view.reason).toContain('no tier here carries rules yet');
+  });
 });
 
 describe('the ledger changes what the planner keeps', () => {
@@ -353,6 +433,24 @@ describe('the ledger changes what the planner keeps', () => {
     expect(plan.benefit).toBe(5005);
     expect(plan.explanation.join(' ')).toContain('Ranked by measured blocking');
     expect(plan.explanation.join(' ')).not.toContain('Ranked by rule count');
+  });
+
+  test('a tier carrying no rules neither blocks the evidence basis nor changes the plan', () => {
+    // The exemption on the planner's own side of the gate. It has to hold here as well as in
+    // `planTierBenefits`, because the popup hands over a benefit only for the tiers the ledger
+    // judged — so an empty tier arrives with no number at all, and a `every`-only gate would read
+    // that as an unmeasured tier and fall back to coverage.
+    const measured = CANDIDATES.map((tier) => ({ ...tier, benefit: MEASURED[tier.id] }));
+    const emptyTier = { id: 'tier_security' as const, label: 'Threat & malware', ruleCount: 0 };
+
+    const plan = planTierSelection({ tiers: [...measured, emptyTier], ...CONGESTED });
+    const without = planTierSelection({ tiers: measured, ...CONGESTED });
+
+    expect(plan.benefitSource).toBe('evidence');
+    // The same plan, tier for tier: it costs no slots and earns nothing, so there is nothing for
+    // the search to trade. Catalogue order breaks the tie, which is why the empty tier is dropped.
+    expect(plan.enabled).toEqual(without.enabled);
+    expect(plan.benefit).toBe(without.benefit);
   });
 
   test('a benefit supplied for only some tiers is ignored entirely, not blended', () => {

@@ -34,6 +34,10 @@ async function makeRulesDir(
     tier_ads: rules(["ads.example.com", "shared.example.com"]),
     tier_privacy: rules(["privacy.example.com"]),
     tier_annoyances: rules(["consent.example.com"]),
+    // Written as an empty file, which is the state `tier_security` is legitimately in on a machine
+    // that has never run the classifier. Omitting it would not model a missing verdict file; it
+    // would model a corrupt bundle, and the command refuses one of those.
+    tier_security: rules([]),
   };
   for (const [tier, body] of Object.entries({ ...defaults, ...overrides })) {
     if (body === null) continue;
@@ -64,7 +68,7 @@ describe("tier-plan", () => {
     const data = res.data as { files: Array<{ id: string; rules: number }>; plan: { totalRules: number } };
     // Not the catalogue's curated counts: a packaged build ships tens of thousands per tier, and
     // a plan computed from the baseline would be a plan about a different bundle.
-    expect(data.files.map((f) => f.rules)).toEqual([2, 2, 1, 1]);
+    expect(data.files.map((f) => f.rules)).toEqual([2, 2, 1, 1, 0]);
     expect(data.plan.totalRules).toBe(6);
     expect(data.plan.benefitSource).toBe("coverage");
   });
@@ -82,8 +86,12 @@ describe("tier-plan", () => {
       capacity: 3,
     });
     // The core call above is over empty files, so only the *rule* is compared: the hub and the CLI
-    // must take the same code path, and `broken` is how a differing path announces itself.
-    expect(expected.broken).toHaveLength(STATIC_RULE_TIERS.length);
+    // must take the same code path, and `broken` is how a differing path announces itself. Every
+    // tier that has a curated baseline to lose is broken by an empty file — all of them but
+    // `tier_security`, which has none and is allowed to ship nothing.
+    expect(expected.broken.map((row) => row.id)).toEqual(
+      STATIC_RULE_TIERS.filter((tier) => tier.curatedSeed).map((tier) => tier.id),
+    );
     expect(data.plan.enabledRules).toBeLessThanOrEqual(3);
   });
 
@@ -286,6 +294,7 @@ describe("tier-plan", () => {
         { id: "tier_ads", rules: rules(["ads.example.com", "shared.example.com"]) },
         { id: "tier_privacy", rules: rules(["privacy.example.com"]) },
         { id: "tier_annoyances", rules: rules(["consent.example.com"]) },
+        { id: "tier_security", rules: [] },
       ],
       synced: { text: "||core.example.com^\n||shared.example.com^\n" },
       enabled: ["tier_core"],

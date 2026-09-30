@@ -144,14 +144,54 @@ export const PRIORITY_STATIC_TIER = 1;
 /** Chrome's guaranteed static-rule floor, mirrored from `MV3_STATIC_LIMITS`. */
 export const GUARANTEED_STATIC_RULES = 30000;
 
-export const TIER_IDS = ['tier_core', 'tier_ads', 'tier_privacy', 'tier_annoyances'];
+export const TIER_IDS = [
+  'tier_core',
+  'tier_ads',
+  'tier_privacy',
+  'tier_annoyances',
+  'tier_security',
+];
 
-/** Share of the budget each tier may claim before redistribution, out of 100. */
+/**
+ * Tiers the repository ships no hand-curated content for.
+ *
+ * `tier_security` holds the embedded classifier's own malware and phishing verdicts, and those
+ * exist only where a machine has run the classifier over a real blocklist. A fresh checkout
+ * therefore ships it **empty**, and that is the correct state rather than a lost baseline — which
+ * is why the three places that assert "a tier is non-empty" (the ruleset validator, `--check`
+ * here, and the extension's tier/model agreement suite) have to be able to tell this tier apart
+ * from the other four instead of being loosened for all of them.
+ *
+ * A tier in this list is still compiled additively like any other: it has no curated seed to
+ * preserve, so everything it ships comes from the classifier input.
+ */
+export const COMPILED_ONLY_TIERS = ['tier_security'];
+
+/**
+ * Share of the budget each tier may claim before redistribution, out of 100.
+ *
+ * A share is a *cap*, never a reservation: capacity a tier does not use is redistributed in
+ * proportion to what the other tiers still hold, so the shares decide the split only when every
+ * tier has more candidates than its cap.
+ *
+ * The security share was sized by measuring what the classifier actually flags rather than by
+ * guessing. On this repository's real 190,035-host browser list the Mini-AI returns **6,392**
+ * malware or phishing verdicts, so a share of 12 — about 3,600 slots — still binds, and the
+ * omission is reported per tier like any other rather than being hidden. That is a deliberate
+ * choice and not a shrug: a large part of that pool is fresh random-subdomain DGA hosts on the
+ * `.cyou` and `.cfd` high-abuse TLDs, where an individual `||host^` rule has a short useful life
+ * because the operator rotates the subdomain, while a rule in the ad or privacy tiers blocks
+ * something that stays put. The four curated tiers give up their capacity in proportion to their
+ * previous shares (40:27:20:13 scaled by the remaining 88), which is why the numbers are not round.
+ * An operator who disagrees can move the boundary without editing this file — the shares are a
+ * starting point, and the per-tier omission line is what tells them whether it bound.
+ */
 export const DEFAULT_SHARES = {
-  tier_core: 40,
-  tier_ads: 27,
-  tier_privacy: 20,
-  tier_annoyances: 13,
+  tier_core: 35,
+  tier_ads: 24,
+  tier_privacy: 18,
+  tier_annoyances: 11,
+  tier_security: 12,
 };
 
 /**
@@ -189,6 +229,13 @@ export const TIER_VOCABULARY = {
 /**
  * Indicators that put a host in the tier that is on by default. These are the categories
  * where a false block is the least costly and a missed block is the most costly.
+ *
+ * Deliberately still routed to `tier_core` now that `tier_security` exists. The alternative —
+ * moving every threat-named host into the opt-in tier — would mean a fresh install stops blocking
+ * malware it can recognise from the hostname alone, which trades away real protection to make the
+ * taxonomy tidier. So the two tiers specialise instead: `tier_core` keeps the hosts whose *name*
+ * gives them away, and `tier_security` carries what name-matching cannot see and no publisher list
+ * happened to carry — the classifier's own verdicts about ordinary-looking hosts.
  */
 export const CORE_INDICATORS = [
   'malware', 'phishing', 'phish', 'botnet', 'c2', 'command-and-control', 'ransom',
@@ -328,18 +375,20 @@ export function parseBlocklist(text, { into, seen } = {}) {
  * purpose. `social` is filed under annoyances because that tier is where consent and nagging
  * lives and a social widget is the same class of intrusion from the user's side.
  *
- * Three categories deliberately map to nothing:
+ * More categories deliberately map to nothing:
  *
- *   - **`security`** is the interesting one. "Threat & Malicious Domain Defense" and "OISD
- *     Blocklist Small" are exactly what the always-on tier is *for*, so mapping them to
- *     `tier_core` is the obvious move and is not taken here. A host from those lists is, by the
- *     publisher's own statement, malware or a phishing domain — and the always-on tier is graded
- *     against the classifier that must agree with it, so filing 300-odd malware hosts into the
- *     tier that ships enabled turns the model/tier agreement check into a question that can only
- *     be answered by weakening it. A tier the user cannot see the contents of, cannot turn off
- *     piecemeal, and that the radar calls a contradiction is a worse default than an opt-in one.
- *     The categories are still *emitted* and counted, so an operator who wants them can route
- *     them with `--input tier_core=security.txt` and take the consequence knowingly.
+ *   - **`security`** is the interesting one, and `tier_security` existing does **not** change the
+ *     answer. The tier carries the *embedded classifier's own* malware and phishing verdicts, read
+ *     from `--security`; this map is for the hub's publisher categories, and "Threat & Malicious
+ *     Domain Defense" plus "OISD Blocklist Small" are a different body of knowledge that only
+ *     partly overlaps it. Measured on this repository's own security module, the classifier calls
+ *     28 of its 34 hosts `Clean` and the other 6 `Advertising` — so merging the two sources into one
+ *     tier would put hosts into a tier that is graded by the very model that disagrees with them,
+ *     and the agreement check would have to be weakened to accommodate it. Keeping the sources
+ *     separate is what lets each be checked on its own terms: the classifier's verdicts are
+ *     measured (they came from the model), and the curated threat lists stay available for an
+ *     operator to route explicitly with `--input tier_security=security.txt` while knowing they are
+ *     asserting the publisher's claim rather than the model's.
  *   - **`unbreak` and `anti-circumvention`** are allowlists and filter-bypass reports. Blocking
  *     them is a category error regardless of which tier receives them.
  *   - **`custom` and `uncategorised`** are the user's own additions and the parser's fallback.
@@ -686,6 +735,17 @@ export function readCuratedTiers(rulesDir = RULES_DIR) {
   const curatedByTier = new Map();
   const curatedTierByHost = new Map();
   for (const tier of TIER_IDS) {
+    // A compiled-only tier is never seeded from disk, and this is the difference between a
+    // verdict list and a blocklist. The other four are read back so that regeneration is purely
+    // additive and a curated host can never be lost — which is only safe because those hosts were
+    // chosen by a person and are still wanted. `tier_security` holds a *model's verdicts*, and
+    // seeding it from its own previous output would make it accumulate: the first run that flagged
+    // a host would keep it forever, so the classifier could never withdraw a false positive and the
+    // tier could only grow. It is rebuilt from the classifier input on every run instead.
+    if (COMPILED_ONLY_TIERS.includes(tier)) {
+      curatedByTier.set(tier, []);
+      continue;
+    }
     const file = resolve(rulesDir, `${tier}.json`);
     let hosts = [];
     if (existsSync(file)) {
@@ -731,6 +791,23 @@ export function defaultInputCandidates(rootDir = ROOT_DIR) {
   ];
 }
 
+/**
+ * Where the embedded classifier's malware and phishing verdicts are looked for.
+ *
+ * Beside the compiled lists, because that is where the desktop hub writes them: it already runs
+ * the classifier over the same deduplicated hosts it writes `browser.txt` for, so the verdicts and
+ * the blocklist they are verdicts *about* are produced in one pass from one input and cannot drift
+ * apart. Discovered rather than required because a checkout with no hub run legitimately has none,
+ * and the tier it feeds ships empty in that state.
+ */
+export function defaultSecurityCandidates(rootDir = ROOT_DIR) {
+  return [
+    resolve(rootDir, 'packages/electron-app/filters/output/malware.txt'),
+    resolve(rootDir, 'packages/electron-app/filters/output/tier-security.txt'),
+    resolve(rootDir, 'packages/cli/filters/output/malware.txt'),
+  ];
+}
+
 export function parseArgs(argv) {
   const options = {
     inputs: [],
@@ -752,6 +829,14 @@ export function parseArgs(argv) {
     // compilation, and a compiler that silently fell back to vocabulary when it was absent would
     // be making the same promise the flag exists to keep.
     attribution: null,
+    // `null` means "discover it"; a string is an explicit file; `false` means ship the tier empty.
+    // Unlike `--hits` and `--attribution`, discovery is the default here, because this input is not
+    // enrichment on top of a plan — it is the entire contents of a tier, and a tier that silently
+    // ships nothing because nobody passed a flag is the failure mode worth avoiding. The hazard
+    // those two flags guard against does not apply either: `--check` does not compare against a
+    // compiled plan until a compilation has been recorded, and when one has been, the discovery is
+    // the same rule the main input list has always been read by.
+    security: null,
     rulesDir: RULES_DIR,
     countsPath: GENERATED_COUNTS_PATH,
     cataloguePath: CATALOGUE_PATH,
@@ -773,6 +858,11 @@ export function parseArgs(argv) {
     } else if (arg === '--budget') options.budget = Number.parseInt(next(), 10);
     else if (arg === '--hits') options.hits = next();
     else if (arg === '--attribution') options.attribution = next();
+    // The classifier's verdicts, for `tier_security`. A named file that does not exist is an
+    // error rather than a silent fall back to an empty tier, for the same reason a mistyped
+    // `--hits` path is: the operator named it, so shipping without it has to be loud.
+    else if (arg === '--security') options.security = next();
+    else if (arg === '--no-security') options.security = false;
     else if (arg === '--residual') {
       options.residual = normalizeTierName(next()) || options.residual;
     }
@@ -804,6 +894,16 @@ export function compile(options) {
     options.inputs.length > 0
       ? options.inputs
       : defaultInputCandidates().map((path) => ({ path, tier: null }));
+
+  // `null` discovers, a string is explicit, `false` ships the tier empty. A discovered file that
+  // is not there is simply absent — that is the fresh-checkout state — while an explicit one that
+  // is not there is an error, because the operator named it.
+  const securityPath =
+    options.security === false
+      ? null
+      : options.security !== null
+        ? resolve(options.security)
+        : (defaultSecurityCandidates().find((candidate) => existsSync(candidate)) ?? null);
 
   // The evidence is read before the blocklists so a bad path fails before the work, and a
   // file that yielded nothing usable is an error rather than a silent fall back to input order:
@@ -904,6 +1004,30 @@ export function compile(options) {
     );
   }
 
+  // The classifier's malware and phishing verdicts, read after the blocklists rather than as one
+  // of them: this file is not a subscription list, and letting it satisfy the "something to
+  // compile" check above would mean a run that found nothing but verdicts could rewrite all four
+  // curated tiers from the baseline alone. Its hosts are attributed to exactly one tier, which is
+  // the same placement the `--input tier_x=` form performs, so nothing downstream needs to know
+  // where they came from.
+  let security = null;
+  if (securityPath) {
+    if (!existsSync(securityPath)) {
+      if (options.security !== null && options.security !== false) {
+        throw new Error(
+          `--security file not found: ${relative(ROOT_DIR, securityPath)}. A file the operator ` +
+            'named is never silently replaced by an empty tier.',
+        );
+      }
+    } else {
+      const { hosts, lineCount } = parseBlocklist(readFileSync(securityPath, 'utf8'), { seen });
+      for (const host of hosts) allSynced.add(host);
+      attributedByTier.get('tier_security').push(...hosts);
+      // `hosts` is a Set — it deduplicates within the file, which is the count worth reporting.
+      security = { source: displayPath(securityPath), hosts: hosts.size, lines: lineCount };
+    }
+  }
+
   // Curated hosts seed their own tier; then whole lists an operator attributed to a tier
   // land exactly where they were put; then anything merged is classified. A host already
   // claimed keeps its first, most specific placement, so regeneration is purely additive.
@@ -990,10 +1114,18 @@ export function compile(options) {
     );
   }
 
-  // A declared ruleset that ships zero rules is a defect, not a no-op: the manifest promises
-  // Chrome four rulesets, and `validateTierRuleset` rejects an empty one. Writing `[]` here
-  // would only move the failure to the compliance guardian with a much worse error message.
-  const emptyTiers = TIER_IDS.filter((tier) => counts[tier] === 0);
+  // A declared ruleset that ships zero rules is a defect, not a no-op: the manifest declares five
+  // rulesets and `validateTierRuleset` rejects an empty one for a tier that has a curated baseline
+  // to lose. Writing `[]` for such a tier would only move the failure to the compliance guardian
+  // with a much worse error message.
+  //
+  // The compiled-only tier is the exception and the reason is in `COMPILED_ONLY_TIERS`: it has no
+  // baseline to lose, so `[]` is not a defect there — it is the honest state of a build where the
+  // classifier has not run. Chrome accepts an empty ruleset array and `verify:mv3` checks only the
+  // rules that are present, so nothing downstream has to tolerate something invalid.
+  const emptyTiers = TIER_IDS.filter(
+    (tier) => counts[tier] === 0 && !COMPILED_ONLY_TIERS.includes(tier),
+  );
   if (emptyTiers.length > 0) {
     throw new Error(
       `No rules for ${emptyTiers.join(', ')}. A tier declared in the manifest must ship at least one rule — ` +
@@ -1072,6 +1204,11 @@ export function compile(options) {
             promotedExamples,
           }
         : null,
+      // Null when no verdict file was found at all, which is a different fact from a verdict file
+      // that held nothing: the first says the classifier has not run here, the second says it ran
+      // and found no malware. `tier_security` ships empty in both cases, and a reader who cannot
+      // tell them apart will read an empty tier as "nothing is malicious on this list".
+      security,
     },
   };
 }
@@ -1144,12 +1281,17 @@ export function checkCuratedBaseline({ rulesDir = RULES_DIR, quiet = false, cata
       problem = true;
       continue;
     }
-    if (!Array.isArray(rules) || rules.length === 0) {
+    // A compiled-only tier is legitimately empty on a checkout where the classifier has never
+    // run, and legitimately non-empty (with a count the catalogue does not know, because there is
+    // no curated figure to know) once it has. Both the non-empty assertion and the count
+    // comparison are therefore wrong for it, and only for it.
+    const compiledOnly = COMPILED_ONLY_TIERS.includes(tier);
+    if (!Array.isArray(rules) || (rules.length === 0 && !compiledOnly)) {
       console.error(`❌ [Tiers] ${basename(file)} is not a non-empty ruleset array`);
       problem = true;
       continue;
     }
-    if (declared && declared[tier] !== rules.length) {
+    if (declared && !compiledOnly && declared[tier] !== rules.length) {
       console.error(
         `❌ [Tiers] ${basename(file)} holds ${rules.length} rule(s) but the catalogue declares ${declared[tier]}`,
       );
@@ -1291,6 +1433,19 @@ function main() {
       }
     } else {
       console.log('   ranked  no rule-hit evidence given — tiers are in input order (--hits <ledger>)');
+    }
+    if (report.security) {
+      // Printed with the count for the same reason the evidence line carries its provenance: an
+      // empty security tier and a tier holding a passing classifier run look identical in the
+      // table above, and only one of them means "this list has no malware on it".
+      console.log(
+        `   verdicts ${report.counts.tier_security.toLocaleString()} shipped from ` +
+          `${report.security.hosts.toLocaleString()} classifier verdict(s) in ${report.security.source}`,
+      );
+    } else {
+      console.log(
+        '   verdicts no classifier verdict file found — tier_security ships empty (--security <file>)',
+      );
     }
     if (report.attribution) {
       const a = report.attribution;

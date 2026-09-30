@@ -79,6 +79,17 @@ const TIER_FAMILIES: Partial<Record<StaticTierId, readonly Category[]>> = {
   tier_ads: ['Advertising'],
   tier_privacy: [...BLOCKING_FAMILIES],
   tier_annoyances: ['Advertising', 'Telemetry/Analytics'],
+  /**
+   * The inverted tier, and the only one whose allowed family is `Malware/Phishing`.
+   *
+   * The other four exist to block things the model should *also* recognise as ad or tracking
+   * infrastructure, and the suite fails when it does not. This one is the reverse: its contents
+   * are the model's own malware verdicts, so a host in it that the model calls `Clean` or
+   * `Advertising` is the defect. Being a model's output makes it the one tier this suite cannot
+   * independently corroborate — which is why the assertion is inverted rather than dropped, and
+   * why `curatedSeed: false` is what lets the empty-baseline case stay honest.
+   */
+  tier_security: ['Malware/Phishing'],
 };
 
 /**
@@ -254,21 +265,37 @@ describe('shipped tiers vs the Mini-AI classifier', () => {
     );
 
     // Every tier must contribute hosts, or the loader silently walked an empty file and every
-    // assertion below would hold by vacuity.
+    // assertion below would hold by vacuity — except the one tier that is *supposed* to be empty
+    // until a classifier has run somewhere. Asserting non-empty for it would make a fresh
+    // checkout fail for being fresh, and skipping the assertion for every tier would let a
+    // genuinely lost baseline through.
     for (const tier of MEASURED) {
+      if (tierById(tier.tier)?.curatedSeed === false) continue;
       expect(tier.hosts.length).toBeGreaterThan(0);
     }
     expect(total).toBeGreaterThanOrEqual(118);
   });
 
-  test('ships nothing the model considers malware or phishing', () => {
+  test('ships nothing the model considers malware or phishing, except in the tier that is for them', () => {
     // Holds at any size: a tier presenting itself as ads, privacy, or consent must not be where a
     // malicious host lands — and `tier_core` is enabled on a fresh install, so it is held first.
     const core = MEASURED.filter((tier) => tier.tier === 'tier_core');
     expect(core.flatMap((tier) => qualified(tier, tier.malicious))).toEqual([]);
     if (COMPILED) return;
 
-    expect(MEASURED.flatMap((tier) => qualified(tier, tier.malicious))).toEqual([]);
+    const others = MEASURED.filter((tier) => tier.tier !== 'tier_security');
+    expect(others.flatMap((tier) => qualified(tier, tier.malicious))).toEqual([]);
+  });
+
+  test('holds only malware and phishing verdicts in the tier built from them', () => {
+    // The inverted invariant. `tier_security` carries the model's own output, so "the model
+    // agrees with it" is not a check — but "it contains nothing the model does *not* call
+    // malware" is a real one, and it is what stops the tier drifting into a general-purpose
+    // blocklist that happens to be assembled by the model. An empty baseline satisfies it, which
+    // is the honest state of a checkout where the classifier has never run.
+    const security = MEASURED.find((tier) => tier.tier === 'tier_security')!;
+    expect(qualified(security, security.disagreements)).toEqual([]);
+    expect(tierById('tier_security')?.defaultEnabled).toBe(false);
   });
 
   test('recognises every host the always-on Core shield tier ships', () => {
