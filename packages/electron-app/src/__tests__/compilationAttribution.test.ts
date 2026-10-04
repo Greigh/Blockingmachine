@@ -23,8 +23,8 @@ const appRoot = fileURLToPath(new URL('../../', import.meta.url));
 /** The slice of the compile handler that builds and renders the attribution. */
 function readAttributionCallSite(): string {
   const main = readFileSync(join(appRoot, 'src/index.ts'), 'utf8');
-  const start = main.indexOf('buildCategoryAttribution(');
-  if (start < 0) throw new Error('the buildCategoryAttribution call was not found in index.ts');
+  const start = main.indexOf('const attributionSources');
+  if (start < 0) throw new Error('the attributionSources builder was not found in index.ts');
   const end = main.indexOf('toAttributionManifest(', start);
   if (end < 0) throw new Error('the attribution call site is unterminated in index.ts');
   return main.slice(start, end);
@@ -34,8 +34,10 @@ describe('hub compilation source provenance', () => {
   test('the attribution is built per source, carrying what the manifest will name', () => {
     const callSite = readAttributionCallSite();
     // One entry per configured source — not per category bucket — so a source that produced
-    // rules in two categories, or rules in none, is still one entry on the record.
-    expect(callSite).toContain('sourceResults.map(');
+    // rules in two categories, or rules in none, is still one entry on the record. Built in a
+    // loop rather than `sourceResults.map(` so the sort+hash work can yield between sources.
+    expect(callSite).toContain('for (let i = 0; i < sourceResults.length; i++)');
+    expect(callSite).toContain('yieldToEventLoop()');
     expect(callSite).toContain('res.source.name');
     expect(callSite).toContain('res.source.url');
     expect(callSite).toContain('res.source.category');
