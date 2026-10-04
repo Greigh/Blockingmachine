@@ -57,7 +57,8 @@ export const TIER_VOCABULARY_PROVENANCE: TierVocabularyProvenance =
   "acceptedTokens": 42,
   "rejectedHosts": 3,
   "corpusRefusals": 0,
-  "apexRefusals": 1,
+  "apexRefusals": 0,
+  "brandRefusals": 1,
   "corpus": {
     "total": 216,
     "lexicalCases": 88,
@@ -544,7 +545,7 @@ export const TIER_VOCABULARY_REJECTIONS: readonly TierVocabularyRejection[] =
         "vocabulary": "ad",
         "present": false,
         "family": "Advertising",
-        "attestation": "refused: 'tiktok' is a bare label naming tiktok.com, which tier_privacy did not list — a subdomain row cannot attest the whole brand"
+        "attestation": "refused: 'tiktok' names a high-profile first-party brand — no derived bare token may claim it, whatever tier_privacy listed"
       }
     ]
   },

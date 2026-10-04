@@ -121,6 +121,9 @@ import {
   manifestRuleResources,
   computeTierPlan,
   parseEnabledTierIds,
+  parseHitLedgerText,
+  selectHotList,
+  formatHotList,
   type TierFileInput,
   type AiProviderConfig,
   type AiScanResult,
@@ -3056,6 +3059,47 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           await fs.writeFile(join(outputDir, 'browser.txt'), browserContent, 'utf8');
           await fs.writeFile(join(outputDir, 'adguardBrowser.txt'), browserContent, 'utf8');
           console.log(`[IPC Main] Segregated Browser endpoints saved: browser.txt (${browserRules.length} rules)`);
+
+          // The measured hot set travels beside the list it was measured on: the extension
+          // fetches `hotlist.txt` from the feed so a browser installs the rules its own ledger
+          // says fire before the full sync lands. Written only when a ledger is configured —
+          // an absent file is the honest answer for "no measurement here", and the sync
+          // client already reads missing or empty exactly that way, so a ledger that stops
+          // being picked stops the set rather than leaving a stale one served.
+          const hotlistPath = join(outputDir, 'hotlist.txt');
+          const wantedHotlistLedger =
+            typeof store.get('tierLedgerPath') === 'string' && store.get('tierLedgerPath')
+              ? (store.get('tierLedgerPath') as string)
+              : null;
+          if (wantedHotlistLedger) {
+            try {
+              const parsed = parseHitLedgerText(await fs.readFile(wantedHotlistLedger, 'utf8'));
+              if (parsed.hits.length > 0) {
+                const hot = formatHotList(
+                  selectHotList({
+                    lines: browserRules.map((rule) => rule.raw),
+                    hits: parsed.hits,
+                    exceptions: parsed.exceptions,
+                  }),
+                  {
+                    source: basename(savePath),
+                    measuredOn: `${basename(wantedHotlistLedger)} (browser rule-hit ledger)`,
+                  },
+                );
+                await fs.writeFile(hotlistPath, hot, 'utf8');
+                console.log(`[IPC Main] Hot set saved: hotlist.txt`);
+              } else if (existsSync(hotlistPath)) {
+                await fs.unlink(hotlistPath);
+              }
+            } catch (hotErr) {
+              console.error('[IPC Main] Failed to derive the hot set from the picked ledger:', hotErr);
+              // An unreadable ledger is "no measurement" too — a stale file would keep
+              // serving the set the dead ledger produced.
+              if (existsSync(hotlistPath)) await fs.unlink(hotlistPath);
+            }
+          } else if (existsSync(hotlistPath)) {
+            await fs.unlink(hotlistPath);
+          }
 
           // Broadcast real-time SSE event to connected browser extensions & LAN clients
           broadcastSseEvent('compile_completed', {

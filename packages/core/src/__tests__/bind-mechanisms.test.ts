@@ -26,13 +26,19 @@
 import { describe, expect, test } from "@jest/globals";
 import { execFileSync, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { generateFilterList } from "../export/advanced-formatter.js";
+import { exportFormat } from "../export/index.js";
+import {
+  bindNullDelegatedZoneFile,
+  bindNullZoneStanza,
+  renderBindNullDelegatedZone,
+} from "../export/bindDelegation.js";
 import {
   BIND_NULL_ZONE_CONTENTS,
   BIND_NULL_ZONE_FILE,
@@ -353,5 +359,172 @@ describeWithBind("a live named answers through the null zones", () => {
     // a server answering NXDOMAIN to everything would pass the tests above while blocking
     // nothing real.
     expect(dig("example.org").status).toBe("REFUSED");
+  });
+});
+
+/* ─────────────────────────── the delegation that escapes ─────────────────────────── */
+
+describe("a delegated exception escapes the null zone", () => {
+  test("renders per-parent zone data: shared spine plus the child's NS to real authority", () => {
+    const zone = renderBindNullDelegatedZone(
+      "doubleclick.net",
+      ["www.doubleclick.net", "api.doubleclick.net"],
+      ["ns2.real.example", "ns1.real.example"],
+    );
+    expect(zone).toContain("@ IN SOA localhost. root.localhost.");
+    expect(zone).toContain("@ IN NS localhost.");
+    // Children emit relative to the zone origin, NS targets get a terminal dot, and both
+    // sides are sorted so identical inputs render byte-identical output.
+    expect(zone).toContain("api IN NS ns1.real.example.");
+    expect(zone).toContain("api IN NS ns2.real.example.");
+    expect(zone).toContain("www IN NS ns1.real.example.");
+    expect(zone).toContain("www IN NS ns2.real.example.");
+    expect(bindNullDelegatedZoneFile("doubleclick.net")).toBe("db.bm.null.doubleclick.net");
+    expect(bindNullZoneStanza("doubleclick.net", "db.bm.null.doubleclick.net")).toBe(
+      'zone "doubleclick.net" { type master; file "db.bm.null.doubleclick.net"; };',
+    );
+  });
+
+  test("exportFormat honours an exception whose parent's NS resolves — and writes the file", async () => {
+    const dir = scratch();
+    const out = join(dir, "zones.conf");
+    await exportFormat("bind-null", out, rules, metadata, {
+      resolveNs: async (domain) =>
+        domain === "doubleclick.net" ? ["ns2.real.example", "ns1.real.example"] : [],
+    });
+    const fragment = readFileSync(out, "utf8");
+    // The parent's stanza points at its own zone file, not the shared one…
+    expect(fragment).toContain('zone "doubleclick.net" { type master; file "db.bm.null.doubleclick.net"; };');
+    // …an untouched parent keeps the shared mechanism…
+    expect(fragment).toContain(`zone "ads.example.com" { type master; file "${BIND_NULL_ZONE_FILE}"; };`);
+    // …and the record is DELEGATED, naming the file that carries it — not silent, not
+    // mislabelled NOT HONOURED.
+    expect(fragment).toContain("# EXCEPTION DELEGATED: @@||www.doubleclick.net^ — db.bm.null.doubleclick.net");
+    expect(fragment).not.toContain("NOT HONOURED: @@||www.doubleclick.net^");
+
+    const zone = readFileSync(join(dir, "db.bm.null.doubleclick.net"), "utf8");
+    expect(zone).toContain("@ IN SOA localhost. root.localhost.");
+    expect(zone).toContain("www IN NS ns1.real.example.");
+    expect(zone).toContain("www IN NS ns2.real.example.");
+  });
+
+  test("a parent whose authority cannot be resolved degrades to NOT HONOURED", async () => {
+    const dir = scratch();
+    const out = join(dir, "zones.conf");
+    await exportFormat("bind-null", out, rules, metadata, {
+      resolveNs: async () => {
+        throw new Error("SERVFAIL");
+      },
+    });
+    const fragment = readFileSync(out, "utf8");
+    expect(fragment).toContain(`zone "doubleclick.net" { type master; file "${BIND_NULL_ZONE_FILE}"; };`);
+    expect(fragment).toContain("# EXCEPTION NOT HONOURED: @@||www.doubleclick.net^");
+    expect(existsSync(join(dir, "db.bm.null.doubleclick.net"))).toBe(false);
+  });
+});
+
+(haveBind ? describe : describe.skip)("a live recursive referral escapes the null zone", () => {
+  let named: ChildProcess | null = null;
+  let port = 0;
+  let dir = "";
+
+  function freePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const srv = createServer();
+      srv.once("error", reject);
+      srv.listen(0, "127.0.0.1", () => {
+        const p = (srv.address() as AddressInfo).port;
+        srv.close(() => resolve(p));
+      });
+    });
+  }
+
+  function dig(name: string): { status: string; answers: number; authority: number; nsRecords: string } {
+    const out = run(
+      "dig",
+      ["@127.0.0.1", "-p", String(port), "+time=2", "+tries=1", name, "A"],
+      dir,
+    );
+    const authority = /AUTHORITY SECTION:\n((?:[^;].*\n?)*)/.exec(out)?.[1] ?? "";
+    return {
+      status: /status: (\w+)/.exec(out)?.[1] ?? "?",
+      answers: Number(/ANSWER: (\d+)/.exec(out)?.[1] ?? -1),
+      authority: Number(/AUTHORITY: (\d+)/.exec(out)?.[1] ?? -1),
+      nsRecords: authority,
+    };
+  }
+
+  beforeAll(async () => {
+    dir = scratch();
+    // The same fragment shape `exportFormat` writes for a delegated parent — assembled by
+    // hand because the sync path cannot resolve NS, and the thing under test is whether
+    // BIND honours the delegation, not whether DNS resolution worked.
+    writeFileSync(
+      join(dir, "zones.conf"),
+      [
+        bindNullZoneStanza("doubleclick.net", "db.bm.null.doubleclick.net"),
+        bindNullZoneStanza("ads.example.com"),
+      ].join("\n"),
+    );
+    writeFileSync(join(dir, BIND_NULL_ZONE_FILE), BIND_NULL_ZONE_CONTENTS);
+    writeFileSync(
+      join(dir, "db.bm.null.doubleclick.net"),
+      renderBindNullDelegatedZone("doubleclick.net", ["www.doubleclick.net"], ["ns1.unreachable.invalid"]),
+    );
+    let stderr = "";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      port = await freePort();
+      writeFileSync(
+        join(dir, "named.conf"),
+        [
+          "options {",
+          `  directory "${dir}";`,
+          `  pid-file "${dir}/named.pid";`,
+          `  listen-on port ${port} { 127.0.0.1; };`,
+          "  listen-on-v6 { none; };",
+          "  recursion no;",
+          "  allow-query { localhost; };",
+          "  dnssec-validation no;",
+          "};",
+          `include "${dir}/zones.conf";`,
+          "",
+        ].join("\n"),
+      );
+      stderr = "";
+      named = spawn("named", ["-c", join(dir, "named.conf"), "-g"], {
+        env: { ...process.env, PATH: path },
+      });
+      named.stderr?.on("data", (d: Buffer) => (stderr += d));
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        if (named.exitCode !== null) break;
+        try {
+          dig("ads.example.com");
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+      named.kill("SIGKILL");
+    }
+    throw new Error(`named never answered through the delegated fragment:\n${stderr}`);
+  }, 30_000);
+
+  afterAll(() => named?.kill("SIGKILL"));
+
+  test("the delegated child gets a referral, not the parent's NXDOMAIN", () => {
+    // The half of the flag-20 verify that runs without recursion: `www.doubleclick.net` was
+    // NXDOMAIN under the shared zone, and under the per-parent zone named hands back the
+    // child's own NS records — the delegation a recursive resolver would follow upstream.
+    const answer = dig("www.doubleclick.net");
+    expect(answer.status).toBe("NOERROR");
+    expect(answer.authority).toBeGreaterThan(0);
+    expect(answer.nsRecords).toContain("ns1.unreachable.invalid");
+  });
+
+  test("the rest of the parent's subtree still null-answers", () => {
+    // Delegation is per owner name — a sibling of the honoured child stays blocked.
+    expect(dig("ad.doubleclick.net").status).toBe("NXDOMAIN");
+    expect(dig("ads.example.com").status).toBe("NOERROR");
   });
 });

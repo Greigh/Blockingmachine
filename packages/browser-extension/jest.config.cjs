@@ -35,6 +35,9 @@ const moduleNameMapper = {
   // The tier-id vocabulary the ledger export validates against — from source, so a tier
   // rename cannot leave the popup counting against a stale list.
   '^@blockingmachine/core/tiers$': '<rootDir>/../core/src/tiers.ts',
+  // The suffix tables the context menu's registrable-domain call reads — from source, so
+  // the menu resolves shared-hosting tenants exactly the way the classifier does.
+  '^@blockingmachine/core/entropy$': '<rootDir>/../core/src/ai/entropy.ts',
   '^(\\.{1,2}/.*)\\.js$': '$1',
 };
 

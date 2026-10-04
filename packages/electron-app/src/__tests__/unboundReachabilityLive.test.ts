@@ -178,8 +178,10 @@ describeWithResolvers('Unbound reachability, against real resolvers', () => {
     expect(verdict.state).toBe('live');
     expect(verdict.tone).toBe('ok');
     // A `live` verdict whose rows still read as warnings is a card that says "working" above a list
-    // that says otherwise, which is the failure the row breakdown exists to prevent.
-    expect(verdict.rows.every((row) => row.tone === 'ok')).toBe(true);
+    // that says otherwise, which is the failure the row breakdown exists to prevent. `off` is not
+    // a warning — the refresh row reads `off` until the resolver's cron has reported once, which a
+    // freshly-deployed rig has not had time to do.
+    expect(verdict.rows.every((row) => row.tone !== 'warn')).toBe(true);
     expect(verdict.headline).toMatch(/loaded and the resolver is blocking/i);
   });
 

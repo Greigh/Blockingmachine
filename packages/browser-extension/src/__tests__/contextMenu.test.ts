@@ -142,6 +142,20 @@ describe('url handling', () => {
     expect(registrableDomainOf('')).toBe('');
   });
 
+  test('resolves shared-hosting tenants to themselves, never the platform apex', () => {
+    // Flag 51: "Block the linked domain" on a hosted tenant must install the tenant's
+    // name — `||evil.blogspot.com^` — never `||blogspot.com^`, which would sink every
+    // site on the platform.
+    expect(registrableDomainOf('https://evil.blogspot.com/x')).toBe('evil.blogspot.com');
+    expect(registrableDomainOf('https://user.github.io/page')).toBe('user.github.io');
+    expect(registrableDomainOf('https://app.pythonanywhere.com/x')).toBe('app.pythonanywhere.com');
+    expect(registrableDomainOf('https://shop.myshopify.com/x')).toBe('shop.myshopify.com');
+    expect(registrableDomainOf('https://blogspot.com/')).toBe('blogspot.com');
+    expect(
+      resolveMenuClick({ menuItemId: 'block_link_domain', linkUrl: 'https://evil.blogspot.com/x' }),
+    ).toEqual({ action: 'block_link_domain', domain: 'evil.blogspot.com' });
+  });
+
   test('builds an exact-URL filter that cannot match other pages', () => {
     expect(urlFilterFor('https://cdn.example.com/ads/banner.js?v=2')).toBe(
       '|https://cdn.example.com/ads/banner.js?v=2|',

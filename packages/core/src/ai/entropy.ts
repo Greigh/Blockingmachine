@@ -281,6 +281,7 @@ export const DYNAMIC_DNS_SUFFIXES = new Set([
   'carrd.co', 'hashnode.dev', 'notion.site', 'typedream.app',
   's3.amazonaws.com', 'blob.core.windows.net', 'cloudfront.net', 'azureedge.net',
   'cloudapp.azure.com', 'trafficmanager.net', '000webhostapp.com', 'blogspot.com',
+  'pythonanywhere.com', 'eu.pythonanywhere.com',
 ]);
 
 function cloneDecomposition(value: DomainDecomposition): DomainDecomposition {

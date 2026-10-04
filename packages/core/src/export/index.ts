@@ -7,7 +7,12 @@ import type {
   ExportOptions,
 } from "../types.js";
 import { EXPORT_FORMATS } from "../types.js";
-import { formatRuleForType, formatExceptionComment, isException, isExportableRule, PRIVOXY_BYPASS_SECTION, bindRpzPassthruRecords } from "./formatters.js";
+import { formatRuleForType, formatExceptionComment, isException, isExportableRule, PRIVOXY_BYPASS_SECTION, bindRpzPassthruRecords, getDnsDomain, BIND_NULL_ZONE_FILE } from "./formatters.js";
+import {
+  bindNullDelegatedZoneFile,
+  bindNullZoneStanza,
+  renderBindNullDelegatedZone,
+} from "./bindDelegation.js";
 import { generateHeader } from "./headers.js";
 import {
   filterDNSRules,
@@ -15,7 +20,17 @@ import {
   resolveDnsPrecedence,
 } from "./ruleFilters.js";
 import { mkdir, writeFile } from "fs/promises";
-import { join } from "path";
+import { dirname, join } from "path";
+import { resolveNs } from "dns/promises";
+
+export interface ExportFormatOptions {
+  /**
+   * The NS resolver a `bind-null` delegation consults — the parent's real authoritative
+   * nameservers are what the allowed child delegates back to. Injectable because an
+   * honest test of the honour path should not depend on the network the suite runs on.
+   */
+  resolveNs?: (domain: string) => Promise<string[]>;
+}
 
 // Export functions defined in this file
 export async function exportFormat(
@@ -23,6 +38,7 @@ export async function exportFormat(
   outputPath: string,
   rules: StoredRule[],
   meta: FilterListMetadata,
+  options?: ExportFormatOptions,
 ): Promise<void> {
   if (format !== "all" && !EXPORT_FORMATS.includes(format)) {
     throw new Error(`Unsupported export format: ${format}`);
@@ -43,6 +59,40 @@ export async function exportFormat(
     const precedence = resolveDnsPrecedence(rules);
     const lines: string[] = [];
 
+    // `bind-null` delegations resolve before the stanza loop, because the stanza a delegated
+    // parent emits points at its own zone file rather than the shared one. The delegation is
+    // the only mechanism that releases a child of a null zone (proved on live `named`), and
+    // it costs per-parent zone data the shared file cannot express — so each affected parent
+    // gets `db.bm.null.<parent>` written beside this artifact, carrying the child's `IN NS`
+    // back to the parent's real authority. A parent whose `NS` will not resolve keeps the
+    // shared stanza and its exceptions stay `NOT HONOURED`: an honest miss, not a pretend one.
+    const bindNullZoneFiles = new Map<string, string>();
+    const bindNullDelegated = new Map<string, string>();
+    if (format === "bind-null" && precedence.subdomainExceptions.length > 0) {
+      const lookup = options?.resolveNs ?? resolveNs;
+      const byParent = new Map<string, Set<string>>();
+      for (const sub of precedence.subdomainExceptions) {
+        const set = byParent.get(sub.parentDomain) ?? new Set<string>();
+        set.add(sub.subdomain);
+        byParent.set(sub.parentDomain, set);
+      }
+      for (const [parent, children] of [...byParent.entries()].sort()) {
+        let nsNames: string[] = [];
+        try {
+          nsNames = (await lookup(parent)).filter(
+            (ns): ns is string => typeof ns === "string" && ns.trim().length > 0,
+          );
+        } catch {
+          // No reachable authority — leave the exception NOT HONOURED below.
+          continue;
+        }
+        if (nsNames.length === 0) continue;
+        const file = bindNullDelegatedZoneFile(parent);
+        bindNullDelegated.set(parent, file);
+        bindNullZoneFiles.set(file, renderBindNullDelegatedZone(parent, [...children], nsNames));
+      }
+    }
+
     // A Shadowrocket/Surge rule set is first-match-wins, so a child bypass has to be emitted
     // before the parent block it escapes.
     if (format === "shadowrocket") {
@@ -53,6 +103,15 @@ export async function exportFormat(
 
     // Active blocks
     for (const rule of precedence.activeBlocks) {
+      if (format === "bind-null") {
+        const domain = getDnsDomain(rule);
+        if (domain) {
+          lines.push(
+            bindNullZoneStanza(domain, bindNullDelegated.get(domain) ?? BIND_NULL_ZONE_FILE),
+          );
+        }
+        continue;
+      }
       const line = formatRuleForType(rule, format);
       if (line) lines.push(line);
     }
@@ -83,13 +142,19 @@ export async function exportFormat(
         lines.push(...bindRpzPassthruRecords(sub.subdomain));
       }
     } else if (format === "bind-null") {
-      // A null zone cannot release a child — it is authoritative for the whole subtree, and
-      // BIND answers the parent before any forwarding or policy lookup. The only mechanism
-      // that delegates a child out (an `NS` record in the parent's zone data) needs a
-      // per-domain file this mechanism exists to avoid. Recorded as NOT HONOURED rather than
-      // dropped, because a silently re-blocked allowlist is the failure nobody can see.
+      // A null zone cannot release a child in shared zone data — the parent answers before
+      // any forwarding or policy lookup. The one mechanism that works, an `NS` delegation in
+      // the parent's own zone, is resolved above: a delegated child is recorded DELEGATED
+      // with the file that carries it; one whose parent's authority could not be resolved is
+      // recorded NOT HONOURED rather than dropped, because a silently re-blocked allowlist is
+      // the failure nobody can see.
       for (const sub of precedence.subdomainExceptions) {
-        lines.push(`# EXCEPTION NOT HONOURED: @@||${sub.subdomain}^`);
+        const zoneFile = bindNullDelegated.get(sub.parentDomain);
+        lines.push(
+          zoneFile
+            ? `# EXCEPTION DELEGATED: @@||${sub.subdomain}^ — ${zoneFile}`
+            : `# EXCEPTION NOT HONOURED: @@||${sub.subdomain}^`,
+        );
       }
     }
 
@@ -106,6 +171,13 @@ export async function exportFormat(
     const header = generateHeader(meta, format);
     const output = `${header}\n${uniqueLines.join("\n")}`;
     await writeFile(outputPath, output, "utf8");
+
+    // The per-parent zone files the delegated stanzas point at. They land beside the
+    // fragment — a `named.conf` include of the fragment alone would otherwise reference
+    // files nothing wrote.
+    for (const [file, contents] of bindNullZoneFiles) {
+      await writeFile(join(dirname(outputPath), file), contents, "utf8");
+    }
     return;
   }
 
