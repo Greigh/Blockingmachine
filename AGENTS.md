@@ -34,6 +34,15 @@ Known sharp edges:
   `gh workflow run publish.yml` to attach platform builds.
 - `release.mjs` loads `.env` via `process.loadEnvFile` for `NPMJS_TOKEN` /
   `FORGEJO_TOKEN` / `GITHUB_TOKEN`; missing tokens log and skip rather than fail.
+- **Packaging rewrites `packages/browser-extension/rules/tier_*.json` and
+  `src/shared/tierCounts.generated.ts`** — the compiled 30k-rule plan over the
+  118-host curated baseline. `check:tiers`, `check:vocabulary` and the
+  `tierVocabularyDerivation` suite are provenance-checked against the *baseline*,
+  so `release.mjs` restores those paths before staging. A commit that contains
+  expanded `rules/` files is a bug (rc.7's `c1d06fb` did exactly this; the
+  vocabulary derivation exploded from 45 seeds to 9,707 and CI ran 2.9 h).
+- `zz-plan-check.test.ts` is a manual histogram diagnostic that reads
+  `/tmp/browser-feed.txt` — it skips when the fixture is absent (always in CI).
 
 ## CI
 
