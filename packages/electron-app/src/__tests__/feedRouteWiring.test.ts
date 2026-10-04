@@ -74,14 +74,23 @@ describe('the hotlist.txt write inside the compile handler', () => {
 
   test('derives the set from the picked ledger through the core hot-list pipeline', () => {
     expect(hotlist).toContain('parseHitLedgerText');
-    expect(hotlist).toContain('selectHotList');
-    expect(hotlist).toContain('formatHotList');
     expect(hotlist).toContain('tierLedgerPath');
+    // The ledger data rides into the generation worker as plain data — the
+    // select/format pass itself lives in outputWorker.ts (and its twin in
+    // generateOutputsInline) so the bytes stay identical to the old inline path.
+    expect(main).toContain('hotlist: hotlistInput');
+    const workerSrc = readFileSync(join(appRoot, 'src/outputWorker.ts'), 'utf8');
+    expect(workerSrc).toContain('selectHotList');
+    expect(workerSrc).toContain('formatHotList');
   });
 
   test('removes the file when the measurement is absent or unreadable', () => {
-    // Three honest absences: no ledger picked, a ledger with no hits, and a ledger that no
-    // longer parses — each must unlink rather than keep serving what a dead ledger measured.
-    expect(hotlist.match(/fs\.unlink\(hotlistPath\)/g)?.length).toBe(3);
+    // One gate decides "no measurement": the worker only emits content when the
+    // ledger parses and carries hits, so no ledger picked, a ledger with no
+    // hits, and a ledger that no longer parses all arrive here as `null` — and
+    // the single unlink branch covers them rather than serving a stale set.
+    const workerSrc = readFileSync(join(appRoot, 'src/outputWorker.ts'), 'utf8');
+    expect(workerSrc).toContain('input.hotlist && input.hotlist.hits.length > 0');
+    expect(main).toContain('fs.unlink(hotlistPath)');
   });
 });

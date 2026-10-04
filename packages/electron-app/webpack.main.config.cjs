@@ -23,6 +23,8 @@ module.exports = {
     preload: './src/preload.ts',
     // The classify pass runs off the main thread — see src/classifyWorker.ts.
     classifierWorker: './src/classifyWorker.ts',
+    // So does the post-dedup generation pass — see src/outputWorker.ts.
+    outputWorker: './src/outputWorker.ts',
   },
   target: 'electron-main',
   output: {

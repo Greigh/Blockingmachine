@@ -42,17 +42,29 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
   not diagnose a silent packaged-exec exit as an app defect.
 - **Compile pipeline**: `runImportProcess` (extracted from the
   `run-import-process` handler; the IPC handler and `compileInvoker` — used by the
-  auto-schedule timer — both call it). The ~130s malware classify pass runs in
-  `.webpack/main/classifierWorker.cjs` (`worker_threads`, third webpack entry,
-  `asarUnpack`'d); dedup/extract/classify loops yield via `yieldToEventLoop`.
-  `filters/` ships via `extraResource` — relative `./filters/...` sources resolve
-  `process.resourcesPath`-first packaged, `app.getAppPath()` in dev.
+  auto-schedule timer — both call it). Two `worker_threads` bundles carry the
+  synchronous CPU: `classifierWorker.cjs` (~130s cold classify) and
+  `outputWorker.cjs` (post-dedup generation — three `generateFilterList` calls,
+  both segregations, host-candidate extraction, hot-set derivation; input is the
+  rules' joined raws, never the ~160MB rule-object clone). Both are webpack
+  entries and `asarUnpack`'d; each has a yielded inline fallback
+  (`generateOutputsInline`, the classify loop). Dedup/attribution loops yield
+  via `yieldToEventLoop`. `filters/` ships via `extraResource` — relative
+  `./filters/...` sources resolve `process.resourcesPath`-first packaged,
+  `app.getAppPath()` in dev.
 - **macOS notarization**: `osxNotarize` in `forge.config.cjs` is env-gated —
   `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` or
   `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID`; unset means signed-but-unnotarized
   (flag 54). After `rm -rf` + `cp -R` reinstalling the app, run
   `lsregister -f /Applications/Blockingmachine.app` or `open` silently no-ops on
-  the stale LaunchServices record.
+  the stale LaunchServices record. After *several* rm/recopy cycles in one day
+  the wedge can deepen: every LaunchServices-mediated launch of
+  `com.electron.blockingmachine` (open, open -b, AppleEvent reopen) then exits
+  0 in ~100ms before app code — for any copy of the binary, including a
+  pristine release zip — while direct exec and other apps stay fine.
+  `lsregister -u`/`-f` and `tccutil reset` did not clear it; the recovery is a
+  reboot (or `sudo killall launchservicesd`). Verify the binary itself with
+  `env -u ELECTRON_RUN_AS_NODE <binary>` before diagnosing an app defect.
 
 ## Release pipeline (`scripts/release.mjs`)
 
@@ -127,7 +139,7 @@ Known sharp edges:
 
 ## Verified suite counts (rc.7)
 
-Core 47/1322, CLI 89, browser-extension 55/793, electron-app 54/607 (55 suites,
+Core 47/1322, CLI 89, browser-extension 55/793, electron-app 55/614 (56 suites,
 10 skipped incl. docker-gated live suites when images are absent),
 homeassistant-integration 14. `tsc --noEmit` clean everywhere; eslint
 zero warnings. Extension tests need `--experimental-vm-modules` (the `npm test` script

@@ -55,7 +55,7 @@ describe('the incremental classifier pass', () => {
   test('reads the record before the pass and writes it after the verdict file', () => {
     const main = readFileSync(join(appRoot, 'src/index.ts'), 'utf8');
     const readAt = main.indexOf("fs.readFile(cachePath");
-    const loopAt = main.indexOf('for (const host of candidates)');
+    const loopAt = main.indexOf('for (const host of candidateList)');
     const verdictWrite = main.indexOf("fs.writeFile(\n            malwarePath");
     const cacheWrite = main.indexOf('serializeVerdictCache(fingerprint, measured)');
 
