@@ -109,6 +109,9 @@ export class DaemonManager {
 
     const env = {
       ...process.env,
+      // The spawn target is the Electron binary — run the daemon's Node entry as plain
+      // Node rather than booting a second app instance for it.
+      ELECTRON_RUN_AS_NODE: '1',
       DNS_PORT: String(this.dnsPort),
       CONTROL_PORT: String(this.controlPort),
       FEED_URL: 'http://127.0.0.1:9191/dns.txt',
@@ -326,6 +329,9 @@ export class DaemonManager {
     </array>
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- The program above is the Electron binary; run the daemon's Node entry as Node. -->
+        <key>ELECTRON_RUN_AS_NODE</key>
+        <string>1</string>
         <key>DNS_PORT</key>
         <string>53</string>
         <key>CONTROL_PORT</key>
@@ -354,6 +360,7 @@ Type=simple
 User=root
 ExecStart=${process.execPath} ${path.resolve(process.cwd(), 'packages/system-daemon/dist/index.js')}
 Restart=always
+Environment="ELECTRON_RUN_AS_NODE=1"
 Environment="DNS_PORT=53"
 Environment="CONTROL_PORT=9292"
 Environment="FEED_URL=http://127.0.0.1:9191/dns.txt"

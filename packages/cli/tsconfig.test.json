@@ -1,0 +1,19 @@
+{
+  // Same role as core's: the base `exclude`s `src/__tests__` to keep the build's emit out of
+  // `dist`, which left `type-check` blind to tests. Two differences worth noting:
+  //   * `typeRoots` here points at the monorepo root's `@types` — the base lists
+  //     `./node_modules/@types`, a directory that does not exist in this package because
+  //     dependencies hoist to the root. Production never noticed (it imports types through
+  //     modules); tests did, because `describe`/`it`/`expect` are ambient Jest globals.
+  //   * `composite`/`declaration`/`noEmit` are overridden so a single pass checks rather than
+  //     emits.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "noEmit": true,
+    "typeRoots": ["../../node_modules/@types", "./src/types"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

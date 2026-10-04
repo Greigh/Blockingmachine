@@ -134,6 +134,36 @@ describe("CLI Commands", () => {
     );
   });
 
+  test("ExportCommand emits both BIND mechanisms, each in the syntax its file is read with", async () => {
+    const outputDir = path.join(tmpDir, "filters", "output");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(
+      path.join(outputDir, "imported-rules.txt"),
+      ["||ads.example.com^", "||parent.example^", "@@||child.parent.example^"].join("\n"),
+      "utf-8",
+    );
+    const config: any = { baseDir: tmpDir, output: { directory: outputDir }, sources: [] };
+    const exportCmd = new ExportCommand({ config, logger: mockLogger });
+    const result = await exportCmd.execute({ outputPath: outputDir, formats: ["bind", "bind-null"] });
+    expect(result.success).toBe(true);
+
+    // The RPZ is a *zone file*, where `;` comments and an SOA are both required.
+    const rpz = await fs.readFile(path.join(outputDir, "filter-list.bind"), "utf-8");
+    expect(rpz).toContain("@ IN SOA localhost. root.localhost.");
+    expect(rpz).toMatch(/^; /m);
+    // A bare RPZ trigger matches one name, so the wildcard sibling is the whole point of it.
+    expect(rpz).toContain("ads.example.com CNAME .");
+    expect(rpz).toContain("*.ads.example.com CNAME .");
+
+    // The null-zone artifact is a *named.conf fragment*, where a semicolon ENDS a statement rather
+    // than starting a comment, and `!` is not a comment character at all. Both were caught by
+    // handing the real artifact to `named-checkconf`, which rejected each in turn.
+    const stanzas = await fs.readFile(path.join(outputDir, "filter-list.bind-null"), "utf-8");
+    expect(stanzas).toMatch(/^# /m);
+    expect(stanzas).not.toMatch(/^[!;] /m);
+    expect(stanzas).toContain('zone "ads.example.com" { type master; file "db.blockingmachine.null"; };');
+  });
+
   test("ExportCommand writes privoxy and bind as the sectioned documents their tools load", async () => {
     const outputDir = path.join(tmpDir, "filters", "output");
     await fs.mkdir(outputDir, { recursive: true });
@@ -170,6 +200,47 @@ describe("CLI Commands", () => {
     expect(bind).not.toContain("null.zone.file");
     // `#` comments the rest of the CLI writes are a parse error in a master file.
     expect(bind).not.toMatch(/^# /m);
+  });
+
+  test("ExportCommand writes unbound as local-zone statements, not an AdGuard list under a .conf name", async () => {
+    // The defect: `unbound` was absent from the group that calls `generateFilterList`, so it fell
+    // to the `default` branch and was written as `! Title: …` plus the raw rules. `unbound-checkconf`
+    // rejected that file with 43 errors (`unknown keyword '||ads.example.com^'`) while the command
+    // reported `success: true` — a file that looks produced, has the format's name, and blocks
+    // nothing because Unbound cannot load it.
+    const outputDir = path.join(tmpDir, "filters", "output");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(
+      path.join(outputDir, "imported-rules.txt"),
+      ["||ads.example.com^", "||parent.example^", "@@||child.parent.example^"].join("\n"),
+      "utf-8",
+    );
+
+    const config: any = { baseDir: tmpDir, output: { directory: outputDir }, sources: [] };
+    const exportCmd = new ExportCommand({ config, logger: mockLogger });
+    const result = await exportCmd.execute({ outputPath: outputDir, formats: ["unbound"] });
+    expect(result.success).toBe(true);
+
+    const unbound = await fs.readFile(path.join(outputDir, "filter-list.unbound"), "utf-8");
+    // `always_nxdomain` rather than the CLI's former `redirect` + `local-data "…" A 0.0.0.0`. Both
+    // block, and they answered differently on the wire — which is how the Hub's reachability check
+    // reported a working CLI deployment as `not-loaded` and told the operator to go check an
+    // `include:` line that was already correct.
+    expect(unbound).toContain('local-zone: "ads.example.com" always_nxdomain');
+    expect(unbound).not.toContain("local-data");
+    // The one shape that must never reach Unbound: a browser rule, or a raw exception. Matched at line
+    // start rather than as a substring, because an exception is *named* in a `# EXCEPTION:` comment —
+    // quoting the browser rule it came from is how a person reading the drop-in knows what was
+    // released, and it is a comment, not a statement Unbound would try to parse.
+    expect(unbound).not.toMatch(/^\|\|/m);
+    expect(unbound).not.toMatch(/^@@/m);
+    expect(unbound).toContain("# EXCEPTION: @@||child.parent.example^");
+    // The `server:` block the drop-in is included *into*; without it every `local-zone` line is a
+    // parse error rather than a block.
+    expect(unbound).toContain("\nserver:\n");
+    // Unbound's per-zone semantics make the more specific child win regardless of order, so the
+    // exception is a `transparent` zone and needs no ordering relative to the parent block.
+    expect(unbound).toContain('local-zone: "child.parent.example" transparent');
   });
 
   test("ImportCommand imports, preserves cosmetic rules and deduplicates rules from local file source", async () => {
@@ -478,6 +549,89 @@ describe("CLI Commands", () => {
       // 6. Check unsupported POST method returns 405
       const postRes = await fetch(`http://127.0.0.1:${port}/health`, { method: "POST" });
       expect(postRes.status).toBe(405);
+    } finally {
+      if (holder.server) {
+        await new Promise((r) => holder.server!.close(r));
+      }
+    }
+  });
+
+  test("ServeCommand serves the measured hot set beside the full list", async () => {
+    const outputDir = path.join(tmpDir, "filters", "output");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(
+      path.join(outputDir, "imported-rules.txt"),
+      "||a.example^\n||b.example^\n||c.example^\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(outputDir, "hotlist.txt"),
+      "! generated by build-hot-list.mjs\n\n||a.example^\n||b.example^\n",
+      "utf-8",
+    );
+
+    const config: any = { baseDir: tmpDir, output: { directory: outputDir }, sources: [] };
+    const holder: { server?: http.Server } = {};
+    const serveCmd = new ServeCommand({ config, logger: mockLogger });
+    const port = 18054;
+
+    const result = await serveCmd.execute({ port, host: "127.0.0.1", serverInstanceHolder: holder });
+    expect(result.success).toBe(true);
+
+    try {
+      // The endpoint serves the file verbatim, header comments and all, because the header is
+      // where the list states what it was measured on — dropping it would strip the provenance
+      // from the one artifact a reader is most likely to take at face value.
+      const hotRes = await fetch(`http://127.0.0.1:${port}/v1/hotlist.txt`);
+      expect(hotRes.status).toBe(200);
+      expect(hotRes.headers.get("content-type")).toMatch(/text\/plain/);
+      const hotBody = await hotRes.text();
+      expect(hotBody).toContain("! generated by build-hot-list.mjs");
+      expect(hotBody).toContain("||a.example^");
+
+      // /health reports what the client will actually be offered, so a deployment can be checked
+      // without having to reason about whether the file is there.
+      const health = (await (await fetch(`http://127.0.0.1:${port}/health`)).json()) as any;
+      expect(health.hotListLoaded).toBe(2);
+      expect(health.hotListSource).toContain("hotlist.txt");
+      // The full list is untouched by the hot set's presence: both are served.
+      expect(health.rulesLoaded).toBe(3);
+
+      // The full list is still available at its own endpoint.
+      const rules = (await (await fetch(`http://127.0.0.1:${port}/v1/rules`)).json()) as any;
+      expect(rules.totalRules).toBe(3);
+    } finally {
+      if (holder.server) {
+        await new Promise((r) => holder.server!.close(r));
+      }
+    }
+  });
+
+  test("ServeCommand reports no hot set rather than failing when none was built", async () => {
+    const outputDir = path.join(tmpDir, "filters", "output");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(path.join(outputDir, "imported-rules.txt"), "||a.example^\n", "utf-8");
+
+    const config: any = { baseDir: tmpDir, output: { directory: outputDir }, sources: [] };
+    const holder: { server?: http.Server } = {};
+    const serveCmd = new ServeCommand({ config, logger: mockLogger });
+    const port = 18055;
+
+    await serveCmd.execute({ port, host: "127.0.0.1", serverInstanceHolder: holder });
+
+    try {
+      // 200 with an empty body, not a 404. A deployment that has never run the measurement is a
+      // normal state the client is expected to cope with, and a 404 reads as a fault in the server
+      // — the more surprising of the two to debug.
+      const hotRes = await fetch(`http://127.0.0.1:${port}/v1/hotlist.txt`);
+      expect(hotRes.status).toBe(200);
+      expect(await hotRes.text()).toBe("");
+
+      const health = (await (await fetch(`http://127.0.0.1:${port}/health`)).json()) as any;
+      expect(health.hotListLoaded).toBe(0);
+      expect(health.hotListSource).toBe("none");
+      // The full list keeps working, which is the whole point of the fallback.
+      expect(health.rulesLoaded).toBe(1);
     } finally {
       if (holder.server) {
         await new Promise((r) => holder.server!.close(r));

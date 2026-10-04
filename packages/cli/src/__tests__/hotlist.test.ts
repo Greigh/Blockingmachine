@@ -1,19 +1,41 @@
 import { jest } from "@jest/globals";
 import { CoverageCommand, HOT_LIST_FILE } from "../commands/CoverageCommand.js";
-import { CompiledDomainRuleSet, formatHotList, replayRuleHits, selectHotList } from "@blockingmachine/core";
-import { existsSync } from "fs";
+import {
+  CompiledDomainRuleSet,
+  formatHotList,
+  parseHitLedgerText,
+  replayRuleHits,
+  selectHotList,
+} from "@blockingmachine/core";
+import { existsSync, readFileSync } from "fs";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
 
 const cliRoot = fileURLToPath(new URL("../../", import.meta.url));
+const repoRoot = path.resolve(cliRoot, "..", "..");
 const fullListPath = path.join(cliRoot, "filters", "output", "genericBrowserRules.txt");
 const hotListPath = path.join(cliRoot, "filters", "output", HOT_LIST_FILE);
 const tracePath = path.join(cliRoot, "src", "__tests__", "fixtures", "browsing-trace.txt");
 
 /** The artifacts are large and generated; the suite skips rather than pretending to have checked. */
 const ready = [fullListPath, hotListPath, tracePath].every((file) => existsSync(file));
+
+/**
+ * What the shipped artifact declares it was built from — the `! Derivation:` header line the
+ * builder writes and `--check` replays. The list used to always derive from the checked-in
+ * trace; the browser-reported ledger changes the input, and the tests must replay the input the
+ * file says it came from rather than assume the trace.
+ */
+function derivationOf(text: string): { kind: "hits" | "trace"; file: string } {
+  const match = /^! Derivation:\s+(.+)$/m.exec(text);
+  const declared = match?.[1] ?? "";
+  const hits = /--hits\s+(\S+)/.exec(declared);
+  const trace = /--trace\s+(\S+)/.exec(declared);
+  if (hits) return { kind: "hits", file: path.resolve(repoRoot, hits[1]) };
+  return { kind: "trace", file: trace ? path.resolve(repoRoot, trace[1]) : tracePath };
+}
 
 const maybe = ready ? test : test.skip;
 
@@ -73,24 +95,79 @@ describe("coverage-derived hot set", () => {
     expect(shipped.filter((rule) => !available.has(rule))).toEqual([]);
 
     // And it is exactly the rules the measurement saw fire — no pruning by hand, no favourites.
+    // Replayed the way the file was built: the header's derivation names the input, so a list
+    // derived from the browser ledger is checked against the ledger, not the checked-in trace.
     const lines = fullText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const hosts = (await fs.readFile(tracePath, "utf8"))
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"));
-    const outcome = replayRuleHits(
-      new CompiledDomainRuleSet(lines),
-      hosts.map((host) => ({ host, count: 1 })),
-    );
-    const fired = new Set([
-      ...outcome.hits.map((entry) => entry.rule),
-      ...outcome.scopedHits.map((entry) => entry.rule),
-      ...outcome.exceptions.map((entry) => entry.rule),
-    ]);
-    expect(shipped.slice().sort()).toEqual([...fired].sort());
+    const derivation = derivationOf(text);
+    let hits: { rule: string; count: number }[];
+    let exceptions: string[];
+    if (derivation.kind === "hits") {
+      const ledger = parseHitLedgerText(readFileSync(derivation.file, "utf8"));
+      hits = ledger.hits;
+      exceptions = ledger.exceptions;
+    } else {
+      // The same split the builder performs: a trace line may carry a URL, and the replay — not
+      // the reader — decides whether a path-scoped rule fired on it.
+      const requests = (await fs.readFile(derivation.file, "utf8"))
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"))
+        .map((line) => {
+          const value = line.toLowerCase();
+          const host = value.replace(/^[a-z][a-z0-9+.-]*:\/\//, "").split("/")[0];
+          return { host, url: value.includes("/") ? value.replace(/#.*$/, "") : undefined, count: 1 };
+        });
+      const outcome = replayRuleHits(new CompiledDomainRuleSet(lines), requests);
+      hits = [
+        ...outcome.hits,
+        ...outcome.urlHits,
+        ...outcome.scopedHits.map((hit) => ({ rule: hit.rule, count: hit.count })),
+      ];
+      exceptions = outcome.exceptions.map((entry) => entry.rule);
+    }
+    const selection = selectHotList({ lines, hits, exceptions });
+    expect(shipped.slice().sort()).toEqual([...selection.lines].sort());
   });
 
   maybe("blocks the same traffic as the full list on the measurement it came from", async () => {
+    const shippedText = await fs.readFile(hotListPath, "utf8");
+    const derivation = derivationOf(shippedText);
+
+    if (derivation.kind === "hits") {
+      // A rule-hit ledger records *decisions*, not requests: `<count> <rule>` is the browser
+      // saying "this rule decided this many blocks". There is no request to replay (a session
+      // carries no hosts — the same gap flag 15 records for paths, one level up). What can be
+      // checked is what the check is really about: every deciding rule the export carries is in
+      // the hot set, so on the measured traffic the two lists cannot disagree; and every
+      // exception the ledger kept survived, so no released request becomes a block.
+      const lines = (await fs.readFile(fullListPath, "utf8"))
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const available = new Set(lines);
+      const shipped = new Set(
+        shippedText.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("!")),
+      );
+      const ledger = parseHitLedgerText(readFileSync(derivation.file, "utf8"));
+
+      const unshippable = ledger.hits.filter((entry) => !available.has(entry.rule));
+      const uncovered = ledger.hits.filter((entry) => available.has(entry.rule) && !shipped.has(entry.rule));
+      const droppedExceptions = ledger.exceptions.filter(
+        (rule) => available.has(rule) && !shipped.has(rule),
+      );
+      // The uncovered side is the export's limit, not the trim's: a rule the source list does
+      // not carry cannot ship. It is reported rather than pinned to zero, because the ledger
+      // comes from the extension's own compiled rulesets and the two lists genuinely differ.
+      process.stdout.write(
+        `\n  [hot list ledger coverage] ${ledger.hits.length - unshippable.length - uncovered.length}` +
+          ` of ${ledger.hits.length} reported rules ship` +
+          ` (${unshippable.length} the export cannot carry)\n`,
+      );
+      expect(uncovered).toEqual([]);
+      expect(droppedExceptions).toEqual([]);
+      return;
+    }
+
     const full = await measure(fullListPath, tracePath);
     const hot = await measure(hotListPath, tracePath, true);
 
@@ -169,10 +246,12 @@ describe("coverage-derived hot set", () => {
 
     // Pinned, because this is the honest half of the claim and the number that stops the artifact
     // from being sold as a general list: a hot set is exact for the traffic it came from and loses
-    // most of the rest. Deriving from half the pages yields 35 rules; on the pages it never saw
+    // most of the rest. Deriving from half the pages yields 34 rules — one fewer than before the
+    // evaluator indexed path-preserving exceptions, because `@@||host^*/x` can no longer ride
+    // along having fired zone-wide on a trace that records no URLs. On the pages it never saw
     // they keep 38 of the full list's 93 blocks. A change that makes this look better should have
     // to move this assertion deliberately.
-    expect(selection.lines.length).toBe(35);
+    expect(selection.lines.length).toBe(34);
     expect(fullOnHoldout.trace.blockedRequests).toBe(93);
     expect(hotOnHoldout.trace.blockedRequests).toBe(38);
     expect(hotOnHoldout.trace.blockedRequests).toBeLessThan(fullOnHoldout.trace.blockedRequests);

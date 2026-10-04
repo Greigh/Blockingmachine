@@ -9,6 +9,7 @@ import {
   type AiProviderType,
 } from '@blockingmachine/core';
 import chalk from 'chalk';
+import { writeJson } from '../lib/logger.js';
 
 export interface AiCrawlOptions {
   url: string;
@@ -47,7 +48,7 @@ export class AiCrawlCommand extends BaseCommand<AiCrawlOptions> {
       const crawlResult = await service.crawlAndScanUrl(rawUrl, aiConfig);
 
       if (options.json) {
-        console.log(JSON.stringify(crawlResult, null, 2));
+        writeJson(crawlResult);
         return this.success(crawlResult, 'Crawl complete');
       }
 

@@ -114,11 +114,12 @@ export class TierPlanCommand extends BaseCommand {
       const data = {
         rulesDir,
         capacity: result.capacitySlots,
-        files: result.rows.map(({ id, label, rules, hits, redundant }) => ({
+        files: result.rows.map(({ id, label, rules, hits, hitsAxis, redundant }) => ({
           id,
           label,
           rules,
           hits,
+          hitsAxis,
           redundant,
         })),
         enabled,
@@ -180,6 +181,22 @@ export class TierPlanCommand extends BaseCommand {
               ? `, ${ledger.shared.toLocaleString()} matched a host more than one tier ships`
               : ''),
         );
+        if (ledger.tally) {
+          const complete =
+            ledger.tally.sessions !== null && ledger.tally.tierSessions === ledger.tally.sessions;
+          // The axis is named rather than implied: a complete tally is the measurement the plan
+          // used, a partial one is evidence the plan deliberately stayed off of — the numbers
+          // above are the host-join either way, so without this line a reader cannot tell which
+          // of the two per-tier answers in the file was the one that weighted the plan.
+          this.logger.info(
+            `  tally      per-tier split covers ${ledger.tally.tierSessions ?? '?'} of ` +
+              `${ledger.tally.sessions ?? '?'} sessions` +
+              (complete
+                ? ' — used as the measured figures above'
+                : ' — partial coverage; the measured figures above come from the rule lines') +
+              (ledger.tally.rejected > 0 ? ` · ${ledger.tally.rejected} unknown tier id(s) refused` : ''),
+          );
+        }
       }
 
       this.logger.info("");

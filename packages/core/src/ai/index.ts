@@ -31,11 +31,13 @@ export {
   HIGH_ABUSE_TLDS,
   SUSPICIOUS_AD_TOKENS,
   SUSPICIOUS_TRACKER_TOKENS,
+  SUSPICIOUS_CONSENT_TOKENS,
   // The hand-written half of the vocabulary, on its own. The tier derivation seeds from these and
   // never from the shipped merge: the derived tokens are its output, so reading them back would
   // make each run depend on the last.
   HAND_WRITTEN_AD_TOKENS,
   HAND_WRITTEN_TRACKER_TOKENS,
+  HAND_WRITTEN_CONSENT_TOKENS,
   SPECIFIC_NETWORK_TOKENS,
   DICTIONARY_COMPOUND_EXEMPTIONS,
   MULTI_TENANT_PLATFORMS,
@@ -161,8 +163,19 @@ export {
   classifyDomainWithMiniAi,
   extractDomainFeatures,
   getRegistrableZone,
+  MODEL_WEIGHTS,
   type MiniAiClassifierOptions,
+  type ModelClassWeights,
 } from './MiniAiClassifier.js';
+
+// 7b. Persistent verdict cache for bulk classifier passes (hub compilation)
+export {
+  VERDICT_CACHE_FORMAT,
+  classifierInputFingerprint,
+  parseVerdictCache,
+  serializeVerdictCache,
+  type VerdictCacheFile,
+} from './verdictCache.js';
 
 // 7a. Embedded Mini-AI Element Classifier (DOM snapshots: ad / tracker / nag / content)
 export {
@@ -223,13 +236,18 @@ export {
   isHarvestedHumanDecision,
   redactHarvestSnapshot,
   harvestCandidateId,
+  harvestLeadingIdentifier,
   sanitizeHarvestedElement,
   sanitizeHarvestedElements,
   renderHarvestFile,
   parseHarvestFile,
   selectHarvestCandidates,
   proposeHarvestEvalCase,
+  corpusCaseCoversHarvestProposal,
+  harvestProposalIsPromoted,
+  planHarvestPromotion,
   formatHarvestReport,
+  type HarvestDecisionScope,
   type HarvestedVerdict,
   type HarvestedHumanDecision,
   type HarvestedElement,
@@ -297,6 +315,7 @@ export {
   parseLearnedManifest,
   verifyLearnedManifest,
   sha256Hex,
+  LEARNED_SHADOW_SAMPLE_RATE,
   runShadowComparison,
   type BehavioralObservation,
   type GbdtModelFile,

@@ -7,9 +7,10 @@
  */
 
 import { execFileSync } from 'child_process';
-import { readFileSync, writeFileSync, mkdirSync, statSync, cpSync, rmSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, cpSync, rmSync } from 'fs';
 import { resolve, basename } from 'path';
 import { fileURLToPath } from 'url';
+import { parseArgvOrExit } from './argv.mjs';
 import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -19,9 +20,28 @@ const EXT_DIR = resolve(ROOT_DIR, 'packages/browser-extension');
 const DIST_DIR = resolve(EXT_DIR, 'dist');
 const OUT_DIR = resolve(ROOT_DIR, 'dist/extensions');
 
+/**
+ * The accumulated browser ledger, when it holds evidence.
+ *
+ * `--hits` is what decides the cut: the budget is 30,000 rules against a ~117,000-domain input, so
+ * which 30,000 ship is the whole decision. Without evidence the compiler takes candidates in input
+ * order, and a merged blocklist's order is a merge artifact — whichever upstream list was
+ * concatenated first gets the slots, which says nothing about the traffic anyone generates.
+ *
+ * Present-if-usable rather than required: the file is a dropbox that starts empty, and a package
+ * built before any browser has reported anything still has to build. An empty dropbox means no
+ * `--hits`, and the compiler says so in its own report rather than this script guessing.
+ */
+const LEDGER = resolve(ROOT_DIR, 'ledger/ledger-hits.txt');
+const ledgerHasHits = () =>
+  existsSync(LEDGER) && /^#*\s*\d+\s+\S/m.test(readFileSync(LEDGER, 'utf8'));
+
 console.log('📦 [Package Extension] Starting multi-store extension packaging...');
 
-const skipTiers = process.argv.includes('--skip-tiers');
+// Refusing parse: `--skip-tier` (no s) used to land nowhere and silently run the full compile
+// the operator tried to skip.
+const { flags: argvFlags } = parseArgvOrExit(process.argv.slice(2), { flags: ['--skip-tiers'] });
+const skipTiers = argvFlags.has('--skip-tiers');
 
 // 1. Compile the desktop hub's active blocklist into the static tier files.
 //
@@ -32,12 +52,18 @@ const skipTiers = process.argv.includes('--skip-tiers');
 if (skipTiers) {
   console.log('⏭️  [1/6] Skipping tier compilation (--skip-tiers): shipping the curated baseline.');
 } else {
+  const ranked = ledgerHasHits();
   console.log('🗂️  [1/6] Compiling static ruleset tiers from the desktop hub blocklist...');
+  if (ranked) console.log('     Ranking the cut by the accumulated browser ledger (ledger/ledger-hits.txt).');
   try {
-    execFileSync('node', ['scripts/compile-tier-rulesets.mjs'], {
-      cwd: ROOT_DIR,
-      stdio: 'inherit',
-    });
+    execFileSync(
+      'node',
+      ['scripts/compile-tier-rulesets.mjs', ...(ranked ? ['--hits', LEDGER] : [])],
+      {
+        cwd: ROOT_DIR,
+        stdio: 'inherit',
+      },
+    );
   } catch (err) {
     console.error('❌ [Error] Tier compilation failed. Pass --skip-tiers to ship the curated baseline.');
     process.exit(1);

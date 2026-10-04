@@ -6,19 +6,39 @@
  * it exists so there is exactly one of it: the CLI's report, the hot-set builder and the tests all
  * derive their numbers here rather than each keeping its own copy of the loop.
  *
- * The split matters as much as the counts. A winner that needs a path, a request type or the
- * requesting page cannot be validated from a hostname, so it is returned separately from the
- * hostname-decidable winners and marked with the scope it needs — that is what lets a caller state
- * a hit rate over the rules it can actually decide ({@link analyzeRuleCoverage}) and still count
- * what a replay could not.
+ * The split matters as much as the counts, and there are three ways a winner can be reached.
+ * A hostname alone decides a zone block, and those are the `hits` a hit rate is stated over. A
+ * **full request URL** decides a path-scoped rule, by matching the path the request actually took
+ * — those are `urlHits`, counted separately because a path rule is decided for a fraction of the
+ * requests to its host and a hostname rule for all of them, so a rate that mixed them would divide
+ * a rule count by decisions it never made. Everything else — a request type, the requesting page,
+ * a response rewrite, or a path rule the trace had no URL for — stays undecidable and is returned
+ * with the scope it needs, which is what lets a caller state a rate over the rules it can really
+ * decide ({@link analyzeRuleCoverage}) and still account for what it could not.
  */
 
 import { CompiledDomainRuleSet } from './ai/domainEvaluator.js';
-import { blockingRuleScope, type BlockingRuleScope, type RuleHitCount } from './coverage.js';
+import {
+  blockingRuleScope,
+  isUrlDecidableRule,
+  requestUrlMatcher,
+  type BlockingRuleScope,
+  type RuleHitCount,
+} from './coverage.js';
 
-/** One request to replay: a host, and how many times it was observed. */
+/**
+ * One request to replay: where it went, and how many times it was observed.
+ *
+ * `url` is the whole point of the optional half. With it, a path-scoped rule can be *decided*
+ * — matched against the path the request actually took — instead of being counted as a rule
+ * the replay cannot evaluate. Without it the replay falls back to the hostname alone and
+ * reports those rules the way it always has, so a hostname-only trace is still measured, just
+ * less precisely.
+ */
 export interface ReplayRequest {
   host: string;
+  /** The full request URL, when the trace carried one. */
+  url?: string;
   count: number;
 }
 
@@ -28,7 +48,17 @@ export type ContextScope = Exclude<BlockingRuleScope, 'hostname'>;
 export interface RuleReplay {
   /** Winning blocking rules a hostname alone can decide, with the requests each decided. */
   hits: RuleHitCount[];
-  /** Winning blocking rules that need more context, each tagged with the scope it needs. */
+  /**
+   * Winning blocking rules that were *decided* by matching a path-scoped rule against a
+   * request URL.
+   *
+   * Separate from {@link hits} rather than folded into it, because the two are measured over
+   * different denominators: a hostname rule is decided for every request on its host, a path
+   * rule only for the requests whose path it matches, and a hit rate that mixed them would be
+   * counting a number of rules against a number of decisions it never made.
+   */
+  urlHits: RuleHitCount[];
+  /** Winning blocking rules a replay still cannot decide, each tagged with the scope it needs. */
   scopedHits: Array<{ scope: ContextScope; rule: string; count: number }>;
   /** Winning exception rules, with the requests each allowlisted. */
   exceptions: RuleHitCount[];
@@ -40,6 +70,9 @@ export interface RuleReplay {
   /** Distinct hosts, and requests, whose winning rule needed more than a hostname. */
   scopedHosts: number;
   scopedRequests: number;
+  /** Requests settled by matching a path-scoped rule against a URL, and the rules that did it. */
+  urlDecidedRequests: number;
+  urlDecidedRules: number;
 }
 
 /**
@@ -53,47 +86,63 @@ export function replayRuleHits(
   requests: ReadonlyArray<ReplayRequest>,
 ): RuleReplay {
   const hosts = new Map<string, number>();
+  const urlDecided = new Map<string, number>();
   const scoped = new Map<string, { scope: ContextScope; count: number }>();
   const contextHosts = new Set<string>();
   const exceptions = new Map<string, number>();
+
+  // Every path-scoped rule the URL matcher can decide, compiled once rather than per request.
+  // A rule the matcher declines is simply absent, and is then reported the way it always was.
+  const decide = createReplayDecider(ruleSet);
 
   let blockedRequests = 0;
   let blockedHosts = 0;
   let allowlistedHosts = 0;
   let scopedRequests = 0;
+  let urlDecidedRequests = 0;
 
   for (const entry of requests) {
     const count = Number.isFinite(entry.count) ? Math.max(0, Math.floor(entry.count)) : 0;
     if (count <= 0) continue;
 
-    const result = ruleSet.evaluate(entry.host);
-    if (result.verdict === 'blocked') {
-      const winner = result.matchingRule ?? result.matchingRules[0]?.rule;
-      if (!winner) continue;
-      blockedRequests += count;
-      blockedHosts += 1;
+    const decision = decide(entry);
 
-      // A rule that needs a path, a request type or the requesting page cannot be validated from a
-      // hostname — a replay has read it as a blanket block of the whole zone. It is kept out of the
-      // hostname-decidable tally and reported as its own.
-      const scope = blockingRuleScope(winner) ?? 'hostname';
-      if (scope === 'hostname') {
-        hosts.set(winner, (hosts.get(winner) ?? 0) + count);
-      } else {
-        const existing = scoped.get(winner);
-        if (existing) existing.count += count;
-        else scoped.set(winner, { scope, count });
-        contextHosts.add(entry.host);
-        scopedRequests += count;
-      }
-    } else if (result.verdict === 'exception' && result.exceptionRule) {
-      exceptions.set(result.exceptionRule, (exceptions.get(result.exceptionRule) ?? 0) + count);
+    if (decision.verdict === 'exception' && decision.rule) {
+      exceptions.set(decision.rule, (exceptions.get(decision.rule) ?? 0) + count);
       allowlistedHosts += 1;
+      continue;
+    }
+
+    if (decision.verdict !== 'blocked' || !decision.rule) continue;
+    const winner = decision.rule;
+
+    blockedRequests += count;
+    blockedHosts += 1;
+
+    if (decision.decidedByUrl) {
+      urlDecided.set(winner, (urlDecided.get(winner) ?? 0) + count);
+      urlDecidedRequests += count;
+      continue;
+    }
+
+    // A rule that needs a request type or the requesting page cannot be validated from a
+    // hostname *or* a URL, so it keeps the scoped label. A path rule that the matcher declined
+    // lands here too, which is exactly the honest outcome for a hostname-only trace.
+    const scope = (decision.scope === 'hostname' ? 'hostname' : decision.scope) as ContextScope | 'hostname';
+    if (scope === 'hostname') {
+      hosts.set(winner, (hosts.get(winner) ?? 0) + count);
+    } else {
+      const existing = scoped.get(winner);
+      if (existing) existing.count += count;
+      else scoped.set(winner, { scope, count });
+      contextHosts.add(entry.host);
+      scopedRequests += count;
     }
   }
 
   return {
     hits: [...hosts.entries()].map(([rule, count]) => ({ rule, count })),
+    urlHits: [...urlDecided.entries()].map(([rule, count]) => ({ rule, count })),
     scopedHits: [...scoped.entries()].map(([rule, entry]) => ({
       scope: entry.scope,
       rule,
@@ -105,5 +154,136 @@ export function replayRuleHits(
     allowlistedHosts,
     scopedHosts: contextHosts.size,
     scopedRequests,
+    urlDecidedRequests,
+    urlDecidedRules: urlDecided.size,
   };
+}
+
+/**
+ * What a compiled list decided for one request.
+ *
+ * `allowed` and `exception` are kept apart on purpose even though both mean "not blocked".
+ * An exception is a *rule* that fired and said let this through, which is the decision a trimmed
+ * list is most likely to lose: a hot set that keeps the blocks but drops an allowlist does not
+ * under-protect, it starts blocking requests the full export deliberately released. Collapsing the
+ * two would make that invisible to any comparison built on this type.
+ */
+export type ReplayVerdict = 'blocked' | 'allowed' | 'exception';
+
+export interface ReplayDecision {
+  verdict: ReplayVerdict;
+  /** The rule that decided it: the winning block, or the exception that let it through. */
+  rule: string | null;
+  /** The scope the deciding rule needed beyond the hostname, or `null` when none did. */
+  scope: BlockingRuleScope | null;
+  /** True when a matched request URL, not the hostname, settled it. */
+  decidedByUrl: boolean;
+}
+
+/**
+ * Decides a single request against a compiled list.
+ *
+ * Exported because the precedence here — a path rule outranks a bare zone block, and an
+ * exception outranks both — is the whole content of "what this list would do to that request",
+ * and anything comparing two lists needs it exactly. Keeping one implementation is what stops a
+ * comparison from quietly re-deriving the precedence and agreeing with itself: a test that
+ * reimplemented these three lines could keep passing after the rule below them changed.
+ *
+ * The path rules are compiled per call, so prefer {@link createReplayDecider} when deciding many
+ * requests against the same set.
+ */
+export function decideRequest(
+  ruleSet: CompiledDomainRuleSet,
+  request: Pick<ReplayRequest, 'host' | 'url'>,
+): ReplayDecision {
+  return createReplayDecider(ruleSet)(request);
+}
+
+/** {@link decideRequest} with the path rules compiled once, for many requests. */
+export function createReplayDecider(
+  ruleSet: CompiledDomainRuleSet,
+): (request: Pick<ReplayRequest, 'host' | 'url'>) => ReplayDecision {
+  const pathRules = urlDecidableRules(ruleSet);
+
+  return (request) => {
+    const result = ruleSet.evaluate(request.host);
+
+    // A path-scoped rule that matches this request's URL beats a bare zone block of the same
+    // host: it is strictly the narrower statement, and reading the zone block as its winner
+    // would credit the list with blocking every request to that host when it blocks one path.
+    //
+    // It never overrides an allowlist. A hostname exception has already won above, and a
+    // path-carrying exception matching this URL is the same deliberate decision at the
+    // narrower scope — it lets this request through while the rest of the zone stays decided
+    // by the real rules. An $important block still outranks a regular path exception, and an
+    // $important path exception outranks it back, the precedence evaluate() documents.
+    const pathWinner = request.url === undefined ? undefined : matchPathRule(pathRules, request.url);
+
+    if (result.verdict === 'exception' && result.exceptionRule) {
+      return {
+        verdict: 'exception',
+        rule: result.exceptionRule,
+        scope: null,
+        decidedByUrl: false,
+      };
+    }
+
+    const pathException = request.url === undefined ? undefined : ruleSet.matchPathException(request.url);
+    if (pathException) {
+      const importantBlockWon =
+        result.verdict === 'blocked' &&
+        result.matchingRules.some((m) => m.rule === result.matchingRule && m.isImportant);
+      if (pathException.isImportant || !importantBlockWon) {
+        return { verdict: 'exception', rule: pathException.rule, scope: 'path', decidedByUrl: true };
+      }
+    }
+
+    const winner =
+      pathWinner ??
+      (result.verdict === 'blocked' ? result.matchingRule ?? result.matchingRules[0]?.rule : undefined);
+
+    if (!winner) {
+      return { verdict: 'allowed', rule: null, scope: null, decidedByUrl: false };
+    }
+
+    return {
+      verdict: 'blocked',
+      rule: winner,
+      scope: blockingRuleScope(winner) ?? 'hostname',
+      decidedByUrl: pathWinner !== undefined,
+    };
+  };
+}
+
+/** A compiled path-scoped rule the URL matcher is willing to decide. */
+interface PathRule {
+  rule: string;
+  test: (url: string) => boolean;
+}
+
+/**
+ * Every path-scoped rule in the compiled list, in list order, paired with a URL matcher.
+ *
+ * `getIndexedBlockingRuleCount` is deliberately not used to enumerate them: it counts what the
+ * domain evaluator indexed, which is the hostname-decidable set by construction, so it cannot
+ * name the rules this needs. Reading them back off the source list is the only place both are
+ * visible at once.
+ */
+function urlDecidableRules(ruleSet: CompiledDomainRuleSet): PathRule[] {
+  const rules = ruleSet.getSourceRules();
+  const compiled: PathRule[] = [];
+  for (const rule of rules) {
+    if (typeof rule !== 'string' || !isUrlDecidableRule(rule)) continue;
+    const test = requestUrlMatcher(rule);
+    if (test) compiled.push({ rule: rule.trim(), test });
+  }
+  return compiled;
+}
+
+/** The first path rule matching this URL, in list order. */
+function matchPathRule(rules: readonly PathRule[], url: string): string | undefined {
+  for (const entry of rules) {
+    if (entry.test(url)) return entry.rule;
+  }
+  return undefined;
 }

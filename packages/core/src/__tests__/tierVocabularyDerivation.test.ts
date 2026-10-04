@@ -34,16 +34,19 @@ import {
   type TierVocabularyCorpusSample,
   type TierVocabularySeed,
 } from '../ai/tierVocabularyDerivation.js';
-import { TIER_DERIVED_AD_TOKENS, TIER_DERIVED_TRACKER_TOKENS } from '../ai/tierVocabulary.generated.js';
+import { TIER_DERIVED_AD_TOKENS, TIER_DERIVED_CONSENT_TOKENS, TIER_DERIVED_TRACKER_TOKENS } from '../ai/tierVocabulary.generated.js';
 import {
   HAND_WRITTEN_AD_TOKENS,
+  HAND_WRITTEN_CONSENT_TOKENS,
   HAND_WRITTEN_TRACKER_TOKENS,
   SUSPICIOUS_AD_TOKENS,
+  SUSPICIOUS_CONSENT_TOKENS,
   SUSPICIOUS_TRACKER_TOKENS,
   getDbLists,
   withTemporaryVocabulary,
 } from '../ai/reputation.js';
 import type { ThreatCategory } from '../ai/types.js';
+import type { StaticTierId } from '../tiers.js';
 
 // ── The token rules ───────────────────────────────────────────────────────────────────────────
 
@@ -72,6 +75,21 @@ describe('vocabulary token rules', () => {
       expect(isUsableVocabularyToken(label)).toBe(false);
       expect(GENERIC_VOCABULARY_LABELS.has(label)).toBe(true);
     }
+  });
+
+  test('refuses a consent function word, which belongs to the hand-written list instead', () => {
+    // `consent` on a tier host is what the host is *for*, so it can never be derived as a vendor
+    // name — the same rule as `analytics`. The defensible consent labels live in the hand-written
+    // vocabulary where a person vouched for them; this stop-list entry is what keeps a shipped
+    // `consent.vendor.example` host from minting `consent` itself as a token.
+    for (const label of ['consent', 'cmp', 'gdpr', 'ccpa', 'cookie', 'popup', 'newsletter']) {
+      expect(GENERIC_VOCABULARY_LABELS.has(label)).toBe(true);
+      expect(isUsableVocabularyToken(label)).toBe(false);
+    }
+    // And the hand-written half really does carry the consent function words — the stop-list is a
+    // refusal to *derive*, not a claim that the label is never a consent signal.
+    expect(HAND_WRITTEN_CONSENT_TOKENS).toContain('consent');
+    expect(HAND_WRITTEN_CONSENT_TOKENS).toContain('cmp');
   });
 
   test('refuses an ordinary English word the shipped tiers happen to contain', () => {
@@ -148,6 +166,18 @@ describe('vocabulary candidates for a host', () => {
     // names the company. Deduplication is by exact value, so a repeated label is still two tries —
     // the narrower one first, which is the order that matters.
     expect(vocabularyCandidatesFor('vendor.vendor.com')).toEqual(['vendor.vendor', 'vendor']);
+  });
+
+  test('a compound public suffix keeps the zone form inside the listed zone', () => {
+    // `metrics.westpac.com.au`'s registrable domain is `westpac.com.au`, so its zone form is
+    // `metrics.westpac` — refused here because `metrics` is generic vocabulary. The naive
+    // label-pair this replaced minted `westpac.com`, a *different registrable domain* that
+    // escaped the `.com.au` subtree the listing actually attests (flag 41's compound-token
+    // residual, found by the compiled-tier dry-run).
+    expect(vocabularyCandidatesFor('metrics.westpac.com.au')).toEqual(['westpac']);
+    // The UK shape is the same boundary: `itv.co` would name `itv.co`, not `itv.co.uk`, and
+    // a too-short brand still dies on the length rule before any of this matters.
+    expect(vocabularyCandidatesFor('tracking.bbc.co.uk')).toEqual([]);
   });
 });
 
@@ -322,24 +352,36 @@ describe('the corpus gate', () => {
 
 // ── The derivation ────────────────────────────────────────────────────────────────────────────
 
+/** The shape every vocabulary install has: one list per keyword axis the classifier reads. */
+interface HarnessVocabulary {
+  readonly adTokens: readonly string[];
+  readonly trackerTokens: readonly string[];
+  readonly consentTokens: readonly string[];
+}
+
 /** A stand-in for the live lists, with the accumulation semantics the real install has. */
 function harness(options: {
-  classify: (host: string, vocabulary: { adTokens: string[]; trackerTokens: string[] }) => ThreatCategory;
-  gate?: (vocabulary: { adTokens: string[]; trackerTokens: string[] }) => { ok: boolean; detail: string };
+  classify: (host: string, vocabulary: HarnessVocabulary) => ThreatCategory;
+  gate?: (vocabulary: HarnessVocabulary) => { ok: boolean; detail: string };
 }) {
-  let installed: { adTokens: string[]; trackerTokens: string[] } = { adTokens: [], trackerTokens: [] };
-  const installs: Array<{ adTokens: string[]; trackerTokens: string[] }> = [];
+  let installed: HarnessVocabulary = { adTokens: [], trackerTokens: [], consentTokens: [] };
+  const installs: HarnessVocabulary[] = [];
 
   return {
     installs,
     withVocabulary: <T,>(
-      tokens: { adTokens?: readonly string[]; trackerTokens?: readonly string[] },
+      tokens: {
+        adTokens?: readonly string[];
+        trackerTokens?: readonly string[];
+        consentTokens?: readonly string[];
+      },
       fn: () => T,
     ): T => {
       const previous = installed;
       installed = {
         adTokens: [...(tokens.adTokens ?? [])],
         trackerTokens: [...(tokens.trackerTokens ?? [])],
+        consentTokens: [...(tokens.consentTokens ?? [])],
       };
       installs.push(installed);
       try {
@@ -433,7 +475,7 @@ describe('deriveTierVocabulary', () => {
     // Both families would place this host. The one that describes data collection is the truthful
     // one, so a privacy host becomes a tracker token rather than an ad token — and the ad tier is
     // the exception, because its contents are ad infrastructure by definition.
-    const classify = (host: string, vocabulary: { adTokens: string[]; trackerTokens: string[] }) =>
+    const classify = (host: string, vocabulary: HarnessVocabulary) =>
       vocabulary.trackerTokens.includes('ordinary-vendor') || vocabulary.adTokens.includes('ordinary-vendor')
         ? ('Telemetry/Analytics' as ThreatCategory)
         : ('Clean' as ThreatCategory);
@@ -497,7 +539,11 @@ describe('deriveTierVocabulary', () => {
     expect(result.rejections[0].attempts[0].gate).toContain('collides.com called Advertising');
     // And the corpus is asked *with the accumulated vocabulary*, so a candidate is judged on the
     // vocabulary it would actually ship with rather than on its own token in isolation.
-    expect(h.installs.at(-1)).toEqual({ adTokens: ['ordinary-vendor'], trackerTokens: [] });
+    expect(h.installs.at(-1)).toEqual({
+      adTokens: ['ordinary-vendor'],
+      trackerTokens: [],
+      consentTokens: [],
+    });
   });
 
   test('reports a host with no usable label without asking the model anything', () => {
@@ -534,7 +580,7 @@ describe('deriveTierVocabulary', () => {
     // The property that makes a generated file checkable. Seeds are walked in the order given and
     // candidates in a stated order, so a re-derivation cannot disagree with the file for an
     // interesting reason — only because a tier or a rule changed.
-    const classify = (host: string, vocabulary: { adTokens: string[]; trackerTokens: string[] }) =>
+    const classify = (host: string, vocabulary: HarnessVocabulary) =>
       vocabulary.trackerTokens.includes('acme') || vocabulary.adTokens.includes('acme')
         ? ('Telemetry/Analytics' as ThreatCategory)
         : ('Clean' as ThreatCategory);
@@ -570,6 +616,58 @@ describe('deriveTierVocabulary', () => {
     );
   });
 
+  test('places an annoyance host through the consent vocabulary and nowhere else', () => {
+    // The annoyance tier's own axis: the consent list is tried first and only, because the family
+    // contract for the tier accepts nothing else — a consent vendor filed as telemetry is a
+    // misfile, not the nearest true label.
+    const h = harness({
+      classify: (host, vocabulary) =>
+        vocabulary.consentTokens.includes('ordinary-vendor')
+          ? ('Consent/Annoyance' as ThreatCategory)
+          : ('Clean' as ThreatCategory),
+    });
+    const result = deriveTierVocabulary({
+      seeds: [seed('tier_annoyances', 'ordinary-vendor.com')],
+      knownTokens: { adTokens: [], trackerTokens: [], consentTokens: [] },
+      ...h,
+    });
+
+    expect(result.consentTokens).toEqual(['ordinary-vendor']);
+    expect(result.adTokens).toEqual([]);
+    expect(result.trackerTokens).toEqual([]);
+    expect(result.evidence).toEqual([
+      {
+        token: 'ordinary-vendor',
+        vocabulary: 'consent',
+        tier: 'tier_annoyances',
+        hosts: ['ordinary-vendor.com'],
+        family: 'Consent/Annoyance',
+      },
+    ]);
+  });
+
+  test('tries no other vocabulary for the annoyance tier, so a misfile cannot be accepted', () => {
+    // A tracker that happens to sit in the annoyance tier must record a disagreement rather than
+    // be re-filed by vocabulary: the consent list is the only one its seeds are tried against.
+    const h = harness({
+      classify: (host, vocabulary) =>
+        vocabulary.trackerTokens.includes('ordinary-vendor')
+          ? ('Telemetry/Analytics' as ThreatCategory)
+          : ('Clean' as ThreatCategory),
+    });
+    const result = deriveTierVocabulary({
+      seeds: [seed('tier_annoyances', 'ordinary-vendor.com')],
+      knownTokens: {},
+      ...h,
+    });
+
+    expect(result.consentTokens).toEqual([]);
+    expect(result.rejections).toHaveLength(1);
+    expect(result.rejections[0].attempts.every((attempt) => attempt.vocabulary === 'consent')).toBe(
+      true,
+    );
+  });
+
   test('counts the seeds it was given, not the ones it placed', () => {
     const h = harness({ classify: () => 'Clean' });
     const result = deriveTierVocabulary({
@@ -583,25 +681,116 @@ describe('deriveTierVocabulary', () => {
   });
 });
 
+// ── Apex attestation ─────────────────────────────────────────────────────────────────────────
+//
+// The check the corpus cannot run: a bare-label token claims the whole brand zone, so it is
+// admitted only when the tier itself listed the apex. `metrics.walmart.com` can mint
+// `metrics.walmart`; it cannot mint `walmart`.
+
+describe('apex attestation', () => {
+  test('refuses a bare label whose apex the tier never listed', () => {
+    const h = harness({
+      classify: (host, vocabulary) =>
+        vocabulary.adTokens.includes('bigmart') ? ('Advertising' as ThreatCategory) : ('Clean' as ThreatCategory),
+    });
+    // `metrics.bigmart.com` is in the tier; `bigmart.com` is not.
+    const result = deriveTierVocabulary({
+      seeds: [seed('tier_ads', 'metrics.bigmart.com')],
+      knownTokens: {},
+      tierHosts: new Map<StaticTierId, readonly string[]>([['tier_ads', ['metrics.bigmart.com']]]),
+      ...h,
+    });
+
+    expect(result.adTokens).toEqual([]);
+    expect(result.apexRefusals).toBe(1);
+    expect(result.rejections).toHaveLength(1);
+    const bare = result.rejections[0].attempts.find((attempt) => attempt.token === 'bigmart');
+    expect(bare?.attestation).toContain('bigmart.com');
+    expect(result.rejections[0].reason).toContain('bare label');
+  });
+
+  test('admits the bare label when the apex itself was listed under the same family', () => {
+    const h = harness({
+      classify: (host, vocabulary) =>
+        vocabulary.adTokens.includes('bigmart') ? ('Advertising' as ThreatCategory) : ('Clean' as ThreatCategory),
+    });
+    // Same evidence, but `bigmart.com` is itself a tier row — the publisher attested the brand.
+    const result = deriveTierVocabulary({
+      seeds: [seed('tier_ads', 'metrics.bigmart.com')],
+      knownTokens: {},
+      tierHosts: new Map<StaticTierId, readonly string[]>([['tier_ads', ['metrics.bigmart.com', 'bigmart.com']]]),
+      ...h,
+    });
+
+    expect(result.adTokens).toEqual(['bigmart']);
+    expect(result.apexRefusals).toBe(0);
+  });
+
+  test('admits the compound zone.sld form without apex attestation — it stays inside the listed zone', () => {
+    const h = harness({
+      classify: (host, vocabulary) =>
+        vocabulary.adTokens.includes('promo.bigmart')
+          ? ('Advertising' as ThreatCategory)
+          : ('Clean' as ThreatCategory),
+    });
+    const result = deriveTierVocabulary({
+      seeds: [seed('tier_ads', 'promo.bigmart.com')],
+      knownTokens: {},
+      tierHosts: new Map<StaticTierId, readonly string[]>([['tier_ads', ['promo.bigmart.com']]]),
+      ...h,
+    });
+
+    expect(result.adTokens).toEqual(['promo.bigmart']);
+    expect(result.apexRefusals).toBe(0);
+  });
+
+  test('the seeds are the attestation floor when no host sets are passed', () => {
+    const h = harness({
+      classify: (host, vocabulary) =>
+        vocabulary.adTokens.includes('bigmart') ? ('Advertising' as ThreatCategory) : ('Clean' as ThreatCategory),
+    });
+    // No tierHosts: `bigmart.com` is listed only if it was itself a seed, so the subdomain's
+    // bare label is refused while an apex seed is still admitted.
+    const refused = deriveTierVocabulary({
+      seeds: [seed('tier_ads', 'metrics.bigmart.com')],
+      knownTokens: {},
+      ...h,
+    });
+    expect(refused.apexRefusals).toBe(1);
+    expect(refused.adTokens).toEqual([]);
+
+    const admitted = deriveTierVocabulary({
+      seeds: [seed('tier_ads', 'bigmart.com')],
+      knownTokens: {},
+      ...h,
+    });
+    expect(admitted.adTokens).toEqual(['bigmart']);
+    expect(admitted.apexRefusals).toBe(0);
+  });
+});
+
 // ── Rendering ─────────────────────────────────────────────────────────────────────────────────
 
 describe('the generated module', () => {
   const empty = {
     adTokens: [] as string[],
     trackerTokens: [] as string[],
+    consentTokens: [] as string[],
     evidence: [],
     rejections: [],
     seedsConsidered: 0,
     corpusRefusals: 0,
+    apexRefusals: 0,
   };
   const provenance = {
     tiers: [{ tier: 'tier_ads', hosts: 1, unplaceable: 1 }],
     hostsRead: 1,
-    seedVocabulary: { adTokens: 112, trackerTokens: 97 },
+    seedVocabulary: { adTokens: 112, trackerTokens: 97, consentTokens: 22 },
     seedsConsidered: 1,
     acceptedTokens: 1,
     rejectedHosts: 0,
     corpusRefusals: 0,
+    apexRefusals: 0,
     corpus: null,
     gate: 'not run',
   };
@@ -612,6 +801,7 @@ describe('the generated module', () => {
     // what lets the placeholder file live in the repository before the first run.
     expect(rendered).toContain('export const TIER_DERIVED_AD_TOKENS: readonly string[] = \n[]\n;');
     expect(rendered).toContain('export const TIER_DERIVED_TRACKER_TOKENS: readonly string[] = \n[]\n;');
+    expect(rendered).toContain('export const TIER_DERIVED_CONSENT_TOKENS: readonly string[] = \n[]\n;');
   });
 
   test('says in the file itself that it is generated and how to regenerate it', () => {
@@ -649,6 +839,7 @@ describe('the shipped vocabulary', () => {
     for (const [hand, shipped, derived] of [
       [HAND_WRITTEN_AD_TOKENS, SUSPICIOUS_AD_TOKENS, TIER_DERIVED_AD_TOKENS],
       [HAND_WRITTEN_TRACKER_TOKENS, SUSPICIOUS_TRACKER_TOKENS, TIER_DERIVED_TRACKER_TOKENS],
+      [HAND_WRITTEN_CONSENT_TOKENS, SUSPICIOUS_CONSENT_TOKENS, TIER_DERIVED_CONSENT_TOKENS],
     ] as const) {
       expect(shipped.slice(0, hand.length)).toEqual([...hand]);
       expect(new Set(shipped).size).toBe(shipped.length);
@@ -661,8 +852,14 @@ describe('the shipped vocabulary', () => {
     // would keep reporting it as a human's choice. The derivation's own output is the check: every
     // derived token has to be absent from the hand-written half, which is what makes the hand-written
     // half the *input* rather than a duplicate.
-    expect(TIER_DERIVED_AD_TOKENS.filter((token) => HAND_WRITTEN_AD_TOKENS.includes(token))).toEqual([]);
-    expect(TIER_DERIVED_TRACKER_TOKENS.filter((token) => HAND_WRITTEN_TRACKER_TOKENS.includes(token))).toEqual([]);
+    const handWritten = {
+      ad: HAND_WRITTEN_AD_TOKENS as readonly string[],
+      tracker: HAND_WRITTEN_TRACKER_TOKENS as readonly string[],
+      consent: HAND_WRITTEN_CONSENT_TOKENS as readonly string[],
+    };
+    expect(TIER_DERIVED_AD_TOKENS.filter((token) => handWritten.ad.includes(token))).toEqual([]);
+    expect(TIER_DERIVED_TRACKER_TOKENS.filter((token) => handWritten.tracker.includes(token))).toEqual([]);
+    expect(TIER_DERIVED_CONSENT_TOKENS.filter((token) => handWritten.consent.includes(token))).toEqual([]);
   });
 
   test('keeps the tokens a machine cannot honestly derive', () => {
@@ -681,12 +878,22 @@ describe('the shipped vocabulary', () => {
     expect(before).toBeGreaterThan(HAND_WRITTEN_AD_TOKENS.length);
 
     const seen = withTemporaryVocabulary(
-      { adTokens: HAND_WRITTEN_AD_TOKENS, trackerTokens: HAND_WRITTEN_TRACKER_TOKENS, replace: true },
-      () => ({ ad: [...getDbLists().suspiciousAdTokens], tracker: [...getDbLists().suspiciousTrackerTokens] }),
+      {
+        adTokens: HAND_WRITTEN_AD_TOKENS,
+        trackerTokens: HAND_WRITTEN_TRACKER_TOKENS,
+        consentTokens: HAND_WRITTEN_CONSENT_TOKENS,
+        replace: true,
+      },
+      () => ({
+        ad: [...getDbLists().suspiciousAdTokens],
+        tracker: [...getDbLists().suspiciousTrackerTokens],
+        consent: [...getDbLists().suspiciousConsentTokens],
+      }),
     );
 
     expect(seen.ad).toEqual([...HAND_WRITTEN_AD_TOKENS]);
     expect(seen.tracker).toEqual([...HAND_WRITTEN_TRACKER_TOKENS]);
+    expect(seen.consent).toEqual([...HAND_WRITTEN_CONSENT_TOKENS]);
     // And the derived tokens really were absent, so a derivation run this way cannot see them.
     expect(seen.ad).not.toContain(TIER_DERIVED_AD_TOKENS[0]);
     // Restored in a `finally`, including on a throw, so a failing derivation cannot leave the
@@ -703,12 +910,17 @@ describe('the shipped vocabulary', () => {
   test('adds to the live vocabulary when not asked to replace it', () => {
     // The per-candidate question — "would this token change the verdict?" — has to be asked of the
     // vocabulary the candidate would actually ship with, which is the shipped lists plus the token.
-    const seen = withTemporaryVocabulary({ adTokens: ['a-candidate'], trackerTokens: ['another'] }, () => ({
-      ad: [...getDbLists().suspiciousAdTokens],
-      tracker: [...getDbLists().suspiciousTrackerTokens],
-    }));
+    const seen = withTemporaryVocabulary(
+      { adTokens: ['a-candidate'], trackerTokens: ['another'], consentTokens: ['a-cmp-vendor'] },
+      () => ({
+        ad: [...getDbLists().suspiciousAdTokens],
+        tracker: [...getDbLists().suspiciousTrackerTokens],
+        consent: [...getDbLists().suspiciousConsentTokens],
+      }),
+    );
 
     expect(seen.ad).toEqual([...SUSPICIOUS_AD_TOKENS, 'a-candidate']);
     expect(seen.tracker).toEqual([...SUSPICIOUS_TRACKER_TOKENS, 'another']);
+    expect(seen.consent).toEqual([...SUSPICIOUS_CONSENT_TOKENS, 'a-cmp-vendor']);
   });
 });

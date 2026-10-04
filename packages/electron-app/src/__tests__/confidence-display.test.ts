@@ -21,6 +21,7 @@ describe('Confidence display', () => {
     expect(verdictBadgeLabel('ad_server')).toBe('AD SERVER');
     expect(verdictBadgeLabel('tracker')).toBe('TRACKER');
     expect(verdictBadgeLabel('malicious')).toBe('MALWARE');
+    expect(verdictBadgeLabel('annoyance')).toBe('ANNOYANCE');
     expect(verdictBadgeLabel('suspicious')).toBe('SUSPICIOUS');
     expect(verdictBadgeLabel('clean')).toBe('CLEAN');
   });
@@ -32,5 +33,12 @@ describe('Confidence display', () => {
     expect(radar).not.toMatch(/confidence[^;\n]*\*\s*100/);
     expect(inspector).toContain('formatConfidencePercent');
     expect(radar).toContain('verdictBadgeLabel');
+  });
+
+  it('gives the annoyance verdict a chip rather than rendering nothing', () => {
+    // The verdict enum gained `annoyance` with the consent taxonomy; an inspector that only
+    // branched on the older verdicts rendered a consent-host answer as a blank space.
+    const inspector = readFileSync(join(here, '../views/RuleInspectorView.tsx'), 'utf8');
+    expect(inspector).toContain("aiResult.verdict === 'annoyance'");
   });
 });

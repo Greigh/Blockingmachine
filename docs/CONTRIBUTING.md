@@ -18,6 +18,7 @@ First off, thank you for considering contributing to Blockingmachine! Everyone c
   - [Filter List Guidelines](#filter-list-guidelines)
   - [Testing Your Changes](#testing-your-changes)
     - [Testing Filter Rules](#testing-filter-rules)
+  - [The Open Flags Ledger](#the-open-flags-ledger)
   - [Issue Templates](#issue-templates)
   - [Communication Guidelines](#communication-guidelines)
   - [Project Structure](#project-structure)
@@ -116,6 +117,7 @@ Found ads or trackers we're missing?
    - Follow the coding style
    - Add tests if applicable
    - Update documentation if needed
+   - Record any problem you noticed but did not fix in [the open flags ledger](#the-open-flags-ledger)
 
 4. **Commit Your Changes**
    - Use meaningful commit messages
@@ -199,6 +201,31 @@ When contributing new filter rules:
    ||example.com^$third-party
    ||example.com^$dnsrewrite
    ```
+
+## The Open Flags Ledger
+
+Known problems are recorded rather than remembered. When a change surfaces a defect, an honest
+limitation, or a trade-off it does not fix, the finding goes in
+[open-flags.md](open-flags.md) — the moment it is noticed, in the same change if practical —
+instead of living in a conversation or a review comment nobody can find later.
+
+1. **Raising a flag.** Add `### N. <title>` under `## Open`, numbered with the next free integer.
+   Numbers are never reused, so gaps in the sequence are closed entries, not mistakes. An entry
+   states:
+   - **Where** — the file, symbol, and rough line a reader should start from.
+   - **What** — the defect or limitation, stated as it behaves today.
+   - **Why left** — why the change at hand did not fix it (scope, a design decision, missing data).
+   - **Fix shape** — what a fix would take, as concretely as it was reasoned through.
+   - **Verify** — how a fix can be proven: the test, the command, the observable difference.
+
+2. **Flags are never deleted — only moved.** An open entry may not be removed without its fix:
+   dropping the record would erase the one place the hole is written down. When a fix lands, the
+   entry moves to `## Closed` at the bottom of the file, retitled
+   `### N. <title> — closed by <what fixed it>` and the commit that carries it, with **What closed
+   it** and **Verified** notes added above the original entry text, which stays.
+
+3. **Nothing there is scheduled.** The list exists so nothing is relied on silently — a recorded
+   hole is a decision anyone can revisit; an unrecorded one is a surprise.
 
 ## Issue Templates
 

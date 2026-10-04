@@ -53,6 +53,7 @@ export interface DbLists {
   cdnRoutingSuffixes: string[];
   suspiciousAdTokens: string[];
   suspiciousTrackerTokens: string[];
+  suspiciousConsentTokens: string[];
   specificNetworkTokens: string[];
   highProfileBrands: string[];
   dictionaryExemptions: string[];
@@ -152,7 +153,8 @@ const LIST_KEYS: Array<keyof DbLists> = [
   'highAbuseTlds', 'adNetworks', 'trackerNetworks', 'cloudSuffixes',
   'cdnSuffixes', 'iotTrusted', 'vendorSuffixes', 'platformSuffixes',
   'multiTenantPlatforms', 'untrustedHosting', 'cdnRoutingSuffixes',
-  'suspiciousAdTokens', 'suspiciousTrackerTokens', 'specificNetworkTokens',
+  'suspiciousAdTokens', 'suspiciousTrackerTokens', 'suspiciousConsentTokens',
+  'specificNetworkTokens',
   'highProfileBrands', 'dictionaryExemptions', 'benignEndpointLabels', 'dnsSuffixes',
 ];
 
@@ -161,7 +163,8 @@ const LOWERCASE_KEYS = new Set<keyof DbLists>([
   'highAbuseTlds', 'adNetworks', 'trackerNetworks', 'cloudSuffixes',
   'cdnSuffixes', 'iotTrusted', 'vendorSuffixes', 'platformSuffixes',
   'multiTenantPlatforms', 'untrustedHosting', 'cdnRoutingSuffixes',
-  'suspiciousAdTokens', 'suspiciousTrackerTokens', 'specificNetworkTokens',
+  'suspiciousAdTokens', 'suspiciousTrackerTokens', 'suspiciousConsentTokens',
+  'specificNetworkTokens',
   'highProfileBrands', 'dictionaryExemptions', 'benignEndpointLabels', 'dnsSuffixes',
 ]);
 

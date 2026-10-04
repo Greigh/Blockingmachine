@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   HomeAssistantConfig,
+  Mv3QuotaInfo,
   SiteControlView,
   TabTelemetry,
   TrackerDetection,
@@ -8,12 +9,16 @@ import {
 import { ElementScanPanel, type ElementScanResult } from './ElementScanPanel.js';
 import { LedgerStatusCard } from './LedgerStatusCard.js';
 import { LedgerExportCard } from './LedgerExportCard.js';
+import { RuleSourceRow } from './RuleSourceRow.js';
 import { TierDriftNotice } from './TierDriftNotice.js';
+import { SiteControlDriftNotice } from './SiteControlDriftNotice.js';
 import { TierPlanBasis } from './TierPlanBasis.js';
+import { TierRedundancyNotice } from './TierRedundancyNotice.js';
 import { downloadTextFile } from './downloadText.js';
 import type { LedgerStatus } from '../shared/ledgerStatus.js';
-import type { LedgerExportPayload } from '../shared/ledgerExport.js';
+import type { LedgerExportPayload, LedgerTierCount } from '../shared/ledgerExport.js';
 import type { ElementHarvestExport as ElementHarvestExportPayload } from '../background/elementHarvestStore.js';
+import type { TierRedundancyReport } from '../background/tierRedundancy.js';
 import { formatTierCapacity, type RulesetStatus } from '../shared/rulesetTiers.js';
 import { formatTierPlan, planTierSelection } from '../shared/tierPlanner.js';
 import {
@@ -38,13 +43,6 @@ import {
   type ShieldStatus,
   type TrackerSortMode,
 } from '../shared/siteControl.js';
-
-interface Mv3QuotaInfo {
-  dynamicRulesCount: number;
-  maxDynamicRules: number;
-  isWithinQuota: boolean;
-  utilizationPercent: number;
-}
 
 function sendMessage<T = any>(message: any): Promise<T> {
   return new Promise((resolve) => {
@@ -84,11 +82,50 @@ function relativeTime(epochMs: number | null): string {
   return `${Math.floor(delta / 86_400_000)}d ago`;
 }
 
+/**
+ * What the popup keeps of an export answer.
+ *
+ * Narrower than the payload on purpose: the card needs the summary, the filename and the per-tier
+ * split, and the JSON itself would be megabytes of text sitting in React state for a component that
+ * downloads it on demand. The tier numbers are read defensively because a background on an older
+ * build answers without them, and a card that showed `undefined` blocks would be a worse regression
+ * than one that shows no table.
+ */
+type LedgerExportSummary = Pick<
+  LedgerExportPayload,
+  'summary' | 'filename' | 'tiers' | 'tierUnattributed'
+> &
+  // Optional, because a background on a build without the tier axis answers without them and the
+  // card has to render that as "no table" rather than as `undefined` sessions.
+  Partial<Pick<LedgerExportPayload, 'tieredSessions' | 'sessions' | 'rulesDropped'>>;
+
+function readLedgerExport(res: { summary?: string; [key: string]: unknown }): LedgerExportSummary {
+  const tiers = Array.isArray(res.tiers)
+    ? (res.tiers as LedgerTierCount[]).filter(
+        (tier) => tier && typeof tier.tier === 'string' && Number.isFinite(tier.count),
+      )
+    : [];
+  return {
+    summary: String(res.summary ?? ''),
+    filename: typeof res.filename === 'string' ? res.filename : '',
+    tiers,
+    tierUnattributed: Number.isFinite(res.tierUnattributed)
+      ? (res.tierUnattributed as number)
+      : 0,
+    tieredSessions: Number.isFinite(res.tieredSessions)
+      ? (res.tieredSessions as number)
+      : undefined,
+    sessions: Number.isFinite(res.sessions) ? (res.sessions as number) : undefined,
+    rulesDropped: Number.isFinite(res.rulesDropped) ? (res.rulesDropped as number) : 0,
+  };
+}
+
 const CATEGORY_COLORS: Record<TrackerDetection['category'], string> = {
   advertising: '#f97316',
   tracker: '#06b6d4',
   telemetry: '#a78bfa',
   malware: '#ef4444',
+  annoyance: '#14b8a6',
   unknown: '#94a3b8',
 };
 
@@ -101,10 +138,7 @@ export const PopupApp: React.FC = () => {
 
   const [mv3Status, setMv3Status] = useState<Mv3QuotaInfo | null>(null);
   const [ledgerStatus, setLedgerStatus] = useState<LedgerStatus | null>(null);
-  const [ledgerExport, setLedgerExport] = useState<Pick<
-    LedgerExportPayload,
-    'summary' | 'filename'
-  > | null>(null);
+  const [ledgerExport, setLedgerExport] = useState<LedgerExportSummary | null>(null);
   const [ledgerExportBusy, setLedgerExportBusy] = useState(false);
   const [elementHarvest, setElementHarvest] = useState<{ summary: string; filename: string } | null>(null);
   const [elementHarvestBusy, setElementHarvestBusy] = useState(false);
@@ -127,6 +161,10 @@ export const PopupApp: React.FC = () => {
   const [tierStatus, setTierStatus] = useState<RulesetStatus | null>(null);
   const [tierHits, setTierHits] = useState<TierHitCounts>({});
   const [tierBusy, setTierBusy] = useState<string | null>(null);
+  // The redundancy read against the live dynamic rules. Left null while unanswered — an older
+  // background has no handler for the message, and rendering nothing is more honest than a
+  // "could not read" state for a build that was never asked.
+  const [tierRedundancy, setTierRedundancy] = useState<TierRedundancyReport | null>(null);
 
   const [haConfig, setHaConfig] = useState<HomeAssistantConfig>({
     enabled: false,
@@ -207,8 +245,16 @@ export const PopupApp: React.FC = () => {
 
   /** Static ruleset tiers — shipped rules that never consume the dynamic quota. */
   const refreshTiers = useCallback(async () => {
-    const res = await sendMessage({ type: 'GET_RULESET_TIERS' });
-    if (res?.success && res.status) setTierStatus(res.status as RulesetStatus);
+    // The redundancy read rides the same refresh: it is answered off the same installed rules the
+    // tier toggles act on, so a plan and its redundancy never come from two different moments.
+    const [tiers, redundancy] = await Promise.all([
+      sendMessage({ type: 'GET_RULESET_TIERS' }),
+      sendMessage({ type: 'GET_TIER_REDUNDANCY' }),
+    ]);
+    if (tiers?.success && tiers.status) setTierStatus(tiers.status as RulesetStatus);
+    if (redundancy?.success && redundancy.report) {
+      setTierRedundancy(redundancy.report as TierRedundancyReport);
+    }
     await refreshTierHits();
   }, [refreshTierHits]);
 
@@ -236,7 +282,7 @@ export const PopupApp: React.FC = () => {
       type: 'EXPORT_HIT_LEDGER',
     });
     if (res?.success && typeof res.summary === 'string') {
-      setLedgerExport({ summary: res.summary, filename: res.filename ?? '' });
+      setLedgerExport(readLedgerExport(res));
     }
   }, []);
 
@@ -291,7 +337,7 @@ export const PopupApp: React.FC = () => {
       }
       downloadTextFile(res.filename || 'blockingmachine-hit-ledger.json', res.json);
       if (typeof res.summary === 'string') {
-        setLedgerExport({ summary: res.summary, filename: res.filename ?? '' });
+        setLedgerExport(readLedgerExport(res));
       }
       flash(res.sessions ? 'Hit ledger exported.' : 'Exported — no sessions recorded yet.');
     } finally {
@@ -416,11 +462,14 @@ export const PopupApp: React.FC = () => {
   const handleSync = useCallback(async () => {
     setSyncing(true);
     const res = await sendMessage({ type: 'SYNC_RULES_NOW' });
-    await refreshStatus();
+    // A sync replaces the dynamic rules wholesale, which is exactly what the redundancy read
+    // diffs the tiers against — refreshing status alone would leave a stale verdict beside the
+    // fresh rule count.
+    await Promise.all([refreshStatus(), refreshTiers()]);
     if (tabId !== null) await refreshTab(tabId, pageUrl);
     setSyncing(false);
     flash(res?.success ? `Rules synced (${res.count?.toLocaleString?.() ?? 0} active)` : 'Sync failed', res?.success ? 'ok' : 'warn');
-  }, [refreshStatus, refreshTab, tabId, pageUrl, flash]);
+  }, [refreshStatus, refreshTiers, refreshTab, tabId, pageUrl, flash]);
 
   const handleToggleTier = useCallback(
     async (id: string, label: string, enabled: boolean) => {
@@ -552,6 +601,26 @@ export const PopupApp: React.FC = () => {
     setTierBusy(null);
   }, [flash, refreshTiers]);
 
+  /**
+   * Asks the background to make the dynamic rules match the saved site choices — the same repair
+   * the tiers' button runs, one table along. The view that comes back is read *after* the repair,
+   * so the notice stays up if the browser still disagrees.
+   */
+  const handleReconcileSiteControl = useCallback(async () => {
+    setBusy('__drift__');
+    const res = await sendMessage({ type: 'RECONCILE_SITE_CONTROL', payload: { url: pageUrl } });
+    const applied = res?.view as SiteControlView | undefined;
+    if (!res?.success) {
+      flash(res?.error ?? 'Could not reconcile your choices.', 'warn');
+    } else if (applied?.drift && applied.drift.known && !applied.drift.inSync) {
+      flash('The browser still disagrees with your choices.', 'warn');
+    } else {
+      flash('Reconciled your choices with the browser.');
+    }
+    if (res?.view) setView(res.view);
+    setBusy(null);
+  }, [flash, pageUrl]);
+
   const handlePicker = useCallback(async () => {
     await sendMessage({ type: 'START_ELEMENT_PICKER' });
     window.close();
@@ -564,6 +633,26 @@ export const PopupApp: React.FC = () => {
     setTestResult('Saved.');
     setTimeout(() => setTestResult(null), 2200);
   }, [haConfig]);
+
+  // Tests the values in the form, not the saved ones — the point is to catch a
+  // bad URL or token before Save writes it.
+  const handleTestHaConnection = useCallback(async () => {
+    setTestResult('Testing connection…');
+    const res = await sendMessage<{
+      success?: boolean;
+      result?: { ok: boolean; message: string };
+      error?: string;
+    }>({
+      type: 'TEST_HA_CONNECTION',
+      payload: { url: haConfig.url, token: haConfig.token },
+    });
+    if (res?.success && res.result) {
+      setTestResult(res.result.message);
+    } else {
+      setTestResult(res?.error ? `Test failed: ${res.error}` : 'Test failed.');
+    }
+    setTimeout(() => setTestResult(null), 6000);
+  }, [haConfig.url, haConfig.token]);
 
   const handlePushTelemetry = useCallback(async () => {
     await sendMessage({ type: 'REPORT_BROWSER_TELEMETRY' });
@@ -642,6 +731,14 @@ export const PopupApp: React.FC = () => {
               </button>
             </div>
           </section>
+
+          <SiteControlDriftNotice
+            drift={view?.drift}
+            applyError={view?.applyError}
+            globalPaused={view?.globalPaused === true}
+            busy={busy === '__drift__'}
+            onReapply={() => void handleReconcileSiteControl()}
+          />
 
           <div className="metrics-grid">
             <div className="metric-card">
@@ -775,6 +872,12 @@ export const PopupApp: React.FC = () => {
                   : ruleCount.toLocaleString()}
               </strong>
             </div>
+            {mv3Status?.ruleSource && (
+              <RuleSourceRow
+                record={mv3Status.ruleSource}
+                appliedLabel={relativeTime(mv3Status.ruleSource.appliedAt)}
+              />
+            )}
             {mv3Status && (
               <div className="quota-bar" title={`${mv3Status.utilizationPercent}% of the MV3 quota`}>
                 <span
@@ -799,6 +902,11 @@ export const PopupApp: React.FC = () => {
           <LedgerExportCard
             summary={ledgerExport?.summary ?? null}
             filename={ledgerExport?.filename ?? null}
+            tiers={ledgerExport?.tiers ?? []}
+            tierUnattributed={ledgerExport?.tierUnattributed ?? 0}
+            tieredSessions={ledgerExport?.tieredSessions}
+            sessions={ledgerExport?.sessions}
+            rulesDropped={ledgerExport?.rulesDropped ?? 0}
             onExport={() => void handleExportLedger()}
             busy={ledgerExportBusy}
           />
@@ -843,6 +951,10 @@ export const PopupApp: React.FC = () => {
                   </div>
                 )}
 
+                {tierRedundancy && (
+                  <TierRedundancyNotice report={tierRedundancy} tiers={tierStatus.tiers} />
+                )}
+
                 {tierPlan && (
                   <div className="tier-plan">
                     <div className="tier-plan-head">
@@ -880,6 +992,9 @@ export const PopupApp: React.FC = () => {
                 <div className="tier-list">
                   {tierStatus.tiers.map((tier) => {
                     const usage = tierUsage.get(tier.id);
+                    const covered = tierRedundancy?.tiers[tier.id]?.redundant ?? null;
+                    const coveredTotal = tierRedundancy?.tiers[tier.id]?.total ?? 0;
+                    const userCovered = tierRedundancy?.tiers[tier.id]?.userCovered ?? null;
                     return (
                       <div key={tier.id} className={`tier-row tone-${tier.category}`}>
                         <div className="tier-main">
@@ -905,6 +1020,22 @@ export const PopupApp: React.FC = () => {
                               >
                                 Turn off
                               </button>
+                            </span>
+                          )}
+                          {covered && covered.rules > 0 && (
+                            <span className={`tier-usage${covered.complete ? ' idle' : ''}`}>
+                              {covered.complete
+                                ? 'Adds nothing beyond the synced list'
+                                : covered.typeLimited > 0
+                                ? `${covered.rules.toLocaleString()} of ${coveredTotal.toLocaleString()} host-blocked dynamically — navigations & websockets still rely on this tier`
+                                : `${covered.rules.toLocaleString()} of ${coveredTotal.toLocaleString()} rules already blocked dynamically`}
+                            </span>
+                          )}
+                          {userCovered && userCovered.rules > 0 && (
+                            <span className="tier-usage">
+                              {userCovered.complete
+                                ? 'Covered by your own rules'
+                                : `${userCovered.rules.toLocaleString()} covered by your own rules`}
                             </span>
                           )}
                         </div>
@@ -959,7 +1090,7 @@ export const PopupApp: React.FC = () => {
             </div>
 
             <div className="form-group">
-              <label className="form-label">Long-lived access token</label>
+              <label className="form-label">Access token</label>
               <input
                 className="form-input"
                 type="password"
@@ -967,6 +1098,10 @@ export const PopupApp: React.FC = () => {
                 value={haConfig.token}
                 onChange={(e) => setHaConfig({ ...haConfig, token: e.target.value })}
               />
+              <span className="form-hint">
+                Sent as a bearer token to Home Assistant and to the hub's feed server — paste the
+                same value the hub's feed mutation token is set to if one is configured.
+              </span>
             </div>
 
             <div className="toggle-row">
@@ -980,6 +1115,19 @@ export const PopupApp: React.FC = () => {
                 <span className="track" />
               </label>
             </div>
+
+            <button
+              className="action-btn"
+              disabled={!haConfig.url.trim()}
+              title={
+                haConfig.url.trim()
+                  ? 'Probe the URL and token in the form, before saving'
+                  : 'Enter a Home Assistant URL first'
+              }
+              onClick={() => void handleTestHaConnection()}
+            >
+              Test connection
+            </button>
           </section>
 
           <section className="settings-card">

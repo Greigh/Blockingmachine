@@ -38,7 +38,7 @@ const RESULT: TierPlanResult = {
     reason: 'Weighted by what actually blocked: 2,016 attributed blocks across 4 tiers, including 1 that never fired.',
     unmeasured: [],
   },
-  ledger: { lines: 71, skipped: 6, shared: 3 },
+  ledger: { lines: 71, skipped: 6, shared: 3, tally: null },
   synced: { hosts: 122801, exceptions: 312, lines: 743634, skipped: 1200 },
   syncedPath: '/Users/greigh/Documents/Blockingmachine/browser.txt',
   redundantTiers: ['tier_privacy'],

@@ -53,7 +53,18 @@ export interface TierPlanResult {
     explanation: string[];
   };
   basis: { source: 'evidence' | 'coverage'; reason: string; unmeasured: string[] } | null;
-  ledger: { lines: number; skipped: number; shared: number } | null;
+  ledger: {
+    lines: number;
+    skipped: number;
+    shared: number;
+    /** The browser's own per-tier tally, when the ledger's header carries one. */
+    tally: {
+      hits: Record<string, number>;
+      tierSessions: number | null;
+      sessions: number | null;
+      rejected: number;
+    } | null;
+  } | null;
   /** The ledger this plan was weighted by, if one was chosen. */
   ledgerPath?: string | null;
   /** Set when a chosen ledger could not be read, so the plan fell back rather than errored. */
@@ -233,6 +244,19 @@ export const ExtensionTierPlanCard: React.FC<ExtensionTierPlanCardProps> = ({
                 ? `, ${ledger.shared.toLocaleString()} matching a host two tiers both ship`
                 : ''}
               {result.ledgerPath ? ` · ${result.ledgerPath}` : ''}
+            </p>
+          )}
+
+          {/* Which of the ledger's two per-tier answers weighted the plan is stated rather than
+              implied: a complete tally is the measurement used, a partial one is evidence the
+              plan deliberately stayed off — the Blocked column cannot say which it is showing. */}
+          {ledger?.tally && (
+            <p className="tier-plan-ledger tier-plan-tally">
+              Per-tier tally covers {ledger.tally.tierSessions ?? '?'} of{' '}
+              {ledger.tally.sessions ?? '?'} sessions
+              {ledger.tally.sessions !== null && ledger.tally.tierSessions === ledger.tally.sessions
+                ? ' — the Blocked column and the weighting come from it.'
+                : ' — partial coverage, so the Blocked column and the weighting come from the rule lines.'}
             </p>
           )}
 

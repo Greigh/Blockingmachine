@@ -26,6 +26,7 @@ options:
   log_level: "info"
 schema:
   feed_port: int
+  feed_token: password?
   auto_compile_interval: list(disabled|12h|24h|weekly)
   enable_ai_radar: bool
   export_formats:

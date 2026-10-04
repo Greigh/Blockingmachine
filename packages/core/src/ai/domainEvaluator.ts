@@ -1,4 +1,6 @@
 import type { StoredRule } from '../RuleStore.js';
+import { exceptionRequestUrlMatcher } from '../coverage.js';
+import { refusedRegexReason } from '../regexSafety.js';
 import { sanitizeDomain, trimTrailingDots } from './hostname.js';
 import {
   COMPOUND_CCTLDS,
@@ -65,8 +67,11 @@ function createWildcardMatcher(pattern: string): ((target: string) => boolean) |
 function ruleModifiers(rule: string): string[] {
   // Dollar signs in hosts-file comments and DNS configuration are literal text.
   if (/^(?:(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s|address=|server=|local-)/.test(rule)) return [];
-  // A trailing $ in a regex is an anchor, not a modifier separator.
-  if (rule.startsWith('/') && rule.endsWith('/')) return [];
+  // A trailing $ in a regex is an anchor, not a modifier separator — and the same holds
+  // inside an exception's `/re/` body, where a `$/` anchor would otherwise be read as the
+  // start of a `/` modifier and drop the rule at the modifier gate.
+  const body = rule.startsWith('@@') ? rule.slice(2) : rule;
+  if (body.startsWith('/') && body.endsWith('/')) return [];
   const separator = rule.lastIndexOf('$');
   return separator < 0 || separator === rule.length - 1
     ? [] : rule.slice(separator + 1).toLowerCase().split(',').map((part) => part.trim());
@@ -130,7 +135,24 @@ export class CompiledDomainRuleSet {
     match: DomainRuleMatch;
     test: (target: string) => boolean;
   }> = [];
+  /**
+   * Exceptions whose pattern carries a path (`@@||host/path`, `@@||host^` + a path tail). They
+   * are kept apart from the hostname indexes on purpose: the zone lookup cannot see a path, so
+   * firing them there would allowlist every request to the host — the unsafe direction to
+   * widen an allowlist. {@link matchPathException} applies them per request URL instead.
+   */
+  private readonly pathExceptions: Array<{
+    match: DomainRuleMatch;
+    test: (url: string) => boolean;
+  }> = [];
   private readonly badfilters = new Set<string>();
+  private readonly sourceRules: string[] = [];
+  /**
+   * `/regex/` and Pi-hole-regex rules refused for structure, not syntax — the provably
+   * backtracking shapes `refusedRegexReason` names. Recorded rather than logged so a compiled
+   * set stays pure; {@link getRefusedRules} is how a caller shows them.
+   */
+  private readonly refusedRules: Array<{ rule: string; reason: string }> = [];
   private totalRuleCount = 0;
 
   constructor(rules: (StoredRule | string)[]) {
@@ -157,6 +179,7 @@ export class CompiledDomainRuleSet {
       }
 
       this.totalRuleCount++;
+      this.sourceRules.push(rawRule);
       const source = typeof item === 'string' ? undefined : item.metadata?.sourceInfo?.url || item.metadata?.sources?.[0];
       const ruleType = typeof item === 'string' ? undefined : item.type;
       const modifiers = ruleModifiers(rawRule);
@@ -187,6 +210,37 @@ export class CompiledDomainRuleSet {
 
       // 3. Exception Rules
       if (isEx) {
+        // A slashed exception regex gets the same structural check a blocking one does —
+        // and the refusal is *recorded* the same way. Without this the rule fails the URL
+        // matcher, fails the domain extractor, and vanishes without a trace, which is the
+        // safe direction for traffic but an invisible hole in the coverage report.
+        const exRegex = rawRule.match(/^@@\/(.+)\/([$].*)?$/);
+        if (exRegex) {
+          const refused = refusedRegexReason(exRegex[1]);
+          if (refused) {
+            this.refusedRules.push({ rule: rawRule, reason: refused });
+            continue;
+          }
+        }
+        // A path-preserving exception is not a zone allowlist. `@@||host/path` used to fail
+        // the host extraction and drop; the `^`-with-a-path form was worse — the host half
+        // was indexed and the path silently discarded, which allowlisted the whole zone.
+        // Both now keep a URL matcher, and only a request carrying that URL can fire them.
+        const urlTest = exceptionRequestUrlMatcher(rawRule);
+        if (urlTest) {
+          this.pathExceptions.push({
+            match: {
+              rule: rawRule,
+              pattern: rawRule.match(/^@@\|\|([a-z0-9_.*-]+)/i)?.[1]?.toLowerCase() ?? rawRule,
+              isWildcard: true,
+              isImportant,
+              source,
+              ruleType: ruleType || 'unblocking',
+            },
+            test: urlTest,
+          });
+          continue;
+        }
         const abpExMatch = rawRule.match(/^@@\|\|([a-z0-9_.*-]+)\^/i);
         const pattern = abpExMatch
           ? abpExMatch[1].toLowerCase().trim()
@@ -348,6 +402,14 @@ export class CompiledDomainRuleSet {
       // 4e. Slashed regular expression: /pattern/
       if (rawRule.startsWith('/') && rawRule.endsWith('/') && rawRule.length > 2) {
         const regexStr = rawRule.slice(1, -1);
+        // Structure is checked before syntax: `(a+)+` compiles cleanly and then spends
+        // unbounded backtracking time on every host it sees. A refusal is recorded so the
+        // missing coverage is visible rather than silent.
+        const refused = refusedRegexReason(regexStr);
+        if (refused) {
+          this.refusedRules.push({ rule: rawRule, reason: refused });
+          continue;
+        }
         try {
           const rx = new RegExp(regexStr, 'i');
           this.wildcardBlocks.push({
@@ -370,6 +432,11 @@ export class CompiledDomainRuleSet {
 
       // 4f. Pi-hole regex format: (^|\.)domain$
       if (rawRule.startsWith('(^|\\.)') || rawRule.startsWith('(?:^|\\.)')) {
+        const refused = refusedRegexReason(rawRule);
+        if (refused) {
+          this.refusedRules.push({ rule: rawRule, reason: refused });
+          continue;
+        }
         try {
           const rx = new RegExp(rawRule, 'i');
           this.wildcardBlocks.push({
@@ -639,8 +706,51 @@ export class CompiledDomainRuleSet {
     return this.evaluate(targetDomain).matchingRule;
   }
 
+  /**
+   * The path-preserving exception that applies to this request URL, if any.
+   *
+   * This is the other half of the compile-time decision: `evaluate` takes a hostname, so it
+   * cannot fire these — and must not, since `@@||host/path` allows one URL shape and nothing
+   * else. A caller holding real request URLs (the coverage replay) asks here per request, and
+   * the exception applies to exactly the URLs it names.
+   */
+  public matchPathException(url: string): DomainRuleMatch | undefined {
+    for (const entry of this.pathExceptions) {
+      if (entry.test(url)) return entry.match;
+    }
+    return undefined;
+  }
+
   public getRuleCount(): number {
     return this.totalRuleCount;
+  }
+
+  /**
+   * The rules refused at compile time for their *structure* — provably backtracking regular
+   * expressions — each with the reason it was refused.
+   *
+   * A refusal is the only safe answer to a pattern like `/(a+)+/`: `RegExp` carries no step
+   * budget, so the choice is between running a hang and not running the rule. It is recorded
+   * here rather than dropped so a caller measuring coverage (or auditing a downloaded list)
+   * can show what is missing, and why.
+   */
+  public getRefusedRules(): ReadonlyArray<{ rule: string; reason: string }> {
+    return this.refusedRules;
+  }
+
+  /**
+   * The rules this set was compiled from, in list order.
+   *
+   * The indexes above hold only what a *hostname* can decide, so a caller that needs to reason
+   * about the rules the domain evaluator skipped — the path-preserving and request-scoped ones —
+   * has nowhere else to get them. A coverage replay is that caller: it decides a path-scoped
+   * rule against a real request URL, which the hostname indexes cannot express.
+   *
+   * Returns a copy, so a caller cannot reach in and change the verdict of a set that has
+   * already been compiled.
+   */
+  public getSourceRules(): readonly string[] {
+    return [...this.sourceRules];
   }
 
   /**

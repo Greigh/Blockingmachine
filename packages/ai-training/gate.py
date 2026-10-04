@@ -15,6 +15,8 @@ Checks:
     5. feature_version supported and feature_names match the contract
   shadow (learned-shadow.jsonl + reviewed disagreements)
     6. coverage: >= min_shadow_days days, >= min_shadow_scored domains
+     (counted from the per-sweep `summary` records the app writes; the
+     report states how much of that was scored by versioned weights)
     7. >= min_reviewed distinct disagreements reviewed (>= min_reviewed_block
        distinct in the block direction, capped at available)
     8. ZERO confirmed breakage: no distinct domain where the reviewer
@@ -77,7 +79,18 @@ def average_precision(y: np.ndarray, s: np.ndarray) -> float:
     return float(ap)
 
 
-def precision_at_recall(y: np.ndarray, s: np.ndarray, target: float = 0.90) -> float:
+def precision_at_recall(y: np.ndarray, s: np.ndarray, target: float = 0.90,
+                        keep: np.ndarray | None = None) -> float:
+    """Best precision reachable at recall >= target.
+
+    `keep` masks the evaluation rows: the allowlist-adjusted variant drops the
+    domains the allowlist decides before the model ever scores, so the number
+    answers "how precise is the model where it is actually allowed to speak"
+    rather than re-measuring a decision it does not make.
+    """
+    if keep is not None:
+        y = y[keep]
+        s = s[keep]
     best = 0.0
     for t in np.unique(s):
         pred = s >= t
@@ -145,6 +158,19 @@ def main() -> None:
     allow_ok = allow.get("format") == "bm-allowlist/1" and isinstance(allow.get("domains"), list)
     allow_set = {d.lower() for d in allow.get("domains", [])}
     check("allowlist_valid", allow_ok, f"allowlist format ok: {allow_ok}, {len(allow_set)} domains")
+
+    # Allowlist-adjusted P@R: the same metric with the rows the allowlist
+    # decides removed — serving semantics applied to the test set. Reported,
+    # not gated: the design bar is on the raw number, and whether the adjusted
+    # one is good enough to lower it to is a reviewer decision (open flag),
+    # not a threshold this script may choose.
+    test_domains = np.array([str(t.get("domain", "")).lower() for t in test])
+    keep_mask = np.array([d not in allow_set for d in test_domains])
+    n_decided = int((~keep_mask).sum())
+    p90_adjusted = precision_at_recall(y, s, keep=keep_mask)
+    print(f"  [info] precision_at_recall_90 (allowlist-adjusted): "
+          f"{p90_adjusted:.4f} over {int(keep_mask.sum())} rows "
+          f"({n_decided} decided by allowlist)")
     review_t = 0.65
     flips, protected = [], 0
     for d in GOLDEN_BENIGN:
@@ -192,9 +218,23 @@ def main() -> None:
     cov = coverage(records)
     check("shadow_days", (cov["days"] or 0) >= cfg["min_shadow_days"],
           f"{cov['days']} days of shadow (min {cfg['min_shadow_days']})", cov["days"])
-    check("shadow_scored", (cov["scored_domains"] or 0) >= cfg["min_shadow_scored"],
-          f"{cov['scored_domains']} domains scored (min {cfg['min_shadow_scored']})",
-          cov["scored_domains"])
+    # The count is the same either way — excluding unversioned sweeps
+    # would make the ceremony impossible to start, since the shipped
+    # weights predate the manifest. What changes is that the report says
+    # how much of the evidence identified a model, so a reader cannot
+    # mistake "30,000 domains scored" for a claim about a specific one.
+    scored = cov["scored_domains"] or 0
+    unversioned = cov.get("unversioned_scored_domains") or 0
+    if not cov.get("summaries"):
+        note = "; no per-sweep summaries in the log, so no count came from the app at all"
+    elif unversioned:
+        note = (f"; {unversioned} of {scored} scored by weights with no promotion "
+                f"manifest (model version unknown)")
+    else:
+        note = f"; scored by model {','.join(cov['model_versions'])}"
+    check("shadow_scored", scored >= cfg["min_shadow_scored"],
+          f"{scored} domains scored (min {cfg['min_shadow_scored']}){note}",
+          scored)
 
     # --- reviewed disagreements (deduplicated: recurring domains must not
     # overcount; one broken site is one veto, not N log lines) ---
@@ -247,6 +287,16 @@ def main() -> None:
         },
         "config": cfg,
         "checks": checks,
+        "metrics": {
+            # Informational: the same P@R with allowlist-decided test rows
+            # removed. It is NOT the gated number — the bar applies to the
+            # raw metric — so a FAIL verdict with a high adjusted value is
+            # the recorded evidence for the open flag's review decision.
+            "precision_at_recall_90": round(p90, 4),
+            "precision_at_recall_90_allowlist_adjusted": round(p90_adjusted, 4),
+            "allowlist_decided_test_rows": n_decided,
+            "test_rows": int(len(test)),
+        },
         "verdict": verdict,
     }
     Path(args.out).write_text(json.dumps(report, indent=2))

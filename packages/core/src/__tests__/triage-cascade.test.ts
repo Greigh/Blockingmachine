@@ -27,8 +27,9 @@ import {
 } from '../ai/triage.js';
 import { AiDetectorService } from '../ai/AiDetectorService.js';
 import { classifyDomainWithMiniAi } from '../ai/MiniAiClassifier.js';
-import { classifyElementWithMiniAi } from '../ai/elementClassifier.js';
+import { classifyElementWithMiniAi, type ElementClass } from '../ai/elementClassifier.js';
 import { EVAL_CORPUS } from '../ai/evalCorpus.js';
+import type { ThreatCategory } from '../ai/types.js';
 import { ELEMENT_EVAL_CORPUS, MUST_HIDE_CASES } from '../ai/elementEvalCorpus.js';
 
 const candidate = (overrides: Partial<TriageCandidate> = {}): TriageCandidate => ({
@@ -651,6 +652,16 @@ function domainCandidates(): TriageCandidate[] {
   });
 }
 
+// The element model's classes are not the domain threat categories, so the probabilities
+// travel through the mapping the verdict line already asserts: Ad is Advertising, Tracker is
+// Telemetry/Analytics, Annoyance is Consent/Annoyance, Content is Clean.
+const ELEMENT_CLASS_TO_THREAT = {
+  Ad: 'Advertising',
+  Tracker: 'Telemetry/Analytics',
+  Annoyance: 'Consent/Annoyance',
+  Content: 'Clean',
+} as const satisfies Record<ElementClass, ThreatCategory>;
+
 function elementCandidates(): TriageCandidate[] {
   return ELEMENT_EVAL_CORPUS.map((entry) => {
     const prediction = classifyElementWithMiniAi(entry.snapshot);
@@ -659,7 +670,12 @@ function elementCandidates(): TriageCandidate[] {
       verdict: prediction.elementClass === 'Content' ? 'clean' : 'tracker',
       confidence: prediction.confidence,
       riskLevel: 'medium',
-      classProbabilities: prediction.classProbabilities,
+      classProbabilities: Object.fromEntries(
+        Object.entries(prediction.classProbabilities).map(([cls, p]) => [
+          ELEMENT_CLASS_TO_THREAT[cls as ElementClass],
+          p,
+        ]),
+      ),
       // The element engine spells its weakest tier `model-only`.
       corroboration:
         prediction.corroboration === 'model-only' ? 'lexical-only' : prediction.corroboration,

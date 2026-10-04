@@ -1,3 +1,4 @@
+import { beforeEach, describe, expect, test } from '@jest/globals';
 import { RuleDeduplicator } from "../RuleDeduplicator.js";
 import { parseFilterList } from "../RuleProcessor.js";
 

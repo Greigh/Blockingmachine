@@ -1,8 +1,11 @@
 import { describe, test, expect } from '@jest/globals';
 import {
+  BIND_NULL_STEPS,
   BIND_STEPS,
   BIND_ZONE_ID,
+  bindFetchCommand,
   bindFormatWarning,
+  bindHomeAssistantUrl,
   bindNamedConfZoneLine,
   bindReloadCommand,
   bindResponsePolicyLine,
@@ -79,7 +82,30 @@ describe('BIND deploy helpers', () => {
     test('is honest that this is a local file, not a feed', () => {
       const reload = BIND_STEPS.find((step) => step.id === 'reload')!;
       expect(reload.detail).toContain('re-copied');
-      expect(reload.detail.toLowerCase()).toContain('unlike the privoxy');
+      // Privoxy's action file is a local file too, so the contrast is Shadowrocket's re-fetch.
+      expect(reload.detail.toLowerCase()).toContain('unlike the shadowrocket');
+    });
+
+    test('offers the add-on as the copy source that survives this desktop', () => {
+      const addon = BIND_STEPS.find((step) => step.id === 'addon')!;
+      expect(addon.detail.toLowerCase()).toContain('home assistant');
+      expect(addon.detail.toLowerCase()).toContain('whatever export format');
+      // Only the RPZ recipe gets the offer: the null zone has no per-compile file to fetch.
+      expect(BIND_NULL_STEPS.some((step) => step.id === 'addon')).toBe(false);
+    });
+  });
+
+  describe('the add-on fetch', () => {
+    test('points at the zone the add-on renders, at the path the stanza expects', () => {
+      expect(bindHomeAssistantUrl()).toBe('http://homeassistant.local:9191/db.blockingmachine.rpz');
+      const command = bindFetchCommand(bindHomeAssistantUrl(), '/etc/bind/db.blockingmachine.rpz');
+      expect(command).toBe(
+        'curl -fsSL "http://homeassistant.local:9191/db.blockingmachine.rpz" -o /etc/bind/db.blockingmachine.rpz',
+      );
+    });
+
+    test('falls back to the conventional zone path when none is chosen yet', () => {
+      expect(bindFetchCommand('http://x/zone')).toContain('-o /etc/bind/db.blockingmachine.rpz');
     });
   });
 

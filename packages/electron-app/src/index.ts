@@ -1,7 +1,10 @@
 import { join, dirname, isAbsolute, basename, resolve as pathResolve, sep } from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { createServer, Server as HttpServer, ServerResponse, type IncomingMessage } from 'http';
 import { networkInterfaces } from 'os';
 import { getServers as getDnsServers } from 'dns';
+import { createHash } from 'crypto';
 import {
   app,
   BrowserWindow,
@@ -14,6 +17,7 @@ import {
   Notification,
   nativeImage,
   clipboard,
+  safeStorage,
 } from 'electron';
 import { promises as fs, existsSync, createReadStream } from 'fs';
 import isDev from 'electron-is-dev';
@@ -24,6 +28,7 @@ if (isDev) {
 
 import Store from 'electron-store';
 import type { ElectronStore, StoreSchema } from './types';
+import { revalidateQuarantine, shouldAutoQuarantine } from './quarantineGate';
 import {
   clearElementHarvest,
   rememberedElementHarvestPath,
@@ -39,6 +44,19 @@ import {
   type SinkholeEndpoint,
 } from './sinkholeNet';
 import { sinkholeFetch } from './sinkholeFetch';
+import { feedTokenAuthorised } from './feedAuth';
+import { isServableFeedFile } from './feedServing';
+import {
+  parseDeployRefreshQuery,
+  recordDeployRefresh,
+} from './deployRefresh';
+import {
+  readSecret,
+  readSecretField,
+  sealSecretField,
+  secretStorageAvailable,
+  writeSecret,
+} from './secretsStore';
 import { unboundFeedFileName } from './unboundDeploy';
 import {
   RESOLVER_CONTROL_DOMAIN,
@@ -57,6 +75,12 @@ import {
   resolveUnboundResolver,
 } from './unboundAddress';
 import { probeUnboundResolver } from './unboundProbe';
+import {
+  UNBOUND_WATCH_INTERVAL_MS,
+  shouldWatchUnbound,
+  unboundWatchAlert,
+  unboundWatchIntervalMs,
+} from './unboundWatch';
 import {
   classifyDirectStatus,
   classifyHaApiResponse,
@@ -82,6 +106,9 @@ import {
   toCategoryBlocklist,
   toAttributionManifest,
   extractHostFromRule,
+  classifierInputFingerprint,
+  parseVerdictCache,
+  serializeVerdictCache,
   refreshDb,
   setDbCacheDirectory,
   checkRuleConflict,
@@ -89,6 +116,7 @@ import {
   evaluateDomainRules,
   filterDNSRules,
   filterBrowserRules,
+  LEARNED_SHADOW_SAMPLE_RATE,
   STATIC_RULE_TIERS,
   manifestRuleResources,
   computeTierPlan,
@@ -111,6 +139,7 @@ import type {
   ThreatQuarantineItem,
   AiWatchdogConfig,
 } from './types';
+import type { ThreatCategory } from '@blockingmachine/core';
 import { DaemonManager } from './daemonManager';
 import { TrayManager, type TraySharedState } from './trayManager';
 import { shadowScoreWatchdogDomains } from './learnedShadow';
@@ -171,6 +200,9 @@ function isValidFormat(format: unknown): format is FilterFormat {
     'shadowrocket',
     'privoxy',
     'bind',
+    // The shared null-zone mechanism is a second BIND artifact, not a variant of the RPZ one: it
+    // emits a named.conf fragment and a fixed 3-line zone file, where RPZ emits the zone itself.
+    'bind-null',
     'domains',
     'plain',
   ];
@@ -513,6 +545,14 @@ const store = new Store<StoreSchema>({
       type: 'boolean',
       default: false,
     },
+    feedToken: {
+      type: 'string',
+      default: '',
+    },
+    deployRefreshReports: {
+      type: 'object',
+      default: {},
+    },
     launchOnStartup: {
       type: 'boolean',
       default: false,
@@ -674,7 +714,7 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
   aiWatchdogTimer = setInterval(async () => {
     try {
       console.log('[AI Watchdog] Running periodic background query scout...');
-      const savedConfig = (storeRef.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+      const savedConfig = loadAiConfig(storeRef);
       const service = getSharedAiDetectorService(savedConfig);
 
       const queries: RawDnsQuery[] = [];
@@ -692,7 +732,7 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
         }
       } else if (config.service === 'pihole') {
         const baseUrl = storeRef.get('piholeUrl') || 'http://127.0.0.1';
-        const token = storeRef.get('piholeApiKey') || '';
+        const token = readSecret(storeRef, safeStorage, 'piholeApiKey');
         const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
           signal: AbortSignal.timeout(6000),
         });
@@ -717,12 +757,7 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
       if (queries.length > 0) {
         const scan = await service.scanQueryLog(queries, savedConfig);
         const autoQuarantine = config.autoQuarantineEntropyDga !== false;
-        const threats = scan.results.filter((r) => {
-          if (r.verdict === 'clean') return false;
-          if (!autoQuarantine) return true;
-          const conf = typeof r.confidence === 'number' ? (r.confidence > 1 ? r.confidence : r.confidence * 100) : 0;
-          return r.isLikelyDga || (typeof r.entropy === 'number' && r.entropy > 4.2) || conf >= 85 || r.riskLevel === 'high' || r.riskLevel === 'critical';
-        });
+        const threats = scan.results.filter((r) => shouldAutoQuarantine(r, autoQuarantine));
 
         // Collect flagged domains (not only quarantined ones) with client
         // attribution for the heat ledger. Cadence is applied after the scan
@@ -739,11 +774,20 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
         // GBDT and log disagreements against production verdicts. Read-only — the model's
         // output never blocks or quarantines here, and the hook is fail-soft so a missing
         // or corrupt weights file cannot break the watchdog.
+        //
+        // The sample rate is stated rather than defaulted. Disagreements are the domains
+        // where this model differs from the lists, so on their own they are a biased view
+        // of traffic, and the M5 drift stage (PSI against the training baseline) has
+        // nothing to compare — `drift.py` exits with "no sample records in the shadow
+        // log". 1% of every scored domain is the unbiased slice it needs. What a sampled
+        // record contains is a domain, two decisions and a score, written to a local
+        // file and never transmitted: see docs/learned-shadow-privacy.md.
         try {
           const threatSet = new Set(threats.map((t) => t.domain));
           shadowScoreWatchdogDomains(
             scan.results.map((r) => r.domain),
             (d) => (threatSet.has(d) ? 'block' : 'allow'),
+            LEARNED_SHADOW_SAMPLE_RATE,
           );
         } catch (err) {
           console.error('[Learned Shadow] sweep hook failed:', err);
@@ -877,7 +921,7 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
   }
 
   try {
-    const savedConfig = (storeRef.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+    const savedConfig = loadAiConfig(storeRef);
     const service = getSharedAiDetectorService(savedConfig);
     const queries: RawDnsQuery[] = [];
     const limit = 60;
@@ -892,7 +936,7 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
       queries.push(...loaded.queries);
     } else if (currentLiveRadarSession.service === 'pihole') {
       const baseUrl = storeRef.get('piholeUrl') || 'http://127.0.0.1';
-      const token = storeRef.get('piholeApiKey') || '';
+      const token = readSecret(storeRef, safeStorage, 'piholeApiKey');
       const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
         signal: AbortSignal.timeout(6000),
       });
@@ -954,9 +998,7 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
         currentLiveRadarSession.totalQueriesAnalyzed++;
         if (fresh.verdict !== 'clean') {
           currentLiveRadarSession.flaggedCount++;
-          const conf = typeof fresh.confidence === 'number' ? (fresh.confidence > 1 ? fresh.confidence : fresh.confidence * 100) : 0;
-          const isDgaOrEntropy = fresh.isLikelyDga || (typeof fresh.entropy === 'number' && fresh.entropy > 4.2);
-          if (autoQuarantine || isDgaOrEntropy || conf >= 85 || fresh.riskLevel === 'high' || fresh.riskLevel === 'critical') {
+          if (shouldAutoQuarantine(fresh, autoQuarantine)) {
             threatsToQuarantine.push({
               id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
               domain: fresh.domain,
@@ -1325,6 +1367,28 @@ function sinkholeUrlFields(storeRef: ElectronStore<StoreSchema>): SinkholeUrlFie
   };
 }
 
+/**
+ * The stored AI provider config with its key resolved for use.
+ *
+ * `apiKey` persists only as `apiKeyEncrypted` once the seal has run, so a bare
+ * `store.get('aiConfig')` returns a config that *has* a key the scanner cannot see — the
+ * decrypt has to happen at the boundary, exactly here, rather than trusting every
+ * `{ ...savedConfig, ...override }` site to remember it.
+ */
+function loadAiConfig(storeRef: ElectronStore<StoreSchema>): Partial<AiProviderConfig> {
+  const saved = (storeRef.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+  // Lazy migration, same as `readSecret` on the flat keys: seal a plaintext apiKey on the
+  // first read that sees it — `get-ai-config` is not guaranteed to have run first.
+  if (typeof saved.apiKey === 'string' && saved.apiKey && secretStorageAvailable(safeStorage)) {
+    const sealed = sealSecretField(saved, safeStorage, 'apiKey');
+    storeRef.set('aiConfig', sealed);
+    saved.apiKey = undefined;
+    saved.apiKeyEncrypted = sealed.apiKeyEncrypted as string | undefined;
+  }
+  const apiKey = readSecretField(saved, safeStorage, 'apiKey');
+  return apiKey ? { ...saved, apiKey } : saved;
+}
+
 async function readSinkholeProbe(
   storeRef: ElectronStore<StoreSchema>,
   url: string,
@@ -1355,7 +1419,7 @@ function piholeEpochToIso(raw: unknown): string | undefined {
 
 async function loadStoredAdguardQueries(storeRef: ElectronStore<StoreSchema>, limit: number) {
   const user = (storeRef.get('adguardHomeUser') as string) || '';
-  const pass = (storeRef.get('adguardHomePassword') as string) || '';
+  const pass = readSecret(storeRef, safeStorage, 'adguardHomePassword');
   const headers: Record<string, string> = {};
   if (user || pass) {
     headers.Authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
@@ -1388,12 +1452,12 @@ function explainSinkholeFailure(
 
 async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
   const rawPihole = storeRef.get('piholeUrl') as string | undefined;
-  const piholeApiKey = storeRef.get('piholeApiKey') as string | undefined;
+  const piholeApiKey = readSecret(storeRef, safeStorage, 'piholeApiKey') || undefined;
   const rawAdguard = storeRef.get('adguardHomeUrl') as string | undefined;
   const adguardHomeUser = storeRef.get('adguardHomeUser') as string | undefined;
-  const adguardHomePassword = storeRef.get('adguardHomePassword') as string | undefined;
+  const adguardHomePassword = readSecret(storeRef, safeStorage, 'adguardHomePassword') || undefined;
   const adguardMode = (storeRef.get('adguardMode') as 'direct' | 'ha-api' | 'webhook' | undefined) || 'direct';
-  const haToken = storeRef.get('haToken') as string | undefined;
+  const haToken = readSecret(storeRef, safeStorage, 'haToken') || undefined;
   const haWebhookUrl = storeRef.get('haWebhookUrl') as string | undefined;
   const customWebhookUrl = storeRef.get('customWebhookUrl') as string | undefined;
 
@@ -1625,6 +1689,14 @@ function broadcastSseEvent(eventName: string, data: any) {
   const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of sseClients) {
     try {
+      // A subscriber that connected and stopped reading still counts as open — `write` then
+      // buffers every event in memory on its behalf. Drop a client whose backlog has grown
+      // past what a heartbeat stream could ever legitimately owe it.
+      if (client.writableLength > 512 * 1024) {
+        sseClients.delete(client);
+        client.destroy();
+        continue;
+      }
       client.write(payload);
     } catch {
       sseClients.delete(client);
@@ -1812,8 +1884,10 @@ async function checkUnboundReachability(): Promise<UnboundReachability> {
     },
     serves: [...feedServeLog.entries()],
     lastFetchedAt: previous?.fetchedAt ?? null,
+    refreshReport: (store.get('deployRefreshReports') || {})['unbound'] ?? null,
     lastCompiledAt: store.get('lastProcessTime') || null,
     lastConfirmedAt: previous?.lastConfirmedAt ?? null,
+    staleAnnouncedAt: previous?.staleAnnouncedAt ?? null,
     probe,
     probeSkipped,
   });
@@ -1821,6 +1895,112 @@ async function checkUnboundReachability(): Promise<UnboundReachability> {
   store.set('unboundReachability', toReachabilitySnapshot(reachability));
 
   return reachability;
+}
+
+/**
+ * The scheduled check, and the announcement when it finds a regression.
+ *
+ * `unboundWatch.ts` decides *whether* to speak; this owns the two things it cannot: the timer, and
+ * a notification. Three details are the difference between a watcher and a nuisance:
+ *
+ *  - The previous verdict is read **before** the check runs, because the check overwrites the very
+ *    snapshot the comparison needs. Read afterwards, every tick would compare a verdict with itself
+ *    and never see a change.
+ *  - One tick at a time. A manual **Check now** pressed while a scheduled check is mid-flight would
+ *    otherwise put two rounds of DNS queries against the resolver at the same moment, and the
+ *    slower one to finish would overwrite the newer verdict with an older reading.
+ *  - A check the user just ran counts as having been told. It overwrites the same snapshot, so a
+ *    regression discovered by hand is seen and not also announced — which is the correct outcome,
+ *    because the person who pressed the button was looking at the screen it would have appeared on.
+ */
+let unboundWatchTimer: NodeJS.Timeout | null = null;
+let unboundWatchInFlight = false;
+
+async function runUnboundWatchTick(storeRef: ElectronStore<StoreSchema>): Promise<void> {
+  if (unboundWatchInFlight) return;
+  // The gate is re-read every tick rather than once at startup, because a machine that has never
+  // deployed Unbound should not be querying a resolver on a timer, and one that has should start
+  // watching the moment somebody engages with the pane rather than at the next launch.
+  if (
+    !shouldWatchUnbound({
+      address: storeRef.get('unboundResolver'),
+      snapshot: getUnboundReachabilitySnapshot(),
+    })
+  ) {
+    return;
+  }
+
+  unboundWatchInFlight = true;
+  try {
+    const previous = getUnboundReachabilitySnapshot();
+    const reachability = await checkUnboundReachability();
+    const alert = unboundWatchAlert({ previous, current: toReachabilitySnapshot(reachability) });
+
+    // The pane is only listening while it is mounted, and it renders snapshots it was given at
+    // mount time — so without this the check runs on schedule and the screen keeps showing the
+    // verdict from whenever the tab was opened.
+    mainWindow?.webContents.send('unbound-reachability-updated', toReachabilitySnapshot(reachability));
+
+    // The alert decision is pure, so it cannot remember that it spoke. A `stale` finding is held for
+    // a grace period because a copy that has been behind the compile for five minutes may be
+    // waiting for the resolver's next fetch; without this line the announcement would then never
+    // be made, since every later tick is `stale` to `stale`. `classifyUnboundReachability` clears
+    // the stamp when the deployment is current again, so the next regression can speak.
+    if (alert?.staleAnnouncedAt) {
+      const snapshot = getUnboundReachabilitySnapshot();
+      if (snapshot) store.set('unboundReachability', { ...snapshot, staleAnnouncedAt: alert.staleAnnouncedAt });
+    }
+
+    if (alert && Notification.isSupported()) {
+      try {
+        const icon = getAssetPath('Blockingmachine.png');
+        new Notification({ title: alert.title, body: alert.body, icon: icon || undefined }).show();
+      } catch (err) {
+        // Best-effort, the same way the tray and the compile notification are: a machine with
+        // notifications disabled must not lose the check itself.
+        console.warn('[Unbound Watch] Notification failed:', err);
+      }
+    } else if (alert) {
+      // Notifications are off or unavailable. The verdict is still stored and still on the pane;
+      // this line is the only trace that a regression was seen and not shown, so it is written
+      // down rather than dropped.
+      console.log(`[Unbound Watch] ${alert.from} → ${alert.to}: ${alert.body}`);
+    }
+  } catch (err) {
+    console.warn('[Unbound Watch] Scheduled check failed:', err);
+  } finally {
+    unboundWatchInFlight = false;
+  }
+}
+
+/**
+ * Start re-checking the deployment on the cadence, once a deployment is worth watching.
+ *
+ * Called alongside the other background timers at startup. The first tick is one full interval away
+ * rather than immediate: a check fires DNS queries at whatever address is configured, and doing that
+ * at launch — before anyone has looked at the pane — is a surprise nobody asked for and cannot
+ * predict. The snapshot the pane already reads is the previous verdict, so nothing is lost by
+ * waiting.
+ */
+function startUnboundWatch(storeRef: ElectronStore<StoreSchema>): void {
+  stopUnboundWatch();
+  const intervalMs = unboundWatchIntervalMs(
+    // No setting yet: the cadence is a constant until there is a reason to make it one, and the
+    // clamp in `unboundWatchIntervalMs` is what a persisted preference will go through later.
+    UNBOUND_WATCH_INTERVAL_MS,
+  );
+  unboundWatchTimer = setInterval(() => {
+    void runUnboundWatchTick(storeRef);
+  }, intervalMs);
+  unboundWatchTimer?.unref?.();
+  console.log(`[Unbound Watch] Deployment reachability will be re-checked every ${Math.round(intervalMs / 60000)}m.`);
+}
+
+function stopUnboundWatch(): void {
+  if (unboundWatchTimer) {
+    clearInterval(unboundWatchTimer);
+    unboundWatchTimer = null;
+  }
 }
 
 async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>) {
@@ -1938,7 +2118,40 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           }
         };
 
+        // The optional second gate on mutations, resolved once per request — the semantics live
+        // in `feedAuth.ts`. Returns true after writing the rejection, so a guarded endpoint is
+        // one line; read-only queries keep the origin-only guard via `rejectCrossOrigin`.
+        const configuredToken = (storeRef.get('feedToken') || '').trim();
+        const rejectCrossOrigin = (crossOriginError: string): boolean => {
+          if (!isSafeClientOrigin()) {
+            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: crossOriginError }));
+            return true;
+          }
+          return false;
+        };
+        const rejectUnauthorisedMutation = (crossOriginError: string): boolean => {
+          if (rejectCrossOrigin(crossOriginError)) return true;
+          if (!feedTokenAuthorised(configuredToken, req.headers.authorization)) {
+            res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Unauthorised — a valid feed token is required' }));
+            return true;
+          }
+          return false;
+        };
+
         if (lowerPath === '/v1/events' || lowerPath === '/api/events') {
+          // The stream carries browsing-derived telemetry and `remote_control` broadcasts, so it
+          // gets the origin guard mutations get — an EventSource from an arbitrary web page sends
+          // an Origin header and must not be able to read it. A configured feed token gates the
+          // stream the same way it gates mutations: otherwise the token would protect writes
+          // while leaving the data they produce readable by anyone on the LAN.
+          if (rejectCrossOrigin('Cross-origin event stream forbidden')) return;
+          if (configuredToken && !feedTokenAuthorised(configuredToken, req.headers.authorization)) {
+            res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Unauthorised — a valid feed token is required' }));
+            return;
+          }
           if (sseClients.size >= 64) {
             res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: 'Too Many Connections', message: 'Maximum SSE subscribers reached' }));
@@ -1983,11 +2196,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         }
 
         if (lowerPath === '/v1/telemetry/browser' || lowerPath === '/api/telemetry/browser') {
-          if (!isSafeClientOrigin()) {
-            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ success: false, error: 'Cross-origin telemetry forbidden' }));
-            return;
-          }
+          if (rejectUnauthorisedMutation('Cross-origin telemetry forbidden')) return;
           if (req.method !== 'POST') {
             res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use POST.' }));
@@ -2036,18 +2245,59 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           return;
         }
 
-        if (lowerPath === '/v1/control/cosmetics' || lowerPath === '/api/control/cosmetics') {
-          if (!isSafeClientOrigin()) {
-            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ success: false, error: 'Cross-origin control forbidden' }));
+        // The scheduled refresh's report-back: the resolver host's cron POSTs `ok`/`fail` after
+        // its fetch-and-reload, so a failure that happened while nobody looked is recorded rather
+        // than absent. Token-guarded like every mutation — when the recipe is copied with a
+        // configured token it carries the header.
+        if (lowerPath === '/v1/deploy-report' || lowerPath === '/api/deploy-report') {
+          if (rejectUnauthorisedMutation('Cross-origin deploy reports forbidden')) return;
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use POST.' }));
             return;
           }
+          const parsed = parseDeployRefreshQuery(reqUrl.searchParams);
+          if (!parsed) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Bad Request: expected ?target=<target>&ok=0|1[&detail=…]' }));
+            return;
+          }
+          const reports = { ...(storeRef.get('deployRefreshReports') || {}) };
+          reports[parsed.target] = recordDeployRefresh(reports[parsed.target], {
+            ok: parsed.ok,
+            at: new Date().toISOString(),
+            peer: req.socket?.remoteAddress || undefined,
+            detail: parsed.detail,
+          });
+          storeRef.set('deployRefreshReports', reports);
+          console.log(`[Deploy Report] ${parsed.target}: scheduled refresh ${parsed.ok ? 'ok' : 'FAILED'}${parsed.detail ? ` — ${parsed.detail}` : ''}`);
+          // A mounted pane holds a snapshot whose `refreshReport` was stamped at check time —
+          // minutes or days stale. Fold the new report into the stored snapshot and re-publish
+          // it through the channel the view already subscribes to, so a fail report lands on
+          // the card now rather than at the next scheduled tick.
+          if (parsed.target === 'unbound') {
+            const snap = storeRef.get('unboundReachability');
+            if (snap) {
+              storeRef.set('unboundReachability', { ...snap, refreshReport: reports[parsed.target] });
+              mainWindow?.webContents.send('unbound-reachability-updated', storeRef.get('unboundReachability'));
+            }
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ success: true }));
+          return;
+        }
 
+        if (lowerPath === '/v1/control/cosmetics' || lowerPath === '/api/control/cosmetics') {
+          // A status query reads nothing sensitive, so it keeps the origin-only guard even
+          // when a feed token is configured — the token gates the change, not the question.
           if (req.method === 'GET') {
+            if (rejectCrossOrigin('Cross-origin control forbidden')) return;
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ success: true, message: 'Cosmetics status query' }));
             return;
           }
+
+          if (rejectUnauthorisedMutation('Cross-origin control forbidden')) return;
 
           if (req.method !== 'POST') {
             res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -2079,11 +2329,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         }
 
         if (lowerPath === '/v1/control/reload' || lowerPath === '/api/control/reload') {
-          if (!isSafeClientOrigin()) {
-            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ success: false, error: 'Cross-origin control forbidden' }));
-            return;
-          }
+          if (rejectUnauthorisedMutation('Cross-origin control forbidden')) return;
           if (req.method !== 'POST') {
             res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ success: false, error: 'Method Not Allowed' }));
@@ -2096,17 +2342,21 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         }
 
         if (lowerPath === '/v1/compile' || lowerPath === '/api/compile') {
-          if (!isSafeClientOrigin()) {
-            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ success: false, error: 'Cross-origin compilation forbidden' }));
-            return;
-          }
+          if (rejectUnauthorisedMutation('Cross-origin compilation forbidden')) return;
           if (req.method !== 'POST') {
             res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use POST.' }));
             return;
           }
           console.log('[Feed Server API] Received trigger: compile rules');
+          // `compileInFlight` already single-flights the real compile in the IPC handler — this
+          // check keeps a flood of trigger POSTs from each paying an IPC round-trip only to
+          // bounce, and answers honestly instead of claiming every request started a compile.
+          if (compileInFlight) {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: true, alreadyRunning: true, message: 'Compilation already in progress' }));
+            return;
+          }
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('trigger-compile');
           }
@@ -2245,6 +2495,13 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
             res.end('403 Forbidden: Hidden files cannot be served.');
             return;
           }
+          // The output directory is a shared user folder — a feed server must not hand out
+          // whatever else sits beside the compiled lists (`config.yaml`, `package.json`, …).
+          if (!isServableFeedFile(cleanName, basename(savePath))) {
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end(`Not a feed file: ${pathname}`);
+            return;
+          }
           targetFilePath = join(outputDir, cleanName);
         }
 
@@ -2330,8 +2587,13 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
             }
           }
 
-          // Not found response with helpful feed directory listing
-          const available = existsSync(outputDir) ? (await fs.readdir(outputDir)).filter((f) => !f.startsWith('.')) : [];
+          // Not found response with helpful feed directory listing — filtered to servable names
+          // only: naming every file in the directory would leak exactly what the allowlist is
+          // there to keep private.
+          const saveName = basename(savePath);
+          const available = existsSync(outputDir)
+            ? (await fs.readdir(outputDir)).filter((f) => isServableFeedFile(f, saveName))
+            : [];
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end(
             `File not found: ${pathname}\n\nAvailable compiled lists in Blockingmachine output directory:\n${available.map((f) => ` - http://${getLocalLanIp()}:${feedServerPort}/${f}`).join('\n') || ' (no files yet - compile rules first)'}`
@@ -2408,6 +2670,20 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     if (initialWatchdog?.enabled) {
       setupAiWatchdogTimer(initialWatchdog, store);
     }
+
+    // Re-judge the persisted quarantine against the current classifier once per launch. The
+    // store accumulates verdicts across classifier versions and past gate bugs, and the
+    // ai-threats feed serves them whether or not the watchdog runs — nothing else ever asks an
+    // old verdict to prove itself again.
+    void revalidateQuarantine(store, (domain) =>
+      getSharedAiDetectorService(loadAiConfig(store)).scanDomain(domain, { skipDns: true }),
+    ).catch((err) => console.error('[AI Quarantine] Revalidation failed:', err));
+
+    // The Unbound reachability check re-runs itself. Not gated on a setting: the tick is gated on a
+    // deployment being worth watching, which is a far narrower condition than opt-in (see
+    // `shouldWatchUnbound`), and the alternative is a check whose only trigger is remembering to
+    // look — which is the thing that stops happening.
+    startUnboundWatch(store);
 
     ipcMain.handle('get-custom-rules', async () => {
       try {
@@ -2530,6 +2806,16 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         trayCompileProgress = null;
         trayManager?.onCompileCompleted(result);
       };
+
+      if (compileInFlight) {
+        return {
+          success: false,
+          error: 'Compilation already in progress.',
+          processedRuleCount: 0,
+          uniqueRuleCount: 0,
+          timestamp: new Date().toLocaleString(),
+        };
+      }
 
       try {
         compileInFlight = true;
@@ -2802,25 +3088,37 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // publishers is one host with six categories and the deduplicated array keeps only the
         // first — the attribution is built before that information is thrown away.
         try {
-          // Keyed by the category each *rule* resolved to, not the category its source declares.
-          // The rule's own resolution is the publisher's filing after the URL was looked up in
-          // the catalog, which is strictly better than a stored setting a user may have edited
-          // since — and a custom list the user added carries no stored category at all, in which
-          // case the parser's `uncategorised` is the honest answer and lands in the residual.
-          const byCategoryRules = new Map<string, StoredRule[]>();
-          for (const res of sourceResults) {
-            for (const rule of res.rules ?? []) {
-              const category =
-                rule?.metadata?.sourceInfo?.category ||
-                res.source.category ||
-                'uncategorised';
-              const bucket = byCategoryRules.get(category);
-              if (bucket) bucket.push(rule);
-              else byCategoryRules.set(category, [rule]);
-            }
-          }
+          // One entry per configured source, carrying its name and URL: the manifest is the
+          // record a later build cites for "what was this built from", which is a question
+          // about sources, not about the categories they resolved to. A rule's own
+          // `metadata.sourceInfo.category` still wins over the list's declared one — the
+          // parser stamps the catalog's answer onto each rule — and a fetch that failed is
+          // recorded as attempted rather than dropped, so "nine sources produced this" and
+          // "nine were configured" stay two different sentences the manifest can tell apart.
           const attribution = buildCategoryAttribution(
-            [...byCategoryRules].map(([category, rules]) => ({ category, rules })),
+            sourceResults.map((res) => ({
+              name: res.source.name,
+              url: res.source.url,
+              category: res.source.category ?? '',
+              error: res.error,
+              // Pin what was pulled, not just what was named: a digest over the source's raw
+              // rule lines, sorted so a reordered pull is still the same revision. "Which lists"
+              // and "which pull of those lists" are different questions, and the manifest should
+              // be able to answer both. A failed fetch gets no revision — there is nothing to pin.
+              revision: res.error
+                ? undefined
+                : `sha256:${createHash('sha256')
+                    .update(
+                      (res.rules ?? [])
+                        .map((rule) => rule.raw)
+                        .filter((raw): raw is string => typeof raw === 'string')
+                        .sort()
+                        .join('\n'),
+                      'utf8',
+                    )
+                    .digest('hex')}`,
+              rules: res.rules ?? [],
+            })),
           );
           const categoriesDir = join(outputDir, 'categories');
           await fs.mkdir(categoriesDir, { recursive: true });
@@ -2836,7 +3134,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               'utf8',
             );
           }
-          const manifest = toAttributionManifest(attribution);
+          const manifest = toAttributionManifest(attribution, {
+            generatedAt: new Date().toISOString(),
+          });
           await fs.writeFile(
             join(categoriesDir, 'manifest.json'),
             `${JSON.stringify(manifest, null, 2)}\n`,
@@ -2845,6 +3145,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           console.log(
             `[IPC Main] Category attribution saved: ${manifest.hosts} hosts across ` +
               `${manifest.categories.length} categor${manifest.categories.length === 1 ? 'y' : 'ies'} ` +
+              `from ${manifest.sources.length} source${manifest.sources.length === 1 ? '' : 's'} ` +
               `(${manifest.contested} claimed by more than one` +
               `${manifest.empty.length > 0 ? `, ${manifest.empty.length} with nothing blockable: ${manifest.empty.join(', ')}` : ''}` +
               `) -> ${categoriesDir}`,
@@ -2863,11 +3164,18 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // deduplicated array the other outputs come from is what keeps the verdicts and the
         // blocklist they describe from being produced from two different inputs.
         //
-        // Measured on the real 190,035-host browser list this is ~162s and yields 6,392 verdicts,
-        // so it is the slowest part of a compilation and the duration is logged. It is not run in
-        // the background: the file has to exist before `npm run package:extension` compiles the
-        // tiers, and a verdict file written after the packaging step read it would be a tier built
-        // from last week's model.
+        // Measured on the real 190,035-host browser list a cold pass is ~162s and yields 6,392
+        // verdicts, so it is the slowest part of a compilation and the duration is logged. It is
+        // not run in the background: the file has to exist before `npm run package:extension`
+        // compiles the tiers, and a verdict file written after the packaging step read it would
+        // be a tier built from last week's model.
+        //
+        // The pass is incremental via `verdictCache`: a host whose verdict the same classifier
+        // already produced is served from `mini-ai-verdicts.json` rather than re-scored, so a
+        // recompile over a mostly-unchanged list pays only for what churned. The record's
+        // fingerprint covers the model weights, the live vocabulary (a reputation hot patch
+        // between runs invalidates on its own) and the user's feedback tunings — a verdict is
+        // only reused when the classifier that would answer today is the one that answered then.
         try {
           const candidates = new Set<string>();
           for (const rule of uniqueRules) {
@@ -2879,10 +3187,36 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           }
 
           const classifyStartedAt = Date.now();
+          const fingerprint = classifierInputFingerprint(globalMiniAiClassifier.exportFeedback(), BM_BUILD_ID);
+          const cachePath = join(app.getPath('userData'), 'mini-ai-verdicts.json');
+          let priorVerdicts: Record<string, ThreatCategory> = Object.create(null);
+          let cacheState: 'empty' | 'stale' | 'current' = 'empty';
+          try {
+            const parsed = parseVerdictCache(await fs.readFile(cachePath, 'utf8'));
+            if (parsed && parsed.fingerprint === fingerprint) {
+              priorVerdicts = parsed.verdicts;
+              cacheState = 'current';
+            } else if (parsed) {
+              cacheState = 'stale';
+            }
+          } catch {
+            // No cache file yet (or unreadable): the pass below is a full cold run.
+          }
+
           const verdicts: string[] = [];
+          // Only current candidates are written back, so hosts that fell off the list do not
+          // accumulate in the file run over run.
+          const measured: Record<string, ThreatCategory> = Object.create(null);
+          let servedFromCache = 0;
           for (const host of candidates) {
-            const prediction = globalMiniAiClassifier.classify(host);
-            if (prediction.category === 'Malware/Phishing') verdicts.push(host);
+            // `hasOwn` rather than truthiness: the record is null-prototype and validated on
+            // parse, but a key must be present to mean anything — never inherit a lookup.
+            const cached = Object.hasOwn(priorVerdicts, host) ? priorVerdicts[host] : undefined;
+            const category =
+              cached ?? globalMiniAiClassifier.classify(host).category;
+            if (cached !== undefined) servedFromCache += 1;
+            measured[host] = category;
+            if (category === 'Malware/Phishing') verdicts.push(host);
           }
           const elapsed = Date.now() - classifyStartedAt;
 
@@ -2907,8 +3241,19 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           );
           console.log(
             `[IPC Main] Malware verdicts saved: ${verdicts.length.toLocaleString()} of ` +
-              `${candidates.size.toLocaleString()} hosts classified in ${(elapsed / 1000).toFixed(1)}s -> ${malwarePath}`,
+              `${candidates.size.toLocaleString()} hosts ` +
+              `(${servedFromCache.toLocaleString()} served from the ${cacheState} verdict cache, ` +
+              `${(candidates.size - servedFromCache).toLocaleString()} classified ` +
+              `in ${(elapsed / 1000).toFixed(1)}s) -> ${malwarePath}`,
           );
+
+          // The write is best-effort and deliberately last: a compilation whose cache cannot be
+          // persisted has still produced its verdict file, which is the artifact that matters.
+          try {
+            await fs.writeFile(cachePath, serializeVerdictCache(fingerprint, measured), 'utf8');
+          } catch (cacheErr) {
+            console.warn('[IPC Main] Verdict cache could not be written (next compile runs cold):', cacheErr);
+          }
         } catch (verdictErr) {
           console.error('[IPC Main] Failed to write malware verdicts:', verdictErr);
         }
@@ -3168,18 +3513,21 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle('get-sinkhole-config', async () => {
       return {
         piholeUrl: store.get('piholeUrl') || '',
-        piholeApiKey: store.get('piholeApiKey') || '',
+        piholeApiKey: readSecret(store, safeStorage, 'piholeApiKey'),
         adguardHomeUrl: store.get('adguardHomeUrl') || '',
         adguardHomeUser: store.get('adguardHomeUser') || '',
-        adguardHomePassword: store.get('adguardHomePassword') || '',
+        adguardHomePassword: readSecret(store, safeStorage, 'adguardHomePassword'),
         syncOnCompile: Boolean(store.get('syncOnCompile')),
         adguardMode: (store.get('adguardMode') as 'direct' | 'ha-api' | 'webhook') || 'direct',
-        haToken: store.get('haToken') || '',
+        haToken: readSecret(store, safeStorage, 'haToken'),
         haWebhookUrl: store.get('haWebhookUrl') || '',
         customWebhookUrl: store.get('customWebhookUrl') || '',
         adguardDirectPort: normalizeAdguardDirectPort(store.get('adguardDirectPort')),
         adguardDirectUrl: (store.get('adguardDirectUrl') as string) || '',
         allowInsecureLocalTls: Boolean(store.get('allowInsecureLocalTls')),
+        // Whether the secrets above are sealed at rest — the Settings card surfaces this so a
+        // session without a keychain backend stores weaker *visibly*, not silently.
+        encryptionAvailable: secretStorageAvailable(safeStorage),
       };
     });
 
@@ -3192,13 +3540,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         adguardDirectPort: config.adguardDirectPort,
       });
       if (config.piholeUrl !== undefined) store.set('piholeUrl', config.piholeUrl);
-      if (config.piholeApiKey !== undefined) store.set('piholeApiKey', config.piholeApiKey);
+      if (config.piholeApiKey !== undefined) writeSecret(store, safeStorage, 'piholeApiKey', config.piholeApiKey);
       if (config.adguardHomeUrl !== undefined) store.set('adguardHomeUrl', config.adguardHomeUrl);
       if (config.adguardHomeUser !== undefined) store.set('adguardHomeUser', config.adguardHomeUser);
-      if (config.adguardHomePassword !== undefined) store.set('adguardHomePassword', config.adguardHomePassword);
+      if (config.adguardHomePassword !== undefined) writeSecret(store, safeStorage, 'adguardHomePassword', config.adguardHomePassword);
       if (config.syncOnCompile !== undefined) store.set('syncOnCompile', Boolean(config.syncOnCompile));
       if (config.adguardMode !== undefined) store.set('adguardMode', config.adguardMode);
-      if (config.haToken !== undefined) store.set('haToken', config.haToken);
+      if (config.haToken !== undefined) writeSecret(store, safeStorage, 'haToken', config.haToken);
       if (config.haWebhookUrl !== undefined) store.set('haWebhookUrl', config.haWebhookUrl);
       if (config.customWebhookUrl !== undefined) store.set('customWebhookUrl', config.customWebhookUrl);
       if (config.adguardDirectPort !== undefined) store.set('adguardDirectPort', normalizeAdguardDirectPort(config.adguardDirectPort));
@@ -3293,6 +3641,28 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
     });
 
+    // Whether a token is configured is returned alongside — the settings card needs to render
+    // "required" or "optional" before the user types anything, and a blank read cannot show that.
+    ipcMain.handle('get-feed-token', async () => {
+      const token = (store.get('feedToken') || '').trim();
+      return { configured: token.length > 0, token };
+    });
+
+    ipcMain.handle('set-feed-token', async (_event, token: unknown) => {
+      try {
+        // Unknown types are refused rather than coerced — a silent `String(token)` could store
+        // an object the server then compares differently than the user expects.
+        if (typeof token !== 'string') return { success: false, error: 'Token must be a string' };
+        const val = token.trim();
+        if (val.length > 256) return { success: false, error: 'Token exceeds the 256-character limit' };
+        store.set('feedToken', val);
+        return { success: true };
+      } catch (err: any) {
+        console.error('Failed to set feed token:', err);
+        return { success: false, error: err?.message || String(err) };
+      }
+    });
+
     ipcMain.handle('get-launch-on-startup', async () => {
       try {
         const settings = app.getLoginItemSettings();
@@ -3371,7 +3741,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       try {
         if (service === 'pihole') {
           const rawUrl = store.get('piholeUrl') as string | undefined;
-          const apiKey = store.get('piholeApiKey') as string | undefined;
+          const apiKey = readSecret(store, safeStorage, 'piholeApiKey') || undefined;
           if (!rawUrl || !rawUrl.trim()) {
             return { service: 'pihole', success: false, message: 'Pi-hole URL is not configured.' };
           }
@@ -3425,8 +3795,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           const adguardMode = (store.get('adguardMode') as 'direct' | 'ha-api' | 'webhook' | undefined) || 'direct';
           const rawUrl = store.get('adguardHomeUrl') as string | undefined;
           const user = store.get('adguardHomeUser') as string | undefined;
-          const pass = store.get('adguardHomePassword') as string | undefined;
-          const haToken = store.get('haToken') as string | undefined;
+          const pass = readSecret(store, safeStorage, 'adguardHomePassword') || undefined;
+          const haToken = readSecret(store, safeStorage, 'haToken') || undefined;
           const haWebhookUrl = store.get('haWebhookUrl') as string | undefined;
 
           if (adguardMode === 'ha-api') {
@@ -3824,6 +4194,69 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       return '';
     });
 
+    /**
+     * Builds the browser extension and writes a loadable copy beside a directory the user picks.
+     *
+     * "Install the extension" from inside the hub can only ever mean "put a current build where
+     * the browser can load it" — an unpacked extension must sit on disk for `Load unpacked` or
+     * `about:debugging` to read, and no app can click those buttons for the user. The dist is
+     * rebuilt on every click (~2s), because a package copied from a stale build would silently
+     * ship old blocking code while looking freshly downloaded.
+     *
+     * The copy replaces the destination outright. A merge would leave removed files behind, and
+     * an extension folder holding two generations of `rules/` entries is a worse outcome than a
+     * clean rewrite.
+     */
+    ipcMain.handle('download-extension', async () => {
+      const extensionDir = pathResolve(app.getAppPath(), '../browser-extension');
+      if (!existsSync(join(extensionDir, 'package.json'))) {
+        return {
+          success: false,
+          error: 'Browser extension sources are not bundled with this install.',
+        };
+      }
+      const webpackBin = pathResolve(
+        app.getAppPath(),
+        '../../node_modules/webpack/bin/webpack.js',
+      );
+      if (!existsSync(webpackBin)) {
+        return { success: false, error: 'The extension build toolchain is not installed.' };
+      }
+      const picked = await dialog.showOpenDialog({
+        title: 'Choose where to save the extension package',
+        defaultPath: app.getPath('downloads'),
+        buttonLabel: 'Save here',
+        properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+      });
+      if (picked.canceled || !picked.filePaths?.length) return { success: false, cancelled: true };
+      const destination = join(picked.filePaths[0], 'blockingmachine-extension');
+      try {
+        await promisify(execFile)(
+          process.execPath,
+          [webpackBin, '--mode', 'production'],
+          {
+            cwd: extensionDir,
+            timeout: 180_000,
+            // `process.execPath` is the Electron binary — without this it boots a second
+            // app instance instead of running webpack as plain Node.
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+          },
+        );
+      } catch (error) {
+        console.error('[IPC Main] Extension build failed:', error);
+        return { success: false, error: 'The extension build failed — the package was not written.' };
+      }
+      const distDir = join(extensionDir, 'dist');
+      try {
+        await fs.rm(destination, { recursive: true, force: true });
+        await fs.cp(distDir, destination, { recursive: true });
+      } catch (error) {
+        console.error('[IPC Main] Extension copy failed:', error);
+        return { success: false, error: `Could not write ${destination}` };
+      }
+      return { success: true, path: destination };
+    });
+
     ipcMain.handle('get-export-format', async () => {
       return store.get('exportFormat') || 'adguard';
     });
@@ -3877,22 +4310,30 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     // AI Radar IPC Handlers
     // ==========================================
     ipcMain.handle('get-ai-config', async () => {
-      const saved = store.get('aiConfig') as Partial<AiProviderConfig> | undefined;
+      // `loadAiConfig` runs the one-time seal of a legacy plaintext key — the same lazy
+      // migration `readSecret` gives the flat keys.
+      const saved = loadAiConfig(store);
       return {
-        provider: saved?.provider || 'mini-ai',
-        ollamaUrl: saved?.ollamaUrl || 'http://127.0.0.1:11434',
-        ollamaModel: saved?.ollamaModel || 'llama3.2',
-        apiKey: saved?.apiKey || '',
-        apiEndpoint: saved?.apiEndpoint || '',
-        modelName: saved?.modelName || '',
-        cascade: saved?.cascade || { enabled: false },
+        provider: saved.provider || 'mini-ai',
+        ollamaUrl: saved.ollamaUrl || 'http://127.0.0.1:11434',
+        ollamaModel: saved.ollamaModel || 'llama3.2',
+        apiKey: saved.apiKey || '',
+        apiEndpoint: saved.apiEndpoint || '',
+        modelName: saved.modelName || '',
+        cascade: saved.cascade || { enabled: false },
+        encryptionAvailable: secretStorageAvailable(safeStorage),
       };
     });
 
     ipcMain.handle('set-ai-config', async (_event, config: Partial<AiProviderConfig>) => {
       try {
         const existing = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
-        store.set('aiConfig', { ...existing, ...config });
+        // The sealed form is an output of the seal, never input: a caller-supplied
+        // `apiKeyEncrypted` — including an `undefined` carried on a spread config — would
+        // overwrite the stored one with a blob this keychain cannot read, or nothing at all.
+        // `apiKey` stays: plaintext in, sealed on the way to disk, `undefined` untouched.
+        const { apiKeyEncrypted: _callerSealed, ...rest } = (config ?? {}) as Partial<AiProviderConfig>;
+        store.set('aiConfig', sealSecretField({ ...existing, ...rest }, safeStorage, 'apiKey'));
         return { success: true };
       } catch (err: any) {
         return { success: false, error: err?.message || String(err) };
@@ -3967,14 +4408,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('ai-scan-domain', async (_event, domain: string, overrideConfig?: Partial<AiProviderConfig>) => {
-      const savedConfig = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+      const savedConfig = loadAiConfig(store);
       const activeConfig = { ...savedConfig, ...overrideConfig };
       const service = getSharedAiDetectorService(activeConfig);
       return await service.scanDomain(domain, activeConfig);
     });
 
     ipcMain.handle('ai-scan-querylog', async (_event, options: { service: 'adguard' | 'pihole'; limit?: number }, overrideConfig?: Partial<AiProviderConfig>) => {
-      const savedConfig = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+      const savedConfig = loadAiConfig(store);
       const activeConfig = { ...savedConfig, ...overrideConfig };
       const service = getSharedAiDetectorService(activeConfig);
 
@@ -3998,7 +4439,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
       if (options.service === 'pihole') {
         const baseUrl = store.get('piholeUrl') || 'http://127.0.0.1';
-        const token = store.get('piholeApiKey') || '';
+        const token = readSecret(store, safeStorage, 'piholeApiKey');
         const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
           signal: AbortSignal.timeout(6000),
         });
@@ -4035,7 +4476,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       if (!safety.isSafe) {
         throw new Error(`SSRF Guard blocked crawl request to "${url}": ${safety.reason}`);
       }
-      const savedConfig = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
+      const savedConfig = loadAiConfig(store);
       const activeConfig = { ...savedConfig, ...overrideConfig };
       const service = getSharedAiDetectorService(activeConfig);
       return await service.crawlAndScanUrl(url, activeConfig);
@@ -4343,6 +4784,11 @@ let mainWindow: BrowserWindow | null = null;
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
+// Stamped by webpack DefinePlugin from `git rev-parse --short HEAD` at build time — the value
+// the verdict cache folds into its fingerprint so a new binary is a new cache epoch. 'unstamped'
+// is what a dev or test context sees, and it still forms a stable epoch inside that context.
+declare const __BM_BUILD_ID__: string;
+const BM_BUILD_ID: string = typeof __BM_BUILD_ID__ === 'string' ? __BM_BUILD_ID__ : 'unstamped';
 
 const createWindow = async () => {
   const preloadPath =
@@ -4423,7 +4869,7 @@ const createWindow = async () => {
   if (typeof MAIN_WINDOW_WEBPACK_ENTRY !== 'undefined') {
     await mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
   } else if (isDev) {
-    await mainWindow.loadURL('http://localhost:3000');
+    await mainWindow.loadURL(`http://localhost:${process.env.FORGE_RENDERER_PORT || 3000}`);
   } else {
     await mainWindow.loadURL(
       `file://${join(__dirname, '../renderer/index.html')}`
@@ -4533,6 +4979,7 @@ async function initialize() {
         clearInterval(aiWatchdogTimer);
         aiWatchdogTimer = null;
       }
+      stopUnboundWatch();
       if (liveRadarTimer) {
         clearInterval(liveRadarTimer);
         liveRadarTimer = null;

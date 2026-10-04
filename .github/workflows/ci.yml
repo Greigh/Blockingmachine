@@ -63,3 +63,14 @@ jobs:
           # a packaged build; the check is provenance-aware, so this verifies the baseline's shape
           # and counts rather than comparing it to a hub list CI does not have.
           npm run check:tiers
+          # The path-scoped bucket is only potentially URL-decidable — a list update that floods
+          # it with request-typed or mangled shapes passes every replay test while quietly making
+          # the URL half of coverage worth less. This is the floor under that share.
+          npm run check:path-decidability
+
+      # A release rehearsal: the tier compiler runs against a fixture blocklist and packaging runs
+      # the real release path — internal compile, bundle build, MV3 gate, both archives — then the
+      # shipped zips are opened and asserted (every declared ruleset present, fixture hosts aboard,
+      # gecko id stamped). A packaging break fails here, on the PR, rather than at release.
+      - name: Release rehearsal
+        run: npm run rehearse:release

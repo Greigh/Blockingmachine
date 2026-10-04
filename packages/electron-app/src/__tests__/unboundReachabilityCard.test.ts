@@ -159,4 +159,50 @@ describe('UnboundReachabilityCard', () => {
     });
     expect(markup).toContain('This machine resolves through 192.168.1.1');
   });
+
+  test('says the verdict is re-checked on its own, and only where that is true', () => {
+    // A verdict on screen means this hub produced one, and a stored verdict is one of the two
+    // things that make a deployment worth watching — so the sentence is safe exactly here, and the
+    // app being closed is named rather than left for someone to discover.
+    const withVerdict = render({ result: verdict() });
+    expect(withVerdict).toContain('re-checked every 15 minutes while the app is open');
+
+    // Before the first check there is no deployment to watch, so promising a cadence would be a
+    // claim about nothing.
+    const empty = render();
+    expect(empty).not.toContain('re-checked');
+  });
+
+  test('a refresh that failed while the app was closed is named on the remembered verdict', () => {
+    // The flag's scenario end to end: the cron's reload failed at 02:14, the report was
+    // persisted, and on next launch the stored snapshot — rows and all — carries the failure
+    // instead of only the last green verdict.
+    const snapshot = toReachabilitySnapshot(
+      verdict({
+        refreshReport: {
+          lastOkAt: '2026-09-29T05:00:00.000Z',
+          lastFailAt: '2026-09-29T10:14:00.000Z',
+          lastFailDetail: 'unbound-checkconf rejected the file',
+        },
+      }),
+    );
+    const markup = render({ snapshot });
+    expect(markup).toContain('scheduled refresh reported failure');
+    expect(markup).toContain('unbound-checkconf rejected the file');
+    expect(markup).toContain('unbound-refresh-alert');
+  });
+
+  test('a healed failure renders no alert — the success that wiped it is the newest evidence', () => {
+    const snapshot = toReachabilitySnapshot(
+      verdict({
+        refreshReport: {
+          lastFailAt: '2026-09-29T05:00:00.000Z',
+          lastFailDetail: 'conf rejected',
+          lastOkAt: '2026-09-29T11:00:00.000Z',
+        },
+      }),
+    );
+    const markup = render({ snapshot });
+    expect(markup).not.toContain('unbound-refresh-alert');
+  });
 });

@@ -282,6 +282,7 @@ export type SupportedFormat =
   | "dnsmasq"
   | "unbound"
   | "bind"
+  | "bind-null"
   | "privoxy"
   | "shadowrocket"
   | "adguard"

@@ -7,7 +7,7 @@ import type {
   ExportOptions,
 } from "../types.js";
 import { EXPORT_FORMATS } from "../types.js";
-import { formatRuleForType, formatExceptionComment, isException, isExportableRule, PRIVOXY_BYPASS_SECTION } from "./formatters.js";
+import { formatRuleForType, formatExceptionComment, isException, isExportableRule, PRIVOXY_BYPASS_SECTION, bindRpzPassthruRecords } from "./formatters.js";
 import { generateHeader } from "./headers.js";
 import {
   filterDNSRules,
@@ -33,6 +33,7 @@ export async function exportFormat(
     "dnsmasq",
     "unbound",
     "bind",
+    "bind-null",
     "privoxy",
     "shadowrocket",
     "domains",
@@ -75,9 +76,20 @@ export async function exportFormat(
         }
       }
     } else if (format === "bind") {
-      // RPZ resolves on the longest match, so a child passthru needs no ordering at all.
+      // RPZ resolves on the longest match, so a child passthru needs no ordering at all. It is
+      // emitted as a pair — the child and its wildcard — so the exemption covers the subtree the
+      // source rule released, and the parent's block wildcard does not re-block it.
       for (const sub of precedence.subdomainExceptions) {
-        lines.push(`${sub.subdomain} CNAME rpz-passthru.`);
+        lines.push(...bindRpzPassthruRecords(sub.subdomain));
+      }
+    } else if (format === "bind-null") {
+      // A null zone cannot release a child — it is authoritative for the whole subtree, and
+      // BIND answers the parent before any forwarding or policy lookup. The only mechanism
+      // that delegates a child out (an `NS` record in the parent's zone data) needs a
+      // per-domain file this mechanism exists to avoid. Recorded as NOT HONOURED rather than
+      // dropped, because a silently re-blocked allowlist is the failure nobody can see.
+      for (const sub of precedence.subdomainExceptions) {
+        lines.push(`# EXCEPTION NOT HONOURED: @@||${sub.subdomain}^`);
       }
     }
 
@@ -244,7 +256,7 @@ export async function exportWithOptions(
   if (formatsToExport.size > 0) await mkdir(outputDir, { recursive: true });
   for (const format of formatsToExport) {
     let formatRules = baseRules;
-    if (["hosts", "dnsmasq", "unbound", "bind", "privoxy", "shadowrocket", "domains"].includes(format)) {
+    if (["hosts", "dnsmasq", "unbound", "bind", "bind-null", "privoxy", "shadowrocket", "domains"].includes(format)) {
       formatRules = filterDNSRules(baseRules);
     } else if (["adguard", "abp"].includes(format)) {
       formatRules = filterBrowserRules(baseRules);

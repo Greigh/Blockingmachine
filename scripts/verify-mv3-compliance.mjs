@@ -8,12 +8,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgvOrExit } from './argv.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const extensionRoot = path.resolve(__dirname, '../packages/browser-extension');
 const manifestPath = path.join(extensionRoot, 'manifest.json');
 const distPath = path.join(extensionRoot, 'dist');
+
+// This script takes no arguments — a stray `--flag` or extra word was previously ignored, so
+// anything that arrives is a question nobody asked: refuse it.
+parseArgvOrExit(process.argv.slice(2), {});
 
 console.log('🔍 [MV3 Compliance] Running automated Manifest V3 compliance verification...');
 

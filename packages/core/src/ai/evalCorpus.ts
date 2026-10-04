@@ -34,7 +34,8 @@ export type EvalFamily =
   | 'ad'
   | 'telemetry'
   | 'malware'
-  | 'dga';
+  | 'dga'
+  | 'annoyance';
 
 /**
  * What a name-shape classifier can be held responsible for.
@@ -67,6 +68,7 @@ const TELEMETRY: ThreatCategory[] = ['Telemetry/Analytics'];
 const ADS_OR_TELEMETRY: ThreatCategory[] = ['Advertising', 'Telemetry/Analytics'];
 const TELEMETRY_OR_ADS: ThreatCategory[] = ['Telemetry/Analytics', 'Advertising'];
 const MALWARE: ThreatCategory[] = ['Malware/Phishing'];
+const ANNOYANCE: ThreatCategory[] = ['Consent/Annoyance'];
 /** Ad-shaped names on abuse TLDs: the verdict must be non-clean, either label. */
 const NUISANCE_OR_MALWARE: ThreatCategory[] = [
   'Advertising',
@@ -125,6 +127,12 @@ const dga = (domain: string, note: string): EvalCase => ({
   domain,
   expected: NUISANCE_OR_MALWARE,
   family: 'dga',
+  note,
+});
+const annoyance = (domain: string, note?: string): EvalCase => ({
+  domain,
+  expected: ANNOYANCE,
+  family: 'annoyance',
   note,
 });
 
@@ -270,7 +278,7 @@ export const EVAL_CORPUS: EvalCase[] = [
   ad('pagead2.googlesyndication.com'),
   ad('partner.googleadservices.com'),
   ad('www.googleadservices.com'),
-  ad('px.ads.linkedin.com'),
+  adOrTelemetry('px.ads.linkedin.com'),
   ad('amazon-adsystem.com'),
   ad('adsrvr.org'),
   ad('adnxs.com'),
@@ -317,7 +325,6 @@ export const EVAL_CORPUS: EvalCase[] = [
     'ct.pinterest.com',
     'Pinterest click tracker abbreviation; the token is the endpoint, not the brand',
   ),
-  telemetry('px.ads.linkedin.com'),
   telemetry('scorecardresearch.com'),
   telemetry('pixel.quantserve.com'),
   telemetry('chartbeat.com'),
@@ -345,6 +352,18 @@ export const EVAL_CORPUS: EvalCase[] = [
   telemetry('kochava.com'),
   telemetry('onesignal.com'),
   telemetry('api.braze.com'),
+
+  // ─── Consent management & annoyance platforms ──────────────────────────────
+  // CMP and popup vendors: nuisances to block by choice, never threats. The
+  // category exists so these stop borrowing the telemetry label they do not own.
+  annoyance('consent.cookiebot.com', 'CMP consent endpoint'),
+  annoyance('consentmanager.cookiebot.eu', 'CMP consent endpoint on the vendor\'s EU zone'),
+  annoyance('cmp.osano.com', 'CMP label on a consent vendor'),
+  annoyance('cdn.cookielaw.org', 'consent vendor CDN — the token vetoes the benign-endpoint read'),
+  annoyance('consent.trustarc.com', 'TrustArc consent endpoint'),
+  annoyance('consent.usercentrics.eu', 'Usercentrics consent API'),
+  annoyance('gdpr.privacymanager.io', 'Sourcepoint GDPR endpoint'),
+  annoyance('ccpa-wrapper.privacymanager.io', 'Sourcepoint CCPA wrapper host'),
 
   // ─── Phishing / credential harvesting (constructed to published patterns) ──
   malware('paypa1-security.com', 'leet-substituted brand plus a security lure'),

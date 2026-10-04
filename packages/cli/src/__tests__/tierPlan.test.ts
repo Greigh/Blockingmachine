@@ -11,9 +11,9 @@
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { jest } from "@jest/globals";
 import { TierPlanCommand } from "../commands/TierPlanCommand.js";
 import { createLogger } from "../lib/logger.js";
+import { captureStdout, parseJsonStdout } from "./captureStdout.js";
 import { STATIC_RULE_TIERS, computeTierPlan } from "@blockingmachine/core";
 
 const logger = createLogger();
@@ -39,6 +39,9 @@ async function makeRulesDir(
     // that has never run the classifier. Omitting it would not model a missing verdict file; it
     // would model a corrupt bundle, and the command refuses one of those.
     tier_security: rules([]),
+    // Same shape, same reason: the residual bucket is empty in a checkout that has never been
+    // compiled, and it is compiled rather than curated for the same reason `tier_security` is.
+    tier_unclassified: rules([]),
   };
   for (const [tier, body] of Object.entries({ ...defaults, ...overrides })) {
     if (body === null) continue;
@@ -66,10 +69,10 @@ describe("tier-plan", () => {
 
     const res = await run(dir);
     expect(res.success).toBe(true);
-    const data = res.data as { files: Array<{ id: string; rules: number }>; plan: { totalRules: number } };
+    const data = res.data as { files: Array<{ id: string; rules: number }>; plan: { totalRules: number; benefitSource: string } };
     // Not the catalogue's curated counts: a packaged build ships tens of thousands per tier, and
     // a plan computed from the baseline would be a plan about a different bundle.
-    expect(data.files.map((f) => f.rules)).toEqual([2, 2, 1, 1, 0]);
+    expect(data.files.map((f) => f.rules)).toEqual([2, 2, 1, 1, 0, 0]);
     expect(data.plan.totalRules).toBe(6);
     expect(data.plan.benefitSource).toBe("coverage");
   });
@@ -193,26 +196,17 @@ describe("tier-plan", () => {
     // on the timestamp and a machine consumer had no way around it. Asserting on `res.data` alone
     // passes either way, which is why the earlier version of this test did not catch it — the
     // output has to be parsed where the caller reads it, on stdout.
-    const writes: string[] = [];
-    const spy = jest
-      .spyOn(process.stdout, "write")
-      .mockImplementation(((chunk: string | Uint8Array) => {
-        writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-        return true;
-      }) as typeof process.stdout.write);
-    let res;
-    try {
+    //
+    // The capture itself now lives in `captureStdout.ts`, shared with the other `--json` commands,
+    // so "what the caller sees" is defined once rather than re-implemented per suite.
+    let res!: Awaited<ReturnType<typeof run>>;
+    const output = await captureStdout(async () => {
       res = await run(dir, { json: true });
-    } finally {
-      spy.mockRestore();
-    }
-
-    const output = writes.join("");
-    expect(output).not.toContain("\u001b");
-    const parsed = JSON.parse(output) as {
+    });
+    const parsed = parseJsonStdout<{
       files: Array<{ id: string }>;
       plan: { totalRules: number; benefitSource: string };
-    };
+    }>(output);
     // Parseable is necessary but not sufficient: the document has to be *the same plan* the caller
     // receives, or a machine consumer and a person would be looking at different answers.
     expect(parsed).toMatchObject({ plan: { totalRules: 6, benefitSource: "coverage" } });
@@ -259,7 +253,7 @@ describe("tier-plan", () => {
     const data = res.data as {
       redundantTiers: string[];
       synced: { hosts: number; exceptions: number; lines: number; skipped: number };
-      files: Array<{ id: string; rules: number; redundant: { rules: number; complete: boolean } | null }>;
+      files: Array<{ id: string; rules: number; redundant: { rules: number; typeLimited: number; complete: boolean } | null }>;
     };
     expect(data.redundantTiers).toEqual(["tier_privacy"]);
     expect(data.synced).toEqual({ hosts: 4, exceptions: 0, lines: 4, skipped: 0 });
@@ -267,6 +261,7 @@ describe("tier-plan", () => {
     expect(data.files.find((f) => f.id === "tier_core")?.redundant).toEqual({
       rules: 1,
       hosts: 1,
+      typeLimited: 0,
       complete: false,
     });
     expect(data.files.find((f) => f.id === "tier_ads")?.redundant?.rules).toBe(2);

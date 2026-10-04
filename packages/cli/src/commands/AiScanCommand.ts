@@ -10,6 +10,7 @@ import {
   type RawDnsQuery,
 } from '@blockingmachine/core';
 import chalk from 'chalk';
+import { writeJson } from '../lib/logger.js';
 
 export interface AiScanOptions {
   target?: string;
@@ -81,7 +82,7 @@ export class AiScanCommand extends BaseCommand<AiScanOptions> {
       const result = await service.scanDomain(target, aiConfig);
 
       if (options.json) {
-        console.log(JSON.stringify(result, null, 2));
+        writeJson(result);
         return this.success(result, 'AI scan complete');
       }
 
@@ -253,7 +254,7 @@ export class AiScanCommand extends BaseCommand<AiScanOptions> {
     const scanResult = await service.scanQueryLog(queries, aiConfig);
 
     if (options.json) {
-      console.log(JSON.stringify(scanResult, null, 2));
+      writeJson(scanResult);
       return this.success(scanResult, 'Query log scan complete');
     }
 

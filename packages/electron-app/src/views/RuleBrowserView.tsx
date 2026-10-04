@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { CompiledRuleItem } from '../types';
+import { copyTextToClipboard } from '../clipboard';
 
 interface RuleBrowserProps {
   onTriggerCompile?: () => void;
@@ -56,8 +57,8 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
     setPage(0);
   }, [searchQuery, typeFilter]);
 
-  const handleCopy = (raw: string, idx: number) => {
-    navigator.clipboard.writeText(raw);
+  const handleCopy = async (raw: string, idx: number) => {
+    if (!(await copyTextToClipboard(raw))) return;
     setCopiedIndex(idx);
     if (copyTimeoutRef.current) {
       clearTimeout(copyTimeoutRef.current);
@@ -363,7 +364,7 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
           <div style={{ maxHeight: 'calc(100vh - 340px)', overflowY: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
               <thead>
-                <tr style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))' }}>
+                <tr style={{ background: 'var(--overlay-1)', borderBottom: '1px solid var(--border-color)' }}>
                   <th style={{ padding: '12px 16px', width: '50px' }}>#</th>
                   <th style={{ padding: '12px 16px' }}>Rule Pattern</th>
                   <th style={{ padding: '12px 16px', width: '135px' }}>Category</th>
@@ -375,7 +376,7 @@ export const RuleBrowserView: React.FC<RuleBrowserProps> = ({ onTriggerCompile }
                   <tr
                     key={idx}
                     style={{
-                      borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.05))',
+                      borderBottom: '1px solid var(--border-color)',
                       transition: 'background 0.15s ease',
                     }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}

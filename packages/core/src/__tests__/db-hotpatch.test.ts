@@ -1,4 +1,6 @@
-import http, { type AddressInfo } from 'node:http';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, test } from '@jest/globals';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -438,9 +440,9 @@ describe('remote patch cache hygiene', () => {
 // ─── Base data sanity ────────────────────────────────────────────────────────
 
 describe('BASE_DB_LISTS snapshot', () => {
-  test('captures all eighteen list keys with real data', () => {
+  test('captures all nineteen list keys with real data', () => {
     const keys = Object.keys(BASE_DB_LISTS);
-    expect(keys).toHaveLength(18);
+    expect(keys).toHaveLength(19);
     for (const key of keys) {
       expect((BASE_DB_LISTS as unknown as Record<string, string[]>)[key].length).toBeGreaterThan(0);
     }

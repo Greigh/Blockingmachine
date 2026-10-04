@@ -292,6 +292,10 @@ npm install
 # Start the development server
 npm start
 
+# The renderer dev server binds port 3000 by default. If another dev server
+# already holds it (electron-forge fails with EADDRINUSE), move it:
+FORGE_RENDERER_PORT=3100 npm start
+
 # Build the application
 npm run make
 

@@ -13,12 +13,14 @@ import {
   classifyUnboundReachability,
   createFeedServeLog,
   formatUnboundAge,
+  isSinkholedAnswer,
   parseUnboundDropIn,
   pickCanaryDomain,
   reachabilityProbeHeaders,
   summarizeFeedServes,
   toReachabilitySnapshot,
   type FeedServeEvent,
+  type UnboundAnswer,
   type UnboundReachabilityInput,
   type UnboundResolverProbe,
 } from '../unboundReachability';
@@ -89,6 +91,41 @@ function input(overrides: Partial<UnboundReachabilityInput> = {}): UnboundReacha
     ...overrides,
   };
 }
+
+describe('isSinkholedAnswer', () => {
+  // The predicate decides whether a NOERROR answer counts as evidence of blocking, so it is
+  // asserted directly rather than only through the verdicts that call it.
+  const sinkhole = (addresses: string[]): UnboundAnswer => ({ state: 'resolved', addresses });
+
+  test('recognises every address a local zone can be redirected to', () => {
+    // `0.0.0.0` is what a `local-data "…" A 0.0.0.0` zone answers with; `::` and the loopbacks are
+    // what a redirect to an unspecified or local target produces.
+    expect(isSinkholedAnswer(sinkhole(['0.0.0.0']))).toBe(true);
+    expect(isSinkholedAnswer(sinkhole(['::']))).toBe(true);
+    expect(isSinkholedAnswer(sinkhole(['127.0.0.1']))).toBe(true);
+    expect(isSinkholedAnswer(sinkhole(['::1']))).toBe(true);
+    // Case and padding come from parsing, not from the zone file, so neither is assumed.
+    expect(isSinkholedAnswer(sinkhole([' 0.0.0.0 ']))).toBe(true);
+  });
+
+  test('refuses a routable address, however many sinkhole addresses sit beside it', () => {
+    expect(isSinkholedAnswer(sinkhole(['93.184.216.34']))).toBe(false);
+    expect(isSinkholedAnswer(sinkhole(['0.0.0.0', '93.184.216.34']))).toBe(false);
+    // 127.0.0.2 is loopback but is not an address any of these zones emits; treated as routable,
+    // the verdict falls through to `not-loaded`, which is the honest direction to be wrong in.
+    expect(isSinkholedAnswer(sinkhole(['127.0.0.2']))).toBe(false);
+  });
+
+  test('is false for a resolved answer with no addresses, and for every non-resolved state', () => {
+    // `resolve4` answers `nodata` for NOERROR-with-no-records, so an empty address list is
+    // reachable and is not a block.
+    expect(isSinkholedAnswer(sinkhole([]))).toBe(false);
+    expect(isSinkholedAnswer({ state: 'resolved' })).toBe(false);
+    for (const state of ['nxdomain', 'nodata', 'timeout', 'refused', 'unqueryable', 'error'] as const) {
+      expect(isSinkholedAnswer({ state })).toBe(false);
+    }
+  });
+});
 
 describe('summarizeFeedServes', () => {
   const serve = (at: string, path: string, overrides: Partial<FeedServeEvent> = {}): FeedServeEvent => ({
@@ -338,6 +375,99 @@ describe('classifyUnboundReachability', () => {
     expect(verdict.rows.find((row) => row.label.startsWith('Canary'))?.value).toContain('resolves to 1.2.3.4');
   });
 
+  test('live: a canary answered with an address that routes nowhere is blocking, not missing', () => {
+    // The defect this pins, measured against a real resolver in `unbound-reachability-live.sh`:
+    // Unbound has two documented ways to block a local zone. `always_nxdomain` — what this project
+    // emits — answers NXDOMAIN. `redirect` + `local-data "…" A 0.0.0.0` answers **NOERROR carrying
+    // 0.0.0.0**. Both block. Only the first looks like this check's evidence, so a deployment using
+    // the second was reported `not-loaded` and told to check an `include:` line that was already
+    // correct — advice that would change nothing, sent to a user whose resolver was working.
+    const verdict = classifyUnboundReachability(
+      input({
+        probe: probe({ canary: { answer: { state: 'resolved', addresses: ['0.0.0.0'] } } }),
+        serves: [{ at: '2026-09-29T11:00:00.000Z', path: '/unbound.conf', peer: '192.168.1.1', status: 200 }],
+      }),
+    );
+
+    expect(verdict.state).toBe('live');
+    expect(verdict.tone).toBe('ok');
+    // The sentence names what the resolver actually answered, so a reader can match it to their own
+    // `dig` output. "answers NXDOMAIN" here would be a claim the wire does not support.
+    expect(verdict.detail).toContain('0.0.0.0');
+    expect(verdict.rows.find((row) => row.label.startsWith('Canary'))?.value).toContain('blocked');
+    expect(verdict.lastConfirmedAt).toBe(CHECKED_AT);
+  });
+
+  test('the sinkhole answer is held to the same evidence as NXDOMAIN, not waved through', () => {
+    // A block answer proves nothing about a name that never resolved. The reference check is the
+    // only thing separating "this resolver is blocking it" from "this name does not exist", and a
+    // second blocking syntax must not be a way around it.
+    const unconfirmed = classifyUnboundReachability(
+      input({
+        probe: probe({
+          canary: { answer: { state: 'resolved', addresses: ['0.0.0.0'] } },
+          reference: null,
+        }),
+      }),
+    );
+    expect(unconfirmed.state).toBe('canary-unconfirmed');
+    expect(unconfirmed.detail).toContain('0.0.0.0');
+
+    const nonexistent = classifyUnboundReachability(
+      input({
+        probe: probe({
+          canary: { answer: { state: 'resolved', addresses: ['0.0.0.0'] } },
+          reference: { target: '1.1.1.1:53', answer: { state: 'nxdomain' } },
+        }),
+      }),
+    );
+    expect(nonexistent.state).toBe('canary-nonexistent');
+  });
+
+  test('stale: a sinkholed canary behind an older copy is stale, and says the copy is old', () => {
+    const verdict = classifyUnboundReachability(
+      input({
+        probe: probe({ canary: { answer: { state: 'resolved', addresses: ['0.0.0.0'] } } }),
+        serves: [{ at: '2026-09-29T09:00:00.000Z', path: '/unbound.conf', peer: '192.168.1.1', status: 200 }],
+        lastCompiledAt: '2026-09-29T11:00:00.000Z',
+      }),
+    );
+
+    expect(verdict.state).toBe('stale');
+    expect(verdict.detail).toContain('before the last compile');
+    expect(verdict.rows.some((row) => row.label === 'Copy age' && row.tone === 'warn')).toBe(true);
+  });
+
+  test('a real address beside a sinkhole address is not a block', () => {
+    // `every`, not `some`: a resolver that returned one routable address has told us it is not
+    // applying the zone to this name, and reading that as blocking would invert the finding.
+    const verdict = classifyUnboundReachability(
+      input({
+        probe: probe({
+          canary: { answer: { state: 'resolved', addresses: ['0.0.0.0', '93.184.216.34'] } },
+        }),
+      }),
+    );
+    expect(verdict.state).toBe('not-loaded');
+  });
+
+  test('inconclusive: a resolver that sinkholes the control cannot vouch for the canary', () => {
+    // `local-zone: "." redirect` refuses every name, so it answers the canary the same way it
+    // answers the control. Accepting the canary's answer would be the exact failure the control
+    // query exists to catch, wearing different syntax.
+    const verdict = classifyUnboundReachability(
+      input({
+        probe: probe({
+          canary: { answer: { state: 'resolved', addresses: ['0.0.0.0'] } },
+          control: { answer: { state: 'resolved', addresses: ['0.0.0.0'] } },
+        }),
+      }),
+    );
+
+    expect(verdict.state).toBe('inconclusive');
+    expect(verdict.detail).toContain(RESOLVER_CONTROL_DOMAIN);
+  });
+
   test('inconclusive: a resolver that NXDOMAINs the control cannot vouch for the canary', () => {
     const verdict = classifyUnboundReachability(
       input({
@@ -368,12 +498,35 @@ describe('classifyUnboundReachability', () => {
     expect(verdict.rows.find((row) => row.label === 'Drop-in served')?.tone).toBe('ok');
   });
 
+  test('resolver-unqueryable: a name in the address field says so, rather than blaming the resolver', () => {
+    const verdict = classifyUnboundReachability(
+      input({
+        probe: probe({
+          canary: { answer: { state: 'unqueryable', detail: 'ERR_INVALID_IP_ADDRESS' } },
+          control: { answer: { state: 'unqueryable', detail: 'ERR_INVALID_IP_ADDRESS' } },
+        }),
+      }),
+    );
+
+    // The difference from `resolver-unreachable` is the whole point: no query left the machine, so
+    // telling the user to check the resolver's health asks them to debug a resolver that was never
+    // asked anything. The remedy is an address, and the verdict names it.
+    expect(verdict.state).toBe('resolver-unqueryable');
+    expect(verdict.headline).toContain('nothing was queried');
+    expect(verdict.detail).toContain('not an IP address');
+    expect(verdict.nextStep).toContain('IP address');
+    expect(verdict.tone).toBe('off');
+  });
+
   test('feed-offline: a server that is not listening is reported before anything downstream', () => {
     const verdict = classifyUnboundReachability(
       input({ feedServerRunning: false, selfFetch: { ...servedDropIn(), ok: false } }),
     );
     expect(verdict.state).toBe('feed-offline');
-    expect(verdict.rows).toHaveLength(2);
+    // The persisted refresh report is evidence even with the feed down — a cron failure from
+    // last night still belongs on the card.
+    expect(verdict.rows).toHaveLength(3);
+    expect(verdict.rows.some((row) => row.label === 'Scheduled refresh')).toBe(true);
   });
 
   test('feed-offline: an address that answers nothing is not a 404 to fix in Unbound', () => {
@@ -426,11 +579,57 @@ describe('classifyUnboundReachability', () => {
       'Feed address',
       'Drop-in served',
       'Fetched by the resolver',
+      'Scheduled refresh',
       'Resolver',
       'Canary · doubleclick.net',
       'Canary exists upstream',
       'Last confirmed live',
     ]);
+  });
+
+  test('scheduled refresh: a failure reported after the last fetch is named, not hidden', () => {
+    // The scenario the row exists for: the cron's reload failed at 02:14 while the app was
+    // closed, and the persisted report — not an in-session observation — is what tells it.
+    const verdict = classifyUnboundReachability(
+      input({
+        probe: probe(),
+        serves: [{ at: '2026-09-29T09:00:00.000Z', path: '/unbound.conf', peer: '192.168.1.1', status: 200 }],
+        refreshReport: {
+          lastOkAt: '2026-09-29T05:00:00.000Z',
+          lastFailAt: '2026-09-29T10:14:00.000Z',
+          lastFailDetail: 'unbound-checkconf rejected the file',
+        },
+      }),
+    );
+
+    const row = verdict.rows.find((r) => r.label === 'Scheduled refresh');
+    expect(row?.tone).toBe('warn');
+    expect(row?.value).toContain('unbound-checkconf rejected the file');
+    expect(verdict.refreshReport?.lastFailAt).toBe('2026-09-29T10:14:00.000Z');
+  });
+
+  test('scheduled refresh: a failure older than the next success is history', () => {
+    const verdict = classifyUnboundReachability(
+      input({
+        probe: probe(),
+        refreshReport: {
+          lastFailAt: '2026-09-29T05:00:00.000Z',
+          lastOkAt: '2026-09-29T11:00:00.000Z',
+        },
+      }),
+    );
+
+    const row = verdict.rows.find((r) => r.label === 'Scheduled refresh');
+    expect(row?.tone).toBe('ok');
+    expect(row?.value).toContain('last reported');
+  });
+
+  test('scheduled refresh: no reports is an absence, not a pass', () => {
+    const verdict = classifyUnboundReachability(input({ probe: probe() }));
+
+    const row = verdict.rows.find((r) => r.label === 'Scheduled refresh');
+    expect(row?.tone).toBe('off');
+    expect(row?.value).toContain('no reports');
   });
 });
 

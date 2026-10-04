@@ -135,10 +135,68 @@ export function extractHostFromRule(raw: unknown): string | null {
   return line;
 }
 
-/** One publisher's contribution: the category its list is filed under, and the rules it held. */
+/**
+ * One publisher's contribution: the category its list is filed under, and the rules it held.
+ *
+ * `name` and `url` are the list's configured identity — optional because a caller that only
+ * wants the category geometry can omit them, in which case the attribution simply has no
+ * provenance to report rather than a fabricated one. `error` marks a source that was
+ * attempted but did not produce: its rules (if any were supplied at all) are not attributed,
+ * because a failed fetch's partial output is not a thing the manifest should stand behind.
+ */
 export interface AttributedSource {
+  /** The category the list is filed under; a rule's own `metadata.sourceInfo.category` wins. */
   category: string;
-  rules: ReadonlyArray<{ raw?: string | null } | null | undefined>;
+  name?: string | null;
+  url?: string | null;
+  error?: string | null;
+  /**
+   * A content revision for what was fetched, when the caller can compute one.
+   *
+   * The convention is `sha256:` over the source's raw rule lines sorted and newline-joined —
+   * caller-computed because this module stays crypto-free (it is bundled into the browser
+   * extension, where `node:crypto` does not exist). Two pulls of the same list produce the same
+   * revision; "same lists, same content" and "same lists, new pull" stay distinguishable in the
+   * manifest, which is otherwise impossible from name+url alone. Omit it when nothing was
+   * fetched — a failed pull has no content to pin.
+   */
+  revision?: string | null;
+  rules: ReadonlyArray<{
+    raw?: string | null;
+    metadata?: { sourceInfo?: { category?: unknown } | null } | null;
+  } | null | undefined>;
+}
+
+/**
+ * What one configured source contributed to a compilation.
+ *
+ * This is the manifest's answer to "what was this built from": the list's identity, the
+ * categories its rules actually resolved to (which can differ from the category the list was
+ * filed under, when a rule carried its own filing), and how much of it survived extraction.
+ * A source whose fetch failed is listed with its `error` rather than dropped — "nine sources
+ * produced this" and "nine were configured" are different statements, and only the second is
+ * what a reader would assume when a category looks thin.
+ */
+export interface AttributionSource {
+  /** The list's display name, when it gave one. */
+  name?: string;
+  /** Where the list was fetched from, when known. */
+  url?: string;
+  /** The categories its rules resolved to, in the order first seen. */
+  categories: string[];
+  /** Rules the source carried, including ones that named no blockable host. */
+  rules: number;
+  /** Distinct blockable hosts its rules produced. */
+  hosts: number;
+  /**
+   * The content revision the caller reported for this source — a digest of the rules it carried
+   * (`sha256:` over sorted raw lines by convention), so two builds of "the same list" can be told
+   * apart when the list changed underneath. Absent when the caller could not pin one, which on a
+   * failed fetch is always the case.
+   */
+  revision?: string;
+  /** Set when the fetch failed: the source was attempted, not producing. */
+  error?: string;
 }
 
 export interface CategoryAttribution {
@@ -152,6 +210,8 @@ export interface CategoryAttribution {
   unusableRules: number;
   /** Categories present, whether or not they claimed anything. */
   categories: string[];
+  /** The identified sources the attribution was built from, in the order they were given. */
+  sources: AttributionSource[];
 }
 
 /**
@@ -168,15 +228,72 @@ export function buildCategoryAttribution(sources: readonly AttributedSource[]): 
   const hosts = new Map<string, Set<string>>();
   const byCategory = new Map<string, Set<string>>();
   const categories: string[] = [];
+  // Keyed by name+url so the same list handed in twice — once per category slice, say — is
+  // still one source in the record, holding the union of what it carried.
+  const records = new Map<
+    string,
+    {
+      name?: string;
+      url?: string;
+      error?: string;
+      revision?: string;
+      rules: number;
+      categories: Set<string>;
+      hosts: Set<string>;
+    }
+  >();
   let unusableRules = 0;
 
-  for (const source of sources) {
-    const category = String(source?.category ?? '').trim() || 'uncategorised';
+  const text = (value: unknown): string | undefined => {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    return trimmed || undefined;
+  };
+  const register = (category: string) => {
     if (!byCategory.has(category)) {
       byCategory.set(category, new Set());
       categories.push(category);
     }
-    for (const rule of source?.rules ?? []) {
+  };
+
+  for (const source of sources) {
+    const name = text(source?.name);
+    const url = text(source?.url);
+    const error = text(source?.error);
+    const rules = source?.rules ?? [];
+
+    let record;
+    if (name || url) {
+      const key = `${name ?? ''}${url ?? ''}`;
+      record = records.get(key);
+      if (!record) {
+        record = { name, url, rules: 0, categories: new Set<string>(), hosts: new Set<string>() };
+        records.set(key, record);
+      }
+      record.rules += rules.length;
+      if (error) record.error ??= error;
+      // First writer wins: two slices of one list should carry the same pin, and a disagreement
+      // is a fact about the inputs a reader should be able to check, not a merge artefact. A
+      // failed fetch records no revision even if the caller supplies one — there is nothing
+      // fetched for it to pin, and recording one would describe content that never arrived.
+      const revision = text(source?.revision);
+      if (revision && !error) record.revision ??= revision;
+    }
+
+    // A failed fetch is an attempt, not a contribution: recorded above so the manifest can
+    // say it was tried, but none of its output is attributed — partial output is not a thing
+    // the record should stand behind, and a declared category it never filed rules under is
+    // not a category that was present.
+    if (error) continue;
+
+    const declared = text(source?.category) ?? 'uncategorised';
+    register(declared);
+    for (const rule of rules) {
+      // The rule's own filing wins over the list's declared category: the parser stamps the
+      // catalog's answer onto each rule, which is strictly better than a stored setting the
+      // user may have edited since.
+      const resolved = text(rule?.metadata?.sourceInfo?.category) ?? declared;
+      register(resolved);
+      record?.categories.add(resolved);
       const host = extractHostFromRule(rule?.raw);
       if (!host) {
         unusableRules += 1;
@@ -187,8 +304,9 @@ export function buildCategoryAttribution(sources: readonly AttributedSource[]): 
         claimed = new Set();
         hosts.set(host, claimed);
       }
-      claimed.add(category);
-      byCategory.get(category)!.add(host);
+      claimed.add(resolved);
+      byCategory.get(resolved)!.add(host);
+      record?.hosts.add(host);
     }
   }
 
@@ -197,13 +315,36 @@ export function buildCategoryAttribution(sources: readonly AttributedSource[]): 
     if (claimed.size > 1) contested += 1;
   }
 
-  return { hosts, byCategory, contested, unusableRules, categories };
+  return {
+    hosts,
+    byCategory,
+    contested,
+    unusableRules,
+    categories,
+    sources: [...records.values()].map((record) => ({
+      ...(record.name ? { name: record.name } : {}),
+      ...(record.url ? { url: record.url } : {}),
+      categories: [...record.categories],
+      rules: record.rules,
+      hosts: record.hosts.size,
+      ...(record.revision ? { revision: record.revision } : {}),
+      ...(record.error ? { error: record.error } : {}),
+    })),
+  };
 }
 
 export interface CategoryAttributionManifest {
   /** Schema marker, so a consumer can refuse a file it does not understand. */
   format: 'blockingmachine-category-attribution';
   version: 1;
+  /** When the compilation ran — the provenance record's "when". */
+  generatedAt?: string;
+  /**
+   * The configured sources the compilation was built from — what a build names when it says
+   * what it was built from. Empty means the caller gave no source identities, not that the
+   * output had no inputs.
+   */
+  sources: AttributionSource[];
   /** category -> host count, so a reader can size a file before opening it. */
   counts: Record<string, number>;
   /** Distinct hosts across every category. */
@@ -225,7 +366,10 @@ export interface CategoryAttributionManifest {
   empty: string[];
 }
 
-export function toAttributionManifest(attribution: CategoryAttribution): CategoryAttributionManifest {
+export function toAttributionManifest(
+  attribution: CategoryAttribution,
+  options: { generatedAt?: string } = {},
+): CategoryAttributionManifest {
   const counts: Record<string, number> = {};
   const categories: string[] = [];
   const empty: string[] = [];
@@ -241,6 +385,8 @@ export function toAttributionManifest(attribution: CategoryAttribution): Categor
   return {
     format: 'blockingmachine-category-attribution',
     version: 1,
+    ...(options.generatedAt ? { generatedAt: options.generatedAt } : {}),
+    sources: attribution.sources,
     counts,
     hosts: attribution.hosts.size,
     contested: attribution.contested,

@@ -42,6 +42,18 @@ export function shadowrocketFormatWarning(exportFormat: string): string | null {
   return `The compiled export is currently "${exportFormat}". Set Format to Shadowrocket so the hub writes DOMAIN-SUFFIX rules instead of ${exportFormat} syntax.`;
 }
 
+/**
+ * The LAN feed URL for the Home Assistant add-on's rule set.
+ *
+ * The add-on runs as a long-lived service on the same LAN, so a phone can subscribe to it rather
+ * than to the desktop hub — which only answers while that process is running and the machine is
+ * awake. The add-on serves the same rule set from the same DNS feed the Unbound drop-in is rendered
+ * from, so a host sinkholed in the resolver is the host the phone blocks.
+ */
+export function shadowrocketHomeAssistantUrl(port: number = 9191): string {
+  return `http://homeassistant.local:${port}/shadowrocket.conf`;
+}
+
 export interface ShadowrocketRecipeStep {
   id: string;
   title: string;
@@ -52,8 +64,9 @@ export interface ShadowrocketRecipeStep {
  * The setup steps, in order.
  *
  * Kept as data rather than JSX so the wording is testable, and worded for what the app actually
- * does: Shadowrocket re-fetches a remote config on its own schedule, so unlike the Unbound drop-in
- * there is no server-side refresh command to write — the phone is the client.
+ * does: Shadowrocket re-fetches a remote config when it opens (and on a background interval when
+ * iOS Background App Refresh is allowed for it), so unlike the Unbound drop-in there is no
+ * server-side refresh command to write — the phone is the client.
  */
 export const SHADOWROCKET_STEPS: ShadowrocketRecipeStep[] = [
   {
@@ -63,10 +76,16 @@ export const SHADOWROCKET_STEPS: ShadowrocketRecipeStep[] = [
       'Turn the LAN feed server on above and leave Auto-start on, so the address below answers after a restart. The feed serves the compiled file at the path shown, so the format has to be Shadowrocket for it to contain any rules.',
   },
   {
+    id: 'addon',
+    title: 'Or serve it from the Home Assistant add-on instead',
+    detail:
+      'If Home Assistant is on the same LAN, the add-on serves this rule set too, from a path it never stops listening on. A phone subscribed to the add-on keeps working when this desktop is shut down, which is the usual reason a rule set stops arriving. The rule set is the same shape and the same allow decisions; its count is lower than the export above, because the add-on renders from the DNS feed and drops the rules a rule set cannot express.',
+  },
+  {
     id: 'subscribe',
     title: 'Add it in Shadowrocket',
     detail:
-      'In Shadowrocket open Config → Add Remote Config, choose Rule Set, and paste the feed URL. The app re-fetches it on its own schedule, so nothing has to run on the phone and no cron job is needed.',
+      'In Shadowrocket open Config → Add Remote Config, choose Rule Set, and paste the feed URL. The app re-fetches it each time it opens — and in the background if iOS is allowed to refresh it — so nothing has to run on the phone and no cron job is needed.',
   },
   {
     id: 'network',

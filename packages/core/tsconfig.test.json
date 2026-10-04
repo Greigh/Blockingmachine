@@ -1,0 +1,14 @@
+{
+  // The check config, not a second build: `tsconfig.json` excludes `src/__tests__` so the
+  // build's emit cannot ship test files into `dist`, and that exclusion silently made
+  // `type-check` blind to tests — errors there only ever surfaced in an IDE. This config
+  // covers the whole tree, emit disabled, so `type-check` reads production and tests alike.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "noEmit": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

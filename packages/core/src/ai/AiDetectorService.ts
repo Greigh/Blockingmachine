@@ -746,7 +746,12 @@ export class AiDetectorService {
     // 5. Keyword token analysis (strict boundaries)
     const matchedTokens: string[] = [];
     const dbLists = getDbLists();
-    const keywordTokens = [...dbLists.suspiciousAdTokens, ...dbLists.suspiciousTrackerTokens];
+    const consentTokenSet = new Set(dbLists.suspiciousConsentTokens);
+    const keywordTokens = [
+      ...dbLists.suspiciousAdTokens,
+      ...dbLists.suspiciousTrackerTokens,
+      ...dbLists.suspiciousConsentTokens,
+    ];
     for (const token of keywordTokens) {
       if (hostnameHasToken(domain, token)) matchedTokens.push(token);
     }
@@ -758,6 +763,8 @@ export class AiDetectorService {
       if (category === 'Clean') {
         category = matchedTokens.some((t) => isTelemetryToken(t))
           ? 'Telemetry/Analytics'
+          : matchedTokens.some((t) => consentTokenSet.has(t))
+          ? 'Consent/Annoyance'
           : 'Advertising';
       }
     }
@@ -799,7 +806,12 @@ export class AiDetectorService {
     if (category === 'Malware/Phishing' && score >= 65) {
       verdict = 'malicious';
     } else if (score >= 70) {
-      verdict = category === 'Telemetry/Analytics' ? 'tracker' : category === 'CNAME Cloaking' ? 'tracker' : 'ad_server';
+      verdict =
+        category === 'Telemetry/Analytics' || category === 'CNAME Cloaking'
+          ? 'tracker'
+          : category === 'Consent/Annoyance'
+          ? 'annoyance'
+          : 'ad_server';
     } else if (score >= 40) {
       verdict = 'suspicious';
       if (category === 'Clean') category = 'Advertising';
@@ -820,6 +832,9 @@ export class AiDetectorService {
       return confidence >= 75 ? 'high' : 'medium';
     }
     if (verdict === 'suspicious') return 'medium';
+    // A consent platform is an annoyance the model is sure about, not a threat it is unsure
+    // about — below the uncertainty rung on purpose.
+    if (verdict === 'annoyance') return 'low';
     return 'none';
   }
 
@@ -850,7 +865,7 @@ export class AiDetectorService {
     const verdict = normalizeVerdict(result.verdict);
     const fallbackCategory: Record<AiVerdict, ThreatCategory> = {
       clean: 'Clean', tracker: 'Telemetry/Analytics', ad_server: 'Advertising',
-      malicious: 'Malware/Phishing', suspicious: 'Unknown',
+      malicious: 'Malware/Phishing', annoyance: 'Consent/Annoyance', suspicious: 'Unknown',
     };
     const reasons = Array.isArray(result.reasons) ? result.reasons : [result.reasons];
     return {
@@ -882,12 +897,12 @@ Context:
 - Cloaked Target: ${context.cloakedTarget || 'None'}
 - Preliminary Assessment: ${context.preliminaryVerdict}
 
-Classify whether this hostname is an advertising server, user tracker, telemetry beacon, malicious domain, or clean service.
+Classify whether this hostname is an advertising server, user tracker, telemetry beacon, consent-management or annoyance platform, malicious domain, or clean service.
 Respond ONLY with a valid JSON object matching this schema:
 {
-  "verdict": "ad_server" | "tracker" | "malicious" | "clean" | "suspicious",
+  "verdict": "ad_server" | "tracker" | "malicious" | "annoyance" | "clean" | "suspicious",
   "confidence": number between 1 and 100,
-  "category": "Advertising" | "Telemetry/Analytics" | "CNAME Cloaking" | "Malware/Phishing" | "Clean",
+  "category": "Advertising" | "Telemetry/Analytics" | "Consent/Annoyance" | "CNAME Cloaking" | "Malware/Phishing" | "Clean",
   "reasons": ["string explaining specific technical findings"]
 }`;
 

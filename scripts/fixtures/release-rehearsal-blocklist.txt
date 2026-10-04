@@ -1,0 +1,25 @@
+# Blocklist fixture for the CI release rehearsal.
+#
+# One host per vocabulary tier, one in every accepted line shape, and every shape that must be
+# refused. Every zone is `*.rehearsal.example` — a name that belongs to nobody and matches nothing
+# in the curated lists — so a host found in a shipped tier file is proof the fixture reached it,
+# not a coincidence of a real blocklist.
+! a comment in hosts-file dress
+# a comment in adblock dress
+[Adblock Plus 2.0]
+0.0.0.0 ads.rehearsal.example
+||metrics.rehearsal.example^
+||consent.rehearsal.example^$third-party
+0.0.0.0 malware.rehearsal.example
+plain.rehearsal.example
+address=/dns.rehearsal.example/0.0.0.0
+# Refused shapes — an exception, a cosmetic rule, a loopback name, a bare IP, a single label, a
+# public suffix, a wildcard, and a DNS rewrite. None of them may produce a rule.
+@@||allowed.rehearsal.example^
+rehearsal.example##.ad-banner
+0.0.0.0 localhost
+192.168.9.9
+singlelabel
+co.uk
+*.wildcard.rehearsal.example
+rehearsal.example$dnsrewrite=NOERROR;A;1.2.3.4

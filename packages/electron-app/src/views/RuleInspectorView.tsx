@@ -5,6 +5,7 @@ import type {
   RuleConflictResult,
 } from '../types';
 import { formatConfidencePercent, verdictBadgeLabel } from '../aiDisplay';
+import { copyTextToClipboard } from '../clipboard';
 
 interface RuleInspectorViewProps {
   initialDomain?: string;
@@ -26,6 +27,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
   const [addedToCustom, setAddedToCustom] = useState(false);
   const [allowlisted, setAllowlisted] = useState(false);
   const [feedbackTune, setFeedbackTune] = useState<'idle' | 'threat_confirmed' | 'safe_confirmed'>('idle');
+  const [feedbackForgotten, setFeedbackForgotten] = useState<'idle' | 'forgot' | 'nothing'>('idle');
   const [activeDetailTab, setActiveDetailTab] = useState<'overview' | 'rules' | 'ai-heuristics'>('overview');
 
   const sampleDomains = [
@@ -123,8 +125,8 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
     }
   };
 
-  const handleCopy = (text: string, key: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = async (text: string, key: string) => {
+    if (!(await copyTextToClipboard(text))) return;
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(null), 2500);
   };
@@ -184,8 +186,22 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
     try {
       await window.electron.tuneMiniAiFeedback(domain, action);
       setFeedbackTune(action === 'block' ? 'threat_confirmed' : 'safe_confirmed');
+      setFeedbackForgotten('idle');
     } catch (err) {
       console.error('Failed to tune Mini-AI feedback:', err);
+    }
+  };
+
+  const handleForgetMiniAi = async (domain: string) => {
+    if (!domain || !window.electron?.resetMiniAiFeedback) return;
+    try {
+      const res = await window.electron.resetMiniAiFeedback(domain);
+      // `success` is the classifier's `removed` flag — report whether anything was stored
+      // rather than claiming a delete that did not happen.
+      setFeedbackForgotten(res?.success ? 'forgot' : 'nothing');
+      if (res?.success) setFeedbackTune('idle');
+    } catch (err) {
+      console.error('Failed to reset Mini-AI feedback:', err);
     }
   };
 
@@ -308,8 +324,8 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
               gap: 12,
               padding: '16px 20px',
               borderRadius: 10,
-              background: 'var(--bg-tertiary, rgba(255, 255, 255, 0.03))',
-              border: '1px solid var(--border-color, rgba(255, 255, 255, 0.08))',
+              background: 'var(--overlay-1)',
+              border: '1px solid var(--border-color)',
               marginBottom: 18,
             }}
           >
@@ -371,7 +387,9 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                       AI: HIGH THREAT ({aiResult.category.toUpperCase()})
                     </span>
                   )}
-                  {(aiResult.verdict === 'ad_server' || aiResult.verdict === 'tracker') && (
+                  {(aiResult.verdict === 'ad_server' ||
+                    aiResult.verdict === 'tracker' ||
+                    aiResult.verdict === 'annoyance') && (
                     <span
                       style={{
                         fontSize: 12,
@@ -435,7 +453,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                       AI: VERIFIED CLEAN
                     </span>
                   )}
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary, #94a3b8)', marginLeft: 4 }}>
+                  <span style={{ fontSize: 12, color: 'var(--secondary-color)', marginLeft: 4 }}>
                     Confidence: <strong>{formatConfidencePercent(aiResult.confidence)}</strong>
                   </span>
                 </div>
@@ -448,7 +466,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
           </div>
 
           {/* Navigation Tabs for Detailed Inspection */}
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16, borderBottom: '1px solid var(--border-color, rgba(255, 255, 255, 0.08))', paddingBottom: 10 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>
             <button
               type="button"
               className={`secondary-button ${activeDetailTab === 'overview' ? 'active-tab' : ''}`}
@@ -457,9 +475,9 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 fontWeight: 600,
                 padding: '6px 14px',
                 borderRadius: 6,
-                background: activeDetailTab === 'overview' ? 'var(--accent-primary, #6366f1)' : 'transparent',
+                background: activeDetailTab === 'overview' ? 'var(--primary-color)' : 'transparent',
                 color: activeDetailTab === 'overview' ? '#fff' : 'inherit',
-                border: activeDetailTab === 'overview' ? '1px solid var(--accent-primary, #6366f1)' : '1px solid var(--border-color, rgba(255,255,255,0.1))',
+                border: activeDetailTab === 'overview' ? '1px solid var(--primary-color)' : '1px solid var(--border-color)',
               }}
               onClick={() => setActiveDetailTab('overview')}
             >
@@ -473,9 +491,9 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 fontWeight: 600,
                 padding: '6px 14px',
                 borderRadius: 6,
-                background: activeDetailTab === 'rules' ? 'var(--accent-primary, #6366f1)' : 'transparent',
+                background: activeDetailTab === 'rules' ? 'var(--primary-color)' : 'transparent',
                 color: activeDetailTab === 'rules' ? '#fff' : 'inherit',
-                border: activeDetailTab === 'rules' ? '1px solid var(--accent-primary, #6366f1)' : '1px solid var(--border-color, rgba(255,255,255,0.1))',
+                border: activeDetailTab === 'rules' ? '1px solid var(--primary-color)' : '1px solid var(--border-color)',
               }}
               onClick={() => setActiveDetailTab('rules')}
             >
@@ -489,9 +507,9 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 fontWeight: 600,
                 padding: '6px 14px',
                 borderRadius: 6,
-                background: activeDetailTab === 'ai-heuristics' ? 'var(--accent-primary, #6366f1)' : 'transparent',
+                background: activeDetailTab === 'ai-heuristics' ? 'var(--primary-color)' : 'transparent',
                 color: activeDetailTab === 'ai-heuristics' ? '#fff' : 'inherit',
-                border: activeDetailTab === 'ai-heuristics' ? '1px solid var(--accent-primary, #6366f1)' : '1px solid var(--border-color, rgba(255,255,255,0.1))',
+                border: activeDetailTab === 'ai-heuristics' ? '1px solid var(--primary-color)' : '1px solid var(--border-color)',
               }}
               onClick={() => setActiveDetailTab('ai-heuristics')}
             >
@@ -543,7 +561,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
               {/* Dual Column Layout: Rule Match + AI Evidence */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, marginBottom: 18 }}>
                 {/* Left Card: Rule Details */}
-                <div style={{ padding: 14, borderRadius: 8, background: 'var(--bg-secondary, rgba(255,255,255,0.02))', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
+                <div style={{ padding: 14, borderRadius: 8, background: 'var(--overlay-2)', border: '1px solid var(--border-color)' }}>
                   <h4 style={{ margin: '0 0 10px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -556,7 +574,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                       <div className="rule-code-block" style={{ marginBottom: 8 }}>
                         <code>{ruleResult.matchingRule}</code>
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                      <div style={{ fontSize: 12, color: 'var(--secondary-color)' }}>
                         Origin: <strong>{ruleResult.sourceName || 'Compiled Feeds'}</strong>
                       </div>
                       {ruleResult.ruleType && (
@@ -566,14 +584,14 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                       )}
                     </div>
                   ) : (
-                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
+                    <p style={{ fontSize: 12, color: 'var(--secondary-color)', margin: 0 }}>
                       This domain does not match any active rules in your subscribed filter lists. It can be freely resolved unless blocked by custom rules.
                     </p>
                   )}
                 </div>
 
                 {/* Right Card: AI Findings */}
-                <div style={{ padding: 14, borderRadius: 8, background: 'var(--bg-secondary, rgba(255,255,255,0.02))', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
+                <div style={{ padding: 14, borderRadius: 8, background: 'var(--overlay-2)', border: '1px solid var(--border-color)' }}>
                   <h4 style={{ margin: '0 0 10px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
@@ -587,12 +605,12 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                       ))}
                     </ul>
                   ) : (
-                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
+                    <p style={{ fontSize: 12, color: 'var(--secondary-color)', margin: 0 }}>
                       No malicious patterns, high entropy markers, or known tracker signatures detected.
                     </p>
                   )}
                   {aiResult?.modelUsed && (
-                    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-secondary)', opacity: 0.8 }}>
+                    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--secondary-color)', opacity: 0.8 }}>
                       Evaluated by: <strong>{aiResult.modelUsed}</strong>
                     </div>
                   )}
@@ -649,7 +667,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
               {aiResult?.cnames && aiResult.cnames.length > 0 && (
                 <div className="evidence-section" style={{ marginBottom: 14 }}>
                   <h5 style={{ fontSize: 13, marginBottom: 6 }}>CNAME Uncloaking Chain Trace</h5>
-                  <p style={{ fontFamily: 'ui-monospace, monospace', color: 'var(--accent-primary, #6366f1)', fontSize: 13, background: 'rgba(0,0,0,0.2)', padding: '8px 12px', borderRadius: 6 }}>
+                  <p style={{ fontFamily: 'ui-monospace, monospace', color: 'var(--primary-color)', fontSize: 13, background: 'rgba(0,0,0,0.2)', padding: '8px 12px', borderRadius: 6 }}>
                     {aiResult.domain} → {aiResult.cnames.join(' → ')}
                   </p>
                 </div>
@@ -661,7 +679,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                   <h5 style={{ fontSize: 13, marginBottom: 6 }}>Mini-AI Feature Weight Breakdown</h5>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 8 }}>
                     {Object.entries(aiResult.featureScores).map(([feature, score], idx) => (
-                      <div key={idx} style={{ padding: '8px 10px', borderRadius: 6, background: 'var(--control-bg-color, rgba(255,255,255,0.03))', border: '1px solid var(--border-color, rgba(255,255,255,0.06))', fontSize: 12 }}>
+                      <div key={idx} style={{ padding: '8px 10px', borderRadius: 6, background: 'var(--control-bg-color, rgba(255,255,255,0.03))', border: '1px solid var(--border-color)', fontSize: 12 }}>
                         <span style={{ fontWeight: 600 }}>{feature}</span>: <span style={{ color: score > 0 ? '#f87171' : '#34d399' }}>{score > 0 ? `+${score.toFixed(2)}` : score.toFixed(2)}</span>
                       </div>
                     ))}
@@ -681,15 +699,15 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 fontSize: 12,
                 flexWrap: 'wrap'
               }}>
-                <span style={{ fontWeight: 600, color: 'var(--accent-primary, #6366f1)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontWeight: 600, color: 'var(--primary-color)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
                   </svg>
                   Inference Latency: {aiResult?.inferenceTimeMs !== undefined ? `${aiResult.inferenceTimeMs}ms` : '< 0.05ms'}
                 </span>
-                <span style={{ color: 'var(--text-secondary)' }}>•</span>
+                <span style={{ color: 'var(--secondary-color)' }}>•</span>
                 <span>Engine: {aiResult?.modelUsed || 'Mini-AI Embedded Classifier'}</span>
-                <span style={{ color: 'var(--text-secondary)' }}>•</span>
+                <span style={{ color: 'var(--secondary-color)' }}>•</span>
                 <span title="Shannon Entropy: 0.0 to 5.0 scale measuring character randomness. Scores >= 3.8 indicate machine-generated tracking tokens or DGA.">
                   Shannon Entropy: {aiResult?.entropy !== undefined ? `${aiResult.entropy.toFixed(2)} / 5.0` : '0.00 / 5.0'}
                 </span>
@@ -724,8 +742,8 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                   Allowlist Conflict Detected:
                 </span> {ruleConflict.reason}
                 {ruleConflict.suggestedOverrideRule && (
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
-                    Suggested Override: <code style={{ color: 'var(--accent-primary, #6366f1)' }}>{ruleConflict.suggestedOverrideRule}</code>
+                  <div style={{ fontSize: 11, color: 'var(--secondary-color)', marginTop: 2 }}>
+                    Suggested Override: <code style={{ color: 'var(--primary-color)' }}>{ruleConflict.suggestedOverrideRule}</code>
                   </div>
                 )}
               </div>
@@ -754,8 +772,8 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
             style={{
               padding: '16px 18px',
               borderRadius: 8,
-              background: 'var(--bg-secondary, rgba(255,255,255,0.02))',
-              border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+              background: 'var(--overlay-2)',
+              border: '1px solid var(--border-color)',
               marginTop: 10,
             }}
           >
@@ -773,8 +791,8 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                         borderRadius: 4,
                         border: 'none',
                         cursor: 'pointer',
-                        background: targetSyntax === fmt ? 'var(--accent-primary, #6366f1)' : 'transparent',
-                        color: targetSyntax === fmt ? '#fff' : 'var(--text-secondary, #94a3b8)',
+                        background: targetSyntax === fmt ? 'var(--primary-color)' : 'transparent',
+                        color: targetSyntax === fmt ? '#fff' : 'var(--secondary-color)',
                         fontWeight: targetSyntax === fmt ? 600 : 400,
                       }}
                       onClick={() => handleTargetSyntaxChange(fmt)}
@@ -851,14 +869,14 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 ))}
               </div>
             ) : (
-              <p style={{ color: 'var(--text-secondary, #94a3b8)', fontSize: 12, margin: '8px 0 0 0' }}>
+              <p style={{ color: 'var(--secondary-color)', fontSize: 12, margin: '8px 0 0 0' }}>
                 Clean destination. No blocking rules synthesized.
               </p>
             )}
 
             {/* Mini-AI Feedback Tuning */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border-color, rgba(255,255,255,0.06))', flexWrap: 'wrap', gap: 8 }}>
-              <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border-color)', flexWrap: 'wrap', gap: 8 }}>
+              <span style={{ fontSize: 12, color: 'var(--secondary-color)' }}>
                 Train Mini-AI heuristics for this domain:
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -886,6 +904,22 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                   </svg>
                   <span>{feedbackTune === 'safe_confirmed' ? '✓ Marked Safe' : 'Mark as Safe (False Positive)'}</span>
                 </button>
+                {window.electron?.resetMiniAiFeedback && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    style={{ fontSize: 11, padding: '3px 8px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    title="Delete what Mini-AI learned about this domain — undoes Flag as Threat / Mark as Safe"
+                    onClick={() => handleForgetMiniAi(ruleResult?.domain || aiResult?.domain || query)}
+                  >
+                    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 6h18" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                    <span>{feedbackForgotten === 'forgot' ? '✓ Forgotten' : feedbackForgotten === 'nothing' ? 'Nothing stored' : 'Forget Learned'}</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>

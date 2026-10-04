@@ -1,3 +1,4 @@
+import { describe, expect, it } from '@jest/globals';
 import {
   MiniAiClassifier,
   detectAntiAdblock,
@@ -260,6 +261,41 @@ describe('Anti-Adblock Defuser & Circumvention Mitigation Suite', () => {
       // Re-verify normal matching continues to work reliably
       expect(hostnameHasToken('adserver.com', 'adserver')).toBe(true);
       expect(hostnameHasToken('clean-domain.org', 'telemetry')).toBe(false);
+    });
+
+    it('tokenRegexCache evicts least-recently-used: a re-touched token survives the flood instead of being cleared with it', () => {
+      const OriginalRegExp = globalThis.RegExp;
+      let compiles = 0;
+      globalThis.RegExp = class extends OriginalRegExp {
+        constructor(pattern: string | RegExp, flags?: string) {
+          compiles += 1;
+          super(pattern as string, flags);
+        }
+      } as typeof RegExp;
+      try {
+        // 'hot' compiles once, then a partial flood leaves cache room.
+        expect(hostnameHasToken('hot.example.com', 'hot')).toBe(true);
+        const afterHot = compiles;
+        expect(afterHot).toBeGreaterThan(0);
+        for (let i = 0; i < 400; i++) {
+          hostnameHasToken(`d-${i}.com`, `flood${i}`);
+        }
+        // Re-touch 'hot' so it moves to the back of the eviction line.
+        expect(hostnameHasToken('hot.example.com', 'hot')).toBe(true);
+        const compilesAtCap = compiles;
+        // Overflow the 500-entry cap. Under clear-on-overflow the map empties
+        // and 'hot' would need a recompile; under LRU only cold flood entries
+        // leave, so this lookup must not compile anything new.
+        for (let i = 400; i < 650; i++) {
+          hostnameHasToken(`d-${i}.com`, `flood${i}`);
+        }
+        const compilesAfterFlood = compiles;
+        expect(hostnameHasToken('hot.example.com', 'hot')).toBe(true);
+        expect(compiles).toBe(compilesAfterFlood);
+        expect(compilesAtCap).toBeLessThan(compilesAfterFlood);
+      } finally {
+        globalThis.RegExp = OriginalRegExp;
+      }
     });
   });
 });

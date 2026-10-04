@@ -117,7 +117,19 @@ export function ElementScanPanel({
                       </ul>
                     )}
                   </div>
-                  <button className="chip-btn" disabled={busy} onClick={() => onHide([group.selector])}>
+                  <button
+                    className="chip-btn"
+                    disabled={busy}
+                    // The visible text cannot name what it acts on \u2014 every group says "Hide" \u2014 so a
+                    // screen-reader user heard "Hide, Hide, Hide" with nothing to tell them which
+                    // element each one removes, on the one action here that takes content off the
+                    // page. The label carries the selector and the count, because both are needed:
+                    // the selector identifies it and the count says how much of the page it takes.
+                    // The visible text stays "Hide" \u2014 the row above it already shows the selector to
+                    // anyone who can see, and repeating it twice reads as noise.
+                    aria-label={`Hide ${group.matches} element${group.matches === 1 ? '' : 's'} matching ${group.selector}`}
+                    onClick={() => onHide([group.selector])}
+                  >
                     Hide
                   </button>
                 </div>

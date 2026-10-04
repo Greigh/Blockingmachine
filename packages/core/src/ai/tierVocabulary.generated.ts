@@ -44,31 +44,33 @@ export const TIER_VOCABULARY_PROVENANCE: TierVocabularyProvenance =
     {
       "tier": "tier_annoyances",
       "hosts": 22,
-      "unplaceable": 21
+      "unplaceable": 22
     }
   ],
   "hostsRead": 118,
   "seedVocabulary": {
     "adTokens": 112,
-    "trackerTokens": 97
+    "trackerTokens": 97,
+    "consentTokens": 22
   },
-  "seedsConsidered": 44,
+  "seedsConsidered": 45,
   "acceptedTokens": 42,
-  "rejectedHosts": 2,
-  "corpusRefusals": 1,
+  "rejectedHosts": 3,
+  "corpusRefusals": 0,
+  "apexRefusals": 1,
   "corpus": {
-    "total": 209,
-    "lexicalCases": 81,
-    "accuracy": 0.9904,
-    "macroF1": 0.8764,
+    "total": 216,
+    "lexicalCases": 88,
+    "accuracy": 0.9907,
+    "macroF1": 0.9034,
     "falsePositives": 0,
     "coverageGaps": 2,
-    "baselineAccuracy": 0.9809,
-    "baselineMacroF1": 0.8673,
+    "baselineAccuracy": 0.9769,
+    "baselineMacroF1": 0.882,
     "baselineFalsePositives": 0,
     "baselineCoverageGaps": 4
   },
-  "gate": "passed: 0/122 clean domains flagged, accuracy 0.9904, macro F1 0.8764, coverage gaps 2"
+  "gate": "passed: 0/122 clean domains flagged, accuracy 0.9907, macro F1 0.9034, coverage gaps 2"
 }
 ;
 
@@ -98,18 +100,25 @@ export const TIER_DERIVED_TRACKER_TOKENS: readonly string[] =
   'addtoany',
   'clicktale',
   'comscore',
+  'dynamicyield',
+  'imrworldwide',
+  'kameleoon',
+  'nielsen',
+  'sharethis',
+]
+;
+
+/** Vendors the annoyance tier carries whose names read as consent-management or annoyance platforms. */
+export const TIER_DERIVED_CONSENT_TOKENS: readonly string[] = 
+[
   'cookiebot',
   'cookielaw',
-  'dynamicyield',
   'foxpush',
   'getsitecontrol',
   'hellobar',
-  'imrworldwide',
   'iubenda',
   'izooto',
   'justuno',
-  'kameleoon',
-  'nielsen',
   'onetrust',
   'optimonk',
   'osano',
@@ -118,7 +127,6 @@ export const TIER_DERIVED_TRACKER_TOKENS: readonly string[] =
   'pushengage',
   'quantcast',
   'sendpulse',
-  'sharethis',
   'sleeknote',
   'termly',
   'webpushr',
@@ -203,21 +211,21 @@ export const TIER_VOCABULARY_EVIDENCE: readonly TierVocabularyEvidence[] =
   },
   {
     "token": "cookiebot",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "cookiebot.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "cookielaw",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "cookielaw.org"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "dynamicyield",
@@ -230,30 +238,30 @@ export const TIER_VOCABULARY_EVIDENCE: readonly TierVocabularyEvidence[] =
   },
   {
     "token": "foxpush",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "foxpush.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "getsitecontrol",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "getsitecontrol.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "hellobar",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "hellobar.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "imrworldwide",
@@ -266,21 +274,21 @@ export const TIER_VOCABULARY_EVIDENCE: readonly TierVocabularyEvidence[] =
   },
   {
     "token": "iubenda",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "iubenda.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "izooto",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "izooto.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "juicyads",
@@ -293,12 +301,12 @@ export const TIER_VOCABULARY_EVIDENCE: readonly TierVocabularyEvidence[] =
   },
   {
     "token": "justuno",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "justuno.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "kameleoon",
@@ -347,75 +355,75 @@ export const TIER_VOCABULARY_EVIDENCE: readonly TierVocabularyEvidence[] =
   },
   {
     "token": "onetrust",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "onetrust.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "optimonk",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "optimonk.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "osano",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "osano.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "popupsmart",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "popupsmart.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "privacy-mgmt",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "privacy-mgmt.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "pushengage",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "pushengage.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "quantcast",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "quantcast.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "sendpulse",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "sendpulse.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "sharethis",
@@ -428,12 +436,12 @@ export const TIER_VOCABULARY_EVIDENCE: readonly TierVocabularyEvidence[] =
   },
   {
     "token": "sleeknote",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "sleeknote.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "sonobi",
@@ -464,12 +472,12 @@ export const TIER_VOCABULARY_EVIDENCE: readonly TierVocabularyEvidence[] =
   },
   {
     "token": "termly",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "termly.io"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "tremorhub",
@@ -482,21 +490,21 @@ export const TIER_VOCABULARY_EVIDENCE: readonly TierVocabularyEvidence[] =
   },
   {
     "token": "webpushr",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "webpushr.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "wisepops",
-    "vocabulary": "tracker",
+    "vocabulary": "consent",
     "tier": "tier_annoyances",
     "hosts": [
       "wisepops.com"
     ],
-    "family": "Telemetry/Analytics"
+    "family": "Consent/Annoyance"
   },
   {
     "token": "zemanta",
@@ -523,7 +531,7 @@ export const TIER_VOCABULARY_REJECTIONS: readonly TierVocabularyRejection[] =
   {
     "tier": "tier_privacy",
     "host": "business-api.tiktok.com",
-    "reason": "the only candidates that moved this host were refused by the independent corpus",
+    "reason": "the only candidates that moved this host were bare labels the tier could not attest",
     "attempts": [
       {
         "token": "tiktok",
@@ -536,7 +544,20 @@ export const TIER_VOCABULARY_REJECTIONS: readonly TierVocabularyRejection[] =
         "vocabulary": "ad",
         "present": false,
         "family": "Advertising",
-        "gate": "refused: 1 new false positive(s) — tiktok.com called Advertising"
+        "attestation": "refused: 'tiktok' is a bare label naming tiktok.com, which tier_privacy did not list — a subdomain row cannot attest the whole brand"
+      }
+    ]
+  },
+  {
+    "tier": "tier_annoyances",
+    "host": "onesignal.com",
+    "reason": "no candidate token moved this host into a family the tier may be called",
+    "attempts": [
+      {
+        "token": "onesignal",
+        "vocabulary": "consent",
+        "present": false,
+        "family": "Telemetry/Analytics"
       }
     ]
   },

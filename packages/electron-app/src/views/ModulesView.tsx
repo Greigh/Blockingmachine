@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import type { FilterSource } from '../types/';
+import { copyTextToClipboard } from '../clipboard';
 
 export interface NativeModuleItem {
   id: string;
@@ -290,9 +291,9 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
     }
   };
 
-  const handleCopyRules = () => {
+  const handleCopyRules = async () => {
     if (!moduleRawContent) return;
-    navigator.clipboard.writeText(moduleRawContent);
+    if (!(await copyTextToClipboard(moduleRawContent))) return;
     setCopiedNotification(true);
     if (copyTimeoutRef.current) {
       clearTimeout(copyTimeoutRef.current);

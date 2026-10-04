@@ -34,8 +34,14 @@ export type UnboundResolverQuery = (
  */
 export const queryUnboundResolver: UnboundResolverQuery = async (domain, target, timeoutMs) => {
   const resolver = new DnsResolver({ timeout: timeoutMs, tries: 1 });
-  resolver.setServers([`${target.host}:${target.port}`]);
   try {
+    // Inside the `try` on purpose. `setServers` takes an IP address and throws
+    // `ERR_INVALID_IP_ADDRESS` synchronously for a hostname, and it used to sit one line above the
+    // `try` \u2014 so the throw escaped `classifyLookupFailure`, `probeUnboundResolver` and the IPC
+    // handler as a rejected promise instead of arriving as a verdict. A router-hosted Unbound behind
+    // a name is one of the two likeliest things to type, and it was the one input that could not be
+    // checked at all.
+    resolver.setServers([`${target.host}:${target.port}`]);
     const addresses = await resolver.resolve4(domain);
     return addresses.length > 0 ? { state: 'resolved', addresses } : { state: 'nodata' };
   } catch (error) {
@@ -55,6 +61,12 @@ export function classifyLookupFailure(error: unknown): UnboundAnswer {
   }
   if (code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'EREFUSED') {
     return { state: 'refused', detail: code };
+  }
+  // An address `dns` cannot be pointed at is not a failed lookup, and reporting it as one would send
+  // the user to check the resolver's health when the resolver was never asked anything. Its own
+  // state, so the verdict can say the address is a name.
+  if (code === 'ERR_INVALID_IP_ADDRESS') {
+    return { state: 'unqueryable', detail: code };
   }
   return { state: 'error', detail: code || message || name || 'unknown error' };
 }

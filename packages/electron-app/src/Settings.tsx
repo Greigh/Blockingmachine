@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrandLogo } from './components/BrandLogo';
+import type { ElementHarvestSummary } from './elementHarvest';
 import type {
   ThemeType,
   FilterFormat,
@@ -14,12 +15,12 @@ import {
   applyAccentColor,
   type AccentColorOption,
 } from './theme';
+import { AdGuardDirectWarning } from './components/AdGuardDirectWarning';
 import { ServiceMismatchBanner } from './components/ServiceMismatchBanner';
 import { isServiceMismatch } from './sinkholeIdentity';
 import { separateAdguardUrls } from './queryLogScout';
 import {
   DEFAULT_ADGUARD_DIRECT_PORT,
-  directModeWarning,
   localTlsBypassNote,
   normalizeAdguardDirectPort,
   replaceMatchingExplicitPort,
@@ -103,6 +104,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [isSavingSinkhole, setIsSavingSinkhole] = useState(false);
   const [isSyncingSinkhole, setIsSyncingSinkhole] = useState(false);
   const [sinkholeMessage, setSinkholeMessage] = useState('');
+  const [secretStorageAvailable, setSecretStorageAvailable] = useState<boolean | null>(null);
   const [syncResults, setSyncResults] = useState<Array<{ service: string; status: 'success' | 'error' | 'skipped'; message: string; details?: string }>>([]);
   const [showPiholeKey, setShowPiholeKey] = useState(false);
   const [showAdguardPass, setShowAdguardPass] = useState(false);
@@ -134,9 +136,14 @@ const Settings: React.FC<SettingsProps> = ({
   const [radarDisplayConfig, setRadarDisplayConfig] = useState<RadarDisplayConfig>({
     showIgnoredOffenders: false,
   });
+  const [elementHarvest, setElementHarvest] = useState<ElementHarvestSummary | null>(null);
+  const [elementHarvestBusy, setElementHarvestBusy] = useState(false);
   const [autoStartFeedServer, setAutoStartFeedServer] = useState(false);
   const [launchOnStartup, setLaunchOnStartup] = useState(false);
   const [startupMessage, setStartupMessage] = useState('');
+  const [feedToken, setFeedToken] = useState('');
+  const [feedTokenConfigured, setFeedTokenConfigured] = useState(false);
+  const [feedTokenMessage, setFeedTokenMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Path state variables
   const [savePath, setSavePath] = useState('');
@@ -208,12 +215,16 @@ const Settings: React.FC<SettingsProps> = ({
           adguardDirectPort: normalizeAdguardDirectPort(cfg.adguardDirectPort),
           allowInsecureLocalTls: Boolean(cfg.allowInsecureLocalTls),
         });
+        if (typeof cfg.encryptionAvailable === 'boolean') setSecretStorageAvailable(cfg.encryptionAvailable);
       }
     }).catch(console.error);
 
     if (window.electron?.getAiConfig) {
       window.electron.getAiConfig().then((cfg) => {
-        if (isMounted && cfg) setAiConfig(cfg);
+        if (isMounted && cfg) {
+          setAiConfig(cfg);
+          if (typeof cfg.encryptionAvailable === 'boolean') setSecretStorageAvailable(cfg.encryptionAvailable);
+        }
       }).catch(console.error);
     }
 
@@ -235,9 +246,24 @@ const Settings: React.FC<SettingsProps> = ({
       }).catch(console.error);
     }
 
+    if (window.electron?.getElementHarvest) {
+      window.electron.getElementHarvest().then((summary) => {
+        if (isMounted && summary) setElementHarvest(summary);
+      }).catch(console.error);
+    }
+
     if (window.electron?.getAutoStartFeedServer) {
       window.electron.getAutoStartFeedServer().then((val) => {
         if (isMounted) setAutoStartFeedServer(Boolean(val));
+      }).catch(console.error);
+    }
+
+    if (window.electron?.getFeedToken) {
+      window.electron.getFeedToken().then((res) => {
+        if (isMounted && res) {
+          setFeedTokenConfigured(res.configured);
+          setFeedToken(res.token);
+        }
       }).catch(console.error);
     }
 
@@ -277,6 +303,29 @@ const Settings: React.FC<SettingsProps> = ({
       } catch (err) {
         console.error('Failed to set auto-start feed server:', err);
       }
+    }
+  };
+
+  const handleSaveFeedToken = async () => {
+    if (!window.electron?.setFeedToken) return;
+    try {
+      const res = await window.electron.setFeedToken(feedToken);
+      if (res?.success) {
+        const configured = feedToken.trim().length > 0;
+        setFeedTokenConfigured(configured);
+        setFeedTokenMessage({
+          text: configured
+            ? 'Feed token saved — mutations now require Authorization: Bearer'
+            : 'Feed token cleared — mutations are guarded by origin only',
+          type: 'success',
+        });
+      } else {
+        setFeedTokenMessage({ text: res?.error || 'Failed to save feed token', type: 'error' });
+      }
+      safeSetTimeout(() => setFeedTokenMessage(null), 4000);
+    } catch (err) {
+      console.error('Failed to save feed token:', err);
+      setFeedTokenMessage({ text: 'Failed to save feed token', type: 'error' });
     }
   };
 
@@ -517,6 +566,41 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
+  const refreshElementHarvest = async () => {
+    if (window.electron?.getElementHarvest) {
+      const summary = await window.electron.getElementHarvest();
+      if (summary) setElementHarvest(summary);
+    }
+  };
+
+  const handleChooseElementHarvest = async () => {
+    if (!window.electron?.selectElementHarvest) return;
+    setElementHarvestBusy(true);
+    try {
+      await window.electron.selectElementHarvest();
+      await refreshElementHarvest();
+    } catch (err: any) {
+      setAiMessage({ text: err?.message || 'Failed to read the harvest file.', type: 'error' });
+    } finally {
+      setElementHarvestBusy(false);
+    }
+  };
+
+  const handleClearElementHarvest = async () => {
+    if (!window.electron?.clearElementHarvest) return;
+    setElementHarvestBusy(true);
+    try {
+      await window.electron.clearElementHarvest();
+      await refreshElementHarvest();
+      setAiMessage({ text: 'Element harvest forgotten and deleted.', type: 'success' });
+      safeSetTimeout(() => setAiMessage({ text: '', type: null }), 3000);
+    } catch (err: any) {
+      setAiMessage({ text: err?.message || 'Failed to clear the harvest.', type: 'error' });
+    } finally {
+      setElementHarvestBusy(false);
+    }
+  };
+
   const handleResetAiFeedback = async () => {
     if (!window.electron?.tuneMiniAiFeedback) return;
     try {
@@ -531,9 +615,6 @@ const Settings: React.FC<SettingsProps> = ({
 
   const directPortFocusRef = useRef(DEFAULT_ADGUARD_DIRECT_PORT);
   const directPort = normalizeAdguardDirectPort(sinkholeConfig.adguardDirectPort);
-  const directWarning = (!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct')
-    ? directModeWarning(sinkholeConfig.adguardHomeUrl || '', directPort)
-    : null;
   const settingsTlsUrl = sinkholeConfig.adguardMode === 'webhook'
     ? (sinkholeConfig.haWebhookUrl || sinkholeConfig.customWebhookUrl || '')
     : (sinkholeConfig.adguardHomeUrl || sinkholeConfig.customWebhookUrl || '');
@@ -670,6 +751,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <option value="shadowrocket">Shadowrocket (iOS rule set — DOMAIN-SUFFIX rules)</option>
                   <option value="privoxy">Privoxy (action file — &#123;+block&#125; sections)</option>
                   <option value="bind">BIND DNS (Response Policy Zone records)</option>
+                  <option value="bind-null">BIND DNS (shared null zone — one file, many origins)</option>
                   <option value="domains">Domain List (One clean domain per line)</option>
                   <option value="plain">Plain Text (Raw line-by-line rules)</option>
                 </select>
@@ -701,6 +783,7 @@ const Settings: React.FC<SettingsProps> = ({
                     { id: 'shadowrocket', label: 'Shadowrocket (iOS rule set)' },
                     { id: 'privoxy', label: 'Privoxy (filtering proxy action file)' },
                     { id: 'bind', label: 'BIND (Response Policy Zone)' },
+                    { id: 'bind-null', label: 'BIND (shared null zone)' },
                   ]
                     .filter((item) => item.id !== exportFormat)
                     .map((item) => (
@@ -856,7 +939,7 @@ const Settings: React.FC<SettingsProps> = ({
                 type="checkbox"
                 checked={launchOnStartup}
                 onChange={(e) => handleToggleLaunchOnStartup(e.target.checked)}
-                style={{ marginTop: '2px', cursor: 'pointer', accentColor: 'var(--primary-color, #0a84ff)' }}
+                style={{ marginTop: '2px', cursor: 'pointer', accentColor: 'var(--primary-color)' }}
               />
               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 <span style={{ fontWeight: 600 }}>Launch Blockingmachine on Computer Startup</span>
@@ -871,7 +954,7 @@ const Settings: React.FC<SettingsProps> = ({
                 type="checkbox"
                 checked={autoStartFeedServer}
                 onChange={(e) => handleToggleAutoStartFeedServer(e.target.checked)}
-                style={{ marginTop: '2px', cursor: 'pointer', accentColor: 'var(--primary-color, #0a84ff)' }}
+                style={{ marginTop: '2px', cursor: 'pointer', accentColor: 'var(--primary-color)' }}
               />
               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 <span style={{ fontWeight: 600 }}>Auto-Start Local LAN Feed Server on Launch</span>
@@ -880,6 +963,36 @@ const Settings: React.FC<SettingsProps> = ({
                 </span>
               </div>
             </label>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Feed Mutation Token (optional)</span>
+              <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                The feed server listens on every LAN interface and its read endpoints are open by design. Control calls
+                (/v1/control, /v1/compile, telemetry) are guarded by request origin only — a client that sends no Origin
+                header is trusted, which suits a LAN you control. Set a token and every mutation must present
+                <code> Authorization: Bearer</code> — the boundary for a LAN you do not fully trust.
+                {feedTokenConfigured ? ' A token is currently required.' : ' No token is currently required.'}
+              </span>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input
+                  type="password"
+                  className="path-input"
+                  placeholder={feedTokenConfigured ? 'Token configured — enter a new one to replace' : 'Leave empty to keep mutations origin-guarded'}
+                  value={feedToken}
+                  onChange={(e) => setFeedToken(e.target.value)}
+                  style={{ maxWidth: '340px' }}
+                  autoComplete="off"
+                />
+                <button type="button" className="browse-button secondary" onClick={() => void handleSaveFeedToken()}>
+                  Save
+                </button>
+              </div>
+              {feedTokenMessage && (
+                <p className={`setting-message ${feedTokenMessage.type}`} style={{ marginTop: '2px' }}>
+                  {feedTokenMessage.text}
+                </p>
+              )}
+            </div>
           </div>
 
           {startupMessage && <p className="setting-message success" style={{ marginTop: '10px' }}>{startupMessage}</p>}
@@ -900,9 +1013,16 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
           <p>Automatically push compiled blocklists and trigger gravity updates on local DNS appliances</p>
 
+          {secretStorageAvailable === false && (
+            <p className="setting-message error" style={{ marginTop: '10px' }}>
+              OS keychain encryption is unavailable in this session — the credentials below are
+              stored as plaintext on disk rather than sealed.
+            </p>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginTop: '14px' }}>
             {/* Pi-hole Section */}
-            <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
+            <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -938,21 +1058,21 @@ const Settings: React.FC<SettingsProps> = ({
                 <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>Presets:</span>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                   onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://pi.hole/admin/api.php' })}
                 >
                   pi.hole
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                   onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://homeassistant.local:8080/admin/api.php' })}
                 >
                   HA Add-on (8080)
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                   onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://localhost/admin/api.php' })}
                 >
                   Docker (Port 80)
@@ -964,7 +1084,7 @@ const Settings: React.FC<SettingsProps> = ({
                 <input
                   type="text"
                   className="path-input"
-                  style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                   placeholder="http://pi.hole/admin/api.php"
                   value={sinkholeConfig.piholeUrl}
                   onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: e.target.value })}
@@ -984,7 +1104,7 @@ const Settings: React.FC<SettingsProps> = ({
                 <input
                   type={showPiholeKey ? 'text' : 'password'}
                   className="path-input"
-                  style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                   placeholder="Pi-hole web password hash"
                   value={sinkholeConfig.piholeApiKey}
                   onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, piholeApiKey: e.target.value })}
@@ -1000,7 +1120,7 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
 
             {/* AdGuard Home Section */}
-            <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
+            <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1058,35 +1178,35 @@ const Settings: React.FC<SettingsProps> = ({
                 <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>Presets:</span>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                   onClick={() => selectAdguardMode('direct', { adguardHomeUrl: `http://homeassistant.local:${directPort}` })}
                 >
                   HA Port {directPort}
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                   onClick={() => selectAdguardMode('ha-api', { adguardHomeUrl: 'http://homeassistant.local:8123' })}
                 >
                   HA Port 8123 API
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                   onClick={() => selectAdguardMode('direct', { adguardHomeUrl: `http://localhost:${directPort}` })}
                 >
                   Docker {directPort}
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                   onClick={() => selectAdguardMode('direct', { adguardHomeUrl: `http://192.168.8.1:${directPort}` })}
                 >
                   GL.iNet {directPort}
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                   onClick={() => selectAdguardMode('ha-api', { adguardHomeUrl: 'https://your-instance.ui.nabu.casa' })}
                 >
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1096,7 +1216,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                   onClick={() => selectAdguardMode('webhook', { haWebhookUrl: 'https://hooks.nabu.casa/...' })}
                 >
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1114,7 +1234,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <input
                       type="text"
                       className="path-input"
-                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                       placeholder={`http://homeassistant.local:${directPort} or http://192.168.1.1:${directPort}`}
                       value={sinkholeConfig.adguardHomeUrl}
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value, adguardDirectUrl: e.target.value })}
@@ -1125,7 +1245,7 @@ const Settings: React.FC<SettingsProps> = ({
                       min={1}
                       max={65535}
                       className="path-input"
-                      style={{ width: '120px', height: '34px', fontSize: '0.8rem' }}
+                      style={{ width: '120px' }}
                       value={sinkholeConfig.adguardDirectPort ?? ''}
                       onFocus={() => {
                         directPortFocusRef.current = directPort;
@@ -1156,16 +1276,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
                       Used when the URL has no port. A port written in the URL is kept.
                     </p>
-                    {directWarning && (
-                      <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '6px', fontSize: '0.72rem', color: '#f59e0b', display: 'flex', alignItems: 'flex-start', gap: '5px' }}>
-                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: '2px' }}>
-                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                          <line x1="12" y1="9" x2="12" y2="13" />
-                          <line x1="12" y1="17" x2="12.01" y2="17" />
-                        </svg>
-                        <span>{directWarning.message}</span>
-                      </div>
-                    )}
+                    <AdGuardDirectWarning url={sinkholeConfig.adguardHomeUrl || ''} port={directPort} />
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                     <div>
@@ -1173,7 +1284,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <input
                         type="text"
                         className="path-input"
-                        style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                         placeholder="admin"
                         value={sinkholeConfig.adguardHomeUser}
                         onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })}
@@ -1193,7 +1304,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <input
                         type={showAdguardPass ? 'text' : 'password'}
                         className="path-input"
-                        style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                         placeholder="••••••••"
                         value={sinkholeConfig.adguardHomePassword}
                         onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
@@ -1211,7 +1322,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <input
                       type="text"
                       className="path-input"
-                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                       placeholder="http://homeassistant.local:8123 or https://your-instance.ui.nabu.casa"
                       value={sinkholeConfig.adguardHomeUrl}
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
@@ -1231,7 +1342,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <input
                       type={showHaToken ? 'text' : 'password'}
                       className="path-input"
-                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                       placeholder="eyJhbGciOi..."
                       value={sinkholeConfig.haToken || ''}
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haToken: e.target.value })}
@@ -1244,7 +1355,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <input
                         type="text"
                         className="path-input"
-                        style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                         placeholder="https://homeassistant.local:8124"
                         value={sinkholeConfig.adguardDirectUrl || ''}
                         onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardDirectUrl: e.target.value })}
@@ -1257,7 +1368,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <input
                         type="text"
                         className="path-input"
-                        style={{ flex: 1, height: '34px', fontSize: '0.8rem' }}
+                        style={{ flex: 1 }}
                         placeholder="AdGuard username"
                         value={sinkholeConfig.adguardHomeUser}
                         onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })}
@@ -1265,7 +1376,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <input
                         type={showAdguardPass ? 'text' : 'password'}
                         className="path-input"
-                        style={{ flex: 1, height: '34px', fontSize: '0.8rem' }}
+                        style={{ flex: 1 }}
                         placeholder="AdGuard password"
                         value={sinkholeConfig.adguardHomePassword}
                         onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
@@ -1282,7 +1393,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <input
                     type="text"
                     className="path-input"
-                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                     placeholder="http://homeassistant.local:8123/api/webhook/... or https://hooks.nabu.casa/..."
                     value={sinkholeConfig.haWebhookUrl || ''}
                     onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: e.target.value })}
@@ -1295,7 +1406,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <input
                       type="text"
                       className="path-input"
-                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                       placeholder="https://homeassistant.local:8124"
                       value={sinkholeConfig.adguardDirectUrl || ''}
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardDirectUrl: e.target.value })}
@@ -1308,7 +1419,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <input
                       type="text"
                       className="path-input"
-                      style={{ flex: 1, height: '34px', fontSize: '0.8rem' }}
+                      style={{ flex: 1 }}
                       placeholder="AdGuard username"
                       value={sinkholeConfig.adguardHomeUser}
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })}
@@ -1316,7 +1427,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <input
                       type={showAdguardPass ? 'text' : 'password'}
                       className="path-input"
-                      style={{ flex: 1, height: '34px', fontSize: '0.8rem' }}
+                      style={{ flex: 1 }}
                       placeholder="AdGuard password"
                       value={sinkholeConfig.adguardHomePassword}
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
@@ -1359,7 +1470,7 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
 
           {/* Homelab & Custom Webhook Endpoint */}
-          <div style={{ marginTop: '14px', background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
+          <div style={{ marginTop: '14px', background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1388,7 +1499,7 @@ const Settings: React.FC<SettingsProps> = ({
             <input
               type="text"
               className="path-input"
-              style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
               placeholder="http://technitium.lan:5380/api/reload or http://pfsense.lan/api/hook"
               value={sinkholeConfig.customWebhookUrl || ''}
               onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, customWebhookUrl: e.target.value })}
@@ -1453,7 +1564,7 @@ const Settings: React.FC<SettingsProps> = ({
           )}
 
           {syncResults.length > 0 && (
-            <div style={{ marginTop: '12px', padding: '10px', background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', borderRadius: '8px', fontSize: '0.8rem' }}>
+            <div style={{ marginTop: '12px', padding: '10px', background: 'var(--overlay-1)', borderRadius: '8px', fontSize: '0.8rem' }}>
               {syncResults.map((r, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: i < syncResults.length - 1 ? '6px' : 0 }}>
                   <span style={{ fontWeight: 600 }}>{r.service}:</span>
@@ -1573,16 +1684,16 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
 
           {/* Subform for selected provider */}
-          <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))', marginBottom: '14px' }}>
+          <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', marginBottom: '14px' }}>
             {aiConfig.provider === 'mini-ai' && (
               <div>
-                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary, #fff)', marginBottom: '4px' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-color)', marginBottom: '4px' }}>
                   Built-in Embedded Mini-AI Active
                 </div>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary, #9ca3af)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+                <p style={{ fontSize: '0.78rem', color: 'var(--secondary-color)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
                   The Mini-AI classifier extracts 25 domain features (Shannon entropy, consonant clustering, hex string density, brand squatting, vowel ratios) directly on your device without sending any data over the network.
                 </p>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.08))' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--overlay-2)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
                   <span style={{ fontSize: '0.78rem' }}>
                     Learned Feedback Corrections: <strong>{learnedFeedbackCount}</strong> {learnedFeedbackCount === 1 ? 'entry' : 'entries'} stored
                   </span>
@@ -1602,10 +1713,10 @@ const Settings: React.FC<SettingsProps> = ({
 
             {aiConfig.provider === 'local-heuristics' && (
               <div>
-                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary, #fff)', marginBottom: '4px' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-color)', marginBottom: '4px' }}>
                   Mathematical Heuristics Engine Active
                 </div>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary, #9ca3af)', margin: 0, lineHeight: 1.4 }}>
+                <p style={{ fontSize: '0.78rem', color: 'var(--secondary-color)', margin: 0, lineHeight: 1.4 }}>
                   Evaluates target domains using algorithmic Shannon entropy analysis, subdomain depth thresholds, top-level domain risk scoring, and asynchronous CNAME resolution.
                 </p>
               </div>
@@ -1619,7 +1730,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <button
                       key={m}
                       type="button"
-                      style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                      style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                       onClick={() => setAiConfig({ ...aiConfig, ollamaModel: m })}
                     >
                       {m}
@@ -1632,7 +1743,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <input
                       type="text"
                       className="path-input"
-                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                       value={aiConfig.ollamaUrl || 'http://127.0.0.1:11434'}
                       onChange={(e) => setAiConfig({ ...aiConfig, ollamaUrl: e.target.value })}
                       placeholder="http://127.0.0.1:11434"
@@ -1643,7 +1754,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <input
                       type="text"
                       className="path-input"
-                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                       value={aiConfig.ollamaModel || 'llama3.2'}
                       onChange={(e) => setAiConfig({ ...aiConfig, ollamaModel: e.target.value })}
                       placeholder="llama3.2"
@@ -1668,7 +1779,7 @@ const Settings: React.FC<SettingsProps> = ({
                 <input
                   type={showAiKey ? 'text' : 'password'}
                   className="path-input"
-                  style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                   value={aiConfig.apiKey || ''}
                   onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
                   placeholder="AIzaSy..."
@@ -1682,28 +1793,28 @@ const Settings: React.FC<SettingsProps> = ({
                   <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>Presets:</span>
                   <button
                     type="button"
-                    style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                    style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                     onClick={() => setAiConfig({ ...aiConfig, apiEndpoint: 'https://api.openai.com/v1', modelName: 'gpt-4o-mini' })}
                   >
                     OpenAI (gpt-4o-mini)
                   </button>
                   <button
                     type="button"
-                    style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                    style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                     onClick={() => setAiConfig({ ...aiConfig, apiEndpoint: 'https://api.groq.com/openai/v1', modelName: 'llama-3.3-70b-versatile' })}
                   >
                     Groq (Llama 3.3 70B)
                   </button>
                   <button
                     type="button"
-                    style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                    style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                     onClick={() => setAiConfig({ ...aiConfig, apiEndpoint: 'http://localhost:1234/v1', modelName: 'local-model' })}
                   >
                     LM Studio (Local 1234)
                   </button>
                   <button
                     type="button"
-                    style={{ background: 'var(--bg-secondary, rgba(255,255,255,0.06))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                    style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
                     onClick={() => setAiConfig({ ...aiConfig, apiEndpoint: 'https://openrouter.ai/api/v1', modelName: 'meta-llama/llama-3.2-3b-instruct' })}
                   >
                     OpenRouter
@@ -1715,7 +1826,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <input
                       type="text"
                       className="path-input"
-                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                       value={aiConfig.apiEndpoint || 'https://api.openai.com/v1'}
                       onChange={(e) => setAiConfig({ ...aiConfig, apiEndpoint: e.target.value })}
                       placeholder="https://api.openai.com/v1"
@@ -1726,7 +1837,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <input
                       type="text"
                       className="path-input"
-                      style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                       value={aiConfig.modelName || 'gpt-4o-mini'}
                       onChange={(e) => setAiConfig({ ...aiConfig, modelName: e.target.value })}
                       placeholder="gpt-4o-mini"
@@ -1747,11 +1858,16 @@ const Settings: React.FC<SettingsProps> = ({
                   <input
                     type={showAiKey ? 'text' : 'password'}
                     className="path-input"
-                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                     value={aiConfig.apiKey || ''}
                     onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
                     placeholder="sk-..."
                   />
+                  {secretStorageAvailable === false && (
+                    <p className="setting-message error" style={{ marginTop: '6px' }}>
+                      OS keychain encryption is unavailable — this key is stored as plaintext on disk.
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -1764,7 +1880,7 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
 
           {/* Triage Cascade — local screening with a bounded escalation budget */}
-          <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))', marginBottom: '14px' }}>
+          <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', marginBottom: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <div style={{ fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1791,7 +1907,7 @@ const Settings: React.FC<SettingsProps> = ({
                 <span>Screen locally first</span>
               </label>
             </div>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #9ca3af)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+            <p style={{ fontSize: '0.75rem', color: 'var(--secondary-color)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
               The embedded classifier screens every candidate first — it costs nothing per lookup — and only the ones it genuinely cannot decide are sent to the provider above. Without this, the selected provider evaluates <em>everything</em>, which is what makes model-assisted blocking expensive.
             </p>
 
@@ -1802,7 +1918,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <input
                     type="number"
                     className="path-input"
-                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                     min={0}
                     value={aiConfig.cascade?.maxEscalations ?? 25}
                     onChange={(e) =>
@@ -1844,7 +1960,7 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
 
           {/* Sentinel Watchdog Automation */}
-          <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))', marginBottom: '14px' }}>
+          <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', marginBottom: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <div style={{ fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1861,7 +1977,7 @@ const Settings: React.FC<SettingsProps> = ({
                 <span>Enable Watchdog</span>
               </label>
             </div>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #9ca3af)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+            <p style={{ fontSize: '0.75rem', color: 'var(--secondary-color)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
               Periodically queries your local sinkhole query logs in the background, flags emerging ad/tracker hostnames with the selected AI engine, and records them in the Quarantine Ledger.
             </p>
 
@@ -1871,7 +1987,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Sweep Interval</label>
                   <select
                     className="styled-select"
-                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                     value={watchdogConfig.intervalMinutes}
                     onChange={(e) => setWatchdogConfig({ ...watchdogConfig, intervalMinutes: parseInt(e.target.value, 10) || 60 })}
                   >
@@ -1888,7 +2004,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Sinkhole Query Target</label>
                   <select
                     className="styled-select"
-                    style={{ width: '100%', height: '34px', fontSize: '0.8rem' }}
+
                     value={watchdogConfig.service}
                     onChange={(e) => setWatchdogConfig({ ...watchdogConfig, service: e.target.value as 'adguard' | 'pihole' })}
                   >
@@ -1901,11 +2017,11 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
 
           {/* Radar Display Preferences */}
-          <div style={{ background: 'var(--bg-tertiary, rgba(255,255,255,0.03))', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color, rgba(255,255,255,0.06))', marginBottom: '14px' }}>
+          <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', marginBottom: '14px' }}>
             <div style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: '4px' }}>
               AI Radar Display
             </div>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #9ca3af)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+            <p style={{ fontSize: '0.75rem', color: 'var(--secondary-color)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
               Browsing aids for the AI Radar's Top Repeat Offenders card. Ignoring is not trusting: ignored offenders stay hidden without any allowlist rule.
             </p>
             <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', cursor: 'pointer', fontSize: '0.78rem', lineHeight: 1.4 }}>
@@ -1913,7 +2029,7 @@ const Settings: React.FC<SettingsProps> = ({
                 type="checkbox"
                 checked={radarDisplayConfig.showIgnoredOffenders}
                 onChange={(e) => handleToggleShowIgnoredOffenders(e.target.checked)}
-                style={{ cursor: 'pointer', accentColor: 'var(--accent-color, #6366f1)', marginTop: 2 }}
+                style={{ cursor: 'pointer', accentColor: 'var(--primary-color)', marginTop: 2 }}
               />
               <span>
                 <strong>Show ignored offenders inline</strong>
@@ -1922,6 +2038,59 @@ const Settings: React.FC<SettingsProps> = ({
                 </span>
               </span>
             </label>
+          </div>
+
+          {/* Element Corpus Harvest */}
+          <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', marginBottom: '14px' }}>
+            <div style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: '4px' }}>
+              Element Corpus Harvest
+            </div>
+            <p style={{ fontSize: '0.75rem', color: 'var(--secondary-color)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+              The browser extension captures real page elements when you scan or act on one — the only source of corpus cases the hand-written set is missing. Export it from the extension popup, then point the hub at the file here so <code>npm run harvest:elements</code> can review it.
+            </p>
+            {elementHarvest?.path ? (
+              elementHarvest.present ? (
+                <>
+                  <div style={{ fontSize: '0.78rem', lineHeight: 1.6, marginBottom: '10px' }}>
+                    <div><strong>{elementHarvest.records.toLocaleString()}</strong> records across <strong>{elementHarvest.hosts.toLocaleString()}</strong> hosts{elementHarvest.rejected > 0 ? ` · ${elementHarvest.rejected.toLocaleString()} unreadable` : ''}</div>
+                    <div><strong>{elementHarvest.labelled.toLocaleString()}</strong> carry your decisions{elementHarvest.wouldQueue > 0 ? ` · ${elementHarvest.wouldQueue.toLocaleString()} would queue as corpus candidates` : ''}</div>
+                    {elementHarvest.newest && (
+                      <div style={{ opacity: 0.7, fontSize: '0.72rem' }}>Newest capture {new Date(elementHarvest.newest).toLocaleString()}</div>
+                    )}
+                    <div style={{ opacity: 0.7, fontSize: '0.72rem', wordBreak: 'break-all' }}>{elementHarvest.path}</div>
+                  </div>
+                </>
+              ) : (
+                <p style={{ fontSize: '0.78rem', color: 'var(--danger-color, #ff6b6b)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+                  The chosen file is gone: <span style={{ wordBreak: 'break-all' }}>{elementHarvest.path}</span>
+                </p>
+              )
+            ) : (
+              <p style={{ fontSize: '0.78rem', color: 'var(--secondary-color)', margin: '0 0 10px 0', lineHeight: 1.4, opacity: 0.8 }}>
+                No harvest file chosen yet.
+              </p>
+            )}
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="browse-button secondary"
+                onClick={handleChooseElementHarvest}
+                disabled={elementHarvestBusy}
+              >
+                {elementHarvestBusy ? 'Working…' : elementHarvest?.path ? 'Choose a different harvest…' : 'Choose harvest file…'}
+              </button>
+              {elementHarvest?.path && (
+                <button
+                  type="button"
+                  className="browse-button secondary"
+                  onClick={handleClearElementHarvest}
+                  disabled={elementHarvestBusy}
+                  title="Forget this file and delete it — withdrawing what was collected should not require finding it first"
+                >
+                  Forget &amp; delete
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Action Footer */}

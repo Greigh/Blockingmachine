@@ -8,6 +8,7 @@ import {
   PRIORITY_USER_ALLOW,
 } from '../shared/constants.js';
 import { normalizeSite } from '../shared/siteControl.js';
+import type { AppliedRuleSource, SiteControlDrift } from '../shared/types.js';
 
 export interface ParsedDnrCandidate {
   rawRule: string;
@@ -91,8 +92,14 @@ export interface PlannedRule {
   excludedInitiatorDomains?: string[];
 }
 
-/** The resource types blocklist rules apply to. */
-const BLOCK_RESOURCE_TYPES = [
+/**
+ * The resource types blocklist rules apply to.
+ *
+ * Exported for the redundancy read: every plain host block the compiler emits carries exactly
+ * this set, so the live-rules diff passes it as the baseline an unscoped block is expected to
+ * hold — a rule listing strictly fewer types is the scoped one, not one of these.
+ */
+export const BLOCK_RESOURCE_TYPES = [
   'script',
   'image',
   'xmlhttprequest',
@@ -586,7 +593,20 @@ export interface ListRulePlan {
   overflow: number;
   /** Rules that name at least one initiating site, so they fire per-site rather than globally. */
   scoped: number;
+  /**
+   * Candidate rules whose host a supplied benefit ranking could place — present only when a
+   * `TierBenefitRank` was provided. Zero means the ranking had nothing to say and the budget
+   * cut degenerated to list order, which the caller should report as a plain prune.
+   */
+  benefitRanked?: number;
 }
+
+/**
+ * The measured-benefit ordering for a budget cut: maps a candidate's host to its rank in the
+ * shipped tier cut, or null when no tier carries it. Lower ranks survive first; ties and
+ * unranked candidates keep list order. See `TierBenefitIndex` for how the ranking is built.
+ */
+export type TierBenefitRank = (host: string) => number | null;
 
 function toPlannedRule(candidate: ParsedDnrCandidate): PlannedRule {
   return {
@@ -609,6 +629,7 @@ export function planListRules(
   ruleLines: string[],
   control: SiteControlOptions = {},
   budget: number = MV3_LIMITS.SAFE_DYNAMIC_WATERMARK,
+  benefitRank?: TierBenefitRank,
 ): ListRulePlan {
   const allowedDomains = new Set(
     (control.allowedDomains ?? []).map((domain) => normalizeSite(domain)).filter(Boolean),
@@ -642,10 +663,35 @@ export function planListRules(
   }
 
   // Fold redundant variants, then sort by priority descending so high-priority rules & exceptions
-  // fit first.
-  const merged = dropSubsumedBlocks(mergeScopedVariants(candidates)).sort(
-    (a, b) => b.priority - a.priority,
-  );
+  // fit first. Inside a priority class a supplied benefit ranking orders the cut — the host a
+  // tier measured stays ahead of one it did not — and ranks are memoised so the comparator never
+  // re-parses a host for the sort.
+  const merged = dropSubsumedBlocks(mergeScopedVariants(candidates));
+  let benefitRanked = 0;
+  if (benefitRank) {
+    const rankCache = new Map<ParsedDnrCandidate, number | null>();
+    const rankOf = (candidate: ParsedDnrCandidate): number | null => {
+      const cached = rankCache.get(candidate);
+      if (cached !== undefined) return cached;
+      const host = hostnameOf(candidate);
+      const rank = host ? benefitRank(host) : null;
+      rankCache.set(candidate, rank);
+      return rank;
+    };
+    merged.sort((a, b) => {
+      const byPriority = b.priority - a.priority;
+      if (byPriority !== 0) return byPriority;
+      const ra = rankOf(a);
+      const rb = rankOf(b);
+      if (ra === null && rb === null) return 0;
+      if (ra === null) return 1;
+      if (rb === null) return -1;
+      return ra - rb;
+    });
+    for (const candidate of merged) if (rankOf(candidate) !== null) benefitRanked += 1;
+  } else {
+    merged.sort((a, b) => b.priority - a.priority);
+  }
 
   // Enforce Manifest V3 safe watermark and syntax bounds
   const { compliant, overflowCount } = Mv3Guard.boundCandidates(merged, Math.max(0, budget));
@@ -659,6 +705,219 @@ export function planListRules(
     allowSkipped,
     overflow: overflowCount,
     scoped: rules.filter((rule) => rule.initiatorDomains?.length).length,
+    ...(benefitRank ? { benefitRanked } : {}),
+  };
+}
+
+/**
+ * The list the browser will actually be given, and how that was decided.
+ *
+ * A rules-only hot set (`hotlist.txt`, built by `npm run build:hotlist`) carries the blocks its
+ * shipped rules measured, in a fraction of the rules — with the honest bound stated in its own
+ * header rather than assumed (the committed ledger-derived set holds the 17 fired rules that have a
+ * line in the source list, which is 23.3% of that ledger's measured blocks, not all of them). That
+ * still makes it the better answer to "this list does not fit" than the alternative — and the
+ * alternative is what the browser does by default, which is to install as many rules as fit and
+ * drop the rest.
+ *
+ * The two are not comparable in kind, which is the whole reason this is a decision rather than a
+ * truncation. Pruning keeps a *prefix*: rules that happen to be high in the list, with the tail cut
+ * off and no record of what went. The hot set keeps a *measured* subset, but it is a subset of the
+ * traffic that produced it — a handful of scripted sessions, not the deploying user's — so on a
+ * host that traffic never visited it blocks nothing at all (14.3% on the held-out checked-in
+ * session). Neither is the full list. The measured one is the better default because its loss is
+ * characterised, and because a prefix of a 249,000-rule file is not a default anybody would choose
+ * on purpose.
+ *
+ * So the rule is narrow and stated rather than clever: use the hot set only when the full export
+ * genuinely does not fit the budget, and fall back to today's pruning when it does not fit or when
+ * no hot set was supplied. `reason` is non-null whenever the answer is not the plain full list, so
+ * the caller has something to log and the popup has something to show.
+ */
+/**
+ * The supplied hot set's own standing against the same budget — reported on every plan that was
+ * offered one, whichever source won. The report that lets a deployment catch a stale set lives
+ * here and not in the winning answer alone, because staleness can only be seen by comparing the
+ * two lists the checker already holds.
+ */
+export interface HotSetStanding {
+  /** Rules the hot set offered before the budget was applied. */
+  offered: number;
+  /** Hot rules the same budget would still prune — nonzero means it overflows too. */
+  overflow: number;
+  /**
+   * Hot rules the full list does not carry verbatim. `selectHotList` ships only measured rules
+   * that appear verbatim in the source list, so a nonzero count means the served hot set was
+   * built against a different or older export — stale.
+   */
+  absentFromFull: number;
+  /**
+   * How many shipped hot lines the staleness count is over — the *denominator* of
+   * `absentFromFull`, which is the shipped set's size, not the merged set's `offered`.
+   */
+  shipped: number;
+  /**
+   * Rules the merged set took from the deployment's *own* hit ledger rather than the shipped
+   * file — the difference between a hot set measured on the repository's scripted sessions and
+   * one measured on the traffic of the browser actually running it. Zero when the ledger had
+   * nothing to contribute (no hits yet, or every fired rule absent from the current export).
+   */
+  ownRules: number;
+}
+
+export interface RuleSourcePlan extends ListRulePlan {
+  /** Which list the rules came from. `full` is also the answer when pruning had to happen. */
+  source: 'full' | 'hot';
+  /**
+   * The raw lines the winning source was planned from — the full export verbatim, or the merged
+   * hot set (shipped lines plus the deployment's own fired rules, capped at the budget). The
+   * caller installs from this rather than re-deriving it, since the merge is part of the
+   * decision.
+   */
+  sourceLines: readonly string[];
+  /** Why the hot set was chosen, or null when the full list fitted unaided. */
+  reason: string | null;
+  /** Rules the full export would have installed before the budget was applied, for the log. */
+  fullOverflow: number;
+  /** The hot set's own standing, or null when none was supplied. */
+  hotSet: HotSetStanding | null;
+  /**
+   * Whether the installed cut was ordered by measured tier benefit rather than list order —
+   * the fallback that keeps what the tiers can vouch for when the full export had to be
+   * pruned. False when nothing was pruned, when the hot set won, or when the ranking had no
+   * answer for any rule on the list.
+   */
+  tierTrimmed: boolean;
+}
+
+/**
+ * Picks the list to compile: the full export when it fits, the measured hot set when it does not.
+ *
+ * Pure — no `chrome.*` — so the decision can be asserted directly rather than inferred from what
+ * ended up installed.
+ */
+export function chooseRuleSource(
+  fullLines: readonly string[],
+  hotLines: readonly string[] | null,
+  control: SiteControlOptions = {},
+  budget: number = MV3_LIMITS.SAFE_DYNAMIC_WATERMARK,
+  benefitRank: TierBenefitRank | null = null,
+  ownRuleLines: readonly string[] | null = null,
+): RuleSourcePlan {
+  const full = planListRules(
+    [...fullLines],
+    control,
+    budget,
+    benefitRank ?? undefined,
+  );
+  const overflow = full.overflow;
+
+  // The comparison runs on every call that was offered a hot set — the happy path included,
+  // because a stale set keeps its rules while losing the list they were measured against, and
+  // only holding both lists can see that. Its cost is one planning pass over a small list.
+  let hot: ListRulePlan | null = null;
+  let hotSet: HotSetStanding | null = null;
+
+  // The hot input is the shipped set *plus* this browser's own fired rules, own evidence first:
+  // the scripted ledger the shipped set is measured against cannot know what this machine
+  // visits, and the deployment's own tally is exactly that measurement. When own evidence
+  // exists the merge is capped at the budget — a measured set we ordered ourselves, so a union
+  // that does not fit is a priority cut rather than the both-overflow refusal a raw shipped set
+  // earns. Rules absent from the full list are kept — the shipped set has always installed what
+  // it was served — and the staleness check below stays the tripwire for it.
+  const carried = new Set(fullLines);
+  const cap = (ownRuleLines?.length ?? 0) > 0 ? budget : Number.POSITIVE_INFINITY;
+  let ownRules = 0;
+  const mergedHot: string[] = [];
+  if ((ownRuleLines?.length ?? 0) > 0 || (hotLines?.length ?? 0) > 0) {
+    const seen = new Set<string>();
+    for (const [lines, isOwn] of [
+      [ownRuleLines ?? [], true],
+      [hotLines ?? [], false],
+    ] as const) {
+      for (const line of lines) {
+        if (mergedHot.length >= cap) break;
+        if (seen.has(line)) continue;
+        seen.add(line);
+        mergedHot.push(line);
+        if (isOwn) ownRules++;
+      }
+    }
+  }
+
+  if (mergedHot.length > 0) {
+    hot = planListRules(mergedHot, control, budget);
+    let absentFromFull = 0;
+    for (const line of hotLines ?? []) {
+      // Staleness is measured over the *shipped* set against the full export, not the merge: a
+      // shipped rule the own-evidence cap displaced is still present in the list, while one the
+      // export itself dropped names a set built against a different export.
+      if (!carried.has(line)) absentFromFull++;
+    }
+    hotSet = {
+      offered: hot.offered,
+      overflow: hot.overflow,
+      absentFromFull,
+      shipped: hotLines?.length ?? 0,
+      ownRules,
+    };
+  }
+
+  // A cut ordered by measured benefit only counts as trimmed when the ranking placed at least
+  // one rule — otherwise it kept list order after all, and calling it tier-trimmed would be
+  // the same overclaim the plain-prefix reason was accused of.
+  const tierTrimmed = benefitRank !== null && (full.benefitRanked ?? 0) > 0;
+
+  if (overflow === 0) {
+    return { ...full, source: 'full', sourceLines: fullLines, reason: null, fullOverflow: 0, hotSet, tierTrimmed: false };
+  }
+
+  if (!hot || !hotSet) {
+    // No measured set to fall back to: the cut still answers evidence before order when a
+    // benefit ranking was supplied — the tiers already measured which of these hosts matter —
+    // and falls back to list order only when there is no ranking at all.
+    return {
+      ...full,
+      source: 'full',
+      sourceLines: fullLines,
+      reason: tierTrimmed
+        ? `no measured hot set was available, so ${overflow.toLocaleString()} rules were cut by measured tier benefit instead of list order`
+        : `no measured hot set was available, so ${overflow.toLocaleString()} rules were pruned`,
+      fullOverflow: overflow,
+      hotSet: null,
+      tierTrimmed,
+    };
+  }
+
+  if (hot.overflow > 0) {
+    // Both overflow. The hot set is then not a smaller list but a differently-shaped one, and
+    // choosing it would trade a truncation for a truncation. Keep the full export and cut —
+    // benefit-ordered when a ranking was supplied, list-ordered when not.
+    return {
+      ...full,
+      source: 'full',
+      sourceLines: fullLines,
+      reason: tierTrimmed
+        ? `the measured hot set also exceeded the budget (${hot.overflow.toLocaleString()} pruned from it), so the full export was cut by measured tier benefit instead`
+        : `the measured hot set also exceeded the budget (${hot.overflow.toLocaleString()} pruned from it), so the full export was pruned instead`,
+      fullOverflow: overflow,
+      hotSet,
+      tierTrimmed,
+    };
+  }
+
+  const provenance =
+    hotSet.ownRules > 0
+      ? `the measured hot set (${hotSet.ownRules.toLocaleString()} of its rules measured on this browser's own ledger)`
+      : 'the shipped measured hot set';
+  return {
+    ...hot,
+    source: 'hot',
+    sourceLines: mergedHot,
+    reason: `the full export exceeded the ${budget.toLocaleString()}-rule budget by ${overflow.toLocaleString()} rules, so ${provenance} was used`,
+    fullOverflow: overflow,
+    hotSet,
+    tierTrimmed: false,
   };
 }
 
@@ -777,9 +1036,105 @@ export function customRulesAreInstalled(
   return planListRules([...customRules], control).rules.every((rule) => installedFilters.has(rule.pattern));
 }
 
-export class DnrManager {
-  private nextRuleId = 1;
+/**
+ * The name a pause or allow rule is about, read back off its filter.
+ *
+ * Every site-control rule is planned as `||name^`, so the name is recoverable from the filter
+ * rather than needing a side channel — which matters on the unexpected side, where the rule the
+ * browser holds is the only record of which decision it used to be.
+ */
+function decisionName(pattern: string): string {
+  const match = /^\|\|([^|/]+)\^$/.exec(pattern);
+  return match ? match[1] : pattern;
+}
 
+const EMPTY_DRIFT_DETAILS = {
+  missingPauses: [] as string[],
+  missingAllowances: [] as string[],
+  missingRules: [] as string[],
+  unexpectedPauses: [] as string[],
+  unexpectedAllowances: [] as string[],
+  unexpectedRules: [] as string[],
+  unexpectedBlocking: 0,
+};
+
+/**
+ * Which of the user's decisions the browser is *not* enforcing, and which it is enforcing that
+ * were never asked for — the detail underneath {@link userDecisionsAreInstalled} and
+ * {@link customRulesAreInstalled}, named so the popup can say what drifted rather than only that
+ * something did.
+ *
+ * A missing pause is blocking the user believes is off; an unexpected one is a page being let
+ * through that they no longer pause. A missing custom rule is reported by filter because the
+ * filter is the decision — the rule it was planned into is an implementation detail the planner
+ * may legitimately merge. And while blocking is paused everywhere the promise is that *nothing*
+ * is blocked, so any surviving list rules are reported as a count: the pause that did not clear
+ * is the most consequential drift this can name.
+ *
+ * `null` families is an unreadable browser, answered as `known: false` rather than as agreement —
+ * the popup must not report "enforced" about a state nobody has seen.
+ */
+export function computeSiteControlDrift(
+  families: InstalledRuleFamilies | null,
+  control: SiteControlOptions = {},
+  customRules: readonly string[] = [],
+): SiteControlDrift {
+  if (!families) return { known: false, inSync: false, ...EMPTY_DRIFT_DETAILS };
+
+  // A global pause plans nothing of its own — its expected user state is the empty set, exactly
+  // as userDecisionsAreInstalled expects it.
+  const planned = control.globalPaused ? [] : planSiteControlRules(control);
+  const expectedKeys = new Set(planned.map(plannedRuleKey));
+  const installedKeys = new Set(families.user.map(installedRuleKey));
+
+  const missingPauses: string[] = [];
+  const missingAllowances: string[] = [];
+  for (const rule of planned) {
+    if (installedKeys.has(plannedRuleKey(rule))) continue;
+    (rule.action === 'allowAllRequests' ? missingPauses : missingAllowances).push(
+      decisionName(rule.pattern),
+    );
+  }
+
+  const unexpectedPauses: string[] = [];
+  const unexpectedAllowances: string[] = [];
+  const unexpectedRules: string[] = [];
+  for (const rule of families.user) {
+    if (expectedKeys.has(installedRuleKey(rule))) continue;
+    const filter = rule.condition?.urlFilter ?? '';
+    if (rule.action?.type === 'allowAllRequests') {
+      unexpectedPauses.push(decisionName(filter));
+    } else if (rule.action?.type === 'allow') {
+      unexpectedAllowances.push(decisionName(filter));
+    } else {
+      // A rule in the user's own family that is neither a pause nor an allowance matches no
+      // decision the extension can make — foreign state, and still enforced.
+      unexpectedRules.push(filter);
+    }
+  }
+
+  const missingRules = control.globalPaused
+    ? []
+    : planListRules([...customRules], control)
+        .rules.filter((rule) => !families.list.some((r) => r.condition?.urlFilter === rule.pattern))
+        .map((rule) => rule.pattern);
+
+  const details = {
+    missingPauses: missingPauses.sort(),
+    missingAllowances: missingAllowances.sort(),
+    missingRules: missingRules.sort(),
+    unexpectedPauses: unexpectedPauses.sort(),
+    unexpectedAllowances: unexpectedAllowances.sort(),
+    unexpectedRules: unexpectedRules.sort(),
+    unexpectedBlocking: control.globalPaused ? families.list.length : 0,
+  };
+  const inSync = Object.values(details).every((value) =>
+    typeof value === 'number' ? value === 0 : value.length === 0,
+  );
+  return { known: true, inSync, ...details };
+}
+
+export class DnrManager {
   /** Translates a single rule line into a candidate rule. */
   parseRule(line: string): ParsedDnrCandidate | null {
     return parseFilterRule(line);
@@ -824,8 +1179,37 @@ export class DnrManager {
   async updateDynamicRules(
     ruleLines: string[],
     control: SiteControlOptions = {},
-    options: { replaceInstalledList?: boolean } = {},
+    options: {
+      replaceInstalledList?: boolean;
+      hotRuleLines?: string[] | null;
+      /**
+       * Rules the deployment's own hit ledger has fired, hottest first — merged into the hot set
+       * ahead of the shipped lines. This is the per-deployment half of the hot-set story: the
+       * shipped set is measured on the repository's scripted sessions, and these are measured on
+       * the traffic of the browser actually running it.
+       */
+      ownRuleLines?: string[] | null;
+      /**
+       * The measured-benefit ordering for the budget cut, built from the shipped tier files.
+       * When a full export that overflows has no hot set — or a hot set that overflows too —
+       * the cut keeps the hosts the tiers measured first rather than the file's own prefix.
+       * Omitting it keeps the pre-existing list-order prune.
+       */
+      benefitRank?: TierBenefitRank;
+      /**
+       * Reports which source list the application actually installed, after it succeeds — the
+       * record a surface like the popup can show instead of re-running the planner and guessing
+       * at the answer a different day would give. Not called for a preserving apply
+       * (`replaceInstalledList: false`): the kept rules still belong to the source that installed
+       * them, so only a whole-list application gets to claim one.
+       */
+      onRuleSource?: (source: AppliedRuleSource) => void;
+    } = {},
   ): Promise<number> {
+    // The measured hot set, used only when the full export will not fit the browser's budget.
+    // `null` keeps the pre-existing behaviour of pruning the full export, which is what a client
+    // with no hot set to hand should get.
+    const hotRuleLines = options.hotRuleLines ?? null;
     const replaceInstalledList = options.replaceInstalledList !== false;
 
     const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
@@ -861,12 +1245,36 @@ export class DnrManager {
     // caller's own lines produce (the user's custom rules, in the preserving case). Comparing on the
     // filter rather than on the whole rule is deliberate — it also retires a *stale* variant of a
     // filter the fresh plan no longer wants, such as a scoped rule whose scope was edited.
+    // The list budget the *first* planning pass sees, before the preserving call's kept rules are
+    // known. Deciding the source from this is deliberate: whether the full export fits is a
+    // property of the export and the cap, not of what happens to be installed right now, so a
+    // preserving call cannot flip the answer between one application and the next.
+    const sourcePlan = chooseRuleSource(
+      ruleLines,
+      hotRuleLines,
+      control,
+      Math.max(0, quotaCap - userRules.length),
+      options.benefitRank ?? null,
+      options.ownRuleLines ?? null,
+    );
+    const sourceLines = sourcePlan.sourceLines;
+
+    // Both of these must come from the *chosen* source, and that is a safety property rather than
+    // tidiness. `ownedFilters` is the set of installed filters this call supersedes — everything
+    // in it is removed from the browser and is expected to come back in `plan` — so a mismatch
+    // between the two would remove rules and never reinstall them. Reading `ownedFilters` from the
+    // full export while `plan` came from the hot set would retire thousands of rules and replace
+    // them with the measured handful, which is a silent loss of protection rather than a visible
+    // error. Same source, both sides, or nothing gets dropped on the floor.
     const ownedFilters = replaceInstalledList
       ? null
       : new Set(
-          planListRules(ruleLines, control, Math.max(0, quotaCap - userRules.length)).rules.map(
-            (rule) => rule.pattern,
-          ),
+          planListRules(
+            [...sourceLines],
+            control,
+            Math.max(0, quotaCap - userRules.length),
+            options.benefitRank,
+          ).rules.map((rule) => rule.pattern),
         );
     const keptListRules =
       ownedFilters === null
@@ -882,14 +1290,43 @@ export class DnrManager {
 
     // The blocklist budget is what remains after the user's rules *and* whatever of the last
     // compilation is being kept, so a preserving call cannot push the total past the watermark.
+    // The same benefit ranking orders this plan as ordered the source decision — a trim
+    // computed one way and installed another would retire rules the ranking wanted kept.
     const plan = planListRules(
-      ruleLines,
+      [...sourceLines],
       control,
       Math.max(0, quotaCap - userRules.length - keptListRules.length),
+      options.benefitRank,
     );
-    if (plan.overflow > 0) {
+    if (sourcePlan.source === 'hot') {
+      // Loud, because a client silently running on a measured subset of one session's traffic is
+      // protecting less than a reader of the settings screen would assume. The count is kept —
+      // the hot set is the whole point, not an error — but the reason belongs in the log where
+      // someone will actually see it.
       console.warn(
-        `[Mv3Guard] Rule list exceeds safe MV3 dynamic limit (${quotaCap}). Bound ${plan.rules.length} rules, ${plan.overflow} overflow rules pruned. Use @blockingmachine/system-daemon for unlimited network-level filtering.`
+        `[Mv3Guard] ${sourcePlan.reason}. Installed ${plan.rules.length} of ${sourcePlan.offered} measured rules ` +
+          `(the full export would have pruned ${sourcePlan.fullOverflow.toLocaleString()}). ` +
+          `Protection is limited to the traffic that measurement saw.`
+      );
+    } else if (plan.overflow > 0) {
+      console.warn(
+        `[Mv3Guard] Rule list exceeds safe MV3 dynamic limit (${quotaCap}). Bound ${plan.rules.length} rules, ${plan.overflow} overflow rules ` +
+          (sourcePlan.tierTrimmed
+            ? 'dropped in measured-benefit order — the tiered hosts kept, the unmeasured tail cut. '
+            : 'pruned. ') +
+          `Use @blockingmachine/system-daemon for unlimited network-level filtering.`
+      );
+    }
+    if (sourcePlan.hotSet && sourcePlan.hotSet.absentFromFull > 0) {
+      // A stale hot set is a deployment fault, not a list problem: the builder ships only rules the
+      // export carries, so absent ones mean the served pair is out of step. Warned whichever source
+      // won — a full-export answer today does not fix the set that will be asked for tomorrow.
+      console.warn(
+        `[Mv3Guard] ${sourcePlan.hotSet.absentFromFull.toLocaleString()} of the shipped hot set's ` +
+          `${sourcePlan.hotSet.shipped.toLocaleString()} rules are not in the full export it was ` +
+          `served beside — it was measured against a different or older list. Rebuild it ` +
+          `(npm run build:hotlist) or drop it; serving it stale answers for a list that is no ` +
+          `longer there.`
       );
     }
 
@@ -927,8 +1364,6 @@ export class DnrManager {
       });
     }
 
-    this.nextRuleId = nextRuleId;
-
     try {
       await chrome.declarativeNetRequest.updateDynamicRules({
         removeRuleIds,
@@ -942,6 +1377,24 @@ export class DnrManager {
     // What the browser is holding now, not what this call added: the popup's fallback count is a
     // statement about installed protection, and a preserving call adds few rules while keeping
     // thousands.
-    return keptListRules.length + addRules.length;
+    const installed = keptListRules.length + addRules.length;
+    // Recorded *after* the browser accepted the batch, so a rejected apply cannot leave the popup
+    // reporting a source that was never installed. Two kinds of call never report. A pause does
+    // not: clearing every rule installs no source, and the record it leaves behind describes the
+    // list that will return on resume. And a preserving call does not: the kept list rules still
+    // belong to whichever source installed them, so "full" here would only mean "the custom rules
+    // this call re-planned fit" — overwriting a real record with that would be a false claim.
+    if (replaceInstalledList) {
+      options.onRuleSource?.({
+        source: sourcePlan.source,
+        appliedAt: Date.now(),
+        installed,
+        offered: sourcePlan.offered,
+        fullOverflow: sourcePlan.fullOverflow,
+        hotSet: sourcePlan.hotSet,
+        tierTrimmed: sourcePlan.tierTrimmed,
+      });
+    }
+    return installed;
   }
 }

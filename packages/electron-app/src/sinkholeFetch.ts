@@ -22,6 +22,22 @@ export interface SinkholeFetchInit {
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 /**
+ * Headers that must not follow a request across an origin boundary. A sinkhole API token aimed
+ * at a private resolver is exactly what a hostile redirect would otherwise collect — the same
+ * rule `fetch` applies to `redirect: 'follow'` internally, applied to the hops we drive by hand.
+ */
+const CREDENTIAL_HEADERS = new Set(['authorization', 'proxy-authorization', 'cookie', 'cookie2']);
+
+/** `headers` without the entries a cross-origin redirect must not carry. */
+function stripCredentialHeaders(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (!CREDENTIAL_HEADERS.has(key.toLowerCase())) out[key] = value;
+  }
+  return out;
+}
+
+/**
  * Fetch a user-configured sinkhole URL.
  * Untrusted TLS is skipped only when the caller opted in and the current hop
  * is HTTPS on a local/private host. Public hosts always verify certificates.
@@ -31,12 +47,13 @@ export async function sinkholeFetch(url: string, init: SinkholeFetchInit): Promi
   let current = url;
   let method = (init.method || 'GET').toUpperCase();
   let body = init.body;
+  let headers = init.headers ?? {};
 
   for (let hop = 0; hop < 5; hop++) {
     if (init.allowInsecureLocalTls && isLocalHttpUrl(current)) {
       const response = await nodeRequest(current, {
         method,
-        headers: init.headers,
+        headers,
         body,
         timeoutMs,
         rejectUnauthorized: !shouldBypassUntrustedTls(current, true),
@@ -46,6 +63,7 @@ export async function sinkholeFetch(url: string, init: SinkholeFetchInit): Promi
         if (next.protocol !== 'http:' && next.protocol !== 'https:') {
           throw Object.assign(new Error(`Redirect to unsupported protocol ${next.protocol}`), { code: 'ERR_INVALID_REDIRECT' });
         }
+        if (next.origin !== new URL(current).origin) headers = stripCredentialHeaders(headers);
         current = next.toString();
         if (response.status === 301 || response.status === 302 || response.status === 303) {
           method = 'GET';
@@ -58,7 +76,7 @@ export async function sinkholeFetch(url: string, init: SinkholeFetchInit): Promi
 
     const res = await fetch(current, {
       method,
-      headers: init.headers,
+      headers,
       body: method === 'GET' || method === 'HEAD' ? undefined : body,
       redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
@@ -70,6 +88,7 @@ export async function sinkholeFetch(url: string, init: SinkholeFetchInit): Promi
       if (next.protocol !== 'http:' && next.protocol !== 'https:') {
         throw Object.assign(new Error(`Redirect to unsupported protocol ${next.protocol}`), { code: 'ERR_INVALID_REDIRECT' });
       }
+      if (next.origin !== new URL(current).origin) headers = stripCredentialHeaders(headers);
       current = next.toString();
       if (res.status === 301 || res.status === 302 || res.status === 303) {
         method = 'GET';

@@ -1,3 +1,4 @@
+import { describe, expect, test } from '@jest/globals';
 import { parseFilterList, parseFilterListStream, RuleProcessor } from "../RuleProcessor.js";
 import { cleanDomainPattern } from "../createMetadata.js";
 import { Readable } from "stream";

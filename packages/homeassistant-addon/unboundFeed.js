@@ -6,26 +6,13 @@
  * the add-on's DNS feed into exactly that.
  *
  * Deliberately dependency-free — the add-on ships as a plain Node.js image and installs nothing.
- */
-
-/** A hostname with at least one dot, lower-case, no wildcards. */
-const DOMAIN_REGEX = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-
-/** Directives that express something a browser-side list wants, never a DNS zone. */
-const SKIP_HINTS = ['$dnsrewrite', '$dnstype', '$client', '$ctag', '.arpa'];
-
-/**
- * Canonicalises a host, or null when it cannot be a `local-zone` name.
  *
- * `localhost`, `.local` and `.arpa` are refused for the same reason the app refuses them as block
- * targets: zone-ing them breaks local name resolution rather than blocking anything.
+ * The rule-to-host step lives in `hostRules.js`, shared with the Shadowrocket feed. That sharing is
+ * the point: the two feeds are rendered from the same source, and a host one of them fails to parse
+ * is a host that is sinkholed in the resolver but reachable through the phone.
  */
-function normalizeHost(value) {
-  const host = String(value || '').trim().toLowerCase().replace(/^\.+/, '').replace(/\.+$/, '');
-  if (!host || host.length > 253 || host.includes('*')) return null;
-  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.arpa')) return null;
-  return DOMAIN_REGEX.test(host) ? host : null;
-}
+
+import { hostFromRule, normalizeHost } from './hostRules.js';
 
 /** The Unbound statement that sinkholes one host. Matches the desktop exporter's formatting. */
 function zoneLine(host, action = 'always_nxdomain') {
@@ -37,24 +24,20 @@ function zoneLine(host, action = 'always_nxdomain') {
  *
  * The DNS feed is documented as already DNS-safe, but it can still arrive in any of the shapes the
  * upstream lists use — ABP, hosts, dnsmasq, or Unbound itself — because a user is free to publish
- * their own file into the add-on's data directory. Exceptions are dropped rather than translated:
- * a `local-zone` drop-in can only sinkhole, so an allow rule has no equivalent here and quietly
- * emitting one as a block would invert the user's intent.
+ * their own file into the add-on's data directory.
+ *
+ * Exceptions are dropped rather than translated: a `local-zone` drop-in can only sinkhole, so an
+ * allow rule has no equivalent here and quietly emitting one as a block would invert the user's
+ * intent. The shared parser reports the allow separately for exactly this reason, so the decision is
+ * visible here rather than buried in the parser.
  */
 export function unboundZoneFromRule(rule) {
   if (typeof rule !== 'string') return null;
-  let value = rule.trim();
+  const value = rule.trim();
   if (!value) return null;
-  if (value.startsWith('!') || value.startsWith('[') || value.startsWith('#')) return null;
-  if (value.includes('##') || value.includes('#@#') || value.includes('#?#')) return null;
-  if (value.includes('$$') || value.includes('+js(')) return null;
-  if (SKIP_HINTS.some((hint) => value.includes(hint))) return null;
-  if (value.startsWith('@@')) return null;
-  if (/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+(?:localhost|broadcasthost|local)\b/i.test(value)) {
-    return null;
-  }
 
-  // Already-Unbound rules pass through, keeping whatever action they declared.
+  // Already-Unbound rules pass through, keeping whatever action they declared. Checked before the
+  // shared parser because that one would reject the line outright rather than preserve the action.
   const localZone = /^local-zone:\s*"([^"]+)"\s+(\S+)\s*$/i.exec(value);
   if (localZone) {
     const host = normalizeHost(localZone[1]);
@@ -66,22 +49,9 @@ export function unboundZoneFromRule(rule) {
     return host ? zoneLine(host) : null;
   }
 
-  // dnsmasq / Pi-hole forms: address=/host/0.0.0.0 and server=/host/#
-  const dnsmasq = /^(?:address|server)=\/([^/]+)\//i.exec(value);
-  if (dnsmasq) {
-    const host = normalizeHost(dnsmasq[1]);
-    return host ? zoneLine(host) : null;
-  }
-
-  value = value
-    .replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+/, '') // hosts entry
-    .replace(/\$.*$/, '') // ABP modifiers
-    .replace(/^\|\|/, '') // ABP domain anchor
-    .replace(/[\^|/].*$/, '') // terminator, path, or trailing anchor
-    .replace(/\.+$/, '');
-
-  const host = normalizeHost(value);
-  return host ? zoneLine(host) : null;
+  const parsed = hostFromRule(value);
+  if (!parsed || parsed.allowed) return null;
+  return zoneLine(parsed.host);
 }
 
 /**

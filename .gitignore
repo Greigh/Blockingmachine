@@ -95,3 +95,16 @@ __pycache__/
 
 # Local agent/session scratch — never part of the product
 .freebuff/
+
+# Scratch the Unbound reachability rig builds inside the repo (the VM can only
+# bind-mount from here); the rig removes it on exit, an interrupted run leaves it.
+.unbound-live-harness/
+
+# The weekly rig's run report: it records absolute input paths, so it differs per
+# machine and is a log, not an artifact. The committed ledger is ledger-hits.txt.
+ledger/last-tier-plan.json
+
+# Playwright-driven browser automation drops page snapshots, console logs and
+# scratch captures here (including the URL-trace re-capture open flag 15 tracks).
+# It is per-machine output, not a shipped artifact.
+.playwright-mcp/

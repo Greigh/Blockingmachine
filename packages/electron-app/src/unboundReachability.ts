@@ -16,14 +16,43 @@
  *      like "no blocking configured" from every other screen in the app.
  *
  * Only the third is observable from outside, so the check tests it directly: it picks a domain out
- * of the very file the resolver was told to load and asks the resolver for it. The export emits
- * `local-zone: "x" always_nxdomain`, so NXDOMAIN for a name that is *in the drop-in* proves the
- * drop-in is live — and a control name proves the answer is the resolver's opinion rather than a
- * dead server answering nothing.
+ * of the very file the resolver was told to load and asks the resolver for it. A name that is *in
+ * the drop-in* and comes back blocked — NXDOMAIN, or NOERROR carrying an address that routes
+ * nowhere — proves the drop-in is live, and a control name proves the answer is the resolver's
+ * opinion rather than a dead server answering nothing. Unbound has two documented ways to block a
+ * local zone and a deployment may legitimately use either, so both are read as blocking; see
+ * `isSinkholedAnswer` for why that distinction is not cosmetic.
  *
  * Pure: no sockets, no clock, no store. Every function here is a function of its input, so the
  * classification is asserted in tests rather than inferred from a live resolver.
  */
+
+import type { DeployRefreshReport } from './deployRefresh';
+import { deployRefreshFailing, deployRefreshLastReportAt } from './deployRefresh';
+
+/**
+ * Addresses that mean *blocked*, not *answered*.
+ *
+ * `always_nxdomain` — what this project's formatter emits — answers NXDOMAIN, which is the shape
+ * this check was built around. `redirect` + `local-data "…" A 0.0.0.0` — what Unbound's other
+ * documented way of blocking a local zone, and what a deployment configured by hand almost
+ * certainly uses — answers **NOERROR carrying an address that routes nowhere**. Both block; only
+ * one of them looks like a failure.
+ *
+ * That asymmetry is why this list exists. A canary answered with `0.0.0.0` used to fall through
+ * to `not-loaded`, and the pane's advice was "check the include: line" — for a deployment that was
+ * blocking correctly and would go on blocking correctly after making no change at all. Every
+ * address has to be a sinkhole address, so a resolver that answered one real address alongside
+ * them is not read as blocked.
+ */
+const SINKHOLE_ADDRESSES = new Set(['0.0.0.0', '::', '::0', '127.0.0.1', '::1']);
+
+/** True when the answer is a local-zone block rather than a real address. */
+export function isSinkholedAnswer(answer: UnboundAnswer): boolean {
+  if (answer.state !== 'resolved') return false;
+  const addresses = answer.addresses ?? [];
+  return addresses.length > 0 && addresses.every((address) => SINKHOLE_ADDRESSES.has(address.trim().toLowerCase()));
+}
 
 /** Header the reachability probe sends itself, so its own fetch never counts as evidence. */
 export const REACHABILITY_PROBE_HEADER = 'x-blockingmachine-reachability';
@@ -70,6 +99,14 @@ export type UnboundAnswerState =
   | 'nxdomain'
   | 'timeout'
   | 'refused'
+  /**
+   * The address is a name, and Node's resolver can only be pointed at an IP.
+   *
+   * Not `error`: nothing was asked and nothing failed. It is here because a router-hosted Unbound
+   * behind a hostname is one of the two likeliest addresses to type, and reading that as a dead
+   * resolver sends the user to check the resolver's health when the resolver was never queried.
+   */
+  | 'unqueryable'
   | 'error';
 
 /** One resolver answer, reduced to what the verdict needs. */
@@ -112,10 +149,19 @@ export interface UnboundReachabilityInput {
   serves: FeedServeEvent[];
   /** ISO time of the last successful fetch, remembered across launches. */
   lastFetchedAt?: string | null;
+  /**
+   * What the resolver's scheduled refresh has reported back, if the updated command is running.
+   * An `ok` report is a successful fetch by definition — it had to get the file to say so — so it
+   * folds into `fetchedAt`; a `fail` report is the fact the whole channel exists for: a fetch or
+   * reload that broke while nobody was checking is named instead of absent.
+   */
+  refreshReport?: DeployRefreshReport | null;
   /** ISO time the export was last compiled, so a stale resolver copy can be named. */
   lastCompiledAt?: string | null;
   /** ISO time a check last proved the resolver had the drop-in. */
   lastConfirmedAt?: string | null;
+  /** ISO time a `stale` regression was last announced, remembered so it is announced once. */
+  staleAnnouncedAt?: string | null;
   probe?: UnboundResolverProbe | null;
   /** Why no probe was run, when that is the case. */
   probeSkipped?: string | null;
@@ -130,6 +176,8 @@ export type UnboundReachabilityState =
   /** The canary does not resolve anywhere, so NXDOMAIN from the tested resolver proves nothing. */
   | 'canary-nonexistent'
   | 'not-loaded'
+  /** The typed address is a name, so no query left the machine and no verdict is possible. */
+  | 'resolver-unqueryable'
   | 'feed-offline'
   | 'feed-invalid'
   | 'resolver-unreachable'
@@ -157,6 +205,34 @@ export interface UnboundReachability {
   fetchedAt?: string;
   /** ISO time the resolver was last proved to hold the drop-in, including this check. */
   lastConfirmedAt?: string;
+  /**
+   * ISO time of the compile that produced the file this check is about.
+   *
+   * Carried on the verdict rather than left to the row breakdown, because a snapshot keeps only the
+   * verdict and something outside the check needs the same fact: the watch has to tell a `stale`
+   * copy that is ten minutes behind a compile the resolver has not fetched yet from one that is
+   * ten minutes behind a compile it never will.
+   */
+  compiledAt?: string;
+  /**
+   * ISO time a `stale` regression was last announced for this deployment.
+   *
+   * Owned by the watch rather than derived here, and carried on the verdict because the decision
+   * to announce is a function of two consecutive snapshots. A copy that fell behind a compile five
+   * minutes ago may be waiting for the resolver's next fetch; the announcement is held until it has
+   * had a grace period, and this is what makes the held announcement happen *once* rather than never
+   * — the finding is remembered from the tick it was first seen on, not only on the tick it crossed
+   * back from `live`. A deployment that recovers clears it, so the next regression can speak.
+   */
+  staleAnnouncedAt?: string;
+  /**
+   * What the resolver's scheduled refresh has reported back, when the updated command is
+   * running. Carried on the verdict — and so into the snapshot — because a `fail` report is the
+   * one piece of evidence that can name an overnight fetch failure the reachability check
+   * itself cannot see: the resolver still blocks from the copy it has, so `live` and
+   * "the cron broke at 02:00" look identical without it.
+   */
+  refreshReport?: DeployRefreshReport;
 }
 
 /**
@@ -374,7 +450,9 @@ export function formatUnboundAge(atIso: string | null | undefined, nowIso: strin
  */
 export function classifyUnboundReachability(input: UnboundReachabilityInput): UnboundReachability {
   const served = summarizeFeedServes(input.serves, input.feedFileName);
-  const fetchedAt = newestIso(served.lastAt, input.lastFetchedAt ?? undefined);
+  // An `ok` report is a successful fetch by definition — it had to get the file to say so — so
+  // it counts as evidence the way an observed serve does.
+  const fetchedAt = newestIso(served.lastAt, input.lastFetchedAt ?? undefined, input.refreshReport?.lastOkAt);
   const canaryDomain = input.selfFetch.canaryDomain ?? input.probe?.canary.domain ?? undefined;
   const base: Omit<UnboundReachability, 'state' | 'tone' | 'headline' | 'detail'> = {
     checkedAt: input.checkedAt,
@@ -382,6 +460,9 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
     canaryDomain,
     fetchedAt,
     lastConfirmedAt: input.lastConfirmedAt ?? undefined,
+    compiledAt: input.lastCompiledAt ?? undefined,
+    staleAnnouncedAt: input.staleAnnouncedAt ?? undefined,
+    refreshReport: input.refreshReport ?? undefined,
     rows: [],
   };
 
@@ -406,6 +487,32 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
         : 'never',
     tone: served.count > 0 ? 'ok' : 'warn',
   };
+  // The resolver's cron reports its own result, so a fetch or reload that failed while nobody
+  // was checking is a named fact — "reported failed 02:14" — rather than the absence the rest
+  // of this card has to read around. A failure older than the newest success is history: the
+  // next scheduled run already healed it.
+  const refreshRow: UnboundReachabilityRow = (() => {
+    const report = input.refreshReport;
+    if (deployRefreshFailing(report, fetchedAt)) {
+      return {
+        label: 'Scheduled refresh',
+        value: `reported failed ${formatUnboundAge(report!.lastFailAt, input.checkedAt)}${report!.lastFailDetail ? ` — ${report!.lastFailDetail}` : ''}`,
+        tone: 'warn',
+      };
+    }
+    if (report?.lastOkAt || report?.lastFailAt) {
+      return {
+        label: 'Scheduled refresh',
+        value: `last reported ${formatUnboundAge(deployRefreshLastReportAt(report), input.checkedAt)}`,
+        tone: 'ok',
+      };
+    }
+    return {
+      label: 'Scheduled refresh',
+      value: 'no reports — the refreshed command reports back when it runs',
+      tone: 'off',
+    };
+  })();
 
   if (!input.feedServerRunning) {
     return finish(base, {
@@ -414,7 +521,7 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
       headline: 'The feed server is not running',
       detail: 'The address in the recipe answers nothing, so no scheduled fetch can succeed.',
       nextStep: 'Start the feed server above and enable Auto-start on launch.',
-      rows: [feedRow, serveRow],
+      rows: [feedRow, serveRow, refreshRow],
     });
   }
 
@@ -425,7 +532,7 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
       headline: 'The feed address did not answer',
       detail: `Fetching ${input.feedUrl} failed (${input.selfFetch.error ?? `HTTP ${input.selfFetch.status ?? '?'}`}), so the resolver has nothing to load.`,
       nextStep: 'Check that the feed server is listening on this address and that the port is reachable from the resolver host.',
-      rows: [feedRow, serveRow],
+      rows: [feedRow, serveRow, refreshRow],
     });
   }
 
@@ -436,7 +543,7 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
       headline: 'The feed answered, but it is not a Unbound drop-in',
       detail: `The file served at ${input.feedUrl} contains no local-zone statements. Unbound will load it without error and block nothing.`,
       nextStep: 'Set Format to Unbound so the hub writes local-zone rules instead of the current format.',
-      rows: [feedRow, serveRow, fetchRow],
+      rows: [feedRow, serveRow, fetchRow, refreshRow],
     });
   }
 
@@ -447,7 +554,7 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
       headline: 'No domain in the drop-in can be used as a test target',
       detail: 'Every local-zone it serves is a wildcard, an underscore host, or a bare IP, so there is nothing a resolver answer could prove.',
       nextStep: 'Add at least one ordinary domain to the compiled set, then check again.',
-      rows: [feedRow, serveRow, fetchRow],
+      rows: [feedRow, serveRow, fetchRow, refreshRow],
     });
   }
 
@@ -459,7 +566,7 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
       headline: 'The file is served, but no resolver has been queried',
       detail: input.probeSkipped ?? 'Set the resolver address and run the check to confirm the drop-in is loaded.',
       nextStep: 'Enter the address of the Unbound instance and check again.',
-      rows: [feedRow, serveRow, fetchRow],
+      rows: [feedRow, serveRow, fetchRow, refreshRow],
     });
   }
 
@@ -479,17 +586,34 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
     tone: input.lastConfirmedAt ? 'ok' : 'warn',
   };
 
+  // Ahead of the control and canary branches: an address `dns` cannot be pointed at means no query
+  // left the machine, so nothing about either of them is knowable and every verdict below would be
+  // reading a silence the check caused itself.
+  if (probe.canary.answer.state === 'unqueryable' || probe.control.answer.state === 'unqueryable') {
+    return finish(base, {
+      state: 'resolver-unqueryable',
+      tone: 'off',
+      headline: 'The resolver address is a name, so nothing was queried',
+      detail: `${probe.target} is not an IP address, and Node's resolver can only be pointed at one — so no query left this machine and the deployment has not been checked. Unbound behind a hostname is common; its address is what \`getent hosts\` or the router's own page reports.`,
+      nextStep: 'Enter the resolver’s IP address (with ‘:port’ if it is not 53), or resolve the name first and paste the address it gives.',
+      rows: [feedRow, serveRow, fetchRow, refreshRow, resolverRow, { ...canaryRow, tone: 'off' }],
+    });
+  }
+
   // The control query decides whether *any* answer from this resolver is evidence. Checked before
   // the canary so a resolver that sinkholes everything cannot be read as a working drop-in: it
   // answers NXDOMAIN for the canary too, and that is the one shape of "success" that must not pass.
-  if (probe.control.answer.state === 'nxdomain') {
+  // `isSinkholedAnswer` is included because a resolver whose default policy is `local-zone: "."
+  // redirect` answers the control the same way it answers the canary, and reading that as a pass
+  // would be the same failure in a different syntax.
+  if (probe.control.answer.state === 'nxdomain' || isSinkholedAnswer(probe.control.answer)) {
     return finish(base, {
       state: 'inconclusive',
       tone: 'warn',
       headline: 'The resolver refuses names that should resolve',
-      detail: `It answered NXDOMAIN for ${probe.control.domain}, which has nothing to do with this deployment, so NXDOMAIN for ${probe.canary.domain} would not prove the drop-in is loaded.`,
+      detail: `It answered ${describeAnswer(probe.control.answer)} for ${probe.control.domain}, which has nothing to do with this deployment, so ${describeAnswer(probe.control.answer)} for ${probe.canary.domain} would not prove the drop-in is loaded.`,
       nextStep: 'Point the check at the resolver that serves your clients, or confirm this instance is not configured to refuse everything.',
-      rows: [feedRow, serveRow, fetchRow, resolverRow, { ...canaryRow, tone: 'warn' }],
+      rows: [feedRow, serveRow, fetchRow, refreshRow, resolverRow, { ...canaryRow, tone: 'warn' }],
     });
   }
 
@@ -500,30 +624,32 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
       headline: 'The resolver did not answer the control query',
       detail: `${probe.target} could not resolve ${probe.control.domain} (${describeAnswer(probe.control.answer)}), so nothing it said about the canary would mean anything. The file is being served at least.`,
       nextStep: 'Check the resolver address and port. Unbound answers on port 53 by default, and a router-hosted resolver needs its LAN address, not 127.0.0.1.',
-      rows: [feedRow, serveRow, fetchRow, { ...resolverRow, tone: 'off' }],
+      rows: [feedRow, serveRow, fetchRow, refreshRow, { ...resolverRow, tone: 'off' }],
     });
   }
 
   const canaryAnswer = probe.canary.answer;
-  if (canaryAnswer.state === 'nxdomain') {
-    // NXDOMAIN from the resolver under test is only evidence if the name exists somewhere. The
-    // reference answer is what separates "this resolver is sinkholing it" from "this name was
+  const canaryBlocked = canaryAnswer.state === 'nxdomain' || isSinkholedAnswer(canaryAnswer);
+  if (canaryBlocked) {
+    // A block answer from the resolver under test is only evidence if the name exists somewhere.
+    // The reference answer is what separates "this resolver is blocking it" from "this name was
     // never registered" — two identical-looking answers with opposite meanings, and reading the
     // second as a pass is the one failure mode that leaves a user believing they are protected.
+    const blockingAnswer = describeAnswer(canaryAnswer);
     const reference = probe.reference;
     if (!reference) {
       return finish(base, {
         state: 'canary-unconfirmed',
         tone: 'warn',
         headline: 'The drop-in answered, but the canary is unconfirmed',
-        detail: `${probe.target} answered NXDOMAIN for ${probe.canary.domain}, which is what the drop-in asks of it — but nothing confirmed that name exists upstream, so the same answer would come back for a domain that never existed.`,
+        detail: `${probe.target} answered ${blockingAnswer} for ${probe.canary.domain}, which is what a drop-in asks of it — but nothing confirmed that name exists upstream, so the same answer would come back for a domain that never existed.`,
         nextStep: 'Set a reference resolver to check the canary against, or pick a domain in the compiled set that you know resolves normally.',
         rows: [
           feedRow,
           serveRow,
-          fetchRow,
+          fetchRow, refreshRow,
           resolverRow,
-          { ...canaryRow, value: 'NXDOMAIN — but the name is unconfirmed', tone: 'warn' },
+          { ...canaryRow, value: `${blockingAnswer} — but the name is unconfirmed`, tone: 'warn' },
         ],
       });
     }
@@ -544,7 +670,7 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
         rows: [
           feedRow,
           serveRow,
-          fetchRow,
+          fetchRow, refreshRow,
           resolverRow,
           { ...canaryRow, value: 'NXDOMAIN — not evidence', tone: 'warn' },
           referenceRow,
@@ -562,7 +688,7 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
         rows: [
           feedRow,
           serveRow,
-          fetchRow,
+          fetchRow, refreshRow,
           resolverRow,
           { ...canaryRow, value: 'NXDOMAIN — but the name is unconfirmed', tone: 'warn' },
           referenceRow,
@@ -576,14 +702,14 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
         state: 'stale',
         tone: 'warn',
         headline: 'Blocking is live, but the resolver is running an older copy',
-        detail: `${probe.target} answers NXDOMAIN for ${probe.canary.domain}, so the drop-in is loaded. Its copy is from ${formatUnboundAge(fetchedAt, input.checkedAt)}, which is before the last compile (${formatUnboundAge(input.lastCompiledAt, input.checkedAt)}).`,
+        detail: `${probe.target} answers ${blockingAnswer} for ${probe.canary.domain}, so the drop-in is loaded. Its copy is from ${formatUnboundAge(fetchedAt, input.checkedAt)}, which is before the last compile (${formatUnboundAge(input.lastCompiledAt, input.checkedAt)}).`,
         nextStep: 'The scheduled refresh is too infrequent or not running: re-run the refresh command, and check the cron entry on the resolver host.',
         rows: [
           feedRow,
           serveRow,
-          fetchRow,
+          fetchRow, refreshRow,
           resolverRow,
-          { ...canaryRow, value: `NXDOMAIN — the drop-in is loaded`, tone: 'ok' },
+          { ...canaryRow, value: `${blockingAnswer} — the drop-in is loaded`, tone: 'ok' },
           { ...referenceRow, tone: 'ok' },
           { label: 'Copy age', value: `${formatUnboundAge(fetchedAt, input.checkedAt)} · compile is newer`, tone: 'warn' },
         ],
@@ -593,13 +719,13 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
       state: 'live',
       tone: 'ok',
       headline: 'The drop-in is loaded and the resolver is blocking',
-      detail: `${probe.target} answers NXDOMAIN for ${probe.canary.domain}, a domain that is in the file it is serving and still resolves on ${reference.target}, while ${probe.control.domain} resolves here.`,
+      detail: `${probe.target} answers ${blockingAnswer} for ${probe.canary.domain}, a domain that is in the file it is serving and still resolves on ${reference.target}, while ${probe.control.domain} resolves here.`,
       rows: [
         feedRow,
         serveRow,
-        fetchRow,
+        fetchRow, refreshRow,
         resolverRow,
-        { ...canaryRow, value: 'NXDOMAIN — the drop-in is loaded', tone: 'ok' },
+        { ...canaryRow, value: `${blockingAnswer} — the drop-in is loaded`, tone: 'ok' },
         { ...referenceRow, tone: 'ok' },
         { ...confirmedRow, value: 'just now · confirmed by this check', tone: 'ok' },
       ],
@@ -613,7 +739,7 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
       headline: 'The resolver is not using the drop-in',
       detail: `It answered ${describeAnswer(canaryAnswer)} for ${probe.canary.domain}, which the file it was told to load blocks. The file is served correctly${fetchedAt ? ` and was last fetched ${formatUnboundAge(fetchedAt, input.checkedAt)}` : ''}, so the gap is the include or the reload.`,
       nextStep: 'Confirm the include: line is in unbound.conf and that a reload has run since the last fetch — the copy-pasteable commands above do both.',
-      rows: [feedRow, serveRow, fetchRow, resolverRow, canaryRow, confirmedRow],
+      rows: [feedRow, serveRow, fetchRow, refreshRow, resolverRow, canaryRow, confirmedRow],
     });
   }
 
@@ -623,7 +749,7 @@ export function classifyUnboundReachability(input: UnboundReachabilityInput): Un
     headline: 'The resolver did not answer the canary query',
     detail: `${probe.canary.domain} against ${probe.target}: ${describeAnswer(canaryAnswer)}.`,
     nextStep: 'Check the resolver address and port before reading anything into the drop-in.',
-    rows: [feedRow, serveRow, fetchRow, resolverRow, { ...canaryRow, tone: 'off' }],
+    rows: [feedRow, serveRow, fetchRow, refreshRow, resolverRow, { ...canaryRow, tone: 'off' }],
   });
 }
 
@@ -651,6 +777,9 @@ function isBehind(fetchedAt: string | undefined, compiledAt: string | null | und
 function describeAnswer(answer: UnboundAnswer): string {
   switch (answer.state) {
     case 'resolved':
+      // An answer that routes nowhere reads as "resolved" to every DNS client, which is precisely
+      // why the verdict branches on it separately rather than on the state.
+      if (isSinkholedAnswer(answer)) return `NOERROR with ${answer.addresses?.[0]} (blocked)`;
       return answer.addresses?.length ? `resolves to ${answer.addresses[0]}` : 'resolves';
     case 'nodata':
       return 'answers NOERROR with no records';
@@ -660,6 +789,8 @@ function describeAnswer(answer: UnboundAnswer): string {
       return 'no answer before the timeout';
     case 'refused':
       return 'query refused';
+    case 'unqueryable':
+      return 'is a name, which cannot be queried directly';
     default:
       return answer.detail ? `failed (${answer.detail})` : 'failed';
   }
@@ -675,5 +806,10 @@ function finish(
   // that forgets silently stops reporting the last successful refresh.
   const confirmed =
     verdict.state === 'live' || verdict.state === 'stale' ? base.checkedAt : base.lastConfirmedAt;
-  return { ...base, ...verdict, lastConfirmedAt: confirmed };
+  // A deployment that is current again has nothing left to announce, so the record of the last
+  // `stale` announcement goes with it. Without this a deployment that went stale, recovered and went
+  // stale again a month later would stay silent for ever, because its own past would look like a
+  // finding already spoken about.
+  const staleAnnouncedAt = verdict.state === 'live' ? undefined : base.staleAnnouncedAt;
+  return { ...base, ...verdict, lastConfirmedAt: confirmed, staleAnnouncedAt };
 }

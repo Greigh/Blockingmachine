@@ -1,3 +1,4 @@
+import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -107,7 +108,9 @@ describe("export hardening", () => {
   test.each([undefined, ["all"] as SupportedFormat[], ["hosts", "all", "hosts"] as SupportedFormat[]])("all/default exports create concrete format files in a new directory (%s)", async formats => {
     const nested = join(outputDir, "nested", "exports");
     await exportWithOptions(nested, metadata, { formats }, [rule("||tracker.example.com^")]);
-    expect((await readdir(nested)).sort()).toEqual(["abp.txt", "adguard.txt", "bind.txt", "dnsmasq.txt", "domains.txt", "hosts.txt", "plain.txt", "privoxy.txt", "shadowrocket.txt", "unbound.txt"]);
+    // `bind-null` is here because it is a format the exporter can emit, and the list is the only
+    // thing that keeps a new format from shipping without a file. Sorted, so `-` before `.`.
+    expect((await readdir(nested)).sort()).toEqual(["abp.txt", "adguard.txt", "bind-null.txt", "bind.txt", "dnsmasq.txt", "domains.txt", "hosts.txt", "plain.txt", "privoxy.txt", "shadowrocket.txt", "unbound.txt"]);
     expect(await readFile(join(nested, "hosts.txt"), "utf8")).toContain("0.0.0.0 tracker.example.com");
   });
 

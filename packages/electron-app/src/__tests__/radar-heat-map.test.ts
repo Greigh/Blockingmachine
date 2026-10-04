@@ -225,7 +225,11 @@ describe('Adaptive watchdog cadence', () => {
 
   function heatWithFlags(count: number) {
     let heat = emptyRadarHeatMap();
-    const flagged = Array.from({ length: count }, () => ({ domain: `d${Math.random()}.example`, verdict: 'ad_server' }));
+    // Distinct by construction rather than by luck. These names were `d${Math.random()}.example`,
+    // which made every flag a *candidate* for collision and every run of this block a different
+    // input — a suite that cannot be shown to be deterministic is a suite whose failures cannot be
+    // triaged, and this block's output decides an interval the watchdog actually runs on.
+    const flagged = Array.from({ length: count }, (_, i) => ({ domain: `d${i}.example`, verdict: 'ad_server' as const }));
     heat = recordFlagsInHeatMap(heat, flagged, now);
     return heat;
   }

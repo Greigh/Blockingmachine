@@ -19,6 +19,8 @@ import {
   type UnboundReachabilitySnapshot,
 } from '../unboundReachability';
 import { unboundReferenceHint, unboundResolverHint } from '../unboundDeploy';
+import { deployRefreshFailing } from '../deployRefresh';
+import { formatUnboundWatchInterval } from '../unboundWatch';
 
 export interface UnboundReachabilityCardProps {
   /** Result of a check run in this session, when there is one. */
@@ -83,7 +85,22 @@ export function UnboundReachabilityCard(props: UnboundReachabilityCardProps): Re
           <p className="unbound-reachability-meta">
             Checked {formatUnboundAge(view.checkedAt, props.now)}
             {view.lastConfirmedAt ? ` · last confirmed live ${formatUnboundAge(view.lastConfirmedAt, props.now)}` : ''}
+            {/*
+              Stated only where it is true. A verdict on screen means this hub produced one, and a
+              stored verdict is one of the two things that make a deployment worth watching — so
+              this sentence is under exactly the condition that guarantees the watch is running. The
+              gap it does not cover is the app being closed, which is why it says so.
+            */}
+            {` · re-checked ${formatUnboundWatchInterval()} while the app is open`}
           </p>
+          {deployRefreshFailing(view.refreshReport, view.fetchedAt) && (
+            <p className="unbound-reachability-meta unbound-refresh-alert">
+              The scheduled refresh reported failure{' '}
+              {formatUnboundAge(view.refreshReport!.lastFailAt, props.now)}
+              {view.refreshReport!.lastFailDetail ? ` — ${view.refreshReport!.lastFailDetail}` : ''}.
+              The resolver still blocks from the copy it has; the next fetch is not reaching it.
+            </p>
+          )}
         </div>
       ) : (
         <p className="unbound-reachability-detail">

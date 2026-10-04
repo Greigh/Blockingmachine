@@ -26,7 +26,8 @@
       { "id": "tier_ads", "enabled": false, "path": "rules/tier_ads.json" },
       { "id": "tier_privacy", "enabled": false, "path": "rules/tier_privacy.json" },
       { "id": "tier_annoyances", "enabled": false, "path": "rules/tier_annoyances.json" },
-      { "id": "tier_security", "enabled": false, "path": "rules/tier_security.json" }
+      { "id": "tier_security", "enabled": false, "path": "rules/tier_security.json" },
+      { "id": "tier_unclassified", "enabled": false, "path": "rules/tier_unclassified.json" }
     ]
   },
   "content_scripts": [

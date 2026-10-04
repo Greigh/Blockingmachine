@@ -10,7 +10,7 @@
  */
 
 import { describe, test, expect } from '@jest/globals';
-import { classifyLookupFailure, probeUnboundResolver, type UnboundResolverQuery } from '../unboundProbe';
+import { classifyLookupFailure, probeUnboundResolver, queryUnboundResolver, type UnboundResolverQuery } from '../unboundProbe';
 import { RESOLVER_CONTROL_DOMAIN } from '../unboundReachability';
 
 describe('classifyLookupFailure', () => {
@@ -35,6 +35,27 @@ describe('classifyLookupFailure', () => {
     expect(classifyLookupFailure(new Error('socket hang up')).state).toBe('error');
     expect(classifyLookupFailure(new Error('socket hang up')).detail).toBe('socket hang up');
     expect(classifyLookupFailure({}).state).toBe('error');
+  });
+
+  test('reads an address it cannot be pointed at as its own thing, not as a failed lookup', () => {
+    // `dns` rejects a hostname with this, synchronously. It is not a failure of the resolver: no
+    // query was sent, so calling it one would send the user to check a resolver that was never asked.
+    expect(classifyLookupFailure({ code: 'ERR_INVALID_IP_ADDRESS' })).toEqual({
+      state: 'unqueryable',
+      detail: 'ERR_INVALID_IP_ADDRESS',
+    });
+  });
+});
+
+describe('queryUnboundResolver', () => {
+  test('a hostname target answers with a verdict instead of throwing', () => {
+    // The real call, against a name rather than an IP. `setServers` used to sit one line above the
+    // `try`, so this threw out of `probeUnboundResolver` and out of the IPC handler as a rejected
+    // promise \u2014 the one address a router-hosted deployment uses was the one that could not be
+    // checked at all.
+    return expect(
+      queryUnboundResolver('doubleclick.net', { host: 'unbound.lan', port: 53, label: 'unbound.lan:53' }, 250),
+    ).resolves.toEqual({ state: 'unqueryable', detail: 'ERR_INVALID_IP_ADDRESS' });
   });
 });
 

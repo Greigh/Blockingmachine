@@ -1,11 +1,12 @@
 import { jest } from "@jest/globals";
+import { pathRuleDecidability } from "@blockingmachine/core";
 import {
   CoverageCommand,
   hostOf,
   parseRequestTrace,
   parseRuleHits,
 } from "../commands/CoverageCommand.js";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -32,6 +33,45 @@ describe("request trace parsing", () => {
       "doubleclick.net",
       "sb.scorecardresearch.com",
       "cdn.example.com",
+    ]);
+  });
+
+  test("keeps each URL distinct instead of collapsing the trace to hosts", () => {
+    // The change that makes a path-scoped rule decidable. Aggregating by host destroys the only
+    // thing that distinguishes these three requests, and one of them is the request the rule
+    // actually blocks.
+    const entries = parseRequestTrace(
+      [
+        "https://cdn.example.com/assets/ads.js\t2",
+        "https://cdn.example.com/app.css\t3",
+        "https://cdn.example.com/assets/ads.js\t1",
+        "cdn.example.com\t9",
+      ].join("\n"),
+    );
+
+    expect(entries.map((entry) => entry.url)).toEqual([
+      "https://cdn.example.com/assets/ads.js",
+      "https://cdn.example.com/app.css",
+      undefined,
+    ]);
+    // The same URL seen twice is one entry with the counts added, as before.
+    expect(entries[0].count).toBe(3);
+    expect(entries[1].count).toBe(3);
+    expect(entries[2].count).toBe(9);
+    // Every entry still carries the host the evaluator needs.
+    expect(entries.every((entry) => entry.host === "cdn.example.com")).toBe(true);
+  });
+
+  test("parses the URL-bearing session fixture the way its header describes", () => {
+    const fixture = readFileSync(path.join(cliRoot, "src", "__tests__", "fixtures", "browsing-trace-urls.txt"), "utf-8");
+    const entries = parseRequestTrace(fixture);
+    expect(entries.length).toBe(11);
+    expect(entries.every((entry) => entry.url !== undefined)).toBe(true);
+    expect(entries.reduce((sum, entry) => sum + entry.count, 0)).toBe(28);
+    // The two /ads.js requests the fixture header says the path rule should catch.
+    expect(entries.filter((entry) => /\/ads\.js$/.test(entry.url ?? "")).map((entry) => entry.url)).toEqual([
+      "https://cdn.example.com/assets/ads.js",
+      "https://cdn.example.com/thirdparty/ads.js",
     ]);
   });
 
@@ -112,6 +152,62 @@ describe("coverage command", () => {
     const cmd = new CoverageCommand({ config: { baseDir: tmpDir } as any, logger: mockLogger });
     return cmd.execute({ rules: rulesPath, trace: tracePath, json: false });
   }
+
+  test("keeps request URLs, so a path-scoped rule can be decided rather than excluded", async () => {
+    // The whole point of the URL-carrying trace. Read from hostnames, the zone block and the
+    // path rule are the same statement and the zone block wins, so the path rule is credited
+    // with all four requests to the host — including the three it does not touch. The URL is the
+    // only thing that distinguishes them.
+    const rules = [
+      "||cdn.example.com^",
+      "||cdn.example.com^*/ads.js",
+      "||third.example.org^$third-party",
+    ].join("\n");
+
+    const trace = [
+      "https://cdn.example.com/assets/ads.js\t2",
+      "https://cdn.example.com/app.css\t3",
+      "https://cdn.example.com/logo.svg\t5",
+      "https://cdn.example.com/deep/ads.js\t1",
+      "https://third.example.org/beacon\t6",
+    ].join("\n");
+
+    const result = await runCoverage(rules, trace);
+    expect(result.success).toBe(true);
+    const data: any = result.data;
+
+    // Five URLs, five requests, one host. Aggregation is per URL now, which is what preserved the
+    // distinction between the two requests that hit /ads.js and the three that did not.
+    expect(data.trace.urlsInTrace).toBe(5);
+    expect(data.trace.uniqueHosts).toBe(5);
+
+    // Two of the four requests to cdn.example.com matched the path rule, and only those two.
+    expect(data.trace.urlDecidedRequests).toBe(3);
+    expect(data.trace.urlDecidedRules).toBe(1);
+    // The zone block kept the other two, not all four: that is the over-count being removed.
+    expect(data.ledger.matchedRules).toBe(1);
+
+    // The initiator-scoped rule is still undecidable, and says so rather than vanishing. A URL
+    // settles a path; it settles nothing about whether the request was third-party.
+    expect(data.ledger.contextScopedRulesFired).toBeGreaterThanOrEqual(0);
+  });
+
+  test("says out loud when a trace records hostnames only, because that decides nothing", async () => {
+    // A hostname-only trace still measures the hostname bucket exactly, and reports zero for the
+    // path bucket. Silence there would read as "no path-scoped rule ever fired", which is a
+    // statement about the capture and not about the list.
+    const rules = ["||cdn.example.com^", "||cdn.example.com^*/ads.js"].join("\n");
+    const trace = ["cdn.example.com 7"].join("\n");
+
+    const result = await runCoverage(rules, trace);
+    expect(result.success).toBe(true);
+    const data: any = result.data;
+    expect(data.trace.urlsInTrace).toBe(0);
+    expect(data.trace.urlDecidedRequests).toBe(0);
+    expect(data.trace.urlDecidedRules).toBe(0);
+    // Fallback intact: the zone block still takes everything it always did.
+    expect(data.ledger.matchedRules).toBe(1);
+  });
 
   test("reports the hit rate and the head that carries the blocking", async () => {
     // Four rules fire; 990 rules never do.
@@ -317,10 +413,11 @@ describe("coverage command", () => {
       expect(
         data.coverage.topRules.some((rule: any) => rule.rule.includes("bbci.co.uk")),
       ).toBe(false);
-      // The real list carries path-scoped exceptions for the BBC's own assets. A domain-only
-      // replay cannot see the path or request type, so it reads them as a zone allowlist —
-      // which is why allowlist matches are reported rather than folded into blocking coverage.
-      expect(data.trace.allowlistedHosts).toBeGreaterThan(0);
+      // The real list carries path-scoped exceptions for the BBC's own assets, and a
+      // hostname-only trace can fire none of them — a path exception needs the request URL the
+      // fixture does not record. Every allowlist match this trace used to report was the
+      // zone-widened reading of those rules, so zero is the honest count here.
+      expect(data.trace.allowlistedHosts).toBe(0);
 
       // Against a six-figure list, a handful of fired rules is a rounding error.
       expect(data.coverage.listHitRatePercent).toBeLessThan(0.01);
@@ -340,6 +437,15 @@ describe("coverage command", () => {
       expect(data.rules.scopes.initiator).toBeGreaterThan(0);
       expect(data.rules.scopes.path).toBeGreaterThan(0);
       expect(data.rules.scopes.request).toBeGreaterThan(0);
+
+      // The shipped list's decidability share is what `check:path-decidability` gates at 0.80;
+      // pinning the floor here means a local `npm test` catches the same regression CI would —
+      // today it measures ~0.817, the residue being request-typed paths and rewrites.
+      const decidability = pathRuleDecidability(
+        readFileSync(realListPath, "utf-8").split("\n"),
+      );
+      expect(decidability.pathScoped).toBe(data.rules.scopes.path);
+      expect(decidability.share).toBeGreaterThanOrEqual(0.8);
 
       // The rate is measured over the hostname-decidable bucket alone, which is the one set a
       // replay evaluates exactly — so it is a measurement, not an upper bound.

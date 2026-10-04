@@ -7,63 +7,47 @@ import type {
   DaemonStatusInfo,
   UnboundResolverSettings,
 } from '../types/';
-import { ServiceMismatchBanner } from '../components/ServiceMismatchBanner';
-import { UnboundReachabilityCard } from '../components/UnboundReachabilityCard';
-import {
-  ExtensionTierPlanCard,
-  type TierPlanResult,
-} from '../components/ExtensionTierPlanCard';
+import type { TierPlanResult } from '../components/ExtensionTierPlanCard';
 import type {
   UnboundReachability,
   UnboundReachabilitySnapshot,
 } from '../unboundReachability';
-import { isServiceMismatch } from '../sinkholeIdentity';
 import { separateAdguardUrls } from '../queryLogScout';
 import {
   DEFAULT_ADGUARD_DIRECT_PORT,
-  directModeWarning,
-  localTlsBypassNote,
   normalizeAdguardDirectPort,
-  replaceMatchingExplicitPort,
-  resolveAdguardDirectUrl,
 } from '../sinkholeNet';
-import {
-  UNBOUND_TARGETS,
-  unboundFeedUrl,
-  unboundFetchCommand,
-  unboundFormatWarning,
-  unboundIncludeDirective,
-} from '../unboundDeploy';
-import {
-  SHADOWROCKET_STEPS,
-  shadowrocketFeedUrl,
-  shadowrocketFormatWarning,
-  shadowrocketSyntaxNote,
-} from '../shadowrocketDeploy';
-import {
-  PRIVOXY_STEPS,
-  privoxyActionsFileDirective,
-  privoxyFeedUrl,
-  privoxyFormatWarning,
-  privoxySyntaxNote,
-} from '../privoxyDeploy';
-import {
-  BIND_STEPS,
-  bindFormatWarning,
-  bindNamedConfZoneLine,
-  bindReloadCommand,
-  bindResponsePolicyLine,
-  bindSyntaxNote,
-  bindZoneFileName,
-} from '../bindDeploy';
+import type { BindMechanism } from '../bindDeploy';
+import { DeployHubHeader } from '../deploy/DeployHubHeader';
 import {
   DEFAULT_DEPLOY_TARGET_ID,
   DEPLOY_TARGETS,
   deployTargetById,
+  isDeployTargetId,
   type DeployTargetId,
   type DeploySelectEffect,
 } from '../deploy/deployTargets';
+import { pickPaneProps } from '../deploy/panes/paneProps';
+import type { HubPaneProps } from '../deploy/panes/paneProps';
+import { copyTextToClipboard } from '../clipboard';
 
+/**
+ * The Deploy Hub: the state behind every platform, and nothing else.
+ *
+ * Each platform's screen lives in `deploy/panes/`, one component per target, and the registry says
+ * which pane belongs to which tab; the top bar is `deploy/DeployHubHeader`, markup over the same
+ * boundary. What is left here is the part that cannot be per-platform — the compiled list's path
+ * and format, the LAN server's status, the sinkhole credentials three targets share, the daemon's
+ * service state — plus the effects those screens trigger and the handlers the header's buttons
+ * call.
+ *
+ * Keeping the state here rather than in each pane is a deliberate cost, and it buys two things. The
+ * panes stay pure functions of props, so a pane can be rendered in a test from an object literal
+ * without a renderer, an Electron bridge or a mounted component. And state that outlives a tab
+ * switch outlives it: the BIND mechanism, a revealed password field and the last sync result are
+ * still there when the user comes back, which they would not be if each pane owned its own copy and
+ * unmounted the moment another tab was chosen.
+ */
 interface DeployHubViewProps {
   savePath: string;
   onNavigateSettings?: () => void;
@@ -94,6 +78,10 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
 
   const [activeTab, setActiveTab] = useState<PlatformTab>(DEFAULT_DEPLOY_TARGET_ID);
   const [exportFormat, setExportFormat] = useState<FilterFormat>('adguard');
+  // Which of BIND's two blocking mechanisms the pane is writing a recipe for. Local to the pane
+  // rather than a stored setting, because it chooses between two recipes rather than describing a
+  // deployment \u2014 and the export format below is what actually has to match it.
+  const [bindMechanism, setBindMechanism] = useState<BindMechanism>('rpz');
   const [serverStatus, setServerStatus] = useState<FeedServerStatus | null>(null);
   const [isServerLoading, setIsServerLoading] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -105,6 +93,12 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   const [tierPlanState, setTierPlanState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [tierPlan, setTierPlan] = useState<TierPlanResult | null>(null);
   const [tierPlanError, setTierPlanError] = useState<string | null>(null);
+  const [extensionSaving, setExtensionSaving] = useState(false);
+  const [extensionSavedPath, setExtensionSavedPath] = useState<string | null>(null);
+  const [extensionMessage, setExtensionMessage] = useState<{
+    text: string;
+    type: 'success' | 'error';
+  } | null>(null);
 
   /**
    * Reads the extension's tier plan from the main process.
@@ -216,6 +210,8 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   const [showAdguardPass, setShowAdguardPass] = useState(false);
   const [showPiholeKey, setShowPiholeKey] = useState(false);
   const [autoStartFeedServer, setAutoStartFeedServer] = useState(false);
+  const [feedToken, setFeedToken] = useState('');
+  const [secretStorageAvailable, setSecretStorageAvailable] = useState<boolean | null>(null);
   const [launchOnStartup, setLaunchOnStartup] = useState(false);
   const [unboundReachability, setUnboundReachability] = useState<UnboundReachability | null>(null);
   const [unboundSnapshot, setUnboundSnapshot] = useState<UnboundReachabilitySnapshot | null>(null);
@@ -373,6 +369,14 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
       });
     }
 
+    // The recipe commands a pane writes may need the mutation token in a header — the Unbound
+    // refresh's report-back POST is refused without it when one is configured.
+    if (window.electron?.getFeedToken) {
+      window.electron.getFeedToken().then((res) => {
+        if (isMountedRef.current) setFeedToken(res?.token || '');
+      });
+    }
+
     if (window.electron?.getLaunchOnStartup) {
       window.electron.getLaunchOnStartup().then((val) => {
         if (isMountedRef.current) setLaunchOnStartup(Boolean(val));
@@ -412,6 +416,17 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
       });
     }
 
+    // The reachability check now re-runs itself, so the verdict on screen has to follow it. Without
+    // this subscription the pane holds whatever it was given at mount: the check would keep running
+    // on schedule and the user would keep looking at a verdict from whenever the tab was opened.
+    const unsubscribeUnboundWatch = window.electron?.onUnboundReachabilityUpdated?.((snap) => {
+      if (!isMountedRef.current) return;
+      setUnboundSnapshot(snap);
+      // A scheduled verdict carries no rows, so the row breakdown from a manual run is dropped
+      // rather than left next to a newer headline it no longer describes.
+      setUnboundReachability(null);
+    });
+
     if (window.electron?.getUnboundResolvers) {
       window.electron.getUnboundResolvers().then((setting) => {
         if (!isMountedRef.current) return;
@@ -424,6 +439,9 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     if (window.electron?.getSinkholeConfig) {
       window.electron.getSinkholeConfig().then((cfg) => {
         if (isMountedRef.current && cfg) {
+          if (typeof cfg.encryptionAvailable === 'boolean') {
+            setSecretStorageAvailable(cfg.encryptionAvailable);
+          }
           setSinkholeConfig({
             ...cfg,
             adguardMode: cfg.adguardMode || 'direct',
@@ -446,6 +464,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
 
     return () => {
       isMountedRef.current = false;
+      unsubscribeUnboundWatch?.();
       for (const t of timersRef.current) {
         clearTimeout(t);
       }
@@ -453,13 +472,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     };
   }, []);
 
-  const handleCopy = useCallback((text: string, key: string) => {
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(text);
-      if (isMountedRef.current) {
-        setCopiedKey(key);
-        safeSetTimeout(() => setCopiedKey(null), 2400);
-      }
+  const handleCopy = useCallback(async (text: string, key: string) => {
+    if (!(await copyTextToClipboard(text))) return;
+    if (isMountedRef.current) {
+      setCopiedKey(key);
+      safeSetTimeout(() => setCopiedKey(null), 2400);
     }
   }, [safeSetTimeout]);
 
@@ -680,30 +697,152 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     }
   };
 
-  const directPort = normalizeAdguardDirectPort(sinkholeConfig.adguardDirectPort);
-  const _directWarning = directModeWarning(sinkholeConfig.adguardHomeUrl || '', directPort);
-  const activeTlsUrl = sinkholeConfig.adguardMode === 'webhook'
-    ? (sinkholeConfig.haWebhookUrl || '')
-    : (sinkholeConfig.adguardHomeUrl || '');
-  const tlsScopeNote = localTlsBypassNote(activeTlsUrl, Boolean(sinkholeConfig.allowInsecureLocalTls));
-  const _directEndpointLabel = (() => {
-    if (!sinkholeConfig.adguardHomeUrl) return 'Not Configured';
-    const resolved = resolveAdguardDirectUrl(sinkholeConfig.adguardHomeUrl, directPort);
-    return resolved.ok ? resolved.target.display : sinkholeConfig.adguardHomeUrl;
-  })();
+  /** Selects a tab, running whatever side effect the registry declares for it. */
+  const handleSelectTarget = (id: string) => {
+    // The tab strip only ever passes a registry id, but the same handler reaches the sibling
+    // index in the extension pane as a plain string — refuse rather than trust it.
+    if (!isDeployTargetId(id)) return;
+    setActiveTab(id);
+    const effect = deployTargetById(id)?.selectEffect;
+    if (effect) SELECT_EFFECTS[effect]();
+  };
 
-  const fileUrl = savePath ? `file://${savePath}` : '';
-  const fileName = savePath ? savePath.split(/[/\\]/).pop() || 'rules.txt' : 'rules.txt';
-  const lanFeedUrl = serverStatus?.lanUrl ? `${serverStatus.lanUrl}/${fileName}` : `http://<your-mac-ip>:9191/${fileName}`;
-  const localHttpUrl = serverStatus?.localUrl ? `${serverStatus.localUrl}/${fileName}` : `http://localhost:9191/${fileName}`;
-  const unboundFeedLanUrl = unboundFeedUrl(serverStatus?.lanUrl || '', exportFormat, savePath);
-  const unboundFormatNotice = unboundFormatWarning(exportFormat);
-  const shadowrocketFeedLanUrl = shadowrocketFeedUrl(serverStatus?.lanUrl || '', exportFormat, savePath);
-  const shadowrocketFormatNotice = shadowrocketFormatWarning(exportFormat);
-  const privoxyFeedLanUrl = privoxyFeedUrl(serverStatus?.lanUrl || '', exportFormat, savePath);
-  const privoxyFormatNotice = privoxyFormatWarning(exportFormat);
-  const bindZonePath = bindZoneFileName(savePath);
-  const bindFormatNotice = bindFormatWarning(exportFormat);
+  /**
+   * The extension's "install" from the hub's side: a fresh build copied where the browser can
+   * load it. The browser keeps the actual install click — Load unpacked / temporary add-on —
+   * and the pane says so rather than implying the download finished the job.
+   */
+  const handleDownloadExtension = async () => {
+    if (!window.electron?.downloadExtension) return;
+    setExtensionSaving(true);
+    setExtensionMessage(null);
+    try {
+      const res = await window.electron.downloadExtension();
+      if (res?.cancelled) return;
+      if (res?.success && res.path) {
+        setExtensionSavedPath(res.path);
+        setExtensionMessage({
+          text: 'Saved — now load it in the browser with the steps below.',
+          type: 'success',
+        });
+      } else {
+        setExtensionMessage({
+          text: res?.error || 'The extension package could not be written.',
+          type: 'error',
+        });
+      }
+    } catch (err) {
+      setExtensionMessage({ text: String(err), type: 'error' });
+    } finally {
+      setExtensionSaving(false);
+    }
+  };
+
+  /**
+   * The pane bundle.
+   *
+   * One object, built every render, handed to whichever pane the registry points at. Panes take the
+   * fields they use out of it with `Pick`, so this is the whole list of what any deploy pane can
+   * reach — the states above and the handlers that change them. Typing it as `HubPaneProps` is what
+   * keeps the list honest in both directions: a state field nothing renders cannot be added here
+   * without a compile error, and a pane cannot reach for one that is missing.
+   *
+   * Derived values are absent on purpose. The feed URLs and format notices a pane shows come from
+   * these three inputs through the helpers in `deploy/feedUrls`, so a pane cannot print an address
+   * that disagrees with the header above it.
+   *
+   * The bundle is the whole field set, but no pane sees it whole: dispatch narrows it through
+   * `pickPaneProps` with the entry's own `paneKeys`, so each renderer is invoked with the subset
+   * its module declares and nothing else.
+   */
+  const paneProps: HubPaneProps = {
+    savePath,
+    exportFormat,
+    serverStatus,
+    feedToken,
+    secretStorageAvailable,
+
+    handleCopy,
+    copiedKey,
+
+    sinkholeConfig,
+    setSinkholeConfig,
+    showHaToken,
+    setShowHaToken,
+    showAdguardPass,
+    setShowAdguardPass,
+    showPiholeKey,
+    setShowPiholeKey,
+    adguardEnv,
+    setAdguardEnv,
+    testingService,
+    isSavingSinkhole,
+    isSyncingSinkhole,
+    sinkholeMessage,
+    testResult,
+    lastSyncResult,
+    handleTestConnection,
+    handleSaveSinkholeConfig,
+    handleTriggerLiveSync,
+    handleToggleSyncOnCompile,
+    selectAdguardMode,
+    applyDetectedMode,
+    directPortFocusRef,
+
+    haApiPreview,
+    isTestingHaApi,
+    handleInspectHaApi,
+    tierPlanState,
+    tierPlan,
+    tierPlanError,
+    loadTierPlan,
+    chooseTierLedger,
+    clearTierLedger,
+
+    daemonStatus,
+    isDaemonLoading,
+    daemonMessage,
+    networkServices,
+    selectedService,
+    setSelectedService,
+    showInstallScripts,
+    serviceScripts,
+    refreshDaemonStatus,
+    handleStartDaemon,
+    handleStopDaemon,
+    handleToggleDaemonProtection,
+    handleReloadDaemon,
+    handleSetSystemDns,
+    handleRestoreSystemDns,
+    handleFlushCache,
+    handleToggleInstallScripts,
+
+    unboundReachability,
+    unboundSnapshot,
+    unboundResolver,
+    resolverDraft,
+    setResolverDraft,
+    referenceDraft,
+    setReferenceDraft,
+    isCheckingUnbound,
+    resolverMessage,
+    handleCheckUnboundReachability,
+    handleSaveUnboundResolver,
+
+    bindMechanism,
+    setBindMechanism,
+
+    extensionSaving,
+    extensionSavedPath,
+    extensionMessage,
+    handleDownloadExtension,
+    // Every target but this pane's own — the pane's "everywhere else" index, narrowed here
+    // because the pane cannot import the registry that imports it.
+    siblingTargets: DEPLOY_TARGETS.filter((t) => t.id !== 'browser-extension').map(
+      ({ id, label, summary, icon }) => ({ id, label, summary, icon }),
+    ),
+    onSelectTarget: handleSelectTarget,
+  };
 
   /**
    * The implementations behind the registry's named select effects.
@@ -715,134 +854,36 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     'refresh-daemon-status': () => void refreshDaemonStatus(),
   };
 
-  /** Selects a tab, running whatever side effect the registry declares for it. */
-  const handleSelectTarget = (id: DeployTargetId) => {
-    setActiveTab(id);
-    const effect = deployTargetById(id)?.selectEffect;
-    if (effect) SELECT_EFFECTS[effect]();
-  };
-
+  /**
+   * The tab's entry, and through it the pane.
+   *
+   * The registry is the only place a platform is named, so this is the whole of the dispatch: look
+   * the entry up by id, call the pane it carries. The fallback covers an id that somehow is not in
+   * the registry, which the tab strip cannot produce but a restored session could — and it answers
+   * with the first tab rather than a blank pane.
+   */
+  const activeTarget = deployTargetById(activeTab) ?? DEPLOY_TARGETS[0];
   return (
     <div className="deploy-hub-container">
-      {/* =========================================================================
-          1. UNIFIED COMPACT TOP CONTROL BAR
-         ========================================================================= */}
-      <div className="deploy-hub-top-bar">
-        {/* Left: Compiled Target List File Info */}
-        <div className="deploy-top-file-info">
-          <div className="deploy-file-main-row">
-            <div className="deploy-file-badge-group">
-              <span className="deploy-format-pill">{exportFormat.toUpperCase()}</span>
-              <span className="deploy-count-pill">
-                {uniqueRulesCount ? `${uniqueRulesCount.toLocaleString()} Active Rules` : 'Ready to Deploy'}
-              </span>
-              {lastProcessTime && (
-                <span className="deploy-time-pill">
-                  • Updated {new Date(lastProcessTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              )}
-            </div>
-            <div className="deploy-file-path-row">
-              <span className="deploy-file-path" title={savePath}>{savePath || 'No save path configured'}</span>
-            </div>
-          </div>
-
-          <div className="deploy-file-actions-row">
-            {onTriggerCompile && (
-              <button
-                type="button"
-                className="deploy-tool-btn primary"
-                onClick={onTriggerCompile}
-                title="Recompile blocklists now (⌘R)"
-              >
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-                </svg>
-                <span>Compile (⌘R)</span>
-              </button>
-            )}
-            <button
-              type="button"
-              className={`deploy-tool-btn ${copiedKey === 'local-path' ? 'copied' : ''}`}
-              onClick={() => handleCopy(savePath, 'local-path')}
-              title="Copy absolute filesystem path"
-            >
-              <span>{copiedKey === 'local-path' ? 'Copied Path!' : 'Copy Path'}</span>
-            </button>
-            {window.electron?.showItemInFolder && (
-              <button
-                type="button"
-                className="deploy-tool-btn"
-                onClick={() => window.electron.showItemInFolder(savePath)}
-                title="Reveal file in macOS Finder"
-              >
-                <span>Reveal in Finder</span>
-              </button>
-            )}
-            {onNavigateSettings && (
-              <button
-                type="button"
-                className="deploy-tool-btn"
-                onClick={onNavigateSettings}
-                title="Format & export settings"
-              >
-                <span>Format Settings</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Right: LAN Feed Server Cardlet */}
-        <div className={`deploy-top-server-cardlet ${serverStatus?.isRunning ? 'online' : 'offline'}`}>
-          <div className="deploy-server-top-row">
-            <div className="deploy-server-status-indicator">
-              <span className={`deploy-server-dot ${serverStatus?.isRunning ? 'online' : 'offline'}`} />
-              <span className="deploy-server-title">
-                {serverStatus?.isRunning ? `LAN Server :${serverStatus.port || 9191} (Live)` : 'LAN Feed Server (Offline)'}
-              </span>
-            </div>
-            <button
-              type="button"
-              className={`deploy-server-toggle-btn ${serverStatus?.isRunning ? 'stop' : 'start'}`}
-              onClick={handleToggleFeedServer}
-              disabled={isServerLoading}
-            >
-              {isServerLoading ? '…' : serverStatus?.isRunning ? 'Stop Server' : 'Start Server'}
-            </button>
-          </div>
-
-          <div className="deploy-server-url-row">
-            <code className="deploy-server-url" title={lanFeedUrl}>{lanFeedUrl}</code>
-            <button
-              type="button"
-              className={`deploy-server-copy-btn ${copiedKey === 'lan-url' ? 'copied' : ''}`}
-              onClick={() => handleCopy(lanFeedUrl, 'lan-url')}
-              title="Copy LAN subscription URL for remote devices"
-            >
-              {copiedKey === 'lan-url' ? '✓ Copied' : 'Copy'}
-            </button>
-          </div>
-
-          <div className="deploy-server-options-row">
-            <label className="deploy-checkbox-label" title="Start LAN server when Blockingmachine launches">
-              <input
-                type="checkbox"
-                checked={autoStartFeedServer}
-                onChange={(e) => handleToggleAutoStartFeedServer(e.target.checked)}
-              />
-              <span>Auto-start on launch</span>
-            </label>
-            <label className="deploy-checkbox-label" title="Launch Blockingmachine on computer startup">
-              <input
-                type="checkbox"
-                checked={launchOnStartup}
-                onChange={(e) => handleToggleLaunchOnStartup(e.target.checked)}
-              />
-              <span>Launch on computer startup</span>
-            </label>
-          </div>
-        </div>
-      </div>
+      {/* 1. The header — artifact identity and the LAN feed server. Markup, not state: everything
+          it shows or fires is a prop, the same boundary the panes keep. */}
+      <DeployHubHeader
+        savePath={savePath}
+        exportFormat={exportFormat}
+        uniqueRulesCount={uniqueRulesCount}
+        lastProcessTime={lastProcessTime}
+        handleCopy={handleCopy}
+        copiedKey={copiedKey}
+        onTriggerCompile={onTriggerCompile}
+        onNavigateSettings={onNavigateSettings}
+        serverStatus={serverStatus}
+        isServerLoading={isServerLoading}
+        onToggleFeedServer={handleToggleFeedServer}
+        autoStartFeedServer={autoStartFeedServer}
+        onToggleAutoStartFeedServer={handleToggleAutoStartFeedServer}
+        launchOnStartup={launchOnStartup}
+        onToggleLaunchOnStartup={handleToggleLaunchOnStartup}
+      />
 
       {/* =========================================================================
           2. PLATFORM NAVIGATION TABS
@@ -864,2060 +905,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
         ))}
       </div>
 
-      {renderDeployPane()}
+      {activeTarget.pane(pickPaneProps(paneProps, activeTarget.paneKeys))}
     </div>
   );
-
-  /**
-   * The pane for whichever target is active.
-   *
-   * A `switch` over the registry's ids rather than nine `activeTab === '…'` guards threaded through
-   * the JSX: the compiler narrows the id here, and the `never` default below turns "a target was
-   * added to the registry but not to this switch" into a build failure instead of an empty pane.
-   */
-  function renderDeployPane(): React.ReactNode {
-    switch (activeTab) {
-      /* =======================================================================
-          3. DUAL-PANE PLATFORM WORKSPACE: ADGUARD HOME
-         ======================================================================= */
-      case 'adguard-home':
-        return (
-        <div className="deploy-dual-pane">
-          {/* Left Column: Live API Automation */}
-          <div className="deploy-pane-column">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">⚡</span>
-                <div>
-                  <h3 className="deploy-pane-title">Live API Automation</h3>
-                  <p className="deploy-pane-subtitle">
-                    Automate zero-touch reloads when compiling rules
-                  </p>
-                </div>
-              </div>
-              <div className="deploy-pane-status-pill">
-                <span className={`status-indicator-dot ${sinkholeConfig.adguardHomeUrl ? 'active' : 'idle'}`} />
-                <span>{sinkholeConfig.adguardHomeUrl ? 'Configured' : 'Not Connected'}</span>
-              </div>
-            </div>
-
-            <ServiceMismatchBanner
-              details={testResult?.service === 'adguard' ? testResult.details : lastSyncResult?.service?.toLowerCase().includes('adguard') ? lastSyncResult.details : undefined}
-              message={testResult?.service === 'adguard' ? testResult.message : lastSyncResult?.service?.toLowerCase().includes('adguard') ? lastSyncResult.message : undefined}
-              onUseDirect={() => { void applyDetectedMode('direct'); }}
-              onUseHaApi={() => { void applyDetectedMode('ha-api'); }}
-            />
-
-            {/* Integration Method Selector */}
-            <div className="deploy-field-group">
-              <label className="deploy-field-label">Integration Method</label>
-              <div className="deploy-segmented-selector">
-                <button
-                  type="button"
-                  className={`deploy-segment-btn ${(!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct') ? 'active' : ''}`}
-                  onClick={() => selectAdguardMode('direct')}
-                >
-                  Direct Port {directPort} (Recommended)
-                </button>
-                <button
-                  type="button"
-                  className={`deploy-segment-btn ${sinkholeConfig.adguardMode === 'ha-api' ? 'active' : ''}`}
-                  onClick={() => selectAdguardMode('ha-api')}
-                >
-                  HA REST API
-                </button>
-                <button
-                  type="button"
-                  className={`deploy-segment-btn ${sinkholeConfig.adguardMode === 'webhook' ? 'active' : ''}`}
-                  onClick={() => selectAdguardMode('webhook')}
-                >
-                  Webhook
-                </button>
-              </div>
-            </div>
-
-            {/* Fast Presets Chips */}
-            <div className="deploy-fast-presets-wrap">
-              <span className="fast-presets-title">Quick Presets:</span>
-              <div className="fast-presets-chips">
-                <button
-                  type="button"
-                  className="preset-chip"
-                  onClick={() => selectAdguardMode('direct', { adguardHomeUrl: `http://homeassistant.local:${directPort}` })}
-                >
-                  homeassistant.local:{directPort}
-                </button>
-                <button
-                  type="button"
-                  className="preset-chip"
-                  onClick={() => selectAdguardMode('ha-api', { adguardHomeUrl: 'http://homeassistant.local:8123' })}
-                >
-                  HA API (:8123)
-                </button>
-                <button
-                  type="button"
-                  className="preset-chip"
-                  onClick={() => selectAdguardMode('direct', { adguardHomeUrl: `http://localhost:${directPort}` })}
-                >
-                  Docker (localhost)
-                </button>
-                <button
-                  type="button"
-                  className="preset-chip"
-                  onClick={() => selectAdguardMode('direct', { adguardHomeUrl: `http://192.168.8.1:${directPort}` })}
-                >
-                  GL.iNet (192.168.8.1)
-                </button>
-                <button
-                  type="button"
-                  className="preset-chip"
-                  onClick={() => selectAdguardMode('ha-api', { adguardHomeUrl: 'https://your-instance.ui.nabu.casa' })}
-                >
-                  Nabu Casa Cloud
-                </button>
-              </div>
-            </div>
-
-            {/* Credentials & Endpoint Form */}
-            <div className="deploy-form-fields-grid">
-              {sinkholeConfig.adguardMode === 'ha-api' ? (
-                <>
-                  <div className="deploy-field-group">
-                    <label className="deploy-field-label">Home Assistant URL</label>
-                    <input
-                      type="text"
-                      className="deploy-field-input"
-                      placeholder="http://homeassistant.local:8123 or https://*.ui.nabu.casa"
-                      value={sinkholeConfig.adguardHomeUrl || ''}
-                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
-                    />
-                  </div>
-                  <div className="deploy-field-group">
-                    <label className="deploy-field-label">Long-Lived Access Token</label>
-                    <div className="deploy-input-with-eye">
-                      <input
-                        type={showHaToken ? 'text' : 'password'}
-                        className="deploy-field-input"
-                        placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
-                        value={sinkholeConfig.haToken || ''}
-                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haToken: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        className="deploy-eye-btn"
-                        onClick={() => setShowHaToken(!showHaToken)}
-                      >
-                        {showHaToken ? '👁' : '🔒'}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="deploy-field-row">
-                    <div className="deploy-field-group">
-                      <label className="deploy-field-label">AdGuard Username</label>
-                      <input
-                        type="text"
-                        className="deploy-field-input"
-                        placeholder="admin"
-                        value={sinkholeConfig.adguardHomeUser || ''}
-                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })}
-                      />
-                    </div>
-                    <div className="deploy-field-group">
-                      <label className="deploy-field-label">AdGuard Password</label>
-                      <div className="deploy-input-with-eye">
-                        <input
-                          type={showAdguardPass ? 'text' : 'password'}
-                          className="deploy-field-input"
-                          placeholder="••••••••"
-                          value={sinkholeConfig.adguardHomePassword || ''}
-                          onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
-                        />
-                        <button
-                          type="button"
-                          className="deploy-eye-btn"
-                          onClick={() => setShowAdguardPass(!showAdguardPass)}
-                          title={showAdguardPass ? 'Hide password' : 'Show password'}
-                        >
-                          {showAdguardPass ? '👁' : '🔒'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <p style={{ fontSize: 10.5, color: 'var(--secondary-color)', margin: '2px 0 0', lineHeight: 1.4 }}>
-                    Used for the AI Radar live query log feed. Requires AdGuard Home admin credentials.
-                  </p>
-                </>
-              ) : sinkholeConfig.adguardMode === 'webhook' ? (
-                <>
-                  <div className="deploy-field-group">
-                    <label className="deploy-field-label">Home Assistant Webhook URL</label>
-                    <input
-                      type="text"
-                      className="deploy-field-input"
-                      placeholder="http://homeassistant.local:8123/api/webhook/... or https://hooks.nabu.casa/..."
-                      value={sinkholeConfig.haWebhookUrl || ''}
-                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: e.target.value })}
-                    />
-                  </div>
-                  <div className="deploy-field-row">
-                    <div className="deploy-field-group">
-                      <label className="deploy-field-label">AdGuard Username</label>
-                      <input
-                        type="text"
-                        className="deploy-field-input"
-                        placeholder="admin"
-                        value={sinkholeConfig.adguardHomeUser || ''}
-                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })}
-                      />
-                    </div>
-                    <div className="deploy-field-group">
-                      <label className="deploy-field-label">AdGuard Password</label>
-                      <input
-                        type={showAdguardPass ? 'text' : 'password'}
-                        className="deploy-field-input"
-                        placeholder="••••••••"
-                        value={sinkholeConfig.adguardHomePassword || ''}
-                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
-                      />
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="deploy-field-row">
-                    <div className="deploy-field-group" style={{ flex: 3 }}>
-                      <label className="deploy-field-label">AdGuard Home URL</label>
-                      <input
-                        type="text"
-                        className="deploy-field-input"
-                        placeholder={`http://homeassistant.local:${directPort} or http://192.168.1.100:${directPort}`}
-                        value={sinkholeConfig.adguardHomeUrl || ''}
-                        onChange={(e) =>
-                          setSinkholeConfig({
-                            ...sinkholeConfig,
-                            adguardHomeUrl: e.target.value,
-                            adguardDirectUrl: e.target.value,
-                          })
-                        }
-                      />
-                    </div>
-                    <div className="deploy-field-group" style={{ flex: 1 }}>
-                      <label className="deploy-field-label">API Port</label>
-                      <input
-                        type="number"
-                        className="deploy-field-input"
-                        min={1}
-                        max={65535}
-                        value={sinkholeConfig.adguardDirectPort ?? ''}
-                        onFocus={() => { directPortFocusRef.current = directPort; }}
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          if (raw === '') {
-                            setSinkholeConfig({ ...sinkholeConfig, adguardDirectPort: undefined });
-                            return;
-                          }
-                          const next = Number.parseInt(raw, 10);
-                          if (Number.isInteger(next)) {
-                            setSinkholeConfig({ ...sinkholeConfig, adguardDirectPort: next });
-                          }
-                        }}
-                        onBlur={(e) => {
-                          const previous = directPortFocusRef.current;
-                          const next = normalizeAdguardDirectPort(e.target.value);
-                          const nextUrl = replaceMatchingExplicitPort(sinkholeConfig.adguardHomeUrl || '', previous, next);
-                          setSinkholeConfig({
-                            ...sinkholeConfig,
-                            adguardDirectPort: next,
-                            adguardHomeUrl: nextUrl,
-                            adguardDirectUrl: replaceMatchingExplicitPort(sinkholeConfig.adguardDirectUrl || nextUrl, previous, next),
-                          });
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="deploy-field-row">
-                    <div className="deploy-field-group">
-                      <label className="deploy-field-label">Username</label>
-                      <input
-                        type="text"
-                        className="deploy-field-input"
-                        placeholder="admin"
-                        value={sinkholeConfig.adguardHomeUser || ''}
-                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUser: e.target.value })}
-                      />
-                    </div>
-                    <div className="deploy-field-group">
-                      <label className="deploy-field-label">Password</label>
-                      <div className="deploy-input-with-eye">
-                        <input
-                          type={showAdguardPass ? 'text' : 'password'}
-                          className="deploy-field-input"
-                          placeholder="••••••••"
-                          value={sinkholeConfig.adguardHomePassword || ''}
-                          onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
-                        />
-                        <button
-                          type="button"
-                          className="deploy-eye-btn"
-                          onClick={() => setShowAdguardPass(!showAdguardPass)}
-                        >
-                          {showAdguardPass ? '👁' : '🔒'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* Local TLS Bypass Option */}
-              <label className="deploy-checkbox-label" title={tlsScopeNote || undefined}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(sinkholeConfig.allowInsecureLocalTls)}
-                  onChange={(e) =>
-                    setSinkholeConfig({ ...sinkholeConfig, allowInsecureLocalTls: e.target.checked })
-                  }
-                />
-                <span>Allow self-signed HTTPS / local TLS certificate bypass</span>
-              </label>
-            </div>
-
-            {/* Actions Row */}
-            <div className="deploy-actions-row">
-              <button
-                type="button"
-                className="deploy-btn"
-                onClick={() => handleTestConnection('adguard')}
-                disabled={testingService === 'adguard'}
-              >
-                <span>{testingService === 'adguard' ? 'Testing…' : '⚡ Test Connection'}</span>
-              </button>
-              <button
-                type="button"
-                className="deploy-btn"
-                onClick={() => handleSaveSinkholeConfig('adguard')}
-                disabled={isSavingSinkhole}
-              >
-                <span>{isSavingSinkhole ? 'Saving…' : '💾 Save Settings'}</span>
-              </button>
-              <button
-                type="button"
-                className="deploy-btn primary"
-                onClick={() => handleTriggerLiveSync('adguard')}
-                disabled={isSyncingSinkhole || (!sinkholeConfig.adguardHomeUrl && !sinkholeConfig.haWebhookUrl)}
-              >
-                <span>{isSyncingSinkhole ? 'Reloading…' : '▶ Push Live Reload Now'}</span>
-              </button>
-            </div>
-
-            {/* Auto-Push Toggle & Status Feedback */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-              <label className="deploy-checkbox-label" title="Automatically reload AdGuard Home whenever you compile rules (⌘R)">
-                <input
-                  type="checkbox"
-                  checked={sinkholeConfig.syncOnCompile}
-                  onChange={(e) => handleToggleSyncOnCompile(e.target.checked)}
-                />
-                <span style={{ fontWeight: 600, color: 'var(--heading-color)' }}>
-                  Auto-Push to AdGuard on Compile (⌘R)
-                </span>
-              </label>
-
-              {sinkholeMessage && (
-                <span style={{ fontSize: '11px', color: 'var(--primary-color)', fontWeight: 500 }}>
-                  {sinkholeMessage}
-                </span>
-              )}
-              {testResult?.service === 'adguard' && !isServiceMismatch(testResult.details) && (
-                <span className={`test-status-pill ${testResult.success ? 'success' : 'error'}`} style={{ alignSelf: 'flex-start' }}>
-                  {testResult.message}
-                </span>
-              )}
-              {lastSyncResult?.service?.toLowerCase().includes('adguard') && !isServiceMismatch(lastSyncResult.details) && (
-                <span className={`test-status-pill ${lastSyncResult.status === 'success' ? 'success' : 'error'}`} style={{ alignSelf: 'flex-start' }}>
-                  Last Reload: {lastSyncResult.message} ({lastSyncResult.timestamp})
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Right Column: Feed Subscription & Setup Instructions */}
-          <div className="deploy-pane-column">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📡</span>
-                <div>
-                  <h3 className="deploy-pane-title">Feed Subscription & Setup</h3>
-                  <p className="deploy-pane-subtitle">
-                    Subscribe inside AdGuard Home web console
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Big Feed Subscription Box */}
-            <div className="deploy-feed-box">
-              <div className="deploy-feed-box-top">
-                <span className="deploy-feed-box-label">LAN Subscription URL</span>
-                <span className="deploy-feed-box-tag">● Live Wi-Fi Feed</span>
-              </div>
-              <div className="deploy-feed-input-row">
-                <input type="text" readOnly value={lanFeedUrl} className="deploy-feed-input" />
-                <button
-                  type="button"
-                  className={`deploy-copy-feed-btn ${copiedKey === 'agh-lan' ? 'copied' : ''}`}
-                  onClick={() => handleCopy(lanFeedUrl, 'agh-lan')}
-                >
-                  {copiedKey === 'agh-lan' ? '✓ Copied' : 'Copy Feed URL'}
-                </button>
-              </div>
-              <div className="deploy-feed-sublink-row">
-                <button
-                  type="button"
-                  className="deploy-sublink-btn"
-                  onClick={() => handleCopy(fileUrl, 'agh-file')}
-                >
-                  {copiedKey === 'agh-file' ? '✓ Copied file:// URL' : 'Or copy native file:// path (Mac-only setups) →'}
-                </button>
-              </div>
-            </div>
-
-            {/* Environment Tabs */}
-            <div className="deploy-env-bar">
-              <span className="deploy-env-title">Environment:</span>
-              <div className="deploy-env-tabs">
-                <button
-                  type="button"
-                  className={`env-tab-btn ${adguardEnv === 'homeassistant' ? 'active' : ''}`}
-                  onClick={() => setAdguardEnv('homeassistant')}
-                >
-                  Home Assistant
-                </button>
-                <button
-                  type="button"
-                  className={`env-tab-btn ${adguardEnv === 'docker' ? 'active' : ''}`}
-                  onClick={() => setAdguardEnv('docker')}
-                >
-                  Docker / NAS
-                </button>
-                <button
-                  type="button"
-                  className={`env-tab-btn ${adguardEnv === 'router' ? 'active' : ''}`}
-                  onClick={() => setAdguardEnv('router')}
-                >
-                  GL.iNet / Router
-                </button>
-                <button
-                  type="button"
-                  className={`env-tab-btn ${adguardEnv === 'standalone' ? 'active' : ''}`}
-                  onClick={() => setAdguardEnv('standalone')}
-                >
-                  Standalone
-                </button>
-              </div>
-            </div>
-
-            {/* 3-Step Setup Stepper */}
-            <div className="deploy-numbered-stepper">
-              <div className="stepper-step">
-                <div className="stepper-num">1</div>
-                <div className="stepper-content">
-                  <h4>Open AdGuard Home Web Interface</h4>
-                  <p>
-                    {adguardEnv === 'homeassistant'
-                      ? `Open Home Assistant > AdGuard Home, or navigate directly to http://homeassistant.local:${directPort}`
-                      : adguardEnv === 'router'
-                      ? `Navigate to your router web dashboard (default: http://192.168.8.1:${directPort})`
-                      : `Open your browser to your AdGuard Home IP: http://<ip>:${directPort}`}
-                  </p>
-                </div>
-              </div>
-
-              <div className="stepper-step">
-                <div className="stepper-num">2</div>
-                <div className="stepper-content">
-                  <h4>Navigate to DNS Blocklists</h4>
-                  <p>In the top navigation menu, click on <strong>Filters</strong>, then choose <strong>DNS blocklists</strong>.</p>
-                </div>
-              </div>
-
-              <div className="stepper-step">
-                <div className="stepper-num">3</div>
-                <div className="stepper-content">
-                  <h4>Add Custom Blocklist & Paste Feed URL</h4>
-                  <p>
-                    Click <strong>Add blocklist → Add a custom list</strong>. Name it <code>Blockingmachine Compiled</code> and paste the copied LAN URL above.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Contextual Guidance */}
-            {adguardEnv === 'homeassistant' && (
-              <div className="deploy-contextual-note">
-                <span className="note-icon">💡</span>
-                <div className="note-text">
-                  <strong>Nabu Casa & Remote Access:</strong> AdGuard Home runs locally on your home network. Even if you access Home Assistant remotely using Nabu Casa, paste the <strong>LAN Feed URL</strong> above into AdGuard so it fetches blocklists over your local Wi-Fi.
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      );
-
-      /* =======================================================================
-          3. DUAL-PANE PLATFORM WORKSPACE: PI-HOLE
-         ======================================================================= */
-      case 'pihole':
-        return (
-        <div className="deploy-dual-pane">
-          {/* Left Column: Pi-hole Live API Automation */}
-          <div className="deploy-pane-column">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">⚡</span>
-                <div>
-                  <h3 className="deploy-pane-title">Pi-hole Gravity Automation</h3>
-                  <p className="deploy-pane-subtitle">
-                    Automate Pi-hole Gravity updates (`pihole -g`) over API
-                  </p>
-                </div>
-              </div>
-              <div className="deploy-pane-status-pill">
-                <span className={`status-indicator-dot ${sinkholeConfig.piholeUrl ? 'active' : 'idle'}`} />
-                <span>{sinkholeConfig.piholeUrl ? 'Configured' : 'Not Connected'}</span>
-              </div>
-            </div>
-
-            {/* Quick Presets */}
-            <div className="deploy-fast-presets-wrap">
-              <span className="fast-presets-title">Quick Presets:</span>
-              <div className="fast-presets-chips">
-                <button
-                  type="button"
-                  className="preset-chip"
-                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://pi.hole/admin' })}
-                >
-                  pi.hole/admin
-                </button>
-                <button
-                  type="button"
-                  className="preset-chip"
-                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://homeassistant.local:8080/admin' })}
-                >
-                  HA Pi-hole (:8080)
-                </button>
-                <button
-                  type="button"
-                  className="preset-chip"
-                  onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://localhost:80/admin' })}
-                >
-                  Docker (localhost)
-                </button>
-              </div>
-            </div>
-
-            {/* Credentials Form */}
-            <div className="deploy-form-fields-grid">
-              <div className="deploy-field-group">
-                <label className="deploy-field-label">Pi-hole Admin URL</label>
-                <input
-                  type="text"
-                  className="deploy-field-input"
-                  placeholder="http://pi.hole/admin or http://192.168.1.50/admin"
-                  value={sinkholeConfig.piholeUrl || ''}
-                  onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: e.target.value })}
-                />
-              </div>
-
-              <div className="deploy-field-group">
-                <label className="deploy-field-label">API Key / App Password (v5 & v6)</label>
-                <div className="deploy-input-with-eye">
-                  <input
-                    type={showPiholeKey ? 'text' : 'password'}
-                    className="deploy-field-input"
-                    placeholder="Pi-hole API token (WEBPASSWORD hash or v6 app password)"
-                    value={sinkholeConfig.piholeApiKey || ''}
-                    onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, piholeApiKey: e.target.value })}
-                  />
-                  <button
-                    type="button"
-                    className="deploy-eye-btn"
-                    onClick={() => setShowPiholeKey(!showPiholeKey)}
-                  >
-                    {showPiholeKey ? '👁' : '🔒'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="deploy-actions-row">
-              <button
-                type="button"
-                className="deploy-btn"
-                onClick={() => handleTestConnection('pihole')}
-                disabled={testingService === 'pihole'}
-              >
-                <span>{testingService === 'pihole' ? 'Testing…' : '⚡ Test Connection'}</span>
-              </button>
-              <button
-                type="button"
-                className="deploy-btn"
-                onClick={() => handleSaveSinkholeConfig('pihole')}
-                disabled={isSavingSinkhole}
-              >
-                <span>{isSavingSinkhole ? 'Saving…' : '💾 Save Settings'}</span>
-              </button>
-              <button
-                type="button"
-                className="deploy-btn primary"
-                onClick={() => handleTriggerLiveSync('pihole')}
-                disabled={isSyncingSinkhole || !sinkholeConfig.piholeUrl}
-              >
-                <span>{isSyncingSinkhole ? 'Reloading…' : '▶ Trigger Gravity Reload Now'}</span>
-              </button>
-            </div>
-
-            {/* Auto-Push Toggle */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-              <label className="deploy-checkbox-label" title="Trigger automated Gravity update after each rule compile">
-                <input
-                  type="checkbox"
-                  checked={sinkholeConfig.syncOnCompile}
-                  onChange={(e) => handleToggleSyncOnCompile(e.target.checked)}
-                />
-                <span style={{ fontWeight: 600, color: 'var(--heading-color)' }}>
-                  Auto-Push to Pi-hole on Compile (⌘R)
-                </span>
-              </label>
-
-              {sinkholeMessage && (
-                <span style={{ fontSize: '11px', color: 'var(--primary-color)', fontWeight: 500 }}>
-                  {sinkholeMessage}
-                </span>
-              )}
-              {testResult?.service === 'pihole' && (
-                <span className={`test-status-pill ${testResult.success ? 'success' : 'error'}`} style={{ alignSelf: 'flex-start' }}>
-                  {testResult.message}
-                </span>
-              )}
-              {lastSyncResult?.service?.toLowerCase().includes('pi-hole') && (
-                <span className={`test-status-pill ${lastSyncResult.status === 'success' ? 'success' : 'error'}`} style={{ alignSelf: 'flex-start' }}>
-                  Last Gravity Reload: {lastSyncResult.message} ({lastSyncResult.timestamp})
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Right Column: Feed Subscription & Setup Instructions */}
-          <div className="deploy-pane-column">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📡</span>
-                <div>
-                  <h3 className="deploy-pane-title">Feed Subscription & Setup</h3>
-                  <p className="deploy-pane-subtitle">
-                    Add subscription in Pi-hole Admin Console
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Big Feed Subscription Box */}
-            <div className="deploy-feed-box">
-              <div className="deploy-feed-box-top">
-                <span className="deploy-feed-box-label">LAN Subscription URL</span>
-                <span className="deploy-feed-box-tag">● Live Wi-Fi Feed</span>
-              </div>
-              <div className="deploy-feed-input-row">
-                <input type="text" readOnly value={lanFeedUrl} className="deploy-feed-input" />
-                <button
-                  type="button"
-                  className={`deploy-copy-feed-btn ${copiedKey === 'pi-lan' ? 'copied' : ''}`}
-                  onClick={() => handleCopy(lanFeedUrl, 'pi-lan')}
-                >
-                  {copiedKey === 'pi-lan' ? '✓ Copied' : 'Copy Feed URL'}
-                </button>
-              </div>
-            </div>
-
-            {/* 3-Step Setup Stepper */}
-            <div className="deploy-numbered-stepper">
-              <div className="stepper-step">
-                <div className="stepper-num">1</div>
-                <div className="stepper-content">
-                  <h4>Open Pi-hole Admin Console</h4>
-                  <p>Open your browser to <code>http://pi.hole/admin</code> or your Pi-hole device IP.</p>
-                </div>
-              </div>
-
-              <div className="stepper-step">
-                <div className="stepper-num">2</div>
-                <div className="stepper-content">
-                  <h4>Navigate to Adlists</h4>
-                  <p>In the left sidebar menu, click on <strong>Adlists</strong> (or <strong>Lists</strong> in v6).</p>
-                </div>
-              </div>
-
-              <div className="stepper-step">
-                <div className="stepper-num">3</div>
-                <div className="stepper-content">
-                  <h4>Add Subscription Address & Update Gravity</h4>
-                  <p>
-                    Paste the LAN URL into the <strong>Address</strong> field and click <strong>Add</strong>. Then run Gravity update:
-                  </p>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-                    <code style={{ background: 'var(--bg-color)', padding: '3px 8px', borderRadius: 4 }}>pihole -g</code>
-                    <button
-                      type="button"
-                      className="deploy-tool-btn"
-                      onClick={() => handleCopy('pihole -g', 'pi-cmd')}
-                    >
-                      {copiedKey === 'pi-cmd' ? 'Copied!' : 'Copy Command'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-
-      /* =======================================================================
-          3. PLATFORM WORKSPACE: HOME ASSISTANT (ADD-ON & INTEGRATION)
-         ======================================================================= */
-      case 'home-assistant':
-        return (
-        <div className="deploy-dual-pane">
-          {/* Left Column: Home Assistant Automation & Live Sync */}
-          <div className="deploy-pane-column">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">🏠</span>
-                <div>
-                  <h3 className="deploy-pane-title">Home Assistant Hub Connection</h3>
-                  <p className="deploy-pane-subtitle">
-                    Control AdGuard & Pi-hole Add-ons via Home Assistant REST or Webhook
-                  </p>
-                </div>
-              </div>
-              <div className="deploy-pane-status-pill">
-                <span className={`status-indicator-dot ${sinkholeConfig.haToken || sinkholeConfig.haWebhookUrl ? 'active' : 'idle'}`} />
-                <span>{sinkholeConfig.haToken || sinkholeConfig.haWebhookUrl ? 'Configured' : 'Not Connected'}</span>
-              </div>
-            </div>
-
-            <div className="deploy-pane-body">
-              <div className="deploy-field-group">
-                <label className="deploy-field-label">Home Assistant Mode</label>
-                <div className="deploy-mode-selector">
-                  <button
-                    type="button"
-                    className={`deploy-mode-pill ${sinkholeConfig.adguardMode === 'ha-api' ? 'active' : ''}`}
-                    onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'ha-api' })}
-                  >
-                    REST Service API
-                  </button>
-                  <button
-                    type="button"
-                    className={`deploy-mode-pill ${sinkholeConfig.adguardMode === 'webhook' ? 'active' : ''}`}
-                    onClick={() => setSinkholeConfig({ ...sinkholeConfig, adguardMode: 'webhook' })}
-                  >
-                    Webhook
-                  </button>
-                </div>
-              </div>
-
-              {sinkholeConfig.adguardMode === 'ha-api' && (
-                <>
-                  <div className="deploy-field-group">
-                    <label className="deploy-field-label">Home Assistant Instance URL</label>
-                    <input
-                      type="url"
-                      className="deploy-text-input"
-                      placeholder="http://homeassistant.local:8123 or Nabu Casa Cloud URL"
-                      value={sinkholeConfig.adguardHomeUrl || ''}
-                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value })}
-                    />
-                    <span className="deploy-field-hint">
-                      Connects directly to your Home Assistant instance (Local or Nabu Casa Cloud)
-                    </span>
-                  </div>
-
-                  <div className="deploy-field-group">
-                    <label className="deploy-field-label">Long-Lived Access Token</label>
-                    <div className="deploy-input-with-action">
-                      <input
-                        type={showHaToken ? 'text' : 'password'}
-                        className="deploy-text-input"
-                        placeholder="Bearer token from your Home Assistant profile"
-                        value={sinkholeConfig.haToken || ''}
-                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haToken: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        className="deploy-input-icon-btn"
-                        onClick={() => setShowHaToken(!showHaToken)}
-                        title={showHaToken ? 'Hide token' : 'Show token'}
-                      >
-                        {showHaToken ? '👁️' : '🔒'}
-                      </button>
-                    </div>
-                    <span className="deploy-field-hint">
-                      Generate in Home Assistant: Profile &gt; Long-Lived Access Tokens
-                    </span>
-                  </div>
-                </>
-              )}
-
-              {sinkholeConfig.adguardMode === 'webhook' && (
-                <div className="deploy-field-group">
-                  <label className="deploy-field-label">Home Assistant Webhook URL</label>
-                  <input
-                    type="url"
-                    className="deploy-text-input"
-                    placeholder="https://hooks.nabu.casa/... or http://homeassistant.local:8123/api/webhook/..."
-                    value={sinkholeConfig.haWebhookUrl || ''}
-                    onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: e.target.value })}
-                  />
-                  <span className="deploy-field-hint">
-                    Triggers your Home Assistant automation to reload AdGuard or Pi-hole
-                  </span>
-                </div>
-              )}
-
-              <div className="deploy-field-group">
-                <label className="deploy-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={sinkholeConfig.syncOnCompile}
-                    onChange={(e) => handleToggleSyncOnCompile(e.target.checked)}
-                  />
-                  <span>Automatically push & reload Home Assistant when compiling filters</span>
-                </label>
-              </div>
-
-              <div className="deploy-btn-row">
-                <button
-                  type="button"
-                  className="deploy-primary-btn"
-                  onClick={() => handleSaveSinkholeConfig('adguard')}
-                  disabled={isSavingSinkhole}
-                >
-                  {isSavingSinkhole ? 'Saving...' : 'Save Connection'}
-                </button>
-                <button
-                  type="button"
-                  className="deploy-secondary-btn"
-                  onClick={() => handleTestConnection('adguard')}
-                  disabled={testingService !== null}
-                >
-                  {testingService === 'adguard' ? 'Testing...' : 'Test Connection'}
-                </button>
-                <button
-                  type="button"
-                  className="deploy-secondary-btn"
-                  onClick={() => handleTriggerLiveSync('adguard')}
-                  disabled={isSyncingSinkhole}
-                >
-                  {isSyncingSinkhole ? 'Reloading...' : 'Reload Home Assistant'}
-                </button>
-              </div>
-
-              {sinkholeMessage && (
-                <div className="deploy-message-banner success">{sinkholeMessage}</div>
-              )}
-
-              {testResult && testResult.service === 'adguard' && (
-                <div className={`deploy-test-result-box ${testResult.success ? 'success' : 'error'}`}>
-                  <strong>{testResult.success ? '✓ Connection Verified' : '✕ Connection Error'}:</strong>{' '}
-                  {testResult.message}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right Column: Home Assistant Integration & Add-on Hub */}
-          <div className="deploy-pane-column">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">🧩</span>
-                <div>
-                  <h3 className="deploy-pane-title">Integration & Add-on Endpoints</h3>
-                  <p className="deploy-pane-subtitle">
-                    Expose live metrics, sensors, and controls into your Home Assistant dashboards
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-pane-body">
-              {/* Endpoint 1: REST API /v1/status */}
-              <div className="deploy-feed-box">
-                <div className="deploy-feed-box-top">
-                  <span className="deploy-feed-box-label">📡 Home Assistant Integration API</span>
-                  <span className="deploy-feed-box-tag">HACS / Custom Component</span>
-                </div>
-                <p className="deploy-feed-box-desc">
-                  Point the Home Assistant <code>blockingmachine</code> integration at this desktop app:
-                </p>
-                <div className="deploy-feed-input-row">
-                  <input
-                    type="text"
-                    readOnly
-                    value={`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/v1/status`}
-                    className="deploy-feed-input"
-                  />
-                  <button
-                    type="button"
-                    className={`deploy-copy-feed-btn ${copiedKey === 'ha-status-url' ? 'copied' : ''}`}
-                    onClick={() => handleCopy(`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/v1/status`, 'ha-status-url')}
-                  >
-                    {copiedKey === 'ha-status-url' ? '✓ Copied' : 'Copy API URL'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Endpoint 2: DNS Feed for AdGuard Home in HA */}
-              <div className="deploy-feed-box">
-                <div className="deploy-feed-box-top">
-                  <span className="deploy-feed-box-label">🛡️ Pure DNS Feed (AdGuard Home in HA)</span>
-                  <span className="deploy-feed-box-tag">Zero Browser Modifiers</span>
-                </div>
-                <div className="deploy-feed-input-row">
-                  <input
-                    type="text"
-                    readOnly
-                    value={`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/dns.txt`}
-                    className="deploy-feed-input"
-                  />
-                  <button
-                    type="button"
-                    className={`deploy-copy-feed-btn ${copiedKey === 'ha-dns-feed' ? 'copied' : ''}`}
-                    onClick={() => handleCopy(`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/dns.txt`, 'ha-dns-feed')}
-                  >
-                    {copiedKey === 'ha-dns-feed' ? '✓ Copied' : 'Copy DNS Feed'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Endpoint 3: Browser Feed */}
-              <div className="deploy-feed-box">
-                <div className="deploy-feed-box-top">
-                  <span className="deploy-feed-box-label">🌐 Browser Extension Feed</span>
-                  <span className="deploy-feed-box-tag">Network + Cosmetics</span>
-                </div>
-                <div className="deploy-feed-input-row">
-                  <input
-                    type="text"
-                    readOnly
-                    value={`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/browser.txt`}
-                    className="deploy-feed-input"
-                  />
-                  <button
-                    type="button"
-                    className={`deploy-copy-feed-btn ${copiedKey === 'ha-browser-feed' ? 'copied' : ''}`}
-                    onClick={() => handleCopy(`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/browser.txt`, 'ha-browser-feed')}
-                  >
-                    {copiedKey === 'ha-browser-feed' ? '✓ Copied' : 'Copy Browser Feed'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Endpoint 4: AI Threat Quarantine Feed (ABP Format) */}
-              <div className="deploy-feed-box">
-                <div className="deploy-feed-box-top">
-                  <span className="deploy-feed-box-label">⚡ AI Threat Quarantine Feed (ABP Format)</span>
-                  <span className="deploy-feed-box-tag">Auto-updating DGA / Malware</span>
-                </div>
-                <div className="deploy-feed-input-row">
-                  <input
-                    type="text"
-                    readOnly
-                    value={`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/threats.txt`}
-                    className="deploy-feed-input"
-                  />
-                  <button
-                    type="button"
-                    className={`deploy-copy-feed-btn ${copiedKey === 'ha-threats-abp-feed' ? 'copied' : ''}`}
-                    onClick={() => handleCopy(`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/threats.txt`, 'ha-threats-abp-feed')}
-                  >
-                    {copiedKey === 'ha-threats-abp-feed' ? '✓ Copied' : 'Copy ABP Threats'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Endpoint 5: AI Threat Quarantine Feed (Domain List) */}
-              <div className="deploy-feed-box">
-                <div className="deploy-feed-box-top">
-                  <span className="deploy-feed-box-label">🛑 AI Threat Feed (Raw Domains)</span>
-                  <span className="deploy-feed-box-tag">Zero-Day High Entropy</span>
-                </div>
-                <div className="deploy-feed-input-row">
-                  <input
-                    type="text"
-                    readOnly
-                    value={`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/ai-threats.txt`}
-                    className="deploy-feed-input"
-                  />
-                  <button
-                    type="button"
-                    className={`deploy-copy-feed-btn ${copiedKey === 'ha-threats-raw-feed' ? 'copied' : ''}`}
-                    onClick={() => handleCopy(`http://${serverStatus?.lanIp || '127.0.0.1'}:${serverStatus?.port || 9191}/ai-threats.txt`, 'ha-threats-raw-feed')}
-                  >
-                    {copiedKey === 'ha-threats-raw-feed' ? '✓ Copied' : 'Copy Domain Feed'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Extension static tier capacity.
-
-                  Sits with the browser extension's own endpoints because that is what it is about:
-                  the four tier rulesets the extension ships, whether they fit, and what the plan
-                  is worth. The extension popup answers the same question against a live grant the
-                  hub cannot see, so this one asks for a capacity explicitly rather than reporting
-                  Chrome's guaranteed floor as though it were the real one. */}
-              <ExtensionTierPlanCard
-                state={tierPlanState}
-                result={tierPlan}
-                error={tierPlanError}
-                enabled={[]}
-                onRefresh={loadTierPlan}
-                onChooseLedger={chooseTierLedger}
-                onClearLedger={clearTierLedger}
-              />
-
-              {/* Live Status Inspector */}
-              <div className="deploy-tool-box">
-                <div className="deploy-tool-box-header">
-                  <strong>Inspect Live /v1/status Output</strong>
-                  <button
-                    type="button"
-                    className="deploy-tool-btn"
-                    onClick={handleInspectHaApi}
-                    disabled={isTestingHaApi}
-                  >
-                    {isTestingHaApi ? 'Querying...' : 'Fetch Live JSON'}
-                  </button>
-                </div>
-                {haApiPreview && (
-                  <pre className="deploy-json-preview">{haApiPreview}</pre>
-                )}
-              </div>
-
-              {/* Setup Guide */}
-              <div className="deploy-instructions-box">
-                <h4 className="deploy-instructions-title">Quick Setup in Home Assistant:</h4>
-                <ol className="deploy-instructions-list">
-                  <li>
-                    Copy <code>packages/homeassistant-integration/custom_components/blockingmachine</code> into your HA <code>config/custom_components/</code> folder (or install via HACS).
-                  </li>
-                  <li>Restart Home Assistant.</li>
-                  <li>
-                    Go to <strong>Settings</strong> &gt; <strong>Devices &amp; Services</strong> &gt; <strong>Add Integration</strong> &gt; search <strong>Blockingmachine</strong>.
-                  </li>
-                  <li>
-                    Enter Host <code>{serverStatus?.lanIp || '127.0.0.1'}</code> and Port <code>{serverStatus?.port || 9191}</code>.
-                  </li>
-                  <li>Your Home Assistant dashboard will automatically gain live sensors, compile buttons, and protection switches!</li>
-                </ol>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-
-      /* =======================================================================
-          2.4 PLATFORM WORKSPACE: LOCAL SYSTEM DNS DAEMON
-         ======================================================================= */
-      case 'system-daemon':
-        return (
-        <div className="deploy-dual-pane">
-          {/* Left Column: Local Daemon Status & System DNS */}
-          <div className="deploy-pane-column">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">🖥️</span>
-                <div>
-                  <h3 className="deploy-pane-title">Local DNS Filtering Proxy</h3>
-                  <p className="deploy-pane-subtitle">
-                    Zero-latency, on-device loopback filtering for all system apps and network traffic
-                  </p>
-                </div>
-              </div>
-              <div
-                className={`deploy-pane-status-pill ${
-                  daemonStatus?.status === 'running'
-                    ? 'connected'
-                    : daemonStatus?.status === 'paused'
-                    ? 'testing'
-                    : 'idle'
-                }`}
-              >
-                {daemonStatus?.status === 'running'
-                  ? '● Active Shield'
-                  : daemonStatus?.status === 'paused'
-                  ? '⏸ Paused'
-                  : '○ Daemon Inactive'}
-              </div>
-            </div>
-
-            <div className="deploy-pane-body">
-              {/* Daemon Status Summary Box */}
-              <div className="deploy-feed-box">
-                <div className="deploy-feed-box-top">
-                  <span className="deploy-feed-box-label">⚙️ Daemon Process Status</span>
-                  <span className="deploy-feed-box-tag">
-                    {daemonStatus?.managedByApp ? 'Managed by App' : 'External / Service'}
-                  </span>
-                </div>
-                <div className="deploy-form-fields-grid" style={{ marginTop: '8px' }}>
-                  <div className="deploy-field-group">
-                    <span className="deploy-field-label">DNS Port</span>
-                    <strong style={{ fontSize: '13px', color: 'var(--text-color, #e0e0e0)' }}>
-                      {daemonStatus?.port || 5353} (UDP)
-                    </strong>
-                  </div>
-                  <div className="deploy-field-group">
-                    <span className="deploy-field-label">Control Port</span>
-                    <strong style={{ fontSize: '13px', color: 'var(--text-color, #e0e0e0)' }}>
-                      {daemonStatus?.controlPort || 9292} (HTTP)
-                    </strong>
-                  </div>
-                  <div className="deploy-field-group">
-                    <span className="deploy-field-label">Loaded Rules</span>
-                    <strong style={{ fontSize: '13px', color: 'var(--accent-color, #00d26a)' }}>
-                      {daemonStatus?.rulesLoaded?.toLocaleString() || '0'}
-                    </strong>
-                  </div>
-                  <div className="deploy-field-group">
-                    <span className="deploy-field-label">Upstream DoH</span>
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted, #888)' }} title={daemonStatus?.upstream}>
-                      {daemonStatus?.upstream ? new URL(daemonStatus.upstream).hostname : 'dns.quad9.net'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="deploy-sync-actions-row" style={{ marginTop: '14px' }}>
-                  {daemonStatus?.status === 'stopped' ? (
-                    <button
-                      type="button"
-                      className="deploy-sync-btn primary"
-                      onClick={handleStartDaemon}
-                      disabled={isDaemonLoading}
-                    >
-                      {isDaemonLoading ? 'Starting...' : 'Start Local Daemon'}
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="deploy-sync-btn"
-                        onClick={handleToggleDaemonProtection}
-                        disabled={isDaemonLoading}
-                      >
-                        {daemonStatus?.status === 'running' ? 'Pause Protection' : 'Resume Protection'}
-                      </button>
-                      <button
-                        type="button"
-                        className="deploy-sync-btn"
-                        onClick={handleReloadDaemon}
-                        disabled={isDaemonLoading}
-                      >
-                        Reload Rules
-                      </button>
-                      {daemonStatus?.managedByApp && (
-                        <button
-                          type="button"
-                          className="deploy-sync-btn danger"
-                          onClick={handleStopDaemon}
-                          disabled={isDaemonLoading}
-                        >
-                          Stop Daemon
-                        </button>
-                      )}
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    className="deploy-test-btn"
-                    onClick={refreshDaemonStatus}
-                    disabled={isDaemonLoading}
-                  >
-                    Refresh
-                  </button>
-                </div>
-              </div>
-
-              {/* OS Resolver Configuration Box */}
-              <div className="deploy-feed-box" style={{ marginTop: '16px' }}>
-                <div className="deploy-feed-box-top">
-                  <span className="deploy-feed-box-label">🌐 Operating System DNS Resolver</span>
-                  <span className="deploy-feed-box-tag">macOS / Linux</span>
-                </div>
-                <p className="deploy-feed-box-desc">
-                  Point your computer's network interface directly to <code>127.0.0.1</code> to block ads across all native desktop applications:
-                </p>
-
-                <div className="deploy-field-group" style={{ marginBottom: '10px' }}>
-                  <label className="deploy-field-label">Network Interface:</label>
-                  <select
-                    className="deploy-field-input"
-                    value={selectedService}
-                    onChange={(e) => setSelectedService(e.target.value)}
-                  >
-                    {networkServices.map((svc) => (
-                      <option key={svc} value={svc}>
-                        {svc}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="deploy-sync-actions-row">
-                  <button
-                    type="button"
-                    className="deploy-sync-btn primary"
-                    onClick={handleSetSystemDns}
-                    disabled={isDaemonLoading}
-                  >
-                    Set as System DNS (127.0.0.1)
-                  </button>
-                  <button
-                    type="button"
-                    className="deploy-sync-btn"
-                    onClick={handleRestoreSystemDns}
-                    disabled={isDaemonLoading}
-                  >
-                    Restore DHCP Default
-                  </button>
-                  <button
-                    type="button"
-                    className="deploy-test-btn"
-                    onClick={handleFlushCache}
-                    disabled={isDaemonLoading}
-                  >
-                    Flush DNS Cache
-                  </button>
-                </div>
-              </div>
-
-              {daemonMessage && (
-                <div className="deploy-message-banner success" style={{ marginTop: '12px' }}>
-                  {daemonMessage}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right Column: Live Telemetry & OS Service Installation */}
-          <div className="deploy-pane-column">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📊</span>
-                <div>
-                  <h3 className="deploy-pane-title">DNS Telemetry &amp; Service Setup</h3>
-                  <p className="deploy-pane-subtitle">
-                    Live loopback traffic metrics and OS background daemon configuration
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-pane-body">
-              {/* Telemetry Stat Cards */}
-              <div className="deploy-feed-box">
-                <div className="deploy-feed-box-top">
-                  <span className="deploy-feed-box-label">📈 Real-Time DNS Traffic</span>
-                  <span className="deploy-feed-box-tag">Live Feed</span>
-                </div>
-                <div className="deploy-form-fields-grid" style={{ marginTop: '8px' }}>
-                  <div className="deploy-field-group">
-                    <span className="deploy-field-label">Total Queries</span>
-                    <strong style={{ fontSize: '16px', color: 'var(--text-color, #fff)' }}>
-                      {daemonStatus?.stats?.totalQueries?.toLocaleString() || '0'}
-                    </strong>
-                  </div>
-                  <div className="deploy-field-group">
-                    <span className="deploy-field-label">Blocked Trackers</span>
-                    <strong style={{ fontSize: '16px', color: '#ff4d4f' }}>
-                      {daemonStatus?.stats?.blockedQueries?.toLocaleString() || '0'}
-                    </strong>
-                  </div>
-                  <div className="deploy-field-group">
-                    <span className="deploy-field-label">Allowed Queries</span>
-                    <strong style={{ fontSize: '16px', color: '#00d26a' }}>
-                      {daemonStatus?.stats?.allowedQueries?.toLocaleString() || '0'}
-                    </strong>
-                  </div>
-                  <div className="deploy-field-group">
-                    <span className="deploy-field-label">Block Rate</span>
-                    <strong style={{ fontSize: '16px', color: '#1890ff' }}>
-                      {daemonStatus?.stats?.blockRatePercent != null ? `${daemonStatus.stats.blockRatePercent}%` : '0%'}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-
-              {/* OS Background Service Installation */}
-              <div className="deploy-instructions-box" style={{ marginTop: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <h4 className="deploy-instructions-title" style={{ margin: 0 }}>
-                    Install as OS Background Service (Port 53)
-                  </h4>
-                  <button
-                    type="button"
-                    className="deploy-tool-btn"
-                    onClick={handleToggleInstallScripts}
-                  >
-                    {showInstallScripts ? 'Hide Scripts' : 'View Install Scripts'}
-                  </button>
-                </div>
-                <p className="deploy-feed-box-desc" style={{ marginTop: '8px' }}>
-                  Running Blockingmachine as a system daemon on port 53 starts automatically at boot and protects all users, background tasks, and browsers with zero overhead.
-                </p>
-
-                {showInstallScripts && serviceScripts && (
-                  <div style={{ marginTop: '12px' }}>
-                    <div style={{ marginBottom: '12px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 600 }}>macOS launchd Plist &amp; Commands</span>
-                        <button
-                          type="button"
-                          className="deploy-copy-feed-btn"
-                          onClick={() => handleCopy(serviceScripts.mac, 'mac-daemon-script')}
-                        >
-                          {copiedKey === 'mac-daemon-script' ? '✓ Copied' : 'Copy Commands'}
-                        </button>
-                      </div>
-                      <pre className="deploy-json-preview" style={{ maxHeight: '160px' }}>{serviceScripts.mac}</pre>
-                    </div>
-
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 600 }}>Linux systemd Unit &amp; Commands</span>
-                        <button
-                          type="button"
-                          className="deploy-copy-feed-btn"
-                          onClick={() => handleCopy(serviceScripts.linux, 'linux-daemon-script')}
-                        >
-                          {copiedKey === 'linux-daemon-script' ? '✓ Copied' : 'Copy Commands'}
-                        </button>
-                      </div>
-                      <pre className="deploy-json-preview" style={{ maxHeight: '160px' }}>{serviceScripts.linux}</pre>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-
-      /* =======================================================================
-          3. PLATFORM WORKSPACE: ADGUARD APP (DESKTOP)
-         ======================================================================= */
-      case 'adguard-desktop':
-        return (
-        <div className="deploy-single-platform-wrap">
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">💻</span>
-                <div>
-                  <h3 className="deploy-pane-title">Local Subscription Endpoints</h3>
-                  <p className="deploy-pane-subtitle">Direct file:// or HTTP subscription for AdGuard Desktop</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-feed-box">
-              <div className="deploy-feed-box-top">
-                <span className="deploy-feed-box-label">Local File URL (Native Mac App)</span>
-              </div>
-              <div className="deploy-feed-input-row">
-                <input type="text" readOnly value={fileUrl} className="deploy-feed-input" />
-                <button
-                  type="button"
-                  className={`deploy-copy-feed-btn ${copiedKey === 'app-file' ? 'copied' : ''}`}
-                  onClick={() => handleCopy(fileUrl, 'app-file')}
-                >
-                  {copiedKey === 'app-file' ? '✓ Copied' : 'Copy file:// URL'}
-                </button>
-              </div>
-            </div>
-
-            <div className="deploy-feed-box">
-              <div className="deploy-feed-box-top">
-                <span className="deploy-feed-box-label">Localhost HTTP URL</span>
-              </div>
-              <div className="deploy-feed-input-row">
-                <input type="text" readOnly value={localHttpUrl} className="deploy-feed-input" />
-                <button
-                  type="button"
-                  className={`deploy-copy-feed-btn ${copiedKey === 'app-http' ? 'copied' : ''}`}
-                  onClick={() => handleCopy(localHttpUrl, 'app-http')}
-                >
-                  {copiedKey === 'app-http' ? '✓ Copied' : 'Copy Localhost URL'}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📖</span>
-                <div>
-                  <h3 className="deploy-pane-title">Setup in AdGuard for Mac / Windows</h3>
-                  <p className="deploy-pane-subtitle">Steps to add custom filter list</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-numbered-stepper">
-              <div className="stepper-step">
-                <div className="stepper-num">1</div>
-                <div className="stepper-content">
-                  <h4>Open Preferences / Settings</h4>
-                  <p>Launch AdGuard and open <strong>Settings</strong> (or press <code>⌘,</code> on macOS).</p>
-                </div>
-              </div>
-
-              <div className="stepper-step">
-                <div className="stepper-num">2</div>
-                <div className="stepper-content">
-                  <h4>Navigate to Filters → Custom</h4>
-                  <p>Select the <strong>Filters</strong> tab, scroll down to <strong>Custom</strong>, and click <strong>Add custom filter</strong>.</p>
-                </div>
-              </div>
-
-              <div className="stepper-step">
-                <div className="stepper-num">3</div>
-                <div className="stepper-content">
-                  <h4>Paste URL & Subscribe</h4>
-                  <p>Paste the copied <code>file://</code> or <code>http://localhost:9191</code> URL into the address field and click <strong>Subscribe</strong>.</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-
-      /* =======================================================================
-          3. PLATFORM WORKSPACE: SYSTEM HOSTS
-         ======================================================================= */
-      case 'hosts':
-        return (
-        <div className="deploy-single-platform-wrap">
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📄</span>
-                <div>
-                  <h3 className="deploy-pane-title">System /etc/hosts Export</h3>
-                  <p className="deploy-pane-subtitle">Apply DNS sinkhole directly to local machine OS</p>
-                </div>
-              </div>
-            </div>
-
-            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-              Export format must be set to <code>hosts</code> in Format Settings to generate standard IP mapping lines (<code>0.0.0.0 domain.com</code>).
-            </p>
-
-            <div className="deploy-feed-box">
-              <div className="deploy-feed-box-top">
-                <span className="deploy-feed-box-label">One-Click Terminal Command</span>
-                <span className="deploy-feed-box-tag">macOS & Linux</span>
-              </div>
-              <div className="deploy-feed-input-row">
-                <input
-                  type="text"
-                  readOnly
-                  value={`sudo cp "${savePath}" /etc/hosts && sudo killall -HUP mDNSResponder`}
-                  className="deploy-feed-input"
-                />
-                <button
-                  type="button"
-                  className={`deploy-copy-feed-btn ${copiedKey === 'hosts-cmd' ? 'copied' : ''}`}
-                  onClick={() =>
-                    handleCopy(
-                      `sudo cp "${savePath}" /etc/hosts && sudo killall -HUP mDNSResponder`,
-                      'hosts-cmd'
-                    )
-                  }
-                >
-                  {copiedKey === 'hosts-cmd' ? '✓ Copied' : 'Copy Command'}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">⚙️</span>
-                <div>
-                  <h3 className="deploy-pane-title">Manual Installation</h3>
-                  <p className="deploy-pane-subtitle">Safe application instructions</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-numbered-stepper">
-              <div className="stepper-step">
-                <div className="stepper-num">1</div>
-                <div className="stepper-content">
-                  <h4>Backup Existing Hosts File</h4>
-                  <p>In Terminal: <code>sudo cp /etc/hosts /etc/hosts.bak</code></p>
-                </div>
-              </div>
-
-              <div className="stepper-step">
-                <div className="stepper-num">2</div>
-                <div className="stepper-content">
-                  <h4>Overwrite or Append</h4>
-                  <p>Copy compiled output over <code>/etc/hosts</code> using the command on the left.</p>
-                </div>
-              </div>
-
-              <div className="stepper-step">
-                <div className="stepper-num">3</div>
-                <div className="stepper-content">
-                  <h4>Flush DNS Cache</h4>
-                  <p>Flush system resolver cache: <code>sudo killall -HUP mDNSResponder</code></p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-
-      /* =======================================================================
-          3. PLATFORM WORKSPACE: ROUTERS & DNS
-         ======================================================================= */
-      case 'dnsmasq':
-        return (
-        <div className="deploy-single-platform-wrap">
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">🌐</span>
-                <div>
-                  <h3 className="deploy-pane-title">Network DNS Stream URL</h3>
-                  <p className="deploy-pane-subtitle">Technitium, dnsmasq, pfSense, OPNsense</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-feed-box">
-              <div className="deploy-feed-box-top">
-                <span className="deploy-feed-box-label">HTTP Feed Stream URL</span>
-                <span className="deploy-feed-box-tag">LAN Broadcast</span>
-              </div>
-              <div className="deploy-feed-input-row">
-                <input type="text" readOnly value={lanFeedUrl} className="deploy-feed-input" />
-                <button
-                  type="button"
-                  className={`deploy-copy-feed-btn ${copiedKey === 'router-lan' ? 'copied' : ''}`}
-                  onClick={() => handleCopy(lanFeedUrl, 'router-lan')}
-                >
-                  {copiedKey === 'router-lan' ? '✓ Copied' : 'Copy Feed URL'}
-                </button>
-              </div>
-            </div>
-
-            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-              Use this HTTP feed address inside Technitium Block Lists, or schedule automated cron fetching in dnsmasq / Unbound.
-            </p>
-          </div>
-
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📋</span>
-                <div>
-                  <h3 className="deploy-pane-title">Router Setup Recipes</h3>
-                  <p className="deploy-pane-subtitle">Popular router architectures</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-numbered-stepper">
-              <div className="stepper-step">
-                <div className="stepper-num">1</div>
-                <div className="stepper-content">
-                  <h4>Technitium DNS Server</h4>
-                  <p>In Technitium Admin, go to <strong>Settings</strong> → <strong>Blocking</strong> → <strong>Block List URLs</strong>, paste the LAN Feed URL, and click <strong>Save</strong>.</p>
-                </div>
-              </div>
-
-              <div className="stepper-step">
-                <div className="stepper-num">2</div>
-                <div className="stepper-content">
-                  <h4>OpenWrt / dnsmasq Cron Job</h4>
-                  <p>
-                    Download and reload daily: <br />
-                    <code>0 4 * * * curl -s &quot;{lanFeedUrl}&quot; -o /etc/dnsmasq.d/blockingmachine.conf && /etc/init.d/dnsmasq reload</code>
-                  </p>
-                </div>
-              </div>
-
-              <div className="stepper-step">
-                <div className="stepper-num">3</div>
-                <div className="stepper-content">
-                  <h4>pfSense / OPNsense (Unbound / pfBlockerNG)</h4>
-                  <p>In pfBlockerNG, create a new <strong>DNSBL Feed</strong> pointing to the LAN Feed URL with Action: <strong>Unbound</strong>.</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-
-      /* =======================================================================
-          3. PLATFORM WORKSPACE: UNBOUND
-         ======================================================================= */
-      case 'unbound':
-        return (
-        <div className="deploy-single-platform-wrap">
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">🧭</span>
-                <div>
-                  <h3 className="deploy-pane-title">Unbound Local-Zone Feed</h3>
-                  <p className="deploy-pane-subtitle">OPNsense, pfSense, Linux, OpenWrt</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-feed-box">
-              <div className="deploy-feed-box-top">
-                <span className="deploy-feed-box-label">Unbound Feed URL</span>
-                <span className="deploy-feed-box-tag">local-zone rules</span>
-              </div>
-              <div className="deploy-feed-input-row">
-                <input type="text" readOnly value={unboundFeedLanUrl} className="deploy-feed-input" />
-                <button
-                  type="button"
-                  className={`deploy-copy-feed-btn ${copiedKey === 'unbound-feed' ? 'copied' : ''}`}
-                  onClick={() => handleCopy(unboundFeedLanUrl, 'unbound-feed')}
-                >
-                  {copiedKey === 'unbound-feed' ? '✓ Copied' : 'Copy Feed URL'}
-                </button>
-              </div>
-            </div>
-
-            {unboundFormatNotice && (
-              <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-                ⚠︎ {unboundFormatNotice}
-              </p>
-            )}
-
-            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-              Unbound has no remote blocklist feature, so it cannot subscribe to an AdGuard or hosts
-              feed. Point <code>unbound.conf</code> at a drop-in file once, then let the scheduled
-              refresh below keep that file current.
-            </p>
-
-            <div className="deploy-actions-row">
-              <button
-                type="button"
-                className={`deploy-tool-btn ${copiedKey === 'unbound-include' ? 'copied' : ''}`}
-                onClick={() =>
-                  handleCopy(unboundIncludeDirective(UNBOUND_TARGETS[1].configPath), 'unbound-include')
-                }
-              >
-                <span>{copiedKey === 'unbound-include' ? '✓ Copied' : 'Copy include: directive'}</span>
-              </button>
-              <button
-                type="button"
-                className={`deploy-tool-btn ${copiedKey === 'unbound-refresh' ? 'copied' : ''}`}
-                onClick={() =>
-                  handleCopy(
-                    unboundFetchCommand(unboundFeedLanUrl, UNBOUND_TARGETS[1].configPath),
-                    'unbound-refresh',
-                  )
-                }
-              >
-                <span>{copiedKey === 'unbound-refresh' ? '✓ Copied' : 'Copy refresh command'}</span>
-              </button>
-            </div>
-          </div>
-
-          <UnboundReachabilityCard
-            result={unboundReachability}
-            snapshot={unboundSnapshot}
-            resolverAddress={resolverDraft}
-            resolverLabel={unboundResolver?.effective ?? null}
-            resolverIsDefault={unboundResolver?.isDefault ?? true}
-            resolverError={unboundResolver?.error ?? null}
-            referenceAddress={referenceDraft}
-            referenceLabel={unboundResolver?.referenceEffective ?? null}
-            referenceError={unboundResolver?.referenceError ?? null}
-            referenceSource={unboundResolver?.referenceSource ?? 'none'}
-            systemServers={unboundResolver?.systemServers ?? []}
-            resolverMessage={resolverMessage}
-            checking={isCheckingUnbound}
-            now={new Date().toISOString()}
-            onResolverAddressChange={setResolverDraft}
-            onReferenceAddressChange={setReferenceDraft}
-            onSaveResolver={handleSaveUnboundResolver}
-            onCheck={handleCheckUnboundReachability}
-          />
-
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📋</span>
-                <div>
-                  <h3 className="deploy-pane-title">Unbound Setup Recipes</h3>
-                  <p className="deploy-pane-subtitle">Drop-in file first, then a scheduled refresh</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-numbered-stepper">
-              {UNBOUND_TARGETS.map((target, index) => (
-                <div className="stepper-step" key={target.id}>
-                  <div className="stepper-num">{index + 1}</div>
-                  <div className="stepper-content">
-                    <h4>{target.name}</h4>
-                    <p>
-                      Add <code>{unboundIncludeDirective(target.configPath)}</code> to{' '}
-                      <code>unbound.conf</code>, then schedule this refresh so local-zone updates land
-                      without a full restart:
-                      <br />
-                      <code>{unboundFetchCommand(unboundFeedLanUrl, target.configPath)}</code>
-                    </p>
-                  </div>
-                </div>
-              ))}
-
-              <div className="stepper-step">
-                <div className="stepper-num">4</div>
-                <div className="stepper-content">
-                  <h4>Keep the hub address stable</h4>
-                  <p>
-                    Leave <strong>Auto-start on launch</strong> on so the feed answers at the same
-                    address after a restart, and turn on <strong>Launch on computer startup</strong>{' '}
-                    if this machine is the resolver host. A changed LAN address only needs the URL in
-                    the commands above updated — the feed itself does not move.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-
-      /* =======================================================================
-          3. PLATFORM WORKSPACE: SHADOWROCKET
-         ======================================================================= */
-      case 'shadowrocket':
-        return (
-        <div className="deploy-single-platform-wrap">
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📱</span>
-                <div>
-                  <h3 className="deploy-pane-title">Shadowrocket Rule Set Feed</h3>
-                  <p className="deploy-pane-subtitle">iPhone, iPad, Apple-silicon Mac — and Surge</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-feed-box">
-              <div className="deploy-feed-box-top">
-                <span className="deploy-feed-box-label">Shadowrocket Feed URL</span>
-                <span className="deploy-feed-box-tag">DOMAIN-SUFFIX rules</span>
-              </div>
-              <div className="deploy-feed-input-row">
-                <input type="text" readOnly value={shadowrocketFeedLanUrl} className="deploy-feed-input" />
-                <button
-                  type="button"
-                  className={`deploy-copy-feed-btn ${copiedKey === 'shadowrocket-feed' ? 'copied' : ''}`}
-                  onClick={() => handleCopy(shadowrocketFeedLanUrl, 'shadowrocket-feed')}
-                >
-                  {copiedKey === 'shadowrocket-feed' ? '✓ Copied' : 'Copy Feed URL'}
-                </button>
-              </div>
-            </div>
-
-            {shadowrocketFormatNotice && (
-              <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-                ⚠︎ {shadowrocketFormatNotice}
-              </p>
-            )}
-
-            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-              Shadowrocket cannot read an AdGuard or hosts list. It subscribes to a Surge-style rule
-              set, which is what the Shadowrocket format emits: one{' '}
-              <code>DOMAIN-SUFFIX,host,REJECT</code> line per blocked domain under a{' '}
-              <code>[Rule]</code> section.
-            </p>
-            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-              {shadowrocketSyntaxNote()}
-            </p>
-          </div>
-
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📋</span>
-                <div>
-                  <h3 className="deploy-pane-title">Shadowrocket Setup Recipe</h3>
-                  <p className="deploy-pane-subtitle">Serve it here, subscribe on the device</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-numbered-stepper">
-              {SHADOWROCKET_STEPS.map((step, index) => (
-                <div className="stepper-step" key={step.id}>
-                  <div className="stepper-num">{index + 1}</div>
-                  <div className="stepper-content">
-                    <h4>{step.title}</h4>
-                    <p>
-                      {step.detail}
-                      {step.id === 'subscribe' && (
-                        <>
-                          <br />
-                          <code>{shadowrocketFeedLanUrl}</code>
-                        </>
-                      )}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      );
-
-      /* =======================================================================
-          3. PLATFORM WORKSPACE: PRIVOXY
-         ======================================================================= */
-      case 'privoxy':
-        return (
-        <div className="deploy-single-platform-wrap">
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">🧱</span>
-                <div>
-                  <h3 className="deploy-pane-title">Privoxy Action-File Feed</h3>
-                  <p className="deploy-pane-subtitle">Privoxy on Linux, BSD, macOS and router packages</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-feed-box">
-              <div className="deploy-feed-box-top">
-                <span className="deploy-feed-box-label">Privoxy Action File URL</span>
-                <span className="deploy-feed-box-tag">&#123;+block&#125; sections</span>
-              </div>
-              <div className="deploy-feed-input-row">
-                <input type="text" readOnly value={privoxyFeedLanUrl} className="deploy-feed-input" />
-                <button
-                  type="button"
-                  className={`deploy-copy-feed-btn ${copiedKey === 'privoxy-feed' ? 'copied' : ''}`}
-                  onClick={() => handleCopy(privoxyFeedLanUrl, 'privoxy-feed')}
-                >
-                  {copiedKey === 'privoxy-feed' ? '✓ Copied' : 'Copy Feed URL'}
-                </button>
-              </div>
-            </div>
-
-            {privoxyFormatNotice && (
-              <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-                ⚠︎ {privoxyFormatNotice}
-              </p>
-            )}
-
-            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-              Privoxy cannot read an AdGuard or hosts list. It reads an action file, where every URL
-              pattern belongs to the <code>&#123;+block&#125;</code> section above it — which is what
-              the Privoxy format emits.
-            </p>
-            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-              {privoxySyntaxNote()}
-            </p>
-
-            <div className="deploy-actions-row">
-              <button
-                type="button"
-                className={`deploy-tool-btn ${copiedKey === 'privoxy-actionsfile' ? 'copied' : ''}`}
-                onClick={() =>
-                  handleCopy(privoxyActionsFileDirective(privoxyFeedLanUrl), 'privoxy-actionsfile')
-                }
-              >
-                <span>{copiedKey === 'privoxy-actionsfile' ? '✓ Copied' : 'Copy actionsfile line'}</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📋</span>
-                <div>
-                  <h3 className="deploy-pane-title">Privoxy Setup Recipe</h3>
-                  <p className="deploy-pane-subtitle">Serve it here, point Privoxy at it</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-numbered-stepper">
-              {PRIVOXY_STEPS.map((step, index) => (
-                <div className="stepper-step" key={step.id}>
-                  <div className="stepper-num">{index + 1}</div>
-                  <div className="stepper-content">
-                    <h4>{step.title}</h4>
-                    <p>
-                      {step.detail}
-                      {step.id === 'actionsfile' && (
-                        <>
-                          <br />
-                          <code>{privoxyActionsFileDirective(privoxyFeedLanUrl)}</code>
-                        </>
-                      )}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      );
-
-      /* =======================================================================
-          3. PLATFORM WORKSPACE: BIND (RPZ)
-         ======================================================================= */
-      case 'bind':
-        return (
-        <div className="deploy-single-platform-wrap">
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">🗄️</span>
-                <div>
-                  <h3 className="deploy-pane-title">BIND Response Policy Zone</h3>
-                  <p className="deploy-pane-subtitle">named 9.8 and later, on Linux and BSD</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-feed-box">
-              <div className="deploy-feed-box-top">
-                <span className="deploy-feed-box-label">RPZ zone file to save as</span>
-                <span className="deploy-feed-box-tag">CNAME policy records</span>
-              </div>
-              <div className="deploy-feed-input-row">
-                <input type="text" readOnly value={bindZonePath} className="deploy-feed-input" />
-                <button
-                  type="button"
-                  className={`deploy-copy-feed-btn ${copiedKey === 'bind-path' ? 'copied' : ''}`}
-                  onClick={() => handleCopy(bindZonePath, 'bind-path')}
-                >
-                  {copiedKey === 'bind-path' ? '✓ Copied' : 'Copy file name'}
-                </button>
-              </div>
-            </div>
-
-            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-              BIND has no remote blocklist feature, so there is no feed URL here: the zone file is a
-              local file that has to be copied to the resolver and reloaded. What it does have is
-              RPZ, and the compiled artifact is one — records plus the SOA a primary zone cannot
-              load without.
-            </p>
-            {bindFormatNotice && (
-              <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-                ⚠︎ {bindFormatNotice}
-              </p>
-            )}
-            <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-              {bindSyntaxNote()}
-            </p>
-
-            <div className="deploy-actions-row">
-              <button
-                type="button"
-                className={`deploy-tool-btn ${copiedKey === 'bind-zone-line' ? 'copied' : ''}`}
-                onClick={() => handleCopy(bindNamedConfZoneLine(bindZonePath), 'bind-zone-line')}
-              >
-                <span>{copiedKey === 'bind-zone-line' ? '✓ Copied' : 'Copy zone stanza'}</span>
-              </button>
-              <button
-                type="button"
-                className={`deploy-tool-btn ${copiedKey === 'bind-policy-line' ? 'copied' : ''}`}
-                onClick={() => handleCopy(bindResponsePolicyLine(), 'bind-policy-line')}
-              >
-                <span>{copiedKey === 'bind-policy-line' ? '✓ Copied' : 'Copy response-policy line'}</span>
-              </button>
-              <button
-                type="button"
-                className={`deploy-tool-btn ${copiedKey === 'bind-reload' ? 'copied' : ''}`}
-                onClick={() => handleCopy(bindReloadCommand(), 'bind-reload')}
-              >
-                <span>{copiedKey === 'bind-reload' ? '✓ Copied' : 'Copy reload command'}</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="deploy-info-card">
-            <div className="deploy-pane-header">
-              <div className="deploy-pane-title-group">
-                <span className="deploy-pane-icon-badge">📋</span>
-                <div>
-                  <h3 className="deploy-pane-title">BIND Setup Recipe</h3>
-                  <p className="deploy-pane-subtitle">Local zone file, then a reload per compile</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="deploy-numbered-stepper">
-              {BIND_STEPS.map((step, index) => (
-                <div className="stepper-step" key={step.id}>
-                  <div className="stepper-num">{index + 1}</div>
-                  <div className="stepper-content">
-                    <h4>{step.title}</h4>
-                    <p>
-                      {step.detail}
-                      {step.id === 'namedconf' && (
-                        <>
-                          <br />
-                          <code>{bindNamedConfZoneLine(bindZonePath)}</code>
-                          <br />
-                          <code>{bindResponsePolicyLine()}</code>
-                        </>
-                      )}
-                      {step.id === 'reload' && (
-                        <>
-                          <br />
-                          <code>{bindReloadCommand()}</code>
-                        </>
-                      )}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      );
-
-      default: {
-        // Unreachable while every registry id has a case above. Assigning to `never` is what turns
-        // "added to the registry but not to this switch" into a build failure rather than a tab
-        // that opens onto nothing.
-        const unhandled: never = activeTab;
-        return unhandled;
-      }
-    }
-  }
 };

@@ -36,6 +36,7 @@ import { execFileSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { lastValue, parseArgvOrExit } from './argv.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -52,28 +53,29 @@ if (existsSync(envPath) && process.loadEnvFile) {
   }
 }
 
-// Parse arguments
-const args = process.argv.slice(2);
-const isHelp = args.includes('-h') || args.includes('--help');
-const isDryRun = args.includes('--dry-run');
-const skipTests = args.includes('--skip-tests');
-const skipBuild = args.includes('--skip-build');
-const skipMake = args.includes('--skip-make');
-const skipPublish = args.includes('--skip-publish');
+// Parse arguments — a refusing parse. The shape this replaced made three silent replacements:
+// a typo'd skip flag (`--skpi-tests`) parsed as nothing and ran the step anyway; `--tag=x!`
+// was sanitized into `x` and published under a tag nobody typed; and a second bare argument
+// disappeared entirely. A named value is honoured or refused, never rewritten.
+const { flags: argvFlags, values: argvValues, positional } = parseArgvOrExit(process.argv.slice(2), {
+  values: ['--tag'],
+  flags: ['--dry-run', '--skip-tests', '--skip-build', '--skip-make', '--skip-publish', '--help', '-h'],
+  positionals: 1,
+});
+const isHelp = argvFlags.has('-h') || argvFlags.has('--help');
+const isDryRun = argvFlags.has('--dry-run');
+const skipTests = argvFlags.has('--skip-tests');
+const skipBuild = argvFlags.has('--skip-build');
+const skipMake = argvFlags.has('--skip-make');
+const skipPublish = argvFlags.has('--skip-publish');
 
-// Parse explicit --tag / dist-tag (e.g. --tag beta, --tag=rc, --tag custom)
-const tagArgIdx = args.indexOf('--tag');
-let customDistTag = null;
-if (tagArgIdx !== -1 && args[tagArgIdx + 1] && !args[tagArgIdx + 1].startsWith('-')) {
-  customDistTag = args[tagArgIdx + 1];
-} else {
-  const tagEq = args.find((a) => a.startsWith('--tag='));
-  if (tagEq) customDistTag = tagEq.split('=')[1].replace(/[^a-zA-Z0-9._-]/g, '');
-}
-// Sanitize customDistTag to only safe npm dist-tag characters
-if (customDistTag) {
-  customDistTag = customDistTag.replace(/[^a-zA-Z0-9._-]/g, '');
-  if (!customDistTag) customDistTag = null;
+// Explicit --tag / dist-tag (e.g. --tag beta, --tag=rc, --tag custom). A missing value was
+// refused at parse time; what remains is validated whole — a bad tag is refused, not sanitized
+// into a different one, because `npm publish --tag` answers exactly what it is given.
+let customDistTag = lastValue(argvValues, '--tag') ?? null;
+if (customDistTag && !/^[a-zA-Z0-9._-]+$/.test(customDistTag)) {
+  console.error(`❌ Error: --tag "${customDistTag}" is not a valid npm dist-tag (only letters, digits, '.', '_' and '-').`);
+  process.exit(1);
 }
 
 if (isHelp) {
@@ -99,8 +101,8 @@ Options:
   process.exit(0);
 }
 
-// Extract version argument
-const rawVersionArg = args.find((a) => !a.startsWith('-'));
+// Extract version argument — the one positional the parser admitted.
+const rawVersionArg = positional[0];
 
 function normalizeVersion(input) {
   let v = input.trim();

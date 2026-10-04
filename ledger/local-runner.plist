@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The optional local half of the ledger pipeline.
+
+  The weekly GitHub job re-derives from `ledger/ledger-hits.txt`, but only a browser can fill that
+  file. This runs the merge half on the machine the browser is on, so dropping an export into
+  `EXPORT_DIR` is enough — nothing has to be remembered on a Monday and nothing about your
+  browsing has to be committed anywhere.
+
+      cp ledger/local-runner.plist ~/Library/LaunchAgents/com.blockingmachine.ledger.plist
+      $EDITOR ~/Library/LaunchAgents/com.blockingmachine.ledger.plist   # the two paths below
+      launchctl load ~/Library/LaunchAgents/com.blockingmachine.ledger.plist
+
+  It merges into a *local* ledger next to the exports and stops there. Promoting that into the
+  repository is a deliberate act, so this plist cannot leak anything: it only reads a directory you
+  chose and writes a file next to it.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.blockingmachine.ledger</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd "$REPO" &amp;&amp; npm run ledger:merge -- --from "$EXPORT_DIR" --out "$EXPORT_DIR/ledger-hits.txt"</string>
+  </array>
+
+  <!-- Replace both of these before loading. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>REPO</key>
+    <string>/Users/you/Coding/Blockingmachine</string>
+    <key>EXPORT_DIR</key>
+    <string>/Users/you/Downloads</string>
+  </dict>
+
+  <!-- Sundays at 23:40, after a week of browsing but before the Monday CI run. Off the hour so a
+       Mac waking from sleep does not collide with everything else that fires at :00. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>23</integer>
+    <key>Minute</key>
+    <integer>40</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/blockingmachine-ledger.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/blockingmachine-ledger.log</string>
+</dict>
+</plist>

@@ -49,6 +49,31 @@ describe('parseUnboundResolverAddress', () => {
     });
   });
 
+  test('does not read a bare IPv6 literal as a host and a port', () => {
+    // `::1:5353` has four colon-separated parts, so the `host:port` branch does not match it and the
+    // whole string used to become the host with port 53 \u2014 a query to an address that cannot exist,
+    // reported as a dead resolver. A bare literal is not split at all: brackets are how a port is
+    // given, and without them there is nothing to separate.
+    expect(parseUnboundResolverAddress('::1')).toEqual({
+      ok: true,
+      target: { host: '::1', port: DEFAULT_UNBOUND_RESOLVER_PORT, label: '::1:53' },
+    });
+    expect(parseUnboundResolverAddress('::1:5353')).toEqual({
+      ok: true,
+      target: { host: '::1:5353', port: DEFAULT_UNBOUND_RESOLVER_PORT, label: '::1:5353:53' },
+    });
+    // And a hostname with a port still reads as a host and a port, which is the case the branch is
+    // actually for.
+    expect(parseUnboundResolverAddress('unbound.lan:5353')).toEqual({
+      ok: true,
+      target: { host: 'unbound.lan', port: 5353, label: 'unbound.lan:5353' },
+    });
+    expect(parseUnboundResolverAddress('unbound.lan')).toEqual({
+      ok: true,
+      target: { host: 'unbound.lan', port: DEFAULT_UNBOUND_RESOLVER_PORT, label: 'unbound.lan:53' },
+    });
+  });
+
   test('refuses nothing-useful rather than querying a guess', () => {
     for (const bad of ['', '   ', null, undefined]) {
       expect(parseUnboundResolverAddress(bad).ok).toBe(false);

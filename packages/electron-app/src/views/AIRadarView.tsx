@@ -14,6 +14,8 @@ import type { HeatSummary, RadarHeatEntry } from '../radarHeatMap';
 import type { RadarDisplayConfig } from '../types/';
 import { formatConfidencePercent, formatRelativeTime, heatBadgeClass, verdictBadgeLabel } from '../aiDisplay';
 import { formatTriageBucketSummary } from '../triageDisplay';
+import { copyTextToClipboard } from '../clipboard';
+import { shouldAutoQuarantine } from '../quarantineGate';
 import { TriageOutcomeChip } from '../components/TriageOutcomeChip';
 import { BetaBadge } from '../components/BetaBadge';
 import { EntropyGuideModal } from '../components/EntropyGuideModal';
@@ -91,7 +93,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
   // Dedicated Uncluttered Search Stream View & Filtering
   const [isSearchingView, setIsSearchingView] = useState<boolean>(false);
   const [streamSearchText, setStreamSearchText] = useState<string>('');
-  const [streamCategoryFilter, setStreamCategoryFilter] = useState<'all' | 'flagged' | 'clean' | 'ad_server' | 'tracker' | 'malicious' | 'entropy'>('all');
+  const [streamCategoryFilter, setStreamCategoryFilter] = useState<'all' | 'flagged' | 'clean' | 'ad_server' | 'tracker' | 'malicious' | 'annoyance' | 'entropy'>('all');
   const [streamStatusFilter, setStreamStatusFilter] = useState<'all' | 'unblocked' | 'blocked'>('all');
   const [streamSortBy, setStreamSortBy] = useState<'newest' | 'entropy-desc' | 'entropy-asc' | 'domain-asc'>('newest');
 
@@ -273,27 +275,10 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
   }, [loadHeatSummary, loadWatchdog]);
 
   const handleCopy = useCallback(async (text: string, key: string) => {
-    try {
-      if (window.electron?.copyToClipboard) {
-        await window.electron.copyToClipboard(text);
-      } else if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else if (typeof document !== 'undefined') {
-        const textarea = document.createElement('textarea');
-        textarea.value = text;
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-      }
-      if (isMountedRef.current) {
-        setCopiedKey(key);
-        safeSetTimeout(() => setCopiedKey(null), 2200);
-      }
-    } catch (err) {
-      console.error('Failed to copy to clipboard:', err);
+    if (!(await copyTextToClipboard(text))) return;
+    if (isMountedRef.current) {
+      setCopiedKey(key);
+      safeSetTimeout(() => setCopiedKey(null), 2200);
     }
   }, [safeSetTimeout]);
 
@@ -413,10 +398,12 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
         setScoutResult(res);
         setIsSearchingView(true);
 
-        // Auto-quarantine newly flagged domains
+        // Auto-quarantine newly flagged domains — through the shared gate, so a manual scout
+        // holds the same bar as the watchdog (a flagged lead ≠ a publishable verdict).
         if (res.flaggedCount > 0 && window.electron?.addThreatQuarantine) {
+          const autoQuarantineDga = watchdogConfig.autoQuarantineEntropyDga !== false;
           const newThreats: ThreatQuarantineItem[] = res.results
-            .filter((r) => r.verdict !== 'clean')
+            .filter((r) => shouldAutoQuarantine(r, autoQuarantineDga))
             .map((r) => ({
               id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
               domain: r.domain,
@@ -430,9 +417,11 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
               timestamp: new Date().toISOString(),
               blocked: false,
             }));
-          window.electron.addThreatQuarantine(newThreats).then(() => {
-            loadQuarantine();
-          });
+          if (newThreats.length > 0) {
+            window.electron.addThreatQuarantine(newThreats).then(() => {
+              loadQuarantine();
+            });
+          }
         }
 
         if (res.notice && res.totalQueriesAnalyzed === 0) {
@@ -493,6 +482,24 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       }
     } catch (err: any) {
       setError?.(`Failed to whitelist domain: ${err?.message || err}`);
+    }
+  };
+
+  // Forget what Mini-AI learned about the inspected domain — the undo for
+  // handleWhitelistDomain / handleAddRulesToCustom tuning, so a correction is
+  // possible without wiping the whole feedback store.
+  const handleResetFeedback = async (domain: string) => {
+    if (!window.electron?.resetMiniAiFeedback) return;
+    try {
+      const res = await window.electron.resetMiniAiFeedback(domain);
+      if (res?.success) {
+        setSuccessMessage?.(`Forgot learned feedback for ${domain}.`);
+      } else {
+        setSuccessMessage?.(`No learned feedback stored for ${domain}.`);
+      }
+      loadFeedbackStats();
+    } catch (err: any) {
+      setError?.(`Failed to reset feedback: ${err?.message || err}`);
     }
   };
 
@@ -710,7 +717,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
         }
         setInspectorResult(res);
 
-        if (res.verdict !== 'clean' && window.electron?.addThreatQuarantine) {
+        if (shouldAutoQuarantine(res, watchdogConfig.autoQuarantineEntropyDga !== false) && window.electron?.addThreatQuarantine) {
           const item: ThreatQuarantineItem = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
             domain: res.domain,
@@ -748,20 +755,25 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
         setCrawlerResult(res);
 
         if (res.flaggedHosts.length > 0 && window.electron?.addThreatQuarantine) {
-          const items: ThreatQuarantineItem[] = res.flaggedHosts.map((r) => ({
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            domain: r.domain,
-            category: r.category,
-            verdict: r.verdict,
-            riskLevel: r.riskLevel,
-            confidence: r.confidence,
-            reasons: r.reasons,
-            generatedRules: r.generatedRules,
-            source: 'crawler',
-            timestamp: new Date().toISOString(),
-            blocked: false,
-          }));
-          window.electron.addThreatQuarantine(items).then(() => loadQuarantine());
+          const autoQuarantineDga = watchdogConfig.autoQuarantineEntropyDga !== false;
+          const items: ThreatQuarantineItem[] = res.flaggedHosts
+            .filter((r) => shouldAutoQuarantine(r, autoQuarantineDga))
+            .map((r) => ({
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              domain: r.domain,
+              category: r.category,
+              verdict: r.verdict,
+              riskLevel: r.riskLevel,
+              confidence: r.confidence,
+              reasons: r.reasons,
+              generatedRules: r.generatedRules,
+              source: 'crawler',
+              timestamp: new Date().toISOString(),
+              blocked: false,
+            }));
+          if (items.length > 0) {
+            window.electron.addThreatQuarantine(items).then(() => loadQuarantine());
+          }
         }
       }
     } catch (err: any) {
@@ -843,6 +855,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
   const adCount = allResults.filter((r) => r.verdict === 'ad_server' || r.category === 'Advertising').length;
   const trackerCount = allResults.filter((r) => r.verdict === 'tracker' || r.category === 'Telemetry/Analytics' || r.category === 'CNAME Cloaking').length;
   const malwareCount = allResults.filter((r) => r.verdict === 'malicious' || r.verdict === 'suspicious' || r.category === 'Malware/Phishing').length;
+  const annoyanceCount = allResults.filter((r) => r.verdict === 'annoyance' || r.category === 'Consent/Annoyance').length;
   const highEntropyCount = allResults.filter((r) => (r.entropy || 0) >= 3.4).length;
   const blockedCount = allResults.filter((r) => blockedItemsMap.has(r.domain) || Boolean(r.coveredByRule)).length;
   const unblockedCount = allResults.length - blockedCount;
@@ -871,6 +884,8 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
       list = list.filter((item) => item.verdict === 'tracker' || item.category === 'Telemetry/Analytics' || item.category === 'CNAME Cloaking');
     } else if (streamCategoryFilter === 'malicious') {
       list = list.filter((item) => item.verdict === 'malicious' || item.verdict === 'suspicious' || item.category === 'Malware/Phishing');
+    } else if (streamCategoryFilter === 'annoyance') {
+      list = list.filter((item) => item.verdict === 'annoyance' || item.category === 'Consent/Annoyance');
     } else if (streamCategoryFilter === 'entropy') {
       list = list.filter((item) => (item.entropy || 0) >= 3.4);
     }
@@ -1007,14 +1022,14 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             </div>
           )}
 
-          <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border-color, rgba(255, 255, 255, 0.08))' }}>
+          <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border-color)' }}>
             <label
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '8px',
                 fontSize: '0.75rem',
-                color: 'var(--text-secondary, #94a3b8)',
+                color: 'var(--secondary-color)',
                 cursor: 'pointer',
                 userSelect: 'none',
               }}
@@ -1023,7 +1038,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 type="checkbox"
                 checked={watchdogConfig.autoQuarantineEntropyDga !== false}
                 onChange={(e) => handleToggleAutoQuarantineDga(e.target.checked)}
-                style={{ cursor: 'pointer', accentColor: 'var(--accent-color, #6366f1)' }}
+                style={{ cursor: 'pointer', accentColor: 'var(--primary-color)' }}
               />
               <span>Auto-quarantine zero-day DGA / high-entropy domains</span>
             </label>
@@ -1399,6 +1414,15 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   >
                     <span>Threats</span>
                     <span className="pill-count">{malwareCount}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`stream-pill ${streamCategoryFilter === 'annoyance' ? 'active' : ''}`}
+                    onClick={() => setStreamCategoryFilter('annoyance')}
+                  >
+                    <span>Annoyances</span>
+                    <span className="pill-count">{annoyanceCount}</span>
                   </button>
 
                   <button
@@ -2082,7 +2106,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                     </svg>
                     Subdomain Wildcard Compaction:
                   </span> Collapsed {compactionSummary.originalCount} subdomains into {compactionSummary.compactedCount} parent zone rules ({compactionSummary.savingsPercent}% list bloat reduction).
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  <div style={{ fontSize: 11, color: 'var(--secondary-color)', marginTop: 4 }}>
                     Zones: {compactionSummary.collapsedGroups.map((g: any) => g.parentDomain).join(', ')}
                   </div>
                 </div>
@@ -2276,7 +2300,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   </svg>
                   Consolidated in Rule & AI Inspector:
                 </strong>
-                <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: 'var(--secondary-color)' }}>
                   Domain heuristics and compiled filter list rules are now evaluated simultaneously in the Unified Rule & AI Inspector (⌘5).
                 </p>
               </div>
@@ -2389,7 +2413,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                         <line x1="12" y1="8" x2="12.01" y2="8" />
                       </svg>
                     </div>
-                    <span className="card-value">{Number(inspectorResult.entropy).toFixed(2)} <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>/ 5.0</span></span>
+                    <span className="card-value">{Number(inspectorResult.entropy).toFixed(2)} <span style={{ fontSize: 13, color: 'var(--secondary-color)' }}>/ 5.0</span></span>
                     <span className="card-sub">{inspectorResult.entropy >= 3.8 ? 'High Randomness (DGA)' : inspectorResult.entropy >= 3.4 ? 'Elevated Complexity' : 'Normal distribution'}</span>
                   </div>
                   <div className="metric-card">
@@ -2462,13 +2486,13 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                     </svg>
                     Inference Latency: {inspectorResult.inferenceTimeMs !== undefined ? `${inspectorResult.inferenceTimeMs}ms` : '< 0.05ms'}
                   </span>
-                  <span style={{ color: 'var(--text-secondary)' }}>•</span>
+                  <span style={{ color: 'var(--secondary-color)' }}>•</span>
                   <span>Engine: {inspectorResult.modelUsed || 'Mini-AI Embedded Classifier'}</span>
-                  <span style={{ color: 'var(--text-secondary)' }}>•</span>
+                  <span style={{ color: 'var(--secondary-color)' }}>•</span>
                   <span title="Shannon Entropy: 0.0 to 5.0 scale measuring character randomness">
                     Entropy Index: {inspectorResult.entropy.toFixed(2)} / 5.0
                   </span>
-                  <span style={{ color: 'var(--text-secondary)' }}>•</span>
+                  <span style={{ color: 'var(--secondary-color)' }}>•</span>
                   <span style={{ color: '#3b82f6', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="4" y="4" width="16" height="16" rx="2" />
@@ -2505,7 +2529,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                         Allowlist Conflict Detected:
                       </span> {ruleConflict.reason}
                       {ruleConflict.suggestedOverrideRule && (
-                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                        <div style={{ fontSize: 11, color: 'var(--secondary-color)', marginTop: 2 }}>
                           Suggested Override: <code style={{ color: 'var(--primary-color)' }}>{ruleConflict.suggestedOverrideRule}</code>
                         </div>
                       )}
@@ -2547,7 +2571,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                               border: 'none',
                               cursor: 'pointer',
                               background: targetSyntax === fmt ? 'var(--primary-color)' : 'transparent',
-                              color: targetSyntax === fmt ? '#fff' : 'var(--text-secondary)',
+                              color: targetSyntax === fmt ? '#fff' : 'var(--secondary-color)',
                               fontWeight: targetSyntax === fmt ? 600 : 400,
                             }}
                             onClick={() => handleTargetSyntaxChange(fmt)}
@@ -2583,6 +2607,21 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                         </svg>
                         <span>Whitelist (False Positive)</span>
                       </button>
+                      {window.electron?.resetMiniAiFeedback && (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          title="Delete what Mini-AI learned about this domain — undoes Whitelist/Block tuning for it"
+                          onClick={() => handleResetFeedback(inspectorResult.domain)}
+                        >
+                          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 6h18" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          </svg>
+                          <span>Forget Learned</span>
+                        </button>
+                      )}
                       {(customSynthesizedRules !== null ? customSynthesizedRules : inspectorResult.generatedRules).length > 0 && (
                         <>
                           <button
@@ -2847,7 +2886,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                   <span>🛡️ Live Dynamic Threat Feeds (Port 9191)</span>
                   <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'rgba(34, 197, 94, 0.2)', color: '#4ade80' }}>Auto-Updating</span>
                 </div>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary, #94a3b8)', marginTop: '2px' }}>
+                <div style={{ fontSize: '0.78rem', color: 'var(--secondary-color)', marginTop: '2px' }}>
                   High-confidence (≥ 85%) quarantined zero-day threats are materialized in real time as network-wide feeds and auto-injected into DNS trie memory.
                 </div>
               </div>
@@ -2882,7 +2921,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             {/* Toolbar */}
             <div className="quarantine-toolbar">
               <div className="quarantine-filters">
-                {['all', 'advertising', 'telemetry/analytics', 'cname cloaking', 'malware/phishing'].map((cat) => (
+                {['all', 'advertising', 'telemetry/analytics', 'cname cloaking', 'malware/phishing', 'consent/annoyance'].map((cat) => (
                   <button
                     key={cat}
                     type="button"

@@ -14,6 +14,12 @@ export class LiveListener {
   private callbacks: LiveEventCallbacks;
   private abortController: AbortController | null = null;
   private isRunning = false;
+  /**
+   * Bumped on every stop/restart. An aborted connect's `finally` runs *after* the next connect
+   * may already be up — without this guard it would read `isRunning` and schedule a reconnect
+   * for a stream it no longer owns, leaving two open connections to the same endpoint.
+   */
+  private generation = 0;
   private status: LiveListenerStatus = 'disconnected';
   private reconnectTimeout: any = null;
   private retryDelayMs = 2000;
@@ -45,6 +51,7 @@ export class LiveListener {
 
   public stop(): void {
     this.isRunning = false;
+    this.generation += 1;
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
@@ -73,6 +80,7 @@ export class LiveListener {
   private async connect(): Promise<void> {
     if (!this.isRunning) return;
 
+    const generation = this.generation;
     this.updateStatus('connecting');
     this.abortController = new AbortController();
 
@@ -114,7 +122,7 @@ export class LiveListener {
         // Quietly log to avoid log spam when hub is inactive
       }
     } finally {
-      if (this.isRunning) {
+      if (this.isRunning && this.generation === generation) {
         this.updateStatus('disconnected');
         this.scheduleReconnect();
       }

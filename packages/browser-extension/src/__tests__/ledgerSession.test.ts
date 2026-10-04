@@ -59,6 +59,8 @@ function tally(overrides: Partial<LedgerSessionTally> = {}): LedgerSessionTally 
     startedAt: '2026-09-01T09:00:00.000Z',
     feed: 'live',
     hits: {},
+    tierHits: {},
+    tierUnattributed: 0,
     exceptions: {},
     unattributed: 0,
     ...overrides,
@@ -223,6 +225,51 @@ describe('LedgerSessionRecorder', () => {
       hits: { '||ads.example^': 4 },
     });
   });
+
+  test('a quota failure sheds the oldest sessions and retries, rather than failing forever', async () => {
+    // The cap keeps the *newest* sessions for the same reason: what the user exports is recent
+    // traffic. A store that is simply full gets the same answer one level down.
+    const stub = installChrome({
+      [HIT_LEDGER_STORAGE_KEY]: [
+        report({ startedAt: '2026-08-29T09:00:00.000Z' }),
+        report({ startedAt: '2026-08-30T09:00:00.000Z' }),
+        report({ startedAt: '2026-08-31T09:00:00.000Z' }),
+      ],
+    });
+    stub.set
+      .mockRejectedValueOnce(new Error('QUOTA_BYTES quota exceeded'))
+      .mockImplementation(async (payload: Record<string, unknown>) => {
+        for (const [key, value] of Object.entries(payload)) stub.store.set(key, value);
+      });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const ledger = new LedgerSessionRecorder();
+    await ledger.load(date('2026-09-01T09:00:00Z'));
+    ledger.record('||today.example^', 1, date('2026-09-01T09:00:00Z'));
+
+    try {
+      await ledger.flush();
+      await settle(); // the quota retry is scheduled inside flush
+
+      const sessions = stub.store.get(HIT_LEDGER_STORAGE_KEY) as LedgerSessionReport[];
+      expect(sessions.length).toBeLessThan(3);
+      expect(sessions[sessions.length - 1].startedAt).toBe('2026-08-31T09:00:00.000Z');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('a rollover closes the day at its end, not at the first next-day match', () => {
+    // `load` stamps a closed tally at 23:59:59.999Z of its own day; a rollover discovered by a
+    // match has to answer the same way, or the same event reports two different end times.
+    installChrome();
+    const ledger = new LedgerSessionRecorder();
+    ledger.record('||ads.example^', 1, date('2026-09-01T23:00:00Z'));
+    ledger.record('||next.example^', 1, date('2026-09-02T00:05:00Z'));
+
+    const sessions = ledger.sessionsForExport(date('2026-09-02T00:06:00Z'));
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0].endedAt).toBe('2026-09-01T23:59:59.999Z');
+  });
 });
 
 describe('LedgerSessionRecorder.load', () => {
@@ -291,6 +338,135 @@ describe('LedgerSessionRecorder.load', () => {
       warn.mockRestore();
     }
   });
+
+  /**
+   * The tier axis through the recorder, which is where it has to survive the two things a service
+   * worker does to it: a teardown between the match and the write, and a session that was already on
+   * disk before the axis existed.
+   */
+  test('records the tier that shipped the rule, and merges it into the export payload', () => {
+    installChrome();
+    const ledger = new LedgerSessionRecorder();
+
+    ledger.record('||ads.example^', 2, date('2026-09-01T09:00:00Z'), { tier: 'tier_ads' });
+    ledger.record('||shared.example^', 1, date('2026-09-01T09:01:00Z'), { tier: 'tier_ads' });
+    // The same filter in a second tier, and a block from the synced list that names no tier.
+    ledger.record('||shared.example^', 1, date('2026-09-01T09:02:00Z'), { tier: 'tier_privacy' });
+    ledger.record('||synced.example^', 4, date('2026-09-01T09:03:00Z'));
+
+    const payload = ledger.exportPayload(date('2026-09-01T09:04:00Z'));
+    expect(payload.tiers).toEqual([
+      { tier: 'tier_ads', count: 3 },
+      { tier: 'tier_privacy', count: 1 },
+    ]);
+    expect(payload.tierUnattributed).toBe(4);
+    expect(payload.tieredSessions).toBe(1);
+    expect(payload.sessions).toBe(1);
+
+    // The card and the file are the same numbers, not two readings of it.
+    const sessions = JSON.parse(payload.json).sessions;
+    expect(sessions[0].tiers).toEqual(payload.tiers);
+  });
+
+  test('sums what the per-session caps evicted, so the card can say the file lost evidence', async () => {
+    // Each session already reports its own `rulesDropped`; the payload's job is the aggregate,
+    // because "the file saw all of your traffic" is only true when the sum is zero.
+    installChrome({
+      [HIT_LEDGER_STORAGE_KEY]: [
+        report({ startedAt: '2026-08-30T09:00:00.000Z', rulesDropped: 3 }),
+        report({ startedAt: '2026-08-31T09:00:00.000Z', rulesDropped: 2 }),
+        report({ startedAt: '2026-08-29T09:00:00.000Z' }),
+      ],
+    });
+    const ledger = new LedgerSessionRecorder();
+    await ledger.load(date('2026-09-01T09:00:00Z'));
+
+    expect(ledger.exportPayload(date('2026-09-01T09:01:00Z')).rulesDropped).toBe(5);
+  });
+
+  test('a tally persisted with the tier axis resumes with it intact', async () => {
+    // The failure this guards is silent in the worst way: a worker restart that dropped the tier axis
+    // would still report every rule and every session, and only the plan's weighting would be wrong.
+    const stub = installChrome({
+      [HIT_LEDGER_TALLY_STORAGE_KEY]: tally({
+        hits: { '||ads.example^': 2 },
+        tierHits: { tier_ads: 2, tier_invented: 50 },
+        tierUnattributed: 1,
+      }),
+    });
+    const ledger = new LedgerSessionRecorder();
+
+    await ledger.load(date('2026-09-01T10:00:00Z'));
+    ledger.record('||ads.example^', 1, date('2026-09-01T10:00:01Z'), { tier: 'tier_ads' });
+
+    const sessions = ledger.sessionsForExport(date('2026-09-01T10:00:02Z'));
+    expect(sessions[0].tiers).toEqual([{ tier: 'tier_ads', count: 3 }]);
+    expect(sessions[0].tierUnattributed).toBe(1);
+
+    // And it is written back out, so the next restart reads the same thing. The tally is still open,
+    // so this is the active key rather than the closed-session list.
+    await ledger.flush();
+    expect(stub.store.get(HIT_LEDGER_TALLY_STORAGE_KEY)).toMatchObject({
+      tierHits: { tier_ads: 3 },
+      tierUnattributed: 1,
+    });
+  });
+
+  test('a tally stored before the tier axis resumes unchanged, with no split claimed', async () => {
+    installChrome({
+      [HIT_LEDGER_TALLY_STORAGE_KEY]: {
+        day: '2026-09-01',
+        startedAt: '2026-09-01T09:00:00.000Z',
+        feed: 'live',
+        hits: { '||ads.example^': 2 },
+        exceptions: {},
+        unattributed: 0,
+      },
+    });
+    const ledger = new LedgerSessionRecorder();
+
+    await ledger.load(date('2026-09-01T10:00:00Z'));
+    ledger.record('||today.example^', 1, date('2026-09-01T10:00:01Z'), { tier: 'tier_core' });
+
+    const sessions = ledger.sessionsForExport(date('2026-09-01T10:00:02Z'));
+    // Absent, not empty: the session was not measured per tier, and `tiers: []` would claim it was
+    // and that every tier blocked nothing.
+    expect(sessions[0].tiers).toEqual([{ tier: 'tier_core', count: 1 }]);
+    expect(sessions[0].hits).toEqual([
+      { rule: '||ads.example^', count: 2 },
+      { rule: '||today.example^', count: 1 },
+    ]);
+  });
+
+  test('merges the stored tally into hits recorded while load was in flight', async () => {
+    // A worker can record before its startup load resolves — assigning the stored tally over
+    // the live one would silently lose those hits. The stored hits are replayed into the tally
+    // the live records already opened.
+    installChrome({
+      [HIT_LEDGER_TALLY_STORAGE_KEY]: tally({ hits: { '||stored.example^': 2 } }),
+    });
+    const ledger = new LedgerSessionRecorder();
+    ledger.record('||inflight.example^', 1, date('2026-09-01T09:30:00Z'));
+
+    await ledger.load(date('2026-09-01T10:00:00Z'));
+
+    const sessions = ledger.sessionsForExport(date('2026-09-01T10:00:01Z'));
+    expect(sessions[0].hits).toEqual([
+      { rule: '||stored.example^', count: 2 },
+      { rule: '||inflight.example^', count: 1 },
+    ]);
+  });
+
+  test('a tally stored with an unrecognised feed resumes as unknown, not dropped', async () => {
+    // Same coercion the session normaliser makes: a corrupt feed names the reporting path
+    // wrong, but the day's hits are still the day's hits.
+    installChrome({
+      [HIT_LEDGER_TALLY_STORAGE_KEY]: tally({ feed: 'garbage' as never, hits: { '||a.example^': 3 } }),
+    });
+    const ledger = new LedgerSessionRecorder();
+    await ledger.load(date('2026-09-01T10:00:00Z'));
+    expect(ledger.sessionsForExport(date('2026-09-01T10:00:01Z'))[0].feed).toBe('unknown');
+  });
 });
 
 describe('normalizeStoredTally', () => {
@@ -319,6 +495,26 @@ describe('normalizeStoredTally', () => {
       tally({ hits: { '||ok.example^': 2, '': 5, '||zero.example^': 0, '||bad.example^': 'lots' } as never }),
     );
     expect(normalized?.hits).toEqual({ '||ok.example^': 2 });
+  });
+
+  test('keeps a tally whose only content is a tier split', () => {
+    // Every match was unnamed and every one named a tier, so the block axis is empty. Returning null
+    // here would drop the file that the tier plan's evidence lives in.
+    const normalized = normalizeStoredTally(
+      tally({ hits: {}, tierHits: { tier_core: 12 } }),
+    );
+    expect(normalized?.tierHits).toEqual({ tier_core: 12 });
+  });
+
+  test('refuses a tier id the catalogue does not know, without losing the tally', () => {
+    const normalized = normalizeStoredTally(
+      tally({
+        hits: { '||ads.example^': 1 },
+        tierHits: { tier_ads: 1, tier_invented: 99, '': 5 } as never,
+      }),
+    );
+    // A weight key nobody recognises could not be weighed, and a row for it would look measured.
+    expect(normalized?.tierHits).toEqual({ tier_ads: 1 });
   });
 });
 
@@ -349,5 +545,31 @@ describe('normalizeStoredSessions', () => {
   test('an unknown feed is unknown, never guessed to be live', () => {
     const sessions = normalizeStoredSessions([report({ feed: 'garbage' as never })]);
     expect(sessions[0].feed).toBe('unknown');
+  });
+
+  test('reads a stored tier split and leaves a session without one absent', () => {
+    const sessions = normalizeStoredSessions([
+      report({ tiers: [{ tier: 'tier_ads', count: 3 }], tierUnattributed: 2 }),
+      report({ startedAt: '2026-09-02T09:00:00.000Z' }),
+    ]);
+    expect(sessions[0].tiers).toEqual([{ tier: 'tier_ads', count: 3 }]);
+    expect(sessions[0].tierUnattributed).toBe(2);
+    // A session from before the axis is a session with no measurement, not one that measured zero.
+    expect(sessions[1].tiers).toBeUndefined();
+    expect(sessions[1].tierUnattributed).toBeUndefined();
+  });
+
+  test('drops a stored tier entry with an unknown id or an unusable count', () => {
+    const sessions = normalizeStoredSessions([
+      report({
+        tiers: [
+          { tier: 'tier_ads', count: 4 },
+          { tier: 'tier_invented', count: 100 },
+          { tier: 'tier_core', count: 0 },
+          { tier: '', count: 7 },
+        ] as never,
+      }),
+    ]);
+    expect(sessions[0].tiers).toEqual([{ tier: 'tier_ads', count: 4 }]);
   });
 });

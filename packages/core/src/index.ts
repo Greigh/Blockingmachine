@@ -58,7 +58,15 @@ export {
   type FilterFormat,
   type FilterMetadata,
 } from "./export/advanced-formatter.js";
-export { formatRuleForType, formatAdguardRule } from "./export/formatters.js";
+export {
+  formatRuleForType,
+  formatAdguardRule,
+  getDnsDomain,
+  bindRpzBlockRecords,
+  bindRpzPassthruRecords,
+  BIND_NULL_ZONE_FILE,
+  BIND_NULL_ZONE_CONTENTS,
+} from "./export/formatters.js";
 export { generateHeader } from "./export/headers.js";
 export { exportFormat, exportWithOptions } from "./export/index.js";
 export {
@@ -82,6 +90,10 @@ export * from "./ai/index.js";
 
 // Blocklist coverage analysis (which rules actually fire on real traffic)
 export * from "./coverage.js";
+
+// Structural refusal of provably backtracking /regex/ rules — the only in-process answer to
+// an engine with no step budget.
+export * from "./regexSafety.js";
 
 // Browser-reported rule hits, aggregated across sessions — the evidence the trimmed hot set is
 // built from when it comes from real usage rather than a captured trace.

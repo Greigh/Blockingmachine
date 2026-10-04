@@ -270,7 +270,9 @@ runs the gate and the gate passes.
 
 ```
 1. SHADOW   Electron app logs learned-shadow.jsonl for >= 7 days
-            (shadowMode.ts; disagreement + ~1% unbiased sample records)
+            (shadowMode.ts; disagreement + 1% unbiased sample records, the
+            rate the hook passes as LEARNED_SHADOW_SAMPLE_RATE — see
+            docs/learned-shadow-privacy.md for what a sample record holds)
 2. REVIEW   shadow.py --review-sample 120  -> review_queue.csv
             A human labels each row (reviewer_label 0/1). Breakage-risk
             rows (model=block / reference=allow) come first.
@@ -314,13 +316,30 @@ Defaults live in `gate.py` `DEFAULT_CONFIG` (override with `--config`):
   current v1 measures 0.9278, so it honestly fails); golden benign set:
   zero flips *after allowlist-first* (67/67 golden domains are protected
   by the allowlist, which decides before the model scores); artifact <=
-  500 KB; feature contract match.
+  500 KB; feature contract match. The report also carries
+  `precision_at_recall_90_allowlist_adjusted` — the same metric with the
+  test rows the allowlist decides removed, i.e. "how precise the model is
+  where it is actually allowed to speak". It is printed as `[info]` and
+  recorded under `metrics`, **not** gated: the design bar is on the raw
+  number, and whether the adjusted one justifies lowering it is the
+  reviewer decision the open flag keeps open.
 - shadow: >= 7 days, >= 1000 scored domains; >= 50 distinct disagreements
   reviewed (>= 30 distinct in the block direction, capped at available);
   **zero confirmed breakage** — one distinct domain where the reviewer
   calls a model-block benign is a veto. Reviewed block precision is
   reported as informational: it is measured on the hard-case disagreement
   subset, not production traffic.
+
+  *Scored domains* come from the per-sweep `summary` records the app
+  appends (`{"type": "summary", at, evaluated, disagreements,
+  modelVersion}`), because a domain the model and production agreed about
+  is never written down and a disagreements-only log cannot measure how
+  much traffic passed through the model. The app writes one per sweep
+  that scored at least one domain, and `modelVersion` is null until the
+  shipped weights carry a promotion manifest — the current state. The
+  count is the same either way, and `gate.py` states how much of it came
+  from unversioned weights so a report cannot imply it identified a
+  model. See [docs/learned-shadow-privacy.md](../../docs/learned-shadow-privacy.md).
 - drift: PSI <= 0.2 on all top-10-importance features (baseline deciles +
   missing-fraction exported once per model; production = the unbiased
   sample records, never the disagreements).

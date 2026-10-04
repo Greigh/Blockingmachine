@@ -224,6 +224,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span>LAN Server :{feedServerStatus.port}</span>
                 </button>
               )}
+              <span
+                className="shield-rating-tag"
+                style={{ '--rating-color': adblockRatingColor } as React.CSSProperties}
+                title={`Shield Rating: ${adblockRatingScore}/100 — ${adblockRatingLabel}. Based on ${dashboardStats.enabledSources} active sources and compiled rule count. Add more sources to improve your rating.`}
+              >
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+                <span>
+                  Shield {adblockRatingGrade}
+                  <span className="shield-rating-score"> · {adblockRatingScore}/100</span>
+                </span>
+              </span>
             </div>
             <h2 className="hero-heading">Compile & Export Filter Lists</h2>
             <p className="hero-subtext">
@@ -359,29 +372,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
         )}
-
-        {/* Adblock Shield Rating Card */}
-        <div
-          className="desktop-card summary-card"
-          title={`Shield Rating: ${adblockRatingScore}/100 — Based on ${dashboardStats.enabledSources} active sources and compiled rule count. Add more sources to improve your rating.`}
-          style={{ cursor: 'help', borderLeft: `3px solid ${adblockRatingColor}` }}
-        >
-          <div className="summary-icon-wrap" style={{ color: adblockRatingColor }}>
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke={adblockRatingColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              {adblockRatingGrade.startsWith('A') && (
-                <polyline stroke={adblockRatingColor} points="9 12 11 14 15 10" strokeWidth="2.5" />
-              )}
-            </svg>
-          </div>
-          <div className="summary-data-col">
-            <span className="summary-num" style={{ color: adblockRatingColor, fontSize: '1.4rem', fontWeight: 800 }}>
-              {adblockRatingGrade}
-              <span style={{ fontSize: '0.65rem', fontWeight: 600, marginLeft: 4, color: 'var(--secondary-color)', verticalAlign: 'middle' }}>{adblockRatingScore}/100</span>
-            </span>
-            <span className="summary-label">Shield Rating — {adblockRatingLabel}</span>
-          </div>
-        </div>
       </div>
 
       {/* 3-Step Newcomer & Core Workflow Guide */}

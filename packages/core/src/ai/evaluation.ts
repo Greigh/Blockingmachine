@@ -15,7 +15,7 @@
  *     the time, and expected calibration error measures exactly that.
  */
 
-import type { MiniAiPrediction, ThreatCategory } from './types.js';
+import { THREAT_CATEGORIES, type MiniAiPrediction, type ThreatCategory } from './types.js';
 import { EVAL_CORPUS, isLexicalCase, type EvalCase } from './evalCorpus.js';
 
 export type TriageLabel = 'clean' | 'nuisance' | 'malicious';
@@ -76,13 +76,26 @@ export interface EvaluationReport {
   };
   perClass: ClassScore[];
   /**
-   * expected → actual counts. The diagonal is correct; the off-diagonal cells are
-   * the work queue, because they say *which* distinction the model is blurring.
+   * Every case whose actual category is not an accepted label. The triage lists
+   * only see misses that cost a block-or-not decision; a nuisance filed under
+   * the wrong nuisance category (or under `Unknown`) shows up here and nowhere
+   * else.
+   */
+  exactMisses: MisclassifiedCase[];
+  /**
+   * expected[0] → actual counts. The diagonal is correct; off-diagonal cells
+   * split into `accepted` answers (an alternate the corpus allows, e.g. a DGA
+   * host called Malware when the set also accepts Advertising) and real blurs —
+   * only the blurs are the work queue. Cell counts sum to `total`, so a
+   * prediction on a category the axis does not list cannot vanish silently.
    */
   confusion: Array<{
     expected: ThreatCategory;
     actual: ThreatCategory;
     count: number;
+    /** Entries in this cell where `actual` was an accepted label for the case. */
+    accepted: number;
+    /** Domains contributing to the blur — accepted alternates are excluded. */
     examples: string[];
   }>;
   macroF1: number;
@@ -94,6 +107,13 @@ export interface EvaluationReport {
     ece: number;
     /** Mean squared error of the probability estimates. */
     brier: number;
+    /**
+     * Cases that contributed a calibration pair. Every corpus case produces one
+     * today; stating the denominator keeps a future eligibility filter from
+     * shrinking the scored set into a better ECE.
+     */
+    scored: number;
+    total: number;
   };
   byFamily: Array<{ family: string; total: number; accuracy: number }>;
   /** Confidence distribution for flagged predictions, as a sanity check. */
@@ -188,8 +208,11 @@ export function evaluateClassifier(
     reason: prediction.reasons[0] ?? prediction.topContributions[0]?.description ?? '',
   });
 
+  const exactMisses: MisclassifiedCase[] = [];
+
   for (const { entry, prediction } of results) {
     if (entry.expected.includes(prediction.category)) correct++;
+    else exactMisses.push(describe(entry, prediction));
 
     const expectedLabel = expectedTriage(entry.expected);
     const actualLabel = triageOf(prediction.verdict);
@@ -222,12 +245,11 @@ export function evaluateClassifier(
     });
   }
 
-  const classes: ThreatCategory[] = [
-    'Clean',
-    'Advertising',
-    'Telemetry/Analytics',
-    'Malware/Phishing',
-  ];
+  // The class axis is the model's full output vocabulary, not just the labels the
+  // corpus happens to expect: a prediction on a category the axis omitted would
+  // fall out of perClass and the confusion matrix while still counting in
+  // `total` — a silence exactly where the metric should look.
+  const classes: ThreatCategory[] = [...THREAT_CATEGORIES];
   const perClass = classes.map((label) =>
     scoreClass(
       label,
@@ -235,25 +257,25 @@ export function evaluateClassifier(
     ),
   );
 
-  const confusionLabels: ThreatCategory[] = [
-    'Clean',
-    'Advertising',
-    'Telemetry/Analytics',
-    'Malware/Phishing',
-  ];
   const confusion: EvaluationReport['confusion'] = [];
-  for (const expectedLabel of confusionLabels) {
-    for (const actualLabel of confusionLabels) {
+  for (const expectedLabel of classes) {
+    for (const actualLabel of classes) {
       const inCell = results.filter(
         ({ entry, prediction }) =>
           entry.expected[0] === expectedLabel && prediction.category === actualLabel,
       );
       if (inCell.length === 0) continue;
+      // An accepted alternate (DGA called Malware when the set also allows
+      // Advertising) is not a blur; the work queue is the unaccepted remainder.
+      const unaccepted = inCell.filter(
+        ({ entry, prediction }) => !entry.expected.includes(prediction.category),
+      );
       confusion.push({
         expected: expectedLabel,
         actual: actualLabel,
         count: inCell.length,
-        examples: inCell.slice(0, 6).map(({ entry }) => entry.domain),
+        accepted: inCell.length - unaccepted.length,
+        examples: unaccepted.slice(0, 6).map(({ entry }) => entry.domain),
       });
     }
   }
@@ -326,6 +348,7 @@ export function evaluateClassifier(
       recall: round(score.recall),
       f1: round(score.f1),
     })),
+    exactMisses,
     confusion,
     macroF1: round(macroF1),
     weightedF1: round(weightedF1),
@@ -333,6 +356,8 @@ export function evaluateClassifier(
       bins,
       ece: round(ece),
       brier: round(brier),
+      scored: calibrationPairs.length,
+      total: results.length,
     },
     byFamily,
     confidenceStats: {
@@ -360,7 +385,8 @@ export function formatEvaluationReport(report: EvaluationReport): string {
   );
   lines.push(`  macro F1                : ${report.macroF1.toFixed(3)}   weighted F1: ${report.weightedF1.toFixed(3)}`);
   lines.push(
-    `  calibration             : ECE ${report.calibration.ece.toFixed(3)}   Brier ${report.calibration.brier.toFixed(3)}`,
+    `  calibration             : ECE ${report.calibration.ece.toFixed(3)}   Brier ${report.calibration.brier.toFixed(3)}` +
+      `   (${report.calibration.scored} of ${report.calibration.total} cases scored)`,
   );
   lines.push('');
   lines.push('  per class            support   precision   recall      F1');
@@ -373,11 +399,16 @@ export function formatEvaluationReport(report: EvaluationReport): string {
   lines.push('');
   lines.push('  confusion (expected first label → predicted)');
   for (const cell of report.confusion) {
-    const marker = cell.expected === cell.actual ? ' ' : '↳';
+    const offDiagonal = cell.expected !== cell.actual;
+    // · = every case in the cell was an accepted alternate (not a blur)
+    // ↳ = the cell holds real confusion: at least one unaccepted answer
+    const marker = !offDiagonal ? ' ' : cell.accepted === cell.count ? '·' : '↳';
     lines.push(
       `  ${marker} ${cell.expected.padEnd(20)}→ ${cell.actual.padEnd(20)}${String(cell.count).padStart(4)}`,
     );
-    if (cell.expected !== cell.actual) {
+    if (offDiagonal && cell.accepted === cell.count) {
+      lines.push('      all accepted alternates — the corpus allows this answer');
+    } else if (cell.examples.length > 0) {
       lines.push(`      e.g. ${cell.examples.join(', ')}`);
     }
   }
@@ -409,6 +440,12 @@ export function formatEvaluationReport(report: EvaluationReport): string {
 
   list('CLEAN DOMAINS FLAGGED — highest cost', report.triage.falsePositives);
   list('THREATS MISSED — model defect, the name gave it away', report.triage.lexicalMisses);
+  list(
+    'WRONG CATEGORY — unaccepted label even though the block-or-not call was right',
+    report.exactMisses.filter(
+      (miss) => expectedTriage(miss.expected) === triageOf(miss.verdict),
+    ),
+  );
   list(
     'COVERAGE GAPS — ordinary-looking names only a list can know (not a model defect)',
     report.triage.coverageGaps,

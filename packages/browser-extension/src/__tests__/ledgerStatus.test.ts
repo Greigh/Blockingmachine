@@ -26,7 +26,7 @@ function quota(overrides: Partial<LedgerQuotaView> = {}): LedgerQuotaView {
 function status(feed: LedgerStatus['feed'], overrides: Partial<LedgerStatus> = {}): LedgerStatus {
   return {
     feed,
-    liveAvailable: feed === 'live',
+    liveAvailable: feed === 'live' || feed === 'hybrid',
     pollAvailable: feed !== 'unavailable',
     quota: quota(),
     ...overrides,
@@ -34,9 +34,16 @@ function status(feed: LedgerStatus['feed'], overrides: Partial<LedgerStatus> = {
 }
 
 describe('ledgerFeedFromAvailability', () => {
-  test('prefers the live debug event when both paths exist', () => {
-    // Same matches, plus the request URL — there is no reason to poll as well.
-    expect(ledgerFeedFromAvailability({ liveAvailable: true, pollAvailable: true })).toBe('live');
+  test('runs both paths when both exist — the poll backstops lossy live delivery', () => {
+    // onRuleMatchedDebug drops events in flight during a worker wake, so live alone is a hole,
+    // not an upgrade.
+    expect(ledgerFeedFromAvailability({ liveAvailable: true, pollAvailable: true })).toBe(
+      'hybrid',
+    );
+  });
+
+  test('still names live alone when polling is somehow missing', () => {
+    expect(ledgerFeedFromAvailability({ liveAvailable: true, pollAvailable: false })).toBe('live');
   });
 
   test('falls back to polling, the only path a packed build has', () => {
@@ -51,8 +58,9 @@ describe('ledgerFeedFromAvailability', () => {
 });
 
 describe('ledgerFeedForSession', () => {
-  test('names the two real paths and refuses to guess at the third', () => {
+  test('names the three real paths and refuses to guess at the fourth', () => {
     expect(ledgerFeedForSession('live')).toBe('live');
+    expect(ledgerFeedForSession('hybrid')).toBe('hybrid');
     expect(ledgerFeedForSession('polled')).toBe('polled');
     // A session written when nothing could feed the ledger says so, rather than claiming the
     // better of the two sources.
@@ -63,18 +71,21 @@ describe('ledgerFeedForSession', () => {
 describe('ledger feed presentation', () => {
   test('labels each path in the badge', () => {
     expect(ledgerFeedLabel('live')).toBe('Live');
+    expect(ledgerFeedLabel('hybrid')).toBe('Live+poll');
     expect(ledgerFeedLabel('polled')).toBe('Polled');
     expect(ledgerFeedLabel('unavailable')).toBe('Off');
   });
 
   test('tones the badge by how much the path costs', () => {
     expect(ledgerFeedTone('live')).toBe('ok');
+    expect(ledgerFeedTone('hybrid')).toBe('ok');
     expect(ledgerFeedTone('polled')).toBe('warn');
     expect(ledgerFeedTone('unavailable')).toBe('off');
   });
 
   test('names the API behind each path in the detail line', () => {
     expect(ledgerFeedDetail('live')).toContain('onRuleMatchedDebug');
+    expect(ledgerFeedDetail('hybrid')).toContain('getMatchedRules');
     expect(ledgerFeedDetail('polled')).toContain('getMatchedRules');
     expect(ledgerFeedDetail('unavailable')).toContain('getMatchedRules');
     expect(ledgerFeedDetail('unavailable')).toContain('onRuleMatchedDebug');

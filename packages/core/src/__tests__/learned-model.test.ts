@@ -11,6 +11,7 @@
  * Fixtures are generated from Python by gen_ts_assets.py in the
  * training package. If they go stale, regenerate — do not hand-edit.
  */
+import { describe, expect, it } from '@jest/globals';
 import { readFileSync } from 'node:fs';
 import {
   createLearnedClassifier,

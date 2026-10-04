@@ -69,7 +69,9 @@ function App() {
   }, []);
 
   useEffect(() => {
-    window.electron.getSavePath().then(setSavePath);
+    if (window.electron?.getSavePath) {
+      window.electron.getSavePath().then(setSavePath);
+    }
   }, [currentView]);
 
   const memoizedApplyTheme = useCallback(applyTheme, []);

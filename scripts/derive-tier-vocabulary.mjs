@@ -41,6 +41,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseArgvOrExit } from './argv.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -48,12 +49,16 @@ const dist = join(root, 'packages', 'core', 'dist', 'ai');
 const tierDirectory = join(root, 'packages', 'browser-extension', 'rules');
 const target = join(root, 'packages', 'core', 'src', 'ai', 'tierVocabulary.generated.ts');
 
-const args = process.argv.slice(2);
-const flags = new Set(args.filter((arg) => arg.startsWith('--')));
-const rulesDir = (() => {
-  const index = args.indexOf('--rules-dir');
-  return index >= 0 && args[index + 1] ? resolve(args[index + 1]) : tierDirectory;
-})();
+// Parsed through the shared refusing parser: `--rules-dir` with no directory used to fall back
+// to the extension's own rules as if that were the directory named — the same silent-answer class
+// as a tier name the compiler cannot honour — and a flag nobody knows (`--wirte`) did nothing.
+const { flags, values } = parseArgvOrExit(process.argv.slice(2), {
+  values: ['--rules-dir'],
+  flags: ['--write', '--check'],
+});
+const rulesDir = values.has('--rules-dir')
+  ? resolve(values.get('--rules-dir').at(-1))
+  : tierDirectory;
 
 async function load(module) {
   const path = join(dist, module);
@@ -131,10 +136,10 @@ function corpusSample(report) {
 }
 
 /** The corpus's verdict on one candidate vocabulary, next to the corpus's verdict without it. */
-function corpusGate(adTokens, trackerTokens) {
+function corpusGate(adTokens, trackerTokens, consentTokens) {
   classifier = freshClassifier();
   const sample = corpusSample(
-    reputation.withTemporaryVocabulary({ adTokens, trackerTokens }, corpusReport),
+    reputation.withTemporaryVocabulary({ adTokens, trackerTokens, consentTokens }, corpusReport),
   );
   // The comparison itself lives in core, where the suite that re-derives the shipped file can ask
   // the same question of the same function instead of reimplementing what "the corpus passed" means.
@@ -178,6 +183,7 @@ reputation.withTemporaryVocabulary(
   {
     adTokens: reputation.HAND_WRITTEN_AD_TOKENS,
     trackerTokens: reputation.HAND_WRITTEN_TRACKER_TOKENS,
+    consentTokens: reputation.HAND_WRITTEN_CONSENT_TOKENS,
     replace: true,
   },
   () => {
@@ -195,16 +201,22 @@ reputation.withTemporaryVocabulary(
 
     result = deriveTierVocabulary({
       seeds: seedSet.seeds,
+      // The full host sets, not just the seeds: a bare-label candidate is only as honest as
+      // the apex listing it can point to, and an apex that is listed *and* placeable is
+      // never a seed.
+      tierHosts,
       knownTokens: {
         adTokens: reputation.HAND_WRITTEN_AD_TOKENS,
         trackerTokens: reputation.HAND_WRITTEN_TRACKER_TOKENS,
+        consentTokens: reputation.HAND_WRITTEN_CONSENT_TOKENS,
       },
       withVocabulary: reputation.withTemporaryVocabulary,
       classifyHost: classifyWith,
       // Per candidate rather than per run, so a single wrong token is refused on its own instead of
       // costing the whole vocabulary — which is what makes "derived from the tiers" safe: the tiers
       // propose, and the corpus disposes.
-      corpusGate: ({ adTokens, trackerTokens }) => corpusGate(adTokens, trackerTokens),
+      corpusGate: ({ adTokens, trackerTokens, consentTokens }) =>
+        corpusGate(adTokens, trackerTokens, consentTokens),
     });
 
     // The gate above ran per candidate against a moving vocabulary, so the corpus is measured again
@@ -212,7 +224,11 @@ reputation.withTemporaryVocabulary(
     // reports, and the one `--write` refuses to write when it fails.
     finalSample = corpusSample(
       reputation.withTemporaryVocabulary(
-        { adTokens: result.adTokens, trackerTokens: result.trackerTokens },
+        {
+          adTokens: result.adTokens,
+          trackerTokens: result.trackerTokens,
+          consentTokens: result.consentTokens,
+        },
         corpusReport,
       ),
     );
@@ -230,6 +246,7 @@ const provenance = tierVocabularyProvenance({
   seedVocabulary: {
     adTokens: reputation.HAND_WRITTEN_AD_TOKENS.length,
     trackerTokens: reputation.HAND_WRITTEN_TRACKER_TOKENS.length,
+    consentTokens: reputation.HAND_WRITTEN_CONSENT_TOKENS.length,
   },
   derivation: result,
   baseline: baselineSample,
@@ -252,7 +269,8 @@ if (securityHosts > 0) {
 report.push(
   `   seeds    ${result.seedsConsidered} host(s) in the disagreement set ` +
     `(seeded from ${provenance.seedVocabulary.adTokens} ad + ` +
-    `${provenance.seedVocabulary.trackerTokens} tracker hand-written token(s), never a previous run)`,
+    `${provenance.seedVocabulary.trackerTokens} tracker + ` +
+    `${provenance.seedVocabulary.consentTokens} consent hand-written token(s), never a previous run)`,
 );
 
 for (const entry of result.evidence) {
@@ -282,8 +300,10 @@ report.push(
 );
 report.push(`   gate     ${provenance.gate}`);
 report.push(
-  `   tokens   ${result.adTokens.length} ad + ${result.trackerTokens.length} tracker derived` +
-    `${result.corpusRefusals > 0 ? `, ${result.corpusRefusals} candidate(s) refused by the corpus` : ''}`,
+  `   tokens   ${result.adTokens.length} ad + ${result.trackerTokens.length} tracker + ` +
+    `${result.consentTokens.length} consent derived` +
+    `${result.corpusRefusals > 0 ? `, ${result.corpusRefusals} candidate(s) refused by the corpus` : ''}` +
+    `${result.apexRefusals > 0 ? `, ${result.apexRefusals} bare label(s) refused by apex attestation` : ''}`,
 );
 console.log(report.join('\n'));
 

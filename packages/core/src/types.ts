@@ -2,7 +2,7 @@ import type { StoredRule, RuleStore } from "./RuleStore.js";
 
 /** Concrete output formats. `all` is the multi-export selection shorthand. */
 export const EXPORT_FORMATS = [
-  "hosts", "dnsmasq", "unbound", "bind", "privoxy", "shadowrocket",
+  "hosts", "dnsmasq", "unbound", "bind", "bind-null", "privoxy", "shadowrocket",
   "adguard", "abp", "domains", "plain",
 ] as const;
 

@@ -48,7 +48,29 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
       }
     }
 
+    // The measured hot set, served beside the full list rather than instead of it.
+    //
+    // It is optional in a way the full list is not: a deployment that has never run the
+    // measurement simply has no file here, and the extension is written to prune the full export
+    // in that case. So this is read once at startup and a miss is recorded as "absent", not as an
+    // error — the endpoint then says so plainly rather than 404ing with no explanation, because
+    // "no hot set" is a normal state and the client is expected to cope with it.
+    const hotListPath = path.join(paths.output.dir, "hotlist.txt");
+    let hotListContent = "";
+    let hotListSource = "";
+    try {
+      hotListContent = await fs.readFile(hotListPath, "utf8");
+      hotListSource = hotListPath;
+    } catch {
+      // No measurement has been built for this deployment. Not an error.
+    }
+
     const lines = rulesContent
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("!") && !l.startsWith("#"));
+
+    const hotListLines = hotListContent
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("!") && !l.startsWith("#"));
@@ -94,6 +116,8 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
               timestamp: new Date().toISOString(),
               rulesLoaded: lines.length,
               ruleSource: rulesSource || "memory-only",
+              hotListLoaded: hotListLines.length,
+              hotListSource: hotListSource || "none",
             }),
           );
           return;
@@ -137,6 +161,24 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
           return;
         }
 
+        if (pathname === "/v1/hotlist.txt") {
+          // 200 with an empty body rather than 404 when there is no measurement. The extension
+          // treats a missing hot set as "prune the full export instead", and it should get that
+          // answer from a failed request or an empty body equally — a 404 reads as a fault in the
+          // server and would be the more surprising of the two to debug.
+          if (!hotListSource) {
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.statusCode = 200;
+            res.end("");
+            return;
+          }
+
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.statusCode = 200;
+          res.end(hotListContent);
+          return;
+        }
+
         if (pathname === "/v1/rules") {
           if (req.headers.accept?.includes("text/plain")) {
             res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -160,7 +202,12 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
         res.end(
           JSON.stringify({
             error: "Not Found",
-            availableEndpoints: ["/health", "/v1/check?domain=<name>", "/v1/rules"],
+            availableEndpoints: [
+              "/health",
+              "/v1/check?domain=<name>",
+              "/v1/rules",
+              "/v1/hotlist.txt",
+            ],
           }),
         );
       } catch {
@@ -185,9 +232,17 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
           chalk.bold.green(`\n🚀 Blockingmachine preview server listening at http://${host}:${port}`),
         );
         this.logger.info(chalk.dim(`  Loaded ${lines.length} rules from ${rulesSource || "cache"}`));
+        this.logger.info(
+          chalk.dim(
+            hotListSource
+              ? `  Measured hot set: ${hotListLines.length} rules from ${hotListSource}`
+              : `  Measured hot set: none — clients will prune the full export instead`,
+          ),
+        );
         this.logger.info(`  • Health:  ${chalk.cyan(`http://${host}:${port}/health`)}`);
         this.logger.info(`  • Check:   ${chalk.cyan(`http://${host}:${port}/v1/check?domain=example.com`)}`);
-        this.logger.info(`  • Rules:   ${chalk.cyan(`http://${host}:${port}/v1/rules`)}\n`);
+        this.logger.info(`  • Rules:   ${chalk.cyan(`http://${host}:${port}/v1/rules`)}`);
+        this.logger.info(`  • Hot set: ${chalk.cyan(`http://${host}:${port}/v1/hotlist.txt`)}\n`);
 
         if (process.env.NODE_ENV !== "test") {
           const onSignal = () => {

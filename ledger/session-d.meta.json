@@ -1,0 +1,144 @@
+{
+  "provenance": [
+    "Automated Chrome session driven by scripts/ledger-browser-run.mjs over a scripted site list.",
+    "This is NOT a person’s browsing history: no URLs, titles, timestamps or initiators are",
+    "recorded, only <count> <rule> pairs, and the site list is the script’s rather than anyone’s.",
+    "Every shipped tier was enabled for the run; a rule that is not installed cannot match.",
+    "The machine runs AdGuard locally and AdGuard Home on the LAN. Neither can add a match —",
+    "a request the extension blocks is decided before any DNS lookup — but both reduce the",
+    "third-party traffic pages load, so these totals are depressed relative to a clean network.",
+    "The ranking between rules is unaffected; the absolute volumes are."
+  ],
+  "extension": "piepfimfcmcialknkofdccfefhfcopom",
+  "enabledTiers": [
+    "tier_core",
+    "tier_ads",
+    "tier_privacy",
+    "tier_annoyances",
+    "tier_security",
+    "tier_unclassified"
+  ],
+  "pages": {
+    "visited": 20,
+    "attempted": 20,
+    "settleMs": 4500
+  },
+  "sites": [
+    "https://www.bbc.co.uk/news",
+    "https://www.theguardian.com/uk",
+    "https://www.cnn.com",
+    "https://www.nytimes.com",
+    "https://www.washingtonpost.com",
+    "https://www.reuters.com",
+    "https://apnews.com",
+    "https://www.forbes.com",
+    "https://www.wired.com",
+    "https://www.arstechnica.com",
+    "https://techcrunch.com",
+    "https://www.theverge.com",
+    "https://www.engadget.com",
+    "https://www.polygon.com",
+    "https://www.eurogamer.net",
+    "https://www.gamespot.com",
+    "https://www.ign.com",
+    "https://www.espn.com",
+    "https://www.si.com",
+    "https://www.nba.com"
+  ],
+  "totalHits": 138,
+  "distinctRules": 35,
+  "tiers": [
+    {
+      "count": 66,
+      "tier": "tier_privacy"
+    },
+    {
+      "count": 27,
+      "tier": "tier_core"
+    },
+    {
+      "count": 25,
+      "tier": "tier_ads"
+    },
+    {
+      "count": 13,
+      "tier": "tier_annoyances"
+    },
+    {
+      "count": 6,
+      "tier": "tier_unclassified"
+    }
+  ],
+  "sessionTiers": [
+    {
+      "tier": "tier_privacy",
+      "count": 60
+    },
+    {
+      "tier": "tier_ads",
+      "count": 25
+    },
+    {
+      "tier": "tier_core",
+      "count": 24
+    },
+    {
+      "tier": "tier_annoyances",
+      "count": 10
+    },
+    {
+      "tier": "tier_unclassified",
+      "count": 6
+    }
+  ],
+  "rawTally": {
+    "day": "2026-10-02",
+    "exceptions": {},
+    "feed": "live",
+    "hits": {
+      "||ad.doubleclick.net^": 4,
+      "||ads-static.conde.digital^": 2,
+      "||adsafeprotected.com^": 4,
+      "||adsrvr.org^": 1,
+      "||amazon-adsystem.com^": 11,
+      "||beacon.wikia-services.com^": 22,
+      "||btloader.com^": 2,
+      "||cdn-magiclinks.trackonomics.net^": 2,
+      "||chartbeat.com^": 1,
+      "||connect.facebook.net^": 1,
+      "||cookielaw.org^": 7,
+      "||criteo.net^": 1,
+      "||dianomi.com^": 2,
+      "||direct-events-collector.spot.im^": 2,
+      "||doubleclick.net^": 1,
+      "||doubleverify.com^": 4,
+      "||g.doubleclick.net^": 14,
+      "||google-analytics.com^": 1,
+      "||googleads.g.doubleclick.net^": 2,
+      "||googleadservices.com^": 1,
+      "||googlesyndication.com^": 5,
+      "||googletagmanager.com^": 13,
+      "||googletagservices.com^": 2,
+      "||gumgum.com^": 1,
+      "||imrworldwide.com^": 1,
+      "||media.net^": 2,
+      "||mybbc-analytics.files.bbci.co.uk^": 1,
+      "||onesignal.com^": 1,
+      "||optimizely.com^": 6,
+      "||privacy-mgmt.com^": 2,
+      "||scorecardresearch.com^": 4,
+      "||stats.wp.com^": 2
+    },
+    "startedAt": "2026-10-02T01:48:14.976Z",
+    "tierHits": {
+      "tier_ads": 25,
+      "tier_annoyances": 10,
+      "tier_core": 24,
+      "tier_privacy": 60,
+      "tier_unclassified": 6
+    },
+    "tierUnattributed": 0,
+    "unattributed": 0
+  },
+  "rawSessions": []
+}

@@ -189,14 +189,20 @@ export class ExportCommand extends BaseCommand<ExportOptions> {
             }
             case "privoxy":
             case "bind":
+            case "bind-null":
+            case "unbound":
             case "domains":
             case "plain": {
               // None of these is a list of one formatted line per rule: a Privoxy action file is
               // section-based, a BIND artifact is a Response Policy Zone that has to carry an SOA,
-              // and `domains` prunes exceptions rather than emitting them. All four go through the
-              // shared formatter, so the CLI cannot emit a different document from the one the
-              // desktop Hub writes for the same rules. It applies its own DNS filtering, so the
-              // unfiltered parsed set is what it should receive.
+              // a `bind-null` artifact is a `named.conf` fragment whose comments must be `#` because
+              // a `;` ends a statement there, a Unbound artifact is `local-zone` statements under a
+              // `server:` block, and `domains` prunes exceptions rather than emitting them. All go
+              // through the shared formatter, so the CLI cannot emit a different document from the
+              // one the desktop Hub writes for the same rules — which is also what keeps the
+              // `bind-null` header from falling through to AdGuard's `!` syntax, which
+              // `named-checkconf` rejects. It applies its own DNS filtering, so the unfiltered
+              // parsed set is what it should receive.
               output = generateFilterList(parsedRules, meta, format);
               break;
             }

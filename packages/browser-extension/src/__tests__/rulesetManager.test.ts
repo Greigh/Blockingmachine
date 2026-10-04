@@ -1,7 +1,12 @@
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 import { RulesetManager } from '../background/rulesetManager.js';
 import { STORAGE_KEY_STATIC_TIERS } from '../shared/constants.js';
-import { tierById, tierRuleCount } from '../shared/rulesetTiers.js';
+import {
+  DEFAULT_ENABLED_TIER_IDS,
+  isTierId,
+  tierById,
+  tierRuleCount,
+} from '../shared/rulesetTiers.js';
 
 interface ChromeStub {
   updateEnabledRulesets: any;
@@ -45,6 +50,53 @@ function installChrome(options: {
   };
 
   return { updateEnabledRulesets, getEnabledRulesets, getAvailableStaticRuleCount, storageGet, storageSet };
+}
+
+/**
+ * A DNR fake that behaves like Chrome: `updateEnabledRulesets` actually changes what
+ * `getEnabledRulesets` returns next. The stub above records calls — which is the right tool for
+ * asserting *what was asked* — while this one exists to assert *what holds afterwards*: that the
+ * state a status reports and the state the browser enforces are the same set.
+ */
+function installStatefulChrome(options: {
+  enabledRulesets: string[];
+  stored?: unknown;
+  /** The call resolves but the grant never changes — a browser that accepted and did nothing. */
+  ignoreUpdates?: boolean;
+}): ChromeStub {
+  const enabled = new Set(options.enabledRulesets);
+  const updateEnabledRulesets = (jest.fn() as any).mockImplementation(
+    async (patch: { enableRulesetIds?: string[]; disableRulesetIds?: string[] }) => {
+      if (options.ignoreUpdates) return;
+      for (const id of patch.enableRulesetIds ?? []) enabled.add(id);
+      for (const id of patch.disableRulesetIds ?? []) enabled.delete(id);
+    },
+  );
+  const getEnabledRulesets = (jest.fn() as any).mockImplementation(async () => [...enabled]);
+  const getAvailableStaticRuleCount = (jest.fn() as any).mockResolvedValue(29976);
+  const storageGet = (jest.fn() as any).mockResolvedValue(
+    options.stored === undefined ? {} : { [STORAGE_KEY_STATIC_TIERS]: options.stored },
+  );
+  const storageSet = (jest.fn() as any).mockResolvedValue(undefined);
+
+  (globalThis as any).chrome = {
+    declarativeNetRequest: { updateEnabledRulesets, getEnabledRulesets, getAvailableStaticRuleCount },
+    storage: { local: { get: storageGet, set: storageSet } },
+  };
+
+  return { updateEnabledRulesets, getEnabledRulesets, getAvailableStaticRuleCount, storageGet, storageSet };
+}
+
+/** The ruleset ids the browser is enforcing, filtered the way the manager itself reads them. */
+async function enforcedTierIds(): Promise<string[]> {
+  return ((await chrome.declarativeNetRequest.getEnabledRulesets()) as string[])
+    .filter(isTierId)
+    .sort();
+}
+
+/** The tier ids a popup would render as enabled out of the status it is sent. */
+function reportedEnabledIds(status: Awaited<ReturnType<RulesetManager['status']>>): string[] {
+  return status.tiers.filter((tier) => tier.enabled).map((tier) => tier.id).sort();
 }
 
 beforeEach(() => {
@@ -326,13 +378,14 @@ describe('RulesetManager status', () => {
     const status = await manager.status();
 
     expect(status.availableStaticRules).toBeNull();
-    expect(status.tiers).toHaveLength(5);
+    expect(status.tiers).toHaveLength(6);
     expect(status.tiers.map((tier) => tier.id)).toEqual([
       'tier_core',
       'tier_ads',
       'tier_privacy',
       'tier_annoyances',
       'tier_security',
+      'tier_unclassified',
     ]);
   });
 });
@@ -415,5 +468,111 @@ describe('RulesetManager drift (browser vs saved selection)', () => {
     const stillOn = await manager.status();
     expect(stillOn.drift.unexpected).toEqual(['tier_core']);
     expect(stillOn.drift.inSync).toBe(false);
+  });
+});
+
+// The tests above assert on *calls* — what the manager asked Chrome for. This block asserts on the
+// *outcome*: with a DNR stub that mutates state the way the real API does, the only assertion that
+// matters is whether the status the popup renders and the ruleset grant the browser enforces are
+// the same set after the lifecycle runs. That is what makes the update case a regression test
+// rather than a description of one — if the reconcile is ever skipped, weakened, or its patch
+// computed wrong, the reported set and the enforced set diverge here and the test fails.
+describe('RulesetManager reported vs enforced (the update regression)', () => {
+  test('an update that reset the browser to the manifest defaults is repaired by the lifecycle reconcile', async () => {
+    // Post-update state: storage still holds the user's choice, but the browser's ruleset grant
+    // is back to whatever the manifest declares enabled by default. Simulated with the catalogue's
+    // own defaults rather than a hand-picked list, so the test still describes a real update if a
+    // second tier ever ships enabled.
+    const stub = installStatefulChrome({
+      stored: ['tier_core', 'tier_ads', 'tier_security'],
+      enabledRulesets: [...DEFAULT_ENABLED_TIER_IDS],
+    });
+    const manager = new RulesetManager();
+    await manager.load();
+
+    // Before any repair the read path describes the disagreement honestly: the toggles show the
+    // saved selection while drift names the two tiers the browser is not enforcing. The status
+    // call itself must not have touched the browser.
+    const described = await manager.status();
+    expect(described.tiers.find((tier) => tier.id === 'tier_ads')?.enabled).toBe(true);
+    expect(described.drift).toEqual({
+      known: true,
+      unexpected: [],
+      missing: ['tier_ads', 'tier_security'],
+      inSync: false,
+    });
+    expect(stub.updateEnabledRulesets).not.toHaveBeenCalled();
+    expect(await enforcedTierIds()).toEqual([...DEFAULT_ENABLED_TIER_IDS].sort());
+
+    // The reconcile the worker-start block, onInstalled, and the drift notice's button all run.
+    await manager.setSuspended(false);
+
+    // Now the only assertion that matters: what the popup reports IS what the browser enforces.
+    const enforced = await enforcedTierIds();
+    const reported = await manager.status();
+    expect(enforced).toEqual(['tier_ads', 'tier_core', 'tier_security']);
+    expect(reported.drift.inSync).toBe(true);
+    expect(reportedEnabledIds(reported)).toEqual(enforced);
+  });
+
+  test('the same update is repaired in the disable direction when the user had the default off', async () => {
+    // The other half of the reset: the manifest default the user explicitly disabled comes back
+    // on in the browser after the update. Repair has to remove it, not just add what's missing.
+    installStatefulChrome({
+      stored: ['tier_ads'],
+      enabledRulesets: [...DEFAULT_ENABLED_TIER_IDS],
+    });
+    const manager = new RulesetManager();
+    await manager.load();
+    await manager.setSuspended(false);
+
+    const enforced = await enforcedTierIds();
+    expect(enforced).toEqual(['tier_ads']);
+    const reported = await manager.status();
+    expect(reported.drift.inSync).toBe(true);
+    expect(reportedEnabledIds(reported)).toEqual(enforced);
+  });
+
+  test('a browser that accepts the repair call but does not apply it is still reported as drift', async () => {
+    // The failure this whole surface exists to keep visible: the grant cannot be brought in line,
+    // so the popup must go on saying so instead of reporting the saved selection as enforced.
+    // "Caught rather than described" only holds if the description is the browser's answer.
+    installStatefulChrome({
+      stored: ['tier_core', 'tier_ads'],
+      enabledRulesets: [...DEFAULT_ENABLED_TIER_IDS],
+      ignoreUpdates: true,
+    });
+    const manager = new RulesetManager();
+    await manager.load();
+    await manager.setSuspended(false);
+
+    const reported = await manager.status();
+    expect(reported.drift.known).toBe(true);
+    expect(reported.drift.inSync).toBe(false);
+    expect(reported.drift.missing).toEqual(['tier_ads']);
+    expect(reportedEnabledIds(reported)).not.toEqual(await enforcedTierIds());
+  });
+
+  test('inSync is exactly the browser\'s agreement, in both directions of drift', async () => {
+    // The invariant the notice relies on: inSync is true precisely when the reported selection
+    // and the enforced grant hold the same tiers — never true while they differ, never false
+    // while they match.
+    const scenarios: Array<{ stored: string[]; enabledRulesets: string[] }> = [
+      { stored: ['tier_core', 'tier_ads'], enabledRulesets: ['tier_ads', 'tier_core'] },
+      { stored: ['tier_core', 'tier_ads'], enabledRulesets: ['tier_core'] },
+      { stored: ['tier_core'], enabledRulesets: ['tier_core', 'tier_security'] },
+      { stored: ['tier_ads'], enabledRulesets: ['tier_privacy'] },
+      { stored: [], enabledRulesets: ['tier_core'] },
+    ];
+    for (const scenario of scenarios) {
+      installStatefulChrome(scenario);
+      const manager = new RulesetManager();
+      await manager.load();
+      const reported = await manager.status();
+      const enforced = await enforcedTierIds();
+      const agree =
+        reportedEnabledIds(reported).join(',') === enforced.join(',');
+      expect(reported.drift.inSync).toBe(agree);
+    }
   });
 });

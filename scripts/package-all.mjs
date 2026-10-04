@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, mkdirSync, cpSync, readdirSync, statSync, 
 import { resolve, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { parseArgvOrExit } from './argv.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -24,6 +25,10 @@ const MAKE_DIR = resolve(ROOT_DIR, 'make');
 
 const rootPkg = JSON.parse(readFileSync(resolve(ROOT_DIR, 'package.json'), 'utf8'));
 const version = rootPkg.version;
+
+// This script takes no arguments — a stray `--flag` or extra word was previously ignored, so
+// anything that arrives is a question nobody asked: refuse it.
+parseArgvOrExit(process.argv.slice(2), {});
 
 console.log(`\n🚀 [Package All] Building and collecting release artifacts for v${version}`);
 console.log(`📁 Target directory: ${MAKE_DIR}\n`);

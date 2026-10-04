@@ -19,6 +19,8 @@ export function verdictBadgeLabel(verdict: string): string {
       return 'TRACKER';
     case 'malicious':
       return 'MALWARE';
+    case 'annoyance':
+      return 'ANNOYANCE';
     case 'suspicious':
       return 'SUSPICIOUS';
     case 'clean':

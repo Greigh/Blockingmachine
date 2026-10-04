@@ -30,6 +30,21 @@ function normalizeHost(host: string): string {
 }
 
 /**
+ * Whether an authority is a bare IPv6 literal rather than a `host:port` pair.
+ *
+ * Three or more colon-separated parts, and every one of them hex digits or a `::` abbreviation \u2014
+ * `::1` and `fd00::1` qualify, `unbound.lan:5353` does not (two parts), and `unbound.lan` does not.
+ * The count alone would be enough for the addresses anyone actually types, but the hex check is what
+ * keeps a malformed value from being accepted as an address that `dns` would then refuse \u2014 which
+ * is a verdict, not an exception, so being strict here costs nothing.
+ */
+function isBareIpv6Literal(authority: string): boolean {
+  const parts = authority.split(':');
+  if (parts.length < 3) return false;
+  return parts.every((part) => part === '' || /^[0-9a-f]+$/i.test(part));
+}
+
+/**
  * Whether a host is this machine itself.
  *
  * Used to keep a deployment from being its own reference, and to keep the hint from suggesting an
@@ -71,6 +86,12 @@ export function parseUnboundResolverAddress(
   if (bracketed) {
     host = bracketed[1];
     if (bracketed[2]) port = Number(bracketed[2]);
+  } else if (isBareIpv6Literal(authority)) {
+    // A bare IPv6 literal is several colons, so it must be tested *before* the `host:port` branch
+    // rather than after: `::1:5353` has four colon-separated parts, does not match `split(':').length
+    // === 2`, and used to fall through with the whole string as the host and port 53 \u2014 a query to
+    // an address that cannot exist, reported as a dead resolver. `[::1]:5353` parses correctly, and
+    // so does this: brackets remain the way to give a port, and a literal is not split.
   } else if (authority.split(':').length === 2) {
     const [name, rawPort] = authority.split(':');
     host = name;

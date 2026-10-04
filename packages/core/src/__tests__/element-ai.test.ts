@@ -1,3 +1,4 @@
+import { describe, expect, it } from '@jest/globals';
 import {
   MiniAiElementClassifier,
   analyzeElement,
@@ -90,6 +91,42 @@ describe('Element AI — host and path evidence', () => {
     const prediction = classifyElementWithMiniAi(link);
     expect(prediction.action).toBe('leave');
     expect(prediction.elementClass).toBe('Content');
+  });
+
+  it('reads a known cloak destination the host-kind table has no entry for', () => {
+    // `adroll.com` is in KNOWN_CLOAKED_TARGETS but not the host-kind table — the gap this
+    // pins: 141 of 176 cloak destinations silently missed `cnameCloak` until the feature
+    // consulted the table written for exactly this.
+    const analysis = analyzeElement(
+      el({ tag: 'img', src: 'https://metrics.example.com/p.gif', resolvedCname: 'adroll.com' }),
+    );
+    expect(analysis.features.cnameCloak).toBe(1);
+    expect(analysis.details.cnameTarget).toBe('adroll.com');
+  });
+
+  it('folds the DNS root dot out of a resolved CNAME before matching', () => {
+    // Resolvers habitually return canonical `host.` form — an answer in that shape must
+    // still reach the same tables instead of being dropped at normalisation.
+    const analysis = analyzeElement(
+      el({ tag: 'img', src: 'https://metrics.example.com/p.gif', resolvedCname: 'AdRoll.COM.' }),
+    );
+    expect(analysis.details.cnameTarget).toBe('adroll.com');
+  });
+
+  it('scopes an unidentifiable element signature to its resource host, not its tag', () => {
+    // A bare `script` signature would store feedback against every `<script>` anywhere —
+    // the resource it loads is the narrowest honest key left.
+    const signature = elementSignature(
+      el({ tag: 'script', src: 'https://widgets.example.com/embed.js' }),
+    );
+    expect(signature.exact).toBe('script|widgets.example.com');
+    expect(signature.token).toBeNull();
+  });
+
+  it('falls back to a text token before a bare tag signature', () => {
+    const signature = elementSignature(el({ tag: 'span', text: 'Tuesday afternoon meeting' }));
+    expect(signature.exact).toBe('span|tuesday');
+    expect(signature.token).toBeNull();
   });
 });
 
