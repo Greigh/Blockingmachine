@@ -6,6 +6,8 @@
  * worker only creates the items and routes the resulting action.
  */
 
+import { decomposeDomain } from '@blockingmachine/core/entropy';
+
 /**
  * Chrome's context list. Declared locally as a non-empty tuple because the
  * bundled @types use a template-literal enum that a plain array cannot satisfy.
@@ -189,21 +191,22 @@ export function hostOf(rawUrl?: string): string {
   }
 }
 
-const TWO_LEVEL_PREFIXES = new Set(['co', 'com', 'org', 'net', 'ac', 'gov', 'edu']);
-
-/** Best-effort registrable domain; good enough to build a blocking rule from. */
+/**
+ * Best-effort registrable domain; good enough to build a blocking rule from.
+ *
+ * Reads the same suffix tables the classifier ships (`decomposeDomain` knows compound
+ * ccTLDs *and* the dynamic-DNS / shared-hosting platforms), so a subdomain of a hosted
+ * tenant — `evil.blogspot.com`, `user.github.io` — resolves to the tenant's name rather
+ * than the platform's apex. The hand-rolled version this replaced knew `co.uk` but not
+ * `blogspot.com`, and "Block the linked domain" on one could install `||blogspot.com^` —
+ * a rule blocking every Blogspot site.
+ */
 export function registrableDomainOf(rawUrl?: string): string {
   const host = hostOf(rawUrl);
   if (!host) return '';
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return host;
-  const parts = host.split('.');
-  if (parts.length <= 2) return host;
-  const last = parts[parts.length - 1];
-  const secondLast = parts[parts.length - 2];
-  if (last.length === 2 && TWO_LEVEL_PREFIXES.has(secondLast)) {
-    return parts.slice(-3).join('.');
-  }
-  return parts.slice(-2).join('.');
+  const { sld, tld } = decomposeDomain(host);
+  if (!tld || sld === tld) return sld || host;
+  return `${sld}.${tld}`;
 }
 
 export interface ResolvedMenuAction {

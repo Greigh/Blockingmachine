@@ -1,0 +1,97 @@
+name: Weekly ledger cut
+
+# Forgejo mirror of .github/workflows/weekly-tier-compile.yml.
+#
+# The flag that kept this un-mirrored (docs/open-flags.md #26) asked whether the instance
+# is ever up — answered by evidence: the Actions UI shows a run on every push for weeks,
+# so a Monday 04:17 UTC schedule will fire. The difference that remains: if the instance
+# is ever down at that minute the run simply does not happen, which shows up as a missing
+# weekly PR — visible, not a silent pass.
+#
+# `peter-evans/create-pull-request` is replaced by git plus the pulls API against the
+# auto-injected GITHUB_TOKEN — the same token publish.yml publishes packages with — so the
+# mirror introduces no actions or secrets the allow-list has not already admitted.
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: weekly-ledger-cut
+  cancel-in-progress: false
+
+jobs:
+  derive:
+    name: Re-derive the cut from the ledger
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The whole job. One script, not a pile of steps, so that what CI runs weekly is literally
+      # what a maintainer runs by hand when a derivation looks wrong — see
+      # `scripts/weekly-tier-compile.sh`.
+      - name: Re-derive and verify
+        run: scripts/weekly-tier-compile.sh
+
+      - name: Open a PR for the regenerated artifacts
+        env:
+          # The injected token is `secrets.GITHUB_TOKEN` here exactly like publish.yml uses it —
+          # same context names (`github.*`) keep the mirror free of Forgejo-only surfaces.
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITEA_API: ${{ github.server_url }}/api/v1
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No artifact changed, so there is nothing to review."
+            echo "That is the expected outcome in a week where the ledger did not move."
+            exit 0
+          fi
+
+          git config user.name "forgejo-actions[bot]"
+          git config user.email "forgejo-actions@localhost"
+          git checkout -B weekly/ledger-cut
+          git add -A
+          git commit -m "Weekly: re-derive the shipped cut from the accumulated browser ledger
+
+          The hot set is regenerated from ledger/ledger-hits.txt and verified against it.
+          See ledger/last-tier-plan.json in the job log for the tier plan this produced."
+          git push -f origin weekly/ledger-cut
+
+          # Reuse an open PR on the same branch rather than fail on a duplicate.
+          existing=$(curl -sf -H "Authorization: token ${GITEA_TOKEN}" \
+            "${GITEA_API}/repos/${REPO}/pulls?state=open" \
+            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);const m=p.find(x=>x.head&&x.head.ref==='weekly/ledger-cut');console.log(m?m.number:'')})")
+          if [ -n "$existing" ]; then
+            echo "Weekly PR already open as #${existing} — the force-push updated it."
+            exit 0
+          fi
+
+          curl -sf -X POST -H "Authorization: token ${GITEA_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "${GITEA_API}/repos/${REPO}/pulls" \
+            -d @- <<'EOF'
+          {
+            "title": "Weekly: shipped cut re-derived from the browser ledger",
+            "head": "weekly/ledger-cut",
+            "base": "main",
+            "body": "Automated weekly run of `scripts/weekly-tier-compile.sh`.\n\nThe hot set below was re-derived from `ledger/ledger-hits.txt`. The job log carries the tier plan the same ledger produces, including how many of the 30,000 shipped rules carry measured rule hits and how many were promoted over input order.\n\n**What to look at:** `Coverage`, `Scopes kept` and `Left behind` in the hot list header. A week where `Left behind` jumps and `Coverage` drops is a ledger that stopped describing real traffic, and that is the thing this PR exists to make visible.\n\nThe tier rulesets are deliberately *not* in this diff. They are compiled at package time from the ledger directly, so the cut that ships tracks the evidence without a 30,000-rule commit. `ledger/README.md` explains why.",
+            "labels": []
+          }
+          EOF

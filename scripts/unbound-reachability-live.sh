@@ -56,7 +56,10 @@ DOCKER=(docker)
 # repository for the duration and is removed on exit, rather than in /tmp where the daemon would not
 # see it.
 HARNESS_DIR="$REPO_ROOT/.unbound-live-harness"
-MODULES=(unboundProbe unboundReachability unboundAddress)
+# `deployRefresh` is a leaf import of `unboundReachability` — the stale report it checks for is
+# part of the verdict. Keep this list in step with that module's runtime imports, or the harness
+# compiles fine and then dies on an unresolved specifier under Node.
+MODULES=(unboundProbe unboundReachability unboundAddress deployRefresh)
 SCENARIOS=(live notloaded cli swallow)
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
@@ -85,9 +88,11 @@ rm -rf "$HARNESS_DIR"; mkdir -p "$HARNESS_DIR"
 # behaviour. Without the flag the compile fails on `parsed.message` inside a branch it can no longer
 # narrow, and the rig dies before it reaches a resolver.
 (cd "$REPO_ROOT/packages/electron-app" && npx tsc \
-  src/unboundProbe.ts src/unboundReachability.ts src/unboundAddress.ts \
+  src/unboundProbe.ts src/unboundReachability.ts src/unboundAddress.ts src/deployRefresh.ts \
   --outDir "$HARNESS_DIR" --module esnext --target es2022 --moduleResolution bundler --skipLibCheck --strict)
 cp "$REPO_ROOT/scripts/unbound-reachability-harness.mjs" "$HARNESS_DIR/harness.mjs"
+# `argv.mjs` travels with it — the harness imports `./argv.mjs` and runs from $HARNESS_DIR.
+cp "$REPO_ROOT/scripts/argv.mjs" "$HARNESS_DIR/argv.mjs"
 printf '{ "name": "unbound-live-harness", "private": true, "type": "module" }\n' > "$HARNESS_DIR/package.json"
 echo "harness in $HARNESS_DIR"
 

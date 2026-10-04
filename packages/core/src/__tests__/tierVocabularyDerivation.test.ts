@@ -767,6 +767,46 @@ describe('apex attestation', () => {
     expect(admitted.adTokens).toEqual(['bigmart']);
     expect(admitted.apexRefusals).toBe(0);
   });
+
+  test('a listed apex does not rescue a first-party brand label', () => {
+    // The residual the attestation cannot see: the tier really did list `walmart.com`, so the
+    // attestation is satisfied — and a `walmart` token would still claim every host carrying
+    // the label (`walmart.ca`, `walmart.com.mx`). The denylist refuses it regardless.
+    const h = harness({
+      classify: (host, vocabulary) =>
+        vocabulary.adTokens.includes('walmart') ? ('Advertising' as ThreatCategory) : ('Clean' as ThreatCategory),
+    });
+    const result = deriveTierVocabulary({
+      seeds: [seed('tier_ads', 'metrics.walmart.com')],
+      knownTokens: {},
+      tierHosts: new Map<StaticTierId, readonly string[]>([['tier_ads', ['metrics.walmart.com', 'walmart.com']]]),
+      ...h,
+    });
+
+    expect(result.adTokens).toEqual([]);
+    expect(result.brandRefusals).toBe(1);
+    expect(result.apexRefusals).toBe(0);
+    const bare = result.rejections[0].attempts.find((attempt) => attempt.token === 'walmart');
+    expect(bare?.attestation).toContain('first-party brand');
+  });
+
+  test('the brand denylist leaves the scoped compound form admissible', () => {
+    const h = harness({
+      classify: (host, vocabulary) =>
+        vocabulary.adTokens.includes('promo.walmart')
+          ? ('Advertising' as ThreatCategory)
+          : ('Clean' as ThreatCategory),
+    });
+    const result = deriveTierVocabulary({
+      seeds: [seed('tier_ads', 'promo.walmart.com')],
+      knownTokens: {},
+      tierHosts: new Map<StaticTierId, readonly string[]>([['tier_ads', ['promo.walmart.com']]]),
+      ...h,
+    });
+
+    expect(result.adTokens).toEqual(['promo.walmart']);
+    expect(result.brandRefusals).toBe(0);
+  });
 });
 
 // ── Rendering ─────────────────────────────────────────────────────────────────────────────────
@@ -781,6 +821,7 @@ describe('the generated module', () => {
     seedsConsidered: 0,
     corpusRefusals: 0,
     apexRefusals: 0,
+    brandRefusals: 0,
   };
   const provenance = {
     tiers: [{ tier: 'tier_ads', hosts: 1, unplaceable: 1 }],
@@ -791,6 +832,7 @@ describe('the generated module', () => {
     rejectedHosts: 0,
     corpusRefusals: 0,
     apexRefusals: 0,
+    brandRefusals: 0,
     corpus: null,
     gate: 'not run',
   };

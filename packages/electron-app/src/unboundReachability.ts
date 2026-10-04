@@ -27,8 +27,8 @@
  * classification is asserted in tests rather than inferred from a live resolver.
  */
 
-import type { DeployRefreshReport } from './deployRefresh';
-import { deployRefreshFailing, deployRefreshLastReportAt } from './deployRefresh';
+import type { DeployRefreshReport } from './deployRefresh.js';
+import { deployRefreshFailing, deployRefreshLastReportAt } from './deployRefresh.js';
 
 /**
  * Addresses that mean *blocked*, not *answered*.

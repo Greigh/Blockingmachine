@@ -65,3 +65,23 @@ describe('the /v1/compile route', () => {
     expect(compile).toContain('alreadyRunning');
   });
 });
+
+describe('the hotlist.txt write inside the compile handler', () => {
+  // The extension's sync client fetches `hotlist.txt` so a browser can install the rules its
+  // own ledger says fire first — the file must come from the picked ledger, never from rule
+  // counts, and must disappear when the measurement does rather than serving a stale set.
+  const hotlist = blockFrom("join(outputDir, 'hotlist.txt')");
+
+  test('derives the set from the picked ledger through the core hot-list pipeline', () => {
+    expect(hotlist).toContain('parseHitLedgerText');
+    expect(hotlist).toContain('selectHotList');
+    expect(hotlist).toContain('formatHotList');
+    expect(hotlist).toContain('tierLedgerPath');
+  });
+
+  test('removes the file when the measurement is absent or unreadable', () => {
+    // Three honest absences: no ledger picked, a ledger with no hits, and a ledger that no
+    // longer parses — each must unlink rather than keep serving what a dead ledger measured.
+    expect(hotlist.match(/fs\.unlink\(hotlistPath\)/g)?.length).toBe(3);
+  });
+});

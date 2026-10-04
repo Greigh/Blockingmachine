@@ -117,6 +117,41 @@ export const GENERIC_VOCABULARY_LABELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Labels a bare derived token may never claim, regardless of what the tiers listed.
+ *
+ * The apex attestation checks that the tier listed the brand's own apex — it says nothing about
+ * whether the brand is a vendor at all. `walmart.com` appearing in an ad tier (hand-added, or a
+ * misattributed source row) would satisfy the attestation and let `walmart` fire on every host
+ * carrying the label — `walmart.ca`, `walmart.com.mx`, `walmart.com.br` — a blast radius the
+ * list never claimed. These labels name brands whose primary zone is first-party commerce,
+ * banking, media, or consumer software: a machine may not mint a bare token for one, ever. A
+ * human who deliberately wants `facebook` blocked can hand-write the token into the seed
+ * vocabulary where a reviewer sees it; the derivation does not get to invent that claim.
+ *
+ * Scoped forms are unaffected — `analytics.tiktok` still places TikTok's API zone without
+ * naming the consumer site, and the corpus gate sees the compound label.
+ */
+export const FIRST_PARTY_BRAND_LABELS: ReadonlySet<string> = new Set([
+  // Retail and commerce.
+  'walmart', 'samsclub', 'target', 'costco', 'tesco', 'sainsburys', 'ikea', 'macys', 'kohls',
+  'nordstrom', 'homedepot', 'lowes', 'bestbuy', 'ebay', 'etsy', 'aliexpress', 'shopify',
+  'squarespace', 'wix', 'amazon', 'wayfair', 'zappos', '1800contacts', 'biglots',
+  // Banking and payments.
+  'chase', 'wellsfargo', 'bankofamerica', 'citi', 'hsbc', 'barclays', 'capitalone',
+  'americanexpress', 'visa', 'mastercard', 'paypal', 'venmo', 'westpac', 'commbank', 'anz',
+  'nab', 'lloyds', 'natwest', 'santander', 'hsn', 'qvc',
+  // Travel and hospitality.
+  'delta', 'united', 'southwest', 'ryanair', 'expedia', 'booking', 'airbnb', 'marriott',
+  'hilton', 'hyatt', 'uber', 'lyft', 'doordash', 'grubhub',
+  // Consumer platforms, media, and software.
+  'apple', 'microsoft', 'google', 'facebook', 'instagram', 'whatsapp', 'youtube', 'netflix',
+  'spotify', 'tiktok', 'twitter', 'linkedin', 'pinterest', 'reddit', 'snapchat', 'discord',
+  'telegram', 'zoom', 'slack', 'github', 'gitlab', 'stackoverflow', 'wikipedia', 'medium',
+  'substack', 'wordpress', 'tumblr', 'blogspot', 'nytimes', 'bbc', 'cnn', 'reuters', 'forbes',
+  'starbucks', 'mcdonalds', 'nike', 'adidas', 'cocacola', 'pepsi', 'veuveclicquot',
+]);
+
+/**
  * Whether a label is usable as a token at all.
  *
  * Five characters is the floor: shorter labels collide with unrelated hosts across the whole web
@@ -367,6 +402,8 @@ export interface TierVocabularyDerivation {
   corpusRefusals: number;
   /** Bare-label candidates refused because the brand's apex was not itself listed. */
   apexRefusals: number;
+  /** Bare-label candidates refused because the brand is first-party, whatever was listed. */
+  brandRefusals: number;
 }
 
 /**
@@ -396,6 +433,8 @@ export interface TierVocabularyProvenance {
   corpusRefusals: number;
   /** Bare-label candidates the apex attestation refused. */
   apexRefusals: number;
+  /** Bare-label candidates the first-party brand denylist refused. */
+  brandRefusals: number;
   /** The independent corpus, before and after the vocabulary was installed. */
   corpus: {
     total: number;
@@ -452,6 +491,7 @@ export function tierVocabularyProvenance(input: {
     rejectedHosts: derivation.rejections.length,
     corpusRefusals: derivation.corpusRefusals,
     apexRefusals: derivation.apexRefusals,
+    brandRefusals: derivation.brandRefusals,
     corpus: final
       ? {
           total: final.total,
@@ -621,6 +661,7 @@ export function deriveTierVocabulary(input: DeriveTierVocabularyInput): TierVoca
   const knownConsent = new Set(input.knownTokens?.consentTokens ?? []);
   let corpusRefusals = 0;
   let apexRefusals = 0;
+  let brandRefusals = 0;
 
   // The apex attestation sets: what each tier listed, used to refuse bare-label candidates
   // whose reach would exceed the evidence. Defaults to the seeds themselves — the floor of
@@ -677,6 +718,13 @@ export function deriveTierVocabulary(input: DeriveTierVocabularyInput): TierVoca
         // A bare label claims the brand's whole zone, not just the listed subdomain — so it is
         // admitted only when the apex itself was listed under the same family. `metrics.x` may
         // place the zone `metrics`; it may not place `x` on a subdomain row's say-so.
+        if (!token.includes('.') && FIRST_PARTY_BRAND_LABELS.has(token)) {
+          attempt.attestation =
+            `refused: '${token}' names a high-profile first-party brand — no derived bare ` +
+            `token may claim it, whatever ${seed.tier} listed`;
+          brandRefusals += 1;
+          continue;
+        }
         if (!token.includes('.') && !(listedByTier.get(seed.tier)?.has(apex) ?? false)) {
           attempt.attestation =
             `refused: '${token}' is a bare label naming ${apex}, ` +
@@ -764,5 +812,6 @@ export function deriveTierVocabulary(input: DeriveTierVocabularyInput): TierVoca
     seedsConsidered: input.seeds.length,
     corpusRefusals,
     apexRefusals,
+    brandRefusals,
   };
 }

@@ -69,6 +69,12 @@ export {
 } from "./export/formatters.js";
 export { generateHeader } from "./export/headers.js";
 export { exportFormat, exportWithOptions } from "./export/index.js";
+export type { ExportFormatOptions } from "./export/index.js";
+export {
+  bindNullDelegatedZoneFile,
+  bindNullZoneStanza,
+  renderBindNullDelegatedZone,
+} from "./export/bindDelegation.js";
 export {
   filterDNSRules,
   filterBrowserRules,

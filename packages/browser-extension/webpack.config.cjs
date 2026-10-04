@@ -65,7 +65,10 @@ module.exports = {
       '@blockingmachine/core/element-ai': path.resolve(__dirname, '../core/src/ai/elementClassifier.ts'),
       // The rule→host reader behind the benefit fallback — bundled from source for the same
       // reason: one module, not the whole of core (which pulls in node builtins).
-      '@blockingmachine/core/ruleHost': path.resolve(__dirname, '../core/src/ruleHost.ts')
+      '@blockingmachine/core/ruleHost': path.resolve(__dirname, '../core/src/ruleHost.ts'),
+      // The suffix tables behind the context menu's registrable-domain call — the
+      // classifier's own copy, so the menu cannot mint a broader apex than the model's.
+      '@blockingmachine/core/entropy': path.resolve(__dirname, '../core/src/ai/entropy.ts')
     }
   },
   module: {

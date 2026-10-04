@@ -27,8 +27,11 @@ jobs:
       - name: Run lint
         run: npm run lint
 
-      - name: Run unit tests
-        run: npm test
-
+      # Build before the suites: the CLI package's types resolve through `@blockingmachine/core`'s
+      # `dist/`, so a clean checkout cascades `any` errors through everything until the workspace
+      # build has run. Same ordering fix as `.github/workflows/ci.yml`.
       - name: Build packages
         run: npm run build
+
+      - name: Run unit tests
+        run: npm test

@@ -14,7 +14,8 @@
     "paths": {
       "@blockingmachine/core/element-ai": ["../core/src/ai/elementClassifier.ts"],
       "@blockingmachine/core/domain-ai": ["../core/src/ai/MiniAiClassifier.ts"],
-      "@blockingmachine/core/ruleHost": ["../core/src/ruleHost.ts"]
+      "@blockingmachine/core/ruleHost": ["../core/src/ruleHost.ts"],
+      "@blockingmachine/core/entropy": ["../core/src/ai/entropy.ts"]
     },
     "types": ["chrome"]
   },
