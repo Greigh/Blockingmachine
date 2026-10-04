@@ -719,11 +719,15 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     try {
       const res = await window.electron.downloadExtension();
       if (res?.cancelled) return;
-      if (res?.success && res.path) {
-        setExtensionSavedPath(res.path);
+      if (res?.success && (res.path || res.firefoxPath)) {
+        setExtensionSavedPath(res.path ?? res.firefoxPath ?? '');
+        const base = res.release
+          ? `Saved from ${res.release} — now load it in the browser with the steps below.`
+          : 'Saved — now load it in the browser with the steps below.';
+        // A partial write still delivered one package — surface which leg failed.
         setExtensionMessage({
-          text: 'Saved — now load it in the browser with the steps below.',
-          type: 'success',
+          text: res.error ? `${base} ${res.error}` : base,
+          type: res.error ? 'error' : 'success',
         });
       } else {
         setExtensionMessage({

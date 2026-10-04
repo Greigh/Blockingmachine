@@ -58,6 +58,7 @@
     "@blockingmachine/core": "^1.0.0-rc.8",
     "electron-is-dev": "^3.0.1",
     "electron-store": "^11.0.2",
+    "jszip": "^3.10.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "recharts": "^3.10.1"

@@ -1,6 +1,4 @@
 import { join, dirname, isAbsolute, basename, resolve as pathResolve, sep } from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { createServer, Server as HttpServer, ServerResponse, type IncomingMessage } from 'http';
 import { networkInterfaces } from 'os';
 import { getServers as getDnsServers } from 'dns';
@@ -22,6 +20,7 @@ import {
 } from 'electron';
 import { Readable } from 'node:stream';
 import { Worker } from 'node:worker_threads';
+import JSZip from 'jszip';
 import { promises as fs, existsSync, createReadStream } from 'fs';
 import isDev from 'electron-is-dev';
 
@@ -695,6 +694,64 @@ function runClassifyWorker(
       }
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Browser extension package download (GitHub release assets)
+// ---------------------------------------------------------------------------
+
+const GITHUB_RELEASES_API = 'https://api.github.com/repos/Greigh/Blockingmachine/releases';
+
+interface GitHubReleaseAsset {
+  name?: string;
+  browser_download_url?: string;
+}
+interface GitHubRelease {
+  tag_name?: string;
+  draft?: boolean;
+  assets?: GitHubReleaseAsset[];
+}
+
+const EXTENSION_ASSET_PATTERN = /^blockingmachine-(chrome|firefox)-mv3-.+\.zip$/;
+
+function releaseHasExtensionAssets(release: GitHubRelease): boolean {
+  return (release.assets ?? []).some(
+    (asset) => typeof asset.name === 'string' && EXTENSION_ASSET_PATTERN.test(asset.name),
+  );
+}
+
+async function fetchGitHubJson(url: string): Promise<unknown> {
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Blockingmachine-App',
+      Accept: 'application/vnd.github+json',
+    },
+    redirect: 'follow',
+  });
+  if (!res.ok) throw new Error(`GitHub API answered ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Which release an extension download should come from. The tag matching the app's own
+ * version wins whenever it exists — even when it carries no extension assets, so the
+ * caller reports "this release has no package" rather than silently shipping a different
+ * version's bits. Only when the tag itself is absent (a local or unreleased build) does
+ * the newest release carrying the assets answer, named in the result.
+ */
+async function findExtensionRelease(): Promise<GitHubRelease | null> {
+  const tag = `v${app.getVersion()}`;
+  try {
+    const rel = (await fetchGitHubJson(
+      `${GITHUB_RELEASES_API}/tags/${encodeURIComponent(tag)}`,
+    )) as GitHubRelease;
+    if (rel && !rel.draft) return rel;
+  } catch {
+    // The tag is absent (unreleased build) — fall through to the newest release
+    // that actually ships the packages.
+  }
+  const list = (await fetchGitHubJson(`${GITHUB_RELEASES_API}?per_page=10`)) as GitHubRelease[];
+  return list.find((rel) => !rel.draft && releaseHasExtensionAssets(rel)) ?? null;
 }
 
 // Global cache of latest compiled rules for real-time inspection
@@ -4416,33 +4473,22 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     /**
-     * Builds the browser extension and writes a loadable copy beside a directory the user picks.
+     * Downloads the browser extension package from the GitHub release and unpacks it where the
+     * user picks.
      *
-     * "Install the extension" from inside the hub can only ever mean "put a current build where
-     * the browser can load it" — an unpacked extension must sit on disk for `Load unpacked` or
-     * `about:debugging` to read, and no app can click those buttons for the user. The dist is
-     * rebuilt on every click (~2s), because a package copied from a stale build would silently
-     * ship old blocking code while looking freshly downloaded.
+     * "Install the extension" from inside the hub can only ever mean "put a loadable copy where
+     * the browser can read it" — `Load unpacked` and `about:debugging` want a folder on disk,
+     * and no app can click those buttons for the user. The package comes from the release, not
+     * a local rebuild: the packaged app does not ship the extension's webpack sources, and a
+     * folder built from them would silently be a different generation than the artifact the
+     * release published. Chromium lands in `blockingmachine-extension/`, Firefox in
+     * `blockingmachine-extension-firefox/`.
      *
-     * The copy replaces the destination outright. A merge would leave removed files behind, and
-     * an extension folder holding two generations of `rules/` entries is a worse outcome than a
-     * clean rewrite.
+     * The release is chosen, not assumed: the tag matching this app's version wins, and when
+     * it carries no extension assets (a dev build, or a version whose release is not out yet)
+     * the newest release that does carry them is used and named in the result.
      */
     ipcMain.handle('download-extension', async () => {
-      const extensionDir = pathResolve(app.getAppPath(), '../browser-extension');
-      if (!existsSync(join(extensionDir, 'package.json'))) {
-        return {
-          success: false,
-          error: 'Browser extension sources are not bundled with this install.',
-        };
-      }
-      const webpackBin = pathResolve(
-        app.getAppPath(),
-        '../../node_modules/webpack/bin/webpack.js',
-      );
-      if (!existsSync(webpackBin)) {
-        return { success: false, error: 'The extension build toolchain is not installed.' };
-      }
       const picked = await dialog.showOpenDialog({
         title: 'Choose where to save the extension package',
         defaultPath: app.getPath('downloads'),
@@ -4450,32 +4496,76 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
       });
       if (picked.canceled || !picked.filePaths?.length) return { success: false, cancelled: true };
-      const destination = join(picked.filePaths[0], 'blockingmachine-extension');
+      const destinationRoot = picked.filePaths[0];
+
+      let release: { tag_name?: string; assets?: Array<{ name?: string; browser_download_url?: string }> } | null = null;
       try {
-        await promisify(execFile)(
-          process.execPath,
-          [webpackBin, '--mode', 'production'],
-          {
-            cwd: extensionDir,
-            timeout: 180_000,
-            // `process.execPath` is the Electron binary — without this it boots a second
-            // app instance instead of running webpack as plain Node.
-            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-          },
+        release = await findExtensionRelease();
+      } catch (err) {
+        console.error('[IPC Main] GitHub release lookup failed:', err);
+        return {
+          success: false,
+          error: `Could not reach the GitHub releases API: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      if (!release) {
+        return {
+          success: false,
+          error: 'No GitHub release ships a browser extension package for this build.',
+        };
+      }
+
+      const targets: Array<{ assetName: RegExp; dirName: string }> = [
+        { assetName: /^blockingmachine-chrome-mv3-.+\.zip$/, dirName: 'blockingmachine-extension' },
+        { assetName: /^blockingmachine-firefox-mv3-.+\.zip$/, dirName: 'blockingmachine-extension-firefox' },
+      ];
+      const written: Record<string, string> = {};
+      const failures: string[] = [];
+      for (const target of targets) {
+        const asset = (release.assets ?? []).find(
+          (a) => typeof a.name === 'string' && target.assetName.test(a.name) && typeof a.browser_download_url === 'string',
         );
-      } catch (error) {
-        console.error('[IPC Main] Extension build failed:', error);
-        return { success: false, error: 'The extension build failed — the package was not written.' };
+        if (!asset?.browser_download_url || !asset.name) continue;
+        const destination = join(destinationRoot, target.dirName);
+        try {
+          const res = await fetch(asset.browser_download_url, {
+            headers: { 'User-Agent': 'Blockingmachine-App' },
+            redirect: 'follow',
+          });
+          if (!res.ok) throw new Error(`download failed with HTTP ${res.status}`);
+          const zip = await JSZip.loadAsync(await res.arrayBuffer());
+          await fs.rm(destination, { recursive: true, force: true });
+          await fs.mkdir(destination, { recursive: true });
+          for (const [name, entry] of Object.entries(zip.files)) {
+            if (entry.dir) continue;
+            const destPath = pathResolve(destination, name);
+            if (!destPath.startsWith(destination + sep)) continue; // zip-slip guard
+            await fs.mkdir(dirname(destPath), { recursive: true });
+            await fs.writeFile(destPath, await entry.async('nodebuffer'));
+          }
+          written[target.dirName === 'blockingmachine-extension' ? 'path' : 'firefoxPath'] = destination;
+          console.log(`[IPC Main] Extension package ${asset.name} unpacked to ${destination}`);
+        } catch (err) {
+          console.error(`[IPC Main] Failed to fetch extension asset ${asset.name}:`, err);
+          failures.push(`${asset.name}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
-      const distDir = join(extensionDir, 'dist');
-      try {
-        await fs.rm(destination, { recursive: true, force: true });
-        await fs.cp(distDir, destination, { recursive: true });
-      } catch (error) {
-        console.error('[IPC Main] Extension copy failed:', error);
-        return { success: false, error: `Could not write ${destination}` };
+
+      if (!written.path && !written.firefoxPath) {
+        return {
+          success: false,
+          error:
+            failures.length > 0
+              ? `The extension download failed — ${failures.join('; ')}`
+              : `Release ${release.tag_name ?? '?'} ships no extension package assets.`,
+        };
       }
-      return { success: true, path: destination };
+      return {
+        success: true,
+        ...written,
+        release: release.tag_name,
+        error: failures.length > 0 ? `Partial download — ${failures.join('; ')}` : undefined,
+      };
     });
 
     ipcMain.handle('get-export-format', async () => {

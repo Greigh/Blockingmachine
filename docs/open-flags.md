@@ -80,6 +80,13 @@ Nothing here is scheduled. The list exists so nothing is *relied on* silently.
 
 ## Closed
 
+### 56. "Download extension package" could never work in the packaged app — closed by pulling the release's own zips instead of building dist locally
+
+- **Where:** `packages/electron-app/src/index.ts` (`download-extension` handler + `findExtensionRelease`), `src/deploy/panes/BrowserExtensionPane.tsx`, `src/views/DeployHubView.tsx`, `src/preload.ts`, `src/types/index.d.ts`.
+- **What it was:** The handler shelled out to webpack against `../browser-extension` sources — which exist in the monorepo and nowhere else. In the packaged app the button's only reachable branch was `Browser extension sources are not bundled with this install.`, the exact warning it showed under itself.
+- **What closed it:** The handler now resolves the release honestly — the `v<app.getVersion()>` tag first, the newest release carrying the assets only when the tag is absent (dev/unreleased builds) — downloads `blockingmachine-chrome-mv3-*.zip` and `blockingmachine-firefox-mv3-*.zip`, and unpacks them as sibling folders `blockingmachine-extension/` and `blockingmachine-extension-firefox/` beside the directory the user picks. Both flavors land (the old path produced a single build while the pane advertised Firefox), zip-slip entries are refused, partial failures name the leg that failed, and the result carries the release tag so the pane can say what it saved. Extraction uses `jszip` (pure JS, a real dependency now — the `npm:`-aliased `@electron-internal/extract-zip` is a NAPI package that cannot webpack-bundle and only lived in devDependencies).
+- **Verify:** `extensionDownload.test.ts` source-pins the release selection, the byte download + `JSZip.loadAsync` unpack, the zip-slip guard, and the folder names the pane copy promises — 3/3 green; live rehearsal against the real `v1.0.0-rc.8` release unpacked 17 files per flavor with valid MV3 manifests; electron suite 55/56 (612), packaged app rebuilt, installed and serving.
+
 ### 55. A compile on the packaged app froze the window, tray and feed for minutes — closed by yielding the O(n) loops, moving the classify pass to a worker, and shipping the bundled filter lists
 
 - **Where:** `packages/electron-app/src/index.ts` (`runImportProcess`, extracted from the `run-import-process` IPC handler; `yieldToEventLoop`, `resolveSourcePath`, `fetchAndParseSource`, `runClassifyWorker`), `src/classifyWorker.ts` (new `worker_threads` module), `webpack.main.config.cjs` (third `classifierWorker` entry → `.webpack/main/classifierWorker.cjs`), `forge.config.cjs` (`filters/` as `extraResource`, the worker bundle in `asarUnpack`).
