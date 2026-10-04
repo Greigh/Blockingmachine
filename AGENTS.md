@@ -6,11 +6,16 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
 
 ## Current release state
 
-- **`v1.0.0-rc.7` shipped 2026-10-03** — tag on `origin` (GitHub `Greigh/Blockingmachine`)
-  and `forgejo` (`git.greighstudios.com`). GitHub pre-release holds local darwin-arm64
-  artifacts + extension zips + npm tarballs + `SHA256SUMS.txt`; `publish.yml` was
-  manually dispatched to attach CI-built win32/linux/macos builds.
-- **npmjs.com**: `@blockingmachine/core` and `@blockingmachine/cli` `1.0.0-rc.7` under
+- **`v1.0.0-rc.8` shipped 2026-10-04** — tag on `origin` (GitHub `Greigh/Blockingmachine`)
+  and `forgejo` (`git.greighstudios.com`). GitHub pre-release holds the full asset set:
+  local darwin-arm64 dmg/zip + extension zips + npm tarballs + `SHA256SUMS.txt`
+  (all 12 payloads hashed post-upload), plus `publish.yml`'s CI-built win32/linux/
+  macos installers attached automatically on the tag push.
+- **`make/` must be emptied before `package-all.mjs`** — `gh release create … make/*`
+  sweeps the whole directory, so rc.7 artifacts rode onto the rc.8 release once and
+  had to be deleted after the fact. Clean the dir (or hand the script a fresh
+  checkout) before any release run.
+- **npmjs.com**: `@blockingmachine/core` and `@blockingmachine/cli` `1.0.0-rc.8` under
   dist-tag `rc`.
 - **Forgejo npm registry**: publish fails `401 Unauthorized` — `FORGEJO_TOKEN` in `.env`
   is invalid outright ("access token does not exist" per the API), not merely
