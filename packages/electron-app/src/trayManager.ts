@@ -191,9 +191,13 @@ export class TrayManager {
       compiling,
     ).map((row) => {
       if (row.type === "separator") return { type: "separator" };
-      if (row.type === "status") return { label: row.label, enabled: false };
+      // `&` is Electron's mnemonic marker and is stripped from the rendered
+      // label on every platform — "Compile & Update" renders as
+      // "Compile  Update". `&&` is the escape for a literal ampersand.
+      const label = row.label.replace(/&/g, "&&");
+      if (row.type === "status") return { label, enabled: false };
       const item: MenuItemConstructorOptions = {
-        label: row.label,
+        label,
         enabled: row.enabled,
         click: () => {
           void this.runAction(row, epoch);
