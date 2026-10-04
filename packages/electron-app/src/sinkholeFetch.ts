@@ -17,6 +17,13 @@ export interface SinkholeFetchInit {
   body?: string;
   timeoutMs?: number;
   allowInsecureLocalTls: boolean;
+  /**
+   * Resolve as soon as the status line arrives without consuming the body. For endpoints
+   * whose response is a long-lived stream — Pi-hole v6's `/api/action/gravity` answers by
+   * streaming the run log for the duration of the rebuild, so reading to the end would hold
+   * the caller open for the whole run.
+   */
+  respondOnHeaders?: boolean;
 }
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -26,7 +33,7 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
  * at a private resolver is exactly what a hostile redirect would otherwise collect — the same
  * rule `fetch` applies to `redirect: 'follow'` internally, applied to the hops we drive by hand.
  */
-const CREDENTIAL_HEADERS = new Set(['authorization', 'proxy-authorization', 'cookie', 'cookie2']);
+const CREDENTIAL_HEADERS = new Set(['authorization', 'proxy-authorization', 'cookie', 'cookie2', 'x-ftl-sid']);
 
 /** `headers` without the entries a cross-origin redirect must not carry. */
 function stripCredentialHeaders(headers: Record<string, string>): Record<string, string> {
@@ -53,10 +60,14 @@ export async function sinkholeFetch(url: string, init: SinkholeFetchInit): Promi
     if (init.allowInsecureLocalTls && isLocalHttpUrl(current)) {
       const response = await nodeRequest(current, {
         method,
-        headers,
+        // Admin APIs on embedded daemons get single-use sockets: FTL (Pi-hole v6's CivetWeb)
+        // is observed to write bytes after its chunk terminator, and a pooled connection
+        // would feed that trailing garbage to the next request's parser.
+        headers: { ...headers, Connection: 'close' },
         body,
         timeoutMs,
         rejectUnauthorized: !shouldBypassUntrustedTls(current, true),
+        respondOnHeaders: init.respondOnHeaders,
       });
       if (REDIRECT_STATUSES.has(response.status) && response.location) {
         const next = new URL(response.location, current);
@@ -76,11 +87,15 @@ export async function sinkholeFetch(url: string, init: SinkholeFetchInit): Promi
 
     const res = await fetch(current, {
       method,
-      headers,
+      headers: { ...headers, Connection: 'close' },
       body: method === 'GET' || method === 'HEAD' ? undefined : body,
       redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
     });
+    if (init.respondOnHeaders) {
+      res.body?.cancel().catch(() => undefined);
+      return toResult(res.status, res.statusText, '');
+    }
     if (REDIRECT_STATUSES.has(res.status)) {
       const location = res.headers.get('location');
       if (!location) return toResult(res.status, res.statusText, await res.text());
@@ -125,7 +140,7 @@ const MAX_SINKHOLE_PAYLOAD_SIZE = 25 * 1024 * 1024; // 25MB
 
 function nodeRequest(
   urlStr: string,
-  opts: { method: string; headers?: Record<string, string>; body?: string; timeoutMs: number; rejectUnauthorized: boolean },
+  opts: { method: string; headers?: Record<string, string>; body?: string; timeoutMs: number; rejectUnauthorized: boolean; respondOnHeaders?: boolean },
 ): Promise<{ status: number; statusText: string; location?: string; body: string }> {
   const parsed = new URL(urlStr);
   const isHttps = parsed.protocol === 'https:';
@@ -144,10 +159,29 @@ function nodeRequest(
     method: opts.method,
     headers,
     timeout: opts.timeoutMs,
+    agent: false,
+    // Lenient parsing for embedded LAN daemons: FTL's CivetWeb has been seen writing a JSON
+    // body after the chunk terminator on a `Connection: close` response — strictly legal to
+    // reject, but rejecting it makes a real admin endpoint unusable. Lenient mode skips the
+    // trailing bytes instead of failing the whole request. Public-facing parsing stays strict
+    // (this function only ever runs against private/LAN hosts by sinkholeFetch's contract).
+    insecureHTTPParser: true,
   };
 
   return new Promise((resolve, reject) => {
     const onResponse = (res: IncomingMessage) => {
+      if (opts.respondOnHeaders) {
+        // Drain rather than destroy: `Connection: close` (set above) ends the socket anyway,
+        // and draining lets the kernel discard the stream instead of RST-ing it mid-flight.
+        res.resume();
+        resolve({
+          status: res.statusCode || 0,
+          statusText: res.statusMessage || '',
+          location: typeof res.headers.location === 'string' ? res.headers.location : undefined,
+          body: '',
+        });
+        return;
+      }
       const chunks: Buffer[] = [];
       let totalBytes = 0;
       res.on('data', (chunk: Buffer | string) => {

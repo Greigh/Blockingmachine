@@ -24,7 +24,7 @@ module.exports = {
   },
   target: 'electron-main',
   output: {
-    filename: '[name].js',
+    filename: '[name].cjs',
     path: path.join(__dirname, '.webpack/main'),
     library: {
       type: 'commonjs2'

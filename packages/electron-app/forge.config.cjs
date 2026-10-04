@@ -21,13 +21,13 @@ const config = {
     },
     extraResource: ['./assets'],
     afterPrune: [
-      (buildPath, electronVersion, platform, arch, callback) => {
-        require('@electron/rebuild').rebuild({
+      async ({ buildPath, electronVersion, arch }) => {
+        await require('@electron/rebuild').rebuild({
           buildPath,
           electronVersion,
           arch,
           force: true
-        }).then(() => callback()).catch((err) => callback(err));
+        });
       }
     ],
     icon: './assets/Blockingmachine',
