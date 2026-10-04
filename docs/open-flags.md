@@ -12,6 +12,14 @@ Nothing here is scheduled. The list exists so nothing is *relied on* silently.
 
 ## Open
 
+### 54. The macOS build is signed but not notarized — Gatekeeper blocks a fresh download until Apple credentials reach `osxNotarize`
+
+- **Where:** `packages/electron-app/forge.config.cjs` `packagerConfig.osxNotarize` (wired for `notarytool` with two auth paths: `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` for CI, `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` for local runs); `packagerConfig.osxSign` (Developer ID + hardened runtime, already active).
+- **What:** The shipped dmg/zip deep-verifies with Developer ID `Greigh Studios LLC (365KR8NF53)` and carries hardened-runtime entitlements — but `spctl -a` reports `Unnotarized Developer ID`: no notary ticket is stapled. A machine that downloads the artifact is Gatekeeper-blocked on first launch until quarantine is stripped or the user right-clicks Open. Verified during the rc.8 install rehearsal: `xattr -dr com.apple.quarantine` was required before `open` would run it.
+- **Why left:** The credential is the missing piece, not the wiring — `osxNotarize` is already in the config and stays inert until the env vars exist. Notarization runs inside `forge make`/`package` and needs an Apple ID + app-specific password or an App Store Connect API key, which live outside the repository.
+- **Fix shape:** Export either `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` or `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` (the `.env`/CI secrets slots), then run `forge make` — the packager submits to the notary service and staples the ticket as part of the build. `gatekeeper-assess: false` stays for local smoke runs.
+- **Verify:** `stapler validate /path/Blockingmachine.app` (or `spctl -a -vv`) reports `source=Notarized Developer ID` on a shipped artifact.
+
 ### 53. The Forgejo npm registry refuses the configured publish token — packages ship to npmjs only until a valid package-scoped token exists
 
 - **Where:** `scripts/publish-forgejo.mjs` (driven by `.forgejo/workflows/publish.yml` with `FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}`, and runnable locally with `FORGEJO_TOKEN` from `.env`); registry `https://git.greighstudios.com/api/packages/greighstudios/npm/`.
@@ -71,6 +79,14 @@ Nothing here is scheduled. The list exists so nothing is *relied on* silently.
 - **Verify:** `blockingmachine coverage --trace .playwright-mcp/trace-pages/browsing-trace-urls.txt` reports the non-zero Path-decided line (done: 17 requests, 9 rules), and `check:hotlist` is still byte-identical (done). What remains is the adoption decision itself.
 
 ## Closed
+
+### 55. A compile on the packaged app froze the window, tray and feed for minutes — closed by yielding the O(n) loops, moving the classify pass to a worker, and shipping the bundled filter lists
+
+- **Where:** `packages/electron-app/src/index.ts` (`runImportProcess`, extracted from the `run-import-process` IPC handler; `yieldToEventLoop`, `resolveSourcePath`, `fetchAndParseSource`, `runClassifyWorker`), `src/classifyWorker.ts` (new `worker_threads` module), `webpack.main.config.cjs` (third `classifierWorker` entry → `.webpack/main/classifierWorker.cjs`), `forge.config.cjs` (`filters/` as `extraResource`, the worker bundle in `asarUnpack`).
+- **What happened:** Three defects shared one symptom. (a) The compile ran ~650k-rule fetches, a 360k-rule dedup and a **136.8s** malware classify pass as uninterrupted synchronous work on the main thread — the loop starved, the feed died and the app looked dead enough to force-quit. Now the fetch parses through chunked `parseFilterListStream`, the dedup/extract/classify loops yield on a cadence, and the classify pass — ~90% of wall time — runs in a `worker_threads` worker with progress ticks and an inline fallback. (b) The bundled `./filters/modules/*.txt` sources resolved against whatever cwd launchd handed the process — in the packaged app they ENOENTed silently, and the compile shipped without the curated modules. `filters/` now ships under `Resources/` via `extraResource`, and relative source paths resolve app-first (`process.resourcesPath` packaged, `app.getAppPath()` dev). (c) `autoSchedule` logged "Triggering scheduled filter list compilation..." and returned — a dead timer that never compiled; it now calls the real pipeline through `compileInvoker`.
+- **Measured on the packaged build:** a cold compile (empty verdict cache) classified 192,284 hosts in 130.9s with the feed answering 200 on every 4-second probe for the entire pass — the same input produced 20s+ dead windows before the worker. A warm compile ends in ~19s with the verdict cache serving. All 8 curated module files resolve from `Resources/filters/modules/` inside the packaged app, and the `open`-launched app serves its feed.
+- **What it does not claim:** the non-classify stages (dedup, `generateFilterList`, category attribution) still run on the main thread — a compile still saturates short windows of the loop between yields, so the first ~20s of a big compile is heavy-but-alive rather than fully fluid. Peak memory is unchanged (~2GB during the 650k-rule churn). The same worker treatment — or a dedicated compile process — is the residual fix for those stages, left for the day they measure as a problem rather than a hiccup.
+- **Verify:** `compilePipeline.test.ts` source-pins the yields in all three O(n) loops, the stream parser on the fetch path, `resolveSourcePath` app-relative mapping, `compileInvoker` wiring in `setupAutoScheduleTimer`, and `filters/` in `extraResource` — 5/5 green, electron suite 54/55 (607), `tsc --noEmit` clean, live e2e on the installed app via `--remote-debugging-port` + `Runtime.evaluate('window.electron.runImportProcess()')`.
 
 ### 51. "Block this domain" on a shared-hosting subdomain installs the platform's apex — closed by the vendor-hosting suffix tables the classifier already ships
 
