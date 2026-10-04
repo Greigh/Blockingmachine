@@ -95,4 +95,34 @@ describe('the compile pipeline', () => {
     expect(forgeConfig).toContain("'./filters'");
     expect(forgeConfig).toContain('extraResource');
   });
+
+  test('progress keeps moving between 95% and complete — no silent stage reads as a hang', () => {
+    const body = compileBody();
+    const saveMark = body.indexOf("status: 'Saving to disk...'");
+    const doneMark = body.indexOf("status: 'Complete!'");
+    expect(saveMark).toBeGreaterThanOrEqual(0);
+    expect(doneMark).toBeGreaterThan(saveMark);
+    const tail = body.slice(saveMark, doneMark);
+    // Every long stage after the main save reports itself — a compile that spent
+    // 95→100% silent is exactly what looked frozen in the field report.
+    expect(tail).toContain('Writing segregated endpoint lists');
+    expect(tail).toContain('Building category attribution');
+    // Both classify paths feed progress: the worker through its tick callback,
+    // the inline fallback through its own cadence (a silent fallback was the
+    // worst case — ~137s at a frozen percent).
+    expect(tail).toContain('const classifyProgress');
+    expect(tail).toContain('runClassifyWorker(candidateList, priorVerdicts, classifyProgress)');
+    expect(tail).toContain('classifyProgress(classifiedCount)');
+  });
+
+  test("the tray's updated stamp lands at completion, not mid-run", () => {
+    const body = compileBody();
+    const stamp = body.indexOf("store.set('lastProcessTime'");
+    const doneMark = body.indexOf("status: 'Complete!'");
+    expect(stamp).toBeGreaterThanOrEqual(0);
+    expect(doneMark).toBeGreaterThanOrEqual(0);
+    // The stamp sits next to the completion event — earlier it fired right after
+    // the save, so the tray showed "updated" while a compile was still running.
+    expect(Math.abs(doneMark - stamp)).toBeLessThan(400);
+  });
 });

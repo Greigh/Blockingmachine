@@ -2911,10 +2911,18 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     // High-performance concurrent filter processor
     async function runImportProcess(sender?: WebContents | null) {
       const startTime = Date.now();
+      let lastLoggedStage = '';
       const sendProgress = (data: { status: string; percent: number }) => {
         // Mirror progress into the menu-bar tray as well as the renderer.
         trayCompileProgress = data;
         trayManager?.onCompileProgress(data);
+        // Stage transitions go to stdout too — a "stuck at N%" report is only
+        // diagnosable if the log records which stage was running. Ticks inside
+        // one stage (host counts, percents) stay out of the log on purpose.
+        if (data.status !== lastLoggedStage) {
+          lastLoggedStage = data.status;
+          console.log(`[Compile] ${data.percent}% — ${data.status}`);
+        }
         if (sender && !sender.isDestroyed()) {
           sender.send('process-progress', data);
         }
@@ -3145,10 +3153,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         }
 
         const timestampStr = new Date().toLocaleString();
-        store.set('lastProcessTime', timestampStr);
 
         // Automatically write segregated endpoint files for System Daemon (dns.txt) and Browser Extension (browser.txt)
+        sendProgress({ status: 'Writing segregated endpoint lists...', percent: 96 });
         try {
+          await yieldToEventLoop();
           const dnsRules = filterDNSRules(uniqueRules);
           const dnsMeta: FilterListMetadata = {
             ...metadata,
@@ -3166,6 +3175,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           // Automatically hot-reload System DNS Daemon if running
           daemonManager.reloadRules().catch(() => {});
 
+          await yieldToEventLoop();
           const browserRules = filterBrowserRules(uniqueRules);
           const browserMeta: FilterListMetadata = {
             ...metadata,
@@ -3251,6 +3261,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // Built from `sourceResults`, not from `uniqueRules`, because a host listed by six
         // publishers is one host with six categories and the deduplicated array keeps only the
         // first — the attribution is built before that information is thrown away.
+        sendProgress({ status: 'Building category attribution...', percent: 96 });
+        await yieldToEventLoop();
         try {
           // One entry per configured source, carrying its name and URL: the manifest is the
           // record a later build cites for "what was this built from", which is a question
@@ -3259,16 +3271,21 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           // parser stamps the catalog's answer onto each rule — and a fetch that failed is
           // recorded as attempted rather than dropped, so "nine sources produced this" and
           // "nine were configured" stay two different sentences the manifest can tell apart.
-          const attribution = buildCategoryAttribution(
-            sourceResults.map((res) => ({
+          // Pin what was pulled, not just what was named: a digest over each source's raw
+          // rule lines, sorted so a reordered pull is still the same revision. "Which lists"
+          // and "which pull of those lists" are different questions, and the manifest should
+          // be able to answer both. A failed fetch gets no revision — there is nothing to pin.
+          // The sort+join+hash per source is the largest synchronous block left outside the
+          // classify worker, so the loop yields every few sources.
+          const attributionSources = [];
+          for (let i = 0; i < sourceResults.length; i++) {
+            if (i !== 0 && i % 4 === 0) await yieldToEventLoop();
+            const res = sourceResults[i];
+            attributionSources.push({
               name: res.source.name,
               url: res.source.url,
               category: res.source.category ?? '',
               error: res.error,
-              // Pin what was pulled, not just what was named: a digest over the source's raw
-              // rule lines, sorted so a reordered pull is still the same revision. "Which lists"
-              // and "which pull of those lists" are different questions, and the manifest should
-              // be able to answer both. A failed fetch gets no revision — there is nothing to pin.
               revision: res.error
                 ? undefined
                 : `sha256:${createHash('sha256')
@@ -3282,8 +3299,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
                     )
                     .digest('hex')}`,
               rules: res.rules ?? [],
-            })),
-          );
+            });
+          }
+          const attribution = buildCategoryAttribution(attributionSources);
           const categoriesDir = join(outputDir, 'categories');
           await fs.mkdir(categoriesDir, { recursive: true });
           // Only categories that actually have hosts get a file, and the manifest names exactly
@@ -3328,11 +3346,12 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // deduplicated array the other outputs come from is what keeps the verdicts and the
         // blocklist they describe from being produced from two different inputs.
         //
-        // Measured on the real 190,035-host browser list a cold pass is ~162s and yields 6,392
-        // verdicts, so it is the slowest part of a compilation and the duration is logged. It is
-        // not run in the background: the file has to exist before `npm run package:extension`
-        // compiles the tiers, and a verdict file written after the packaging step read it would
-        // be a tier built from last week's model.
+        // Measured on the real ~192k-host list a cold pass is ~131s, so it is the slowest
+        // part of a compilation and runs in `classifyWorker.cjs` (worker_threads) with an
+        // inline fallback; the duration is logged either way. It is still synchronous *within
+        // the pipeline*: the file has to exist before `npm run package:extension` compiles the
+        // tiers, and a verdict file written after the packaging step read it would be a tier
+        // built from last week's model.
         //
         // The pass is incremental via `verdictCache`: a host whose verdict the same classifier
         // already produced is served from `mini-ai-verdicts.json` rather than re-scored, so a
@@ -3377,14 +3396,16 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           // The pass is ~130s of synchronous CPU on a cold cache — too long to keep on the
           // event loop even with yields, so the worker bundle does it when it can. The
           // inline path below stays for the case where the worker cannot start.
+          const classifyProgress = (done: number) => {
+            sendProgress({
+              status: `Classifying ${done.toLocaleString()} of ${candidateList.length.toLocaleString()} hosts (mini-AI)...`,
+              // The pass maps onto 97–99% so a long cold run reads as movement, not a stall.
+              percent: 97 + Math.min(2, Math.floor((done / Math.max(1, candidateList.length)) * 3)),
+            });
+          };
           let workerResult: ClassifyWorkerResult | null = null;
           try {
-            workerResult = await runClassifyWorker(candidateList, priorVerdicts, (done) => {
-              sendProgress({
-                status: `Classifying ${done.toLocaleString()} of ${candidateList.length.toLocaleString()} hosts (mini-AI)...`,
-                percent: 97,
-              });
-            });
+            workerResult = await runClassifyWorker(candidateList, priorVerdicts, classifyProgress);
           } catch (workerErr) {
             console.warn(
               '[IPC Main] Classifier worker unavailable, classifying inline:',
@@ -3398,6 +3419,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             let classifiedCount = 0;
             for (const host of candidates) {
               if (++classifiedCount % 250 === 0) await yieldToEventLoop();
+              // The inline path is the fallback when the worker cannot start — it must keep
+              // reporting progress or a cold compile reads as a hang at a frozen percent.
+              if (classifiedCount % 5000 === 0) classifyProgress(classifiedCount);
               // `hasOwn` rather than truthiness: the record is null-prototype and validated on
               // parse, but a key must be present to mean anything — never inherit a lookup.
               const cached = Object.hasOwn(priorVerdicts, host) ? priorVerdicts[host] : undefined;
@@ -3498,6 +3522,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           }).show();
         }
 
+        // Stamped at completion, not mid-run: the tray's "updated" line should mean a compile
+        // finished then, not that one is still in flight beside last run's rule count.
+        store.set('lastProcessTime', timestampStr);
         sendProgress({ status: 'Complete!', percent: 100 });
         finishCompile({ success: true, ruleCount: uniqueRuleCount });
 
