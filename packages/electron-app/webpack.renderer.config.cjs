@@ -51,6 +51,12 @@ module.exports = {
   ],
   resolve: {
     extensions: ['.js', '.ts', '.jsx', '.tsx', '.css'],
+    // Same `.js`-specifier convention as webpack.main.config.cjs — renderer code can import a
+    // `.ts` source by its emitted name.
+    extensionAlias: {
+      '.js': ['.ts', '.tsx', '.js'],
+      '.jsx': ['.tsx', '.jsx'],
+    },
     alias: {
       '@blockingmachine/core/sources': path.resolve(__dirname, '../core/src/sources.ts')
     }
