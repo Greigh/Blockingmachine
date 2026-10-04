@@ -34,7 +34,7 @@
 
 import { execFileSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
-import { resolve, dirname } from 'path';
+import { resolve, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { lastValue, parseArgvOrExit } from './argv.mjs';
 
