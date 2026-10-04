@@ -504,11 +504,16 @@ export interface ElectronAPI {
   getElementHarvest: () => Promise<import('../elementHarvest.js').ElementHarvestSummary>;
   selectElementHarvest: () => Promise<string>;
   clearElementHarvest: () => Promise<string>;
-  /** Builds the extension and copies it where the user picks, for browser-side loading. */
+  /** Downloads the release's extension package and unpacks it where the user picks. */
   downloadExtension?: () => Promise<{
     success: boolean;
     cancelled?: boolean;
+    /** The unpacked Chromium package folder, when that asset was written. */
     path?: string;
+    /** The unpacked Firefox package folder, when that asset was written. */
+    firefoxPath?: string;
+    /** The release tag the package came from. */
+    release?: string;
     error?: string;
   }>;
   setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;

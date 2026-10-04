@@ -71,8 +71,9 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
         </div>
 
         <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-          The build is written fresh on every download, so the folder the browser loads is always
-          the code this hub is running — never whatever <code>dist/</code> happened to hold.
+          Pulled straight from the GitHub release that matches this app — the same packages the
+          publish workflow attaches — and unpacked as <code>blockingmachine-extension/</code>{' '}
+          (Chromium) and <code>blockingmachine-extension-firefox/</code> (Firefox).
         </p>
 
         <div className="deploy-feed-input-row">
@@ -82,7 +83,7 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
             onClick={() => void handleDownloadExtension()}
             disabled={extensionSaving}
           >
-            {extensionSaving ? 'Building…' : 'Download extension package…'}
+            {extensionSaving ? 'Downloading…' : 'Download extension package…'}
           </button>
           {extensionSavedPath && (
             <button
@@ -151,9 +152,10 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
               <h4>Firefox</h4>
               <p>
                 Open <code>about:debugging#/runtime/this-firefox</code>, choose{' '}
-                <strong>Load Temporary Add-on…</strong> and select{' '}
-                <code>manifest.json</code> inside the same folder. Temporary installs unload when
-                the browser restarts — a permanent install needs a Mozilla-signed build.
+                <strong>Load Temporary Add-on…</strong> and select <code>manifest.json</code>{' '}
+                inside the <code>blockingmachine-extension-firefox</code> folder. Temporary
+                installs unload when the browser restarts — a permanent install needs a
+                Mozilla-signed build.
               </p>
             </div>
           </div>
