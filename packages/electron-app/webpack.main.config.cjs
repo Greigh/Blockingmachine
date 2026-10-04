@@ -20,7 +20,9 @@ module.exports = {
   devtool: false,
   entry: {
     index: './src/index.ts',
-    preload: './src/preload.ts'
+    preload: './src/preload.ts',
+    // The classify pass runs off the main thread — see src/classifyWorker.ts.
+    classifierWorker: './src/classifyWorker.ts',
   },
   target: 'electron-main',
   output: {

@@ -17,9 +17,11 @@ const config = {
     name: 'Blockingmachine',
     executableName: 'blockingmachine',
     asar: {
-      unpack: "**/node_modules/electron-store/**/*"
+      // classifierWorker.cjs is spawned with `new Worker()` — worker bootstrap
+      // is more reliable reading a real file than through the asar patch.
+      unpack: "{**/node_modules/electron-store/**/*,**/.webpack/main/classifierWorker.cjs}"
     },
-    extraResource: ['./assets'],
+    extraResource: ['./assets', './filters'],
     afterPrune: [
       async ({ buildPath, electronVersion, arch }) => {
         await require('@electron/rebuild').rebuild({
@@ -41,19 +43,28 @@ const config = {
             'gatekeeper-assess': false,
           }
         : undefined,
-    // Notarization: prefer canonical env var names, but allow fallbacks for older names
+    // Notarization: prefer canonical env var names, but allow fallbacks for older names.
+    // Apple ID + app-specific password for local runs; App Store Connect API key for CI.
     osxNotarize:
-      process.platform === 'darwin' &&
-      (process.env.APPLE_ID || process.env.APPLEID)
-        ? {
-            tool: 'notarytool',
-            appleId: process.env.APPLE_ID || process.env.APPLEID,
-            // Password may be named APPLE_PASSWORD or APPLE_ID_PASSWORD in older setups
-            appleIdPassword:
-              process.env.APPLE_PASSWORD || process.env.APPLE_ID_PASSWORD || process.env.APPLEIDPASS,
-            teamId: process.env.APPLE_TEAM_ID || process.env.APPLETEAMID,
-          }
-        : undefined,
+      process.platform !== 'darwin'
+        ? undefined
+        : process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID
+          ? {
+              tool: 'notarytool',
+              appleApiKey: process.env.APPLE_API_KEY,
+              appleApiKeyId: process.env.APPLE_API_KEY_ID,
+              appleApiIssuer: process.env.APPLE_API_ISSUER,
+            }
+          : process.env.APPLE_ID || process.env.APPLEID
+            ? {
+                tool: 'notarytool',
+                appleId: process.env.APPLE_ID || process.env.APPLEID,
+                // Password may be named APPLE_PASSWORD or APPLE_ID_PASSWORD in older setups
+                appleIdPassword:
+                  process.env.APPLE_PASSWORD || process.env.APPLE_ID_PASSWORD || process.env.APPLEIDPASS,
+                teamId: process.env.APPLE_TEAM_ID || process.env.APPLETEAMID,
+              }
+            : undefined,
   },
   makers: [
     {

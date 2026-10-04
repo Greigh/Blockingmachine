@@ -33,6 +33,26 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
   ESM, forcing `^3` breaks `isJunk` import. `forge package` stages per-arch under
   `.webpack/<arch>/` then restores the arch into the staged app; a stray `index.cjs`
   at the package root is stale output, not the convention.
+- **`ELECTRON_RUN_AS_NODE=1` is exported into agent shells on this machine** —
+  it forces every Electron binary into node mode, so a packaged
+  `Blockingmachine.app` exec'd from an agent shell dies silently in <1s on
+  `require('electron')` (packaged stderr goes to os_log, not the tty). It is NOT
+  in launchctl or any rc file — the user's `open`/double-click path is unaffected.
+  Always run packaged binaries as `env -u ELECTRON_RUN_AS_NODE <binary>` and do
+  not diagnose a silent packaged-exec exit as an app defect.
+- **Compile pipeline**: `runImportProcess` (extracted from the
+  `run-import-process` handler; the IPC handler and `compileInvoker` — used by the
+  auto-schedule timer — both call it). The ~130s malware classify pass runs in
+  `.webpack/main/classifierWorker.cjs` (`worker_threads`, third webpack entry,
+  `asarUnpack`'d); dedup/extract/classify loops yield via `yieldToEventLoop`.
+  `filters/` ships via `extraResource` — relative `./filters/...` sources resolve
+  `process.resourcesPath`-first packaged, `app.getAppPath()` in dev.
+- **macOS notarization**: `osxNotarize` in `forge.config.cjs` is env-gated —
+  `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` or
+  `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID`; unset means signed-but-unnotarized
+  (flag 54). After `rm -rf` + `cp -R` reinstalling the app, run
+  `lsregister -f /Applications/Blockingmachine.app` or `open` silently no-ops on
+  the stale LaunchServices record.
 
 ## Release pipeline (`scripts/release.mjs`)
 
@@ -107,7 +127,7 @@ Known sharp edges:
 
 ## Verified suite counts (rc.7)
 
-Core 47/1322, CLI 89, browser-extension 55/793, electron-app 53/602 (54 suites,
+Core 47/1322, CLI 89, browser-extension 55/793, electron-app 54/607 (55 suites,
 10 skipped incl. docker-gated live suites when images are absent),
 homeassistant-integration 14. `tsc --noEmit` clean everywhere; eslint
 zero warnings. Extension tests need `--experimental-vm-modules` (the `npm test` script

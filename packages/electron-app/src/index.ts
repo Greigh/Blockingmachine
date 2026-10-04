@@ -18,7 +18,10 @@ import {
   nativeImage,
   clipboard,
   safeStorage,
+  WebContents,
 } from 'electron';
+import { Readable } from 'node:stream';
+import { Worker } from 'node:worker_threads';
 import { promises as fs, existsSync, createReadStream } from 'fs';
 import isDev from 'electron-is-dev';
 
@@ -93,6 +96,8 @@ import { emptyUnblockedNotice, fetchAdguardQueryLog, separateAdguardUrls, type S
 import {
   downloadAndParseSource,
   parseFilterList,
+  parseFilterListStream,
+  fetchContent,
   RuleDeduplicator,
   generateFilterList,
   filterLists,
@@ -586,8 +591,123 @@ async function mapConcurrent<T, R>(
   return results;
 }
 
+/**
+ * The compile pipeline iterates hundreds of thousands of rules on the main
+ * thread — a cold dedup + classify pass can hold the event loop for minutes,
+ * which is what made the window, tray and feed server look dead mid-compile.
+ * Yield between batches so IPC and HTTP keep answering while a compile runs.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * A source saved as `./filters/...` is app-relative, not cwd-relative: dev
+ * resolves beside the package manifest; the packaged app resolves under
+ * `Resources/` where `filters/` ships as an extraResource. Anything already
+ * absolute, remote, or a `file://` URL passes through untouched.
+ */
+function resolveSourcePath(url: string): string {
+  const trimmed = url.trim();
+  if (
+    /^https?:/i.test(trimmed) ||
+    trimmed.startsWith('file://') ||
+    isAbsolute(trimmed)
+  ) {
+    return trimmed;
+  }
+  const base = app.isPackaged ? process.resourcesPath : app.getAppPath();
+  return pathResolve(base, trimmed);
+}
+
+/**
+ * Fetch + parse a filter source without holding the event loop across the
+ * whole payload: the body is fed to `parseFilterListStream` in chunks so
+ * stream delivery gives the loop real breathing points, and the collection
+ * loop yields again on a cadence. Local paths are resolved app-first by
+ * `resolveSourcePath`.
+ */
+async function fetchAndParseSource(url: string): Promise<StoredRule[]> {
+  const resolved = resolveSourcePath(url);
+  console.log(`Processing source: ${resolved}`);
+  const content = await fetchContent(resolved);
+  if (content === null) {
+    console.warn(`Failed to fetch content for ${resolved}, returning empty list.`);
+    return [];
+  }
+  const chunkSize = 256 * 1024;
+  const chunks: string[] = [];
+  for (let i = 0; i < content.length; i += chunkSize) {
+    chunks.push(content.slice(i, i + chunkSize));
+  }
+  const rules: StoredRule[] = [];
+  for await (const rule of parseFilterListStream(Readable.from(chunks), resolved)) {
+    rules.push(rule);
+    if (rules.length % 20000 === 0) await yieldToEventLoop();
+  }
+  console.log(`   Found ${rules.length} rules in ${resolved}`);
+  return rules;
+}
+
+interface ClassifyWorkerResult {
+  measured: Record<string, ThreatCategory>;
+  servedFromCache: number;
+}
+
+/**
+ * Run the ~190k-host malware classify pass in `classifyWorker.cjs` instead of
+ * on the event loop. User feedback tunings go with `workerData` so the worker
+ * classifies as the same model the inline path would have; progress ticks are
+ * forwarded so the compile UI keeps moving while the worker runs.
+ * `__dirname` inside the main bundle is `.webpack/main/` — the sibling worker
+ * bundle ships next to it in dev and inside the asar when packaged.
+ */
+function runClassifyWorker(
+  candidates: string[],
+  priorVerdicts: Record<string, ThreatCategory>,
+  onProgress: (done: number) => void
+): Promise<ClassifyWorkerResult> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const worker = new Worker(join(__dirname, 'classifierWorker.cjs'), {
+      workerData: {
+        candidates,
+        priorVerdicts,
+        feedback: globalMiniAiClassifier.exportFeedback(),
+        progressEvery: 5000,
+      },
+    });
+    let settled = false;
+    worker.on('message', (msg: { type?: string; done?: number } & Partial<ClassifyWorkerResult>) => {
+      if (msg?.type === 'progress' && typeof msg.done === 'number') {
+        onProgress(msg.done);
+      } else if (msg?.type === 'result' && msg.measured) {
+        settled = true;
+        resolvePromise({
+          measured: msg.measured,
+          servedFromCache: typeof msg.servedFromCache === 'number' ? msg.servedFromCache : 0,
+        });
+      }
+    });
+    worker.once('error', rejectPromise);
+    worker.once('exit', (code) => {
+      if (!settled) {
+        rejectPromise(new Error(`classifier worker exited with code ${code}`));
+      }
+    });
+  });
+}
+
 // Global cache of latest compiled rules for real-time inspection
 let latestCompiledRules: StoredRule[] = [];
+
+/**
+ * The compile pipeline, exposed once `initialize()` wires its IPC handler, so
+ * the auto-schedule timer can drive a real compile instead of only logging
+ * that one was due. Null until the app is ready; the timer skips it then.
+ */
+let compileInvoker:
+  | ((sender?: WebContents | null) => Promise<unknown>)
+  | null = null;
 
 // Auto-schedule background timer
 let autoScheduleTimer: NodeJS.Timeout | null = null;
@@ -607,8 +727,13 @@ function setupAutoScheduleTimer(schedule: 'disabled' | '12h' | '24h' | 'weekly',
   if (intervalMs > 0) {
     console.log(`[AutoSchedule] Enabled background compilation schedule: ${schedule} (${intervalMs}ms)`);
     autoScheduleTimer = setInterval(async () => {
+      if (!compileInvoker) return;
       console.log('[AutoSchedule] Triggering scheduled filter list compilation...');
-      // Internal trigger can use existing sources
+      try {
+        await compileInvoker(null);
+      } catch (err) {
+        console.error('[AutoSchedule] Scheduled compilation failed:', err);
+      }
     }, intervalMs);
     autoScheduleTimer?.unref?.();
   }
@@ -2784,9 +2909,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     );
 
     // High-performance concurrent filter processor
-    ipcMain.handle('run-import-process', async (_event: IpcMainInvokeEvent) => {
+    async function runImportProcess(sender?: WebContents | null) {
       const startTime = Date.now();
-      const sender = _event.sender;
       const sendProgress = (data: { status: string; percent: number }) => {
         // Mirror progress into the menu-bar tray as well as the renderer.
         trayCompileProgress = data;
@@ -2858,7 +2982,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               `[IPC Main] Concurrent fetch: ${source.name} (${source.url})`
             );
             try {
-              const rules = await downloadAndParseSource(source.url);
+              const rules = await fetchAndParseSource(source.url);
               finishedCount++;
               const percent = Math.floor(10 + (finishedCount / totalSources) * 45);
               sendProgress({
@@ -2896,6 +3020,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           const rules = res.rules;
           const rulesLen = rules.length;
           for (let i = 0; i < rulesLen; i++) {
+            if (i !== 0 && i % 20000 === 0) await yieldToEventLoop();
             const rule = rules[i];
             if (!rule || !rule.raw) continue;
             const strippedRule =
@@ -3217,11 +3342,12 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // only reused when the classifier that would answer today is the one that answered then.
         try {
           const candidates = new Set<string>();
-          for (const rule of uniqueRules) {
+          for (let i = 0; i < uniqueRules.length; i++) {
+            if (i !== 0 && i % 10000 === 0) await yieldToEventLoop();
             // `extractHostFromRule` refuses `@@` exceptions, cosmetic filters and scoped rules, so
             // an allow rule can never become a block rule here — the same refusal the tier
             // compiler and the ledger reader rely on.
-            const host = extractHostFromRule(rule?.raw);
+            const host = extractHostFromRule(uniqueRules[i]?.raw);
             if (host) candidates.add(host);
           }
 
@@ -3247,15 +3373,42 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           // accumulate in the file run over run.
           const measured: Record<string, ThreatCategory> = Object.create(null);
           let servedFromCache = 0;
-          for (const host of candidates) {
-            // `hasOwn` rather than truthiness: the record is null-prototype and validated on
-            // parse, but a key must be present to mean anything — never inherit a lookup.
-            const cached = Object.hasOwn(priorVerdicts, host) ? priorVerdicts[host] : undefined;
-            const category =
-              cached ?? globalMiniAiClassifier.classify(host).category;
-            if (cached !== undefined) servedFromCache += 1;
-            measured[host] = category;
-            if (category === 'Malware/Phishing') verdicts.push(host);
+          const candidateList = [...candidates];
+          // The pass is ~130s of synchronous CPU on a cold cache — too long to keep on the
+          // event loop even with yields, so the worker bundle does it when it can. The
+          // inline path below stays for the case where the worker cannot start.
+          let workerResult: ClassifyWorkerResult | null = null;
+          try {
+            workerResult = await runClassifyWorker(candidateList, priorVerdicts, (done) => {
+              sendProgress({
+                status: `Classifying ${done.toLocaleString()} of ${candidateList.length.toLocaleString()} hosts (mini-AI)...`,
+                percent: 97,
+              });
+            });
+          } catch (workerErr) {
+            console.warn(
+              '[IPC Main] Classifier worker unavailable, classifying inline:',
+              workerErr
+            );
+          }
+          if (workerResult) {
+            Object.assign(measured, workerResult.measured);
+            servedFromCache = workerResult.servedFromCache;
+          } else {
+            let classifiedCount = 0;
+            for (const host of candidates) {
+              if (++classifiedCount % 250 === 0) await yieldToEventLoop();
+              // `hasOwn` rather than truthiness: the record is null-prototype and validated on
+              // parse, but a key must be present to mean anything — never inherit a lookup.
+              const cached = Object.hasOwn(priorVerdicts, host) ? priorVerdicts[host] : undefined;
+              const category =
+                cached ?? globalMiniAiClassifier.classify(host).category;
+              if (cached !== undefined) servedFromCache += 1;
+              measured[host] = category;
+            }
+          }
+          for (const host of candidateList) {
+            if (measured[host] === 'Malware/Phishing') verdicts.push(host);
           }
           const elapsed = Date.now() - classifyStartedAt;
 
@@ -3372,7 +3525,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           timestamp: new Date().toLocaleString(),
         };
       }
-    });
+    }
+
+    compileInvoker = runImportProcess;
+
+    ipcMain.handle('run-import-process', async (_event: IpcMainInvokeEvent) =>
+      runImportProcess(_event.sender)
+    );
 
     // --- Domain Inspector IPC Handler ---
     ipcMain.handle('inspect-domain', async (_event, domainQuery: string): Promise<DomainInspectionResult> => {
