@@ -52,6 +52,7 @@ jobs:
         run: scripts/weekly-tier-compile.sh
 
       - name: Open a PR for the regenerated artifacts
+        id: pull-request
         uses: peter-evans/create-pull-request@v6
         with:
           branch: weekly/ledger-cut
