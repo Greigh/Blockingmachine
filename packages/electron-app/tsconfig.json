@@ -8,14 +8,12 @@
     "strict": true,
     "skipLibCheck": true,
     "jsx": "react",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": false,
-    "outDir": ".webpack",
-    "baseUrl": ".",
+    "noEmit": true,
     "paths": {
-      "@/*": ["src/*"],
+      "@/*": ["./src/*"],
       "@blockingmachine/core": ["../core/src/index.ts"],
       "@blockingmachine/core/sources": ["../core/src/sources.ts"]
     },

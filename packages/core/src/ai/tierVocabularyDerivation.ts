@@ -22,14 +22,20 @@
  *
  * A vocabulary derived from the tier files and then graded against the tier files would prove
  * nothing: the model would agree with the list because it was taught the list. So this module only
- * produces *candidates*, and three separate things decide whether one is admitted:
+ * produces *candidates*, and four separate things decide whether one is admitted:
  *
  *  1. **The model has to move.** Each candidate is installed into the live lists and the host is
  *     classified again. A token that does not change the verdict is refused, which is how a token
  *     that looks like a name but is not the signal gets caught.
  *  2. **The tier has to accept the family.** {@link TIER_MODEL_FAMILIES} is the same contract the
  *     agreement suite grades with, and it is enforced here rather than asserted afterwards.
- *  3. **The corpus has to hold.** An independent, hand-labelled corpus of clean, ad, measurement
+ *  3. **A bare label needs its apex listed.** A token without a dot — `walmart`, from
+ *     `metrics.walmart.com` — claims the whole brand zone, so it is admitted only when the
+ *     tier itself listed `walmart.com`. The corpus cannot see this: a brand the corpus does
+ *     not know never collides with it, which is how `walmart`/`westpac`/`1800contacts`
+ *     passed the gate while naming first-party brands. The compound `zone.sld` form is
+ *     exempt — its reach stays inside the listed subdomain's subtree.
+ *  4. **The corpus has to hold.** An independent, hand-labelled corpus of clean, ad, measurement
  *     and malicious domains is evaluated before and after; the driver refuses to write a
  *     vocabulary that costs a false positive on any of them. This is the part that keeps
  *     derivation honest, because it is the one instrument that was not built out of the tiers.
@@ -44,6 +50,7 @@
  */
 
 import { normalizeHostname } from './hostname.js';
+import { decomposeDomain } from './entropy.js';
 import type { ThreatCategory } from './types.js';
 import type { StaticTierId } from '../tiers.js';
 
@@ -54,9 +61,10 @@ import type { StaticTierId } from '../tiers.js';
  * the point of it. `tier_privacy` also accepts `Advertising` because ad-verification vendors
  * (`adsafeprotected.com`, `doubleverify.com`) are filed there but are programmatic ad
  * infrastructure — the model calling them what they are is a filing choice, not a contradiction.
- * `tier_annoyances` accepts both blocking families rather than requiring none: the classifier has
- * no annoyance category at all, so a consent platform it *can* place has to be placed as the
- * third-party data processor it is, and the tier's contract says which labels that may be.
+ * `tier_annoyances` accepts only `Consent/Annoyance`: the classifier now has a consent category,
+ * so a CMP vendor filed as telemetry or advertising is a misfile rather than the nearest true
+ * label, and hosts that genuinely are multi-family (a tracker that also runs a CMP) are recorded
+ * as disagreements the tier knows about instead of being silently accepted.
  *
  * `tier_security` is the inverted tier and is not a vocabulary source — see the module header.
  */
@@ -64,7 +72,7 @@ export const TIER_MODEL_FAMILIES: Partial<Record<StaticTierId, readonly ThreatCa
   tier_core: ['Advertising', 'Telemetry/Analytics', 'CNAME Cloaking'],
   tier_ads: ['Advertising'],
   tier_privacy: ['Advertising', 'Telemetry/Analytics', 'CNAME Cloaking'],
-  tier_annoyances: ['Telemetry/Analytics', 'Advertising'],
+  tier_annoyances: ['Consent/Annoyance'],
   tier_security: ['Malware/Phishing'],
 };
 
@@ -99,6 +107,11 @@ export const GENERIC_VOCABULARY_LABELS: ReadonlySet<string> = new Set([
   // Registrable-name-adjacent words that a host may legitimately be.
   'content', 'media', 'news', 'shop', 'store', 'support', 'server', 'servers', 'services',
   'service', 'network', 'networks', 'group', 'global', 'digital', 'online', 'web',
+  // Consent/annoyance function words: the defensible ones are hand-written in reputation.ts,
+  // so a tier host named `consent.example.com` may never mint `consent` as a vendor token.
+  'consent', 'consents', 'cmp', 'gdpr', 'ccpa', 'cookie', 'cookies', 'cookieconsent',
+  'consentmanager', 'cookienotice', 'popup', 'popups', 'newsletter', 'newsletters',
+  'survey', 'surveys', 'notification', 'notifications', 'webpush', 'optin', 'subscribe',
   // Ordinary English words the shipped tiers contain as vendor names.
   'privy',
 ]);
@@ -133,14 +146,16 @@ export function isUsableVocabularyToken(token: string): boolean {
 export function vocabularyCandidatesFor(host: string): string[] {
   const clean = normalizeHostname(host);
   if (!clean) return [];
-  const labels = clean.split('.');
-  if (labels.length < 2) return [];
+  const { sld, subdomains } = decomposeDomain(clean);
+  if (!sld || sld === clean) return [];
 
   const candidates: string[] = [];
-  const sld = labels[labels.length - 2];
   // A label ahead of the registrable label is a zone the vendor runs (`ct.pinterest.com`,
-  // `business-api.tiktok.com`), and taking the pair keeps the token inside that zone.
-  if (labels.length >= 3) candidates.push(`${labels[labels.length - 3]}.${sld}`);
+  // `business-api.tiktok.com`), and taking the pair keeps the token inside that zone. The pair
+  // is built from the decomposition, not raw label positions — a naive `labels[len-3]` on
+  // `metrics.westpac.com.au` mints `westpac.com`, which names a different registrable domain
+  // entirely rather than staying inside `westpac.com.au`.
+  if (subdomains.length > 0) candidates.push(`${subdomains[subdomains.length - 1]}.${sld}`);
   candidates.push(sld);
 
   const seen = new Set<string>();
@@ -290,9 +305,19 @@ export function compareTierVocabularyCorpus(
   };
 }
 
+/**
+ * Which of the classifier's keyword vocabularies a token belongs to.
+ *
+ * `consent` is the annoyance tier's own axis: the classifier gained a consent/annoyance
+ * category, so the tokens the tier teaches are the CMP and popup vendor names its hosts
+ * carry — filed under the family they are, not the telemetry or ad family they used to be
+ * approximated by.
+ */
+export type TierVocabularyKind = 'ad' | 'tracker' | 'consent';
+
 export interface TierVocabularyEvidence {
   token: string;
-  vocabulary: 'ad' | 'tracker';
+  vocabulary: TierVocabularyKind;
   /** The tier the token was derived from, and the one the agreement suite will grade it under. */
   tier: StaticTierId;
   /** Hosts from that tier the token places. */
@@ -303,7 +328,7 @@ export interface TierVocabularyEvidence {
 
 export interface TierVocabularyAttempt {
   token: string;
-  vocabulary: 'ad' | 'tracker';
+  vocabulary: TierVocabularyKind;
   /** True when the hand-written vocabulary already carries this token. */
   present: boolean;
   /** What the host was called with the token installed. */
@@ -315,6 +340,12 @@ export interface TierVocabularyAttempt {
    * candidate that did nothing has nothing for the corpus to object to.
    */
   gate?: string;
+  /**
+   * Why a bare-label candidate was refused on attestation grounds, when it was — the apex the
+   * token names was never listed under the same family, so the subdomain's evidence could not
+   * attest the whole brand.
+   */
+  attestation?: string;
 }
 
 export interface TierVocabularyRejection {
@@ -327,12 +358,15 @@ export interface TierVocabularyRejection {
 export interface TierVocabularyDerivation {
   adTokens: string[];
   trackerTokens: string[];
+  consentTokens: string[];
   evidence: TierVocabularyEvidence[];
   rejections: TierVocabularyRejection[];
   /** Hosts taken from the tiers and asked about, in the order they were considered. */
   seedsConsidered: number;
   /** Candidates that moved a host but were refused by the independent corpus. */
   corpusRefusals: number;
+  /** Bare-label candidates refused because the brand's apex was not itself listed. */
+  apexRefusals: number;
 }
 
 /**
@@ -354,12 +388,14 @@ export interface TierVocabularyProvenance {
    * derivation's output, and a derivation that seeded itself with its own output would shrink its
    * own seed set on every run and never be reproducible.
    */
-  seedVocabulary: { adTokens: number; trackerTokens: number };
+  seedVocabulary: { adTokens: number; trackerTokens: number; consentTokens: number };
   seedsConsidered: number;
   acceptedTokens: number;
   rejectedHosts: number;
   /** Candidates the model accepted that the independent corpus refused. */
   corpusRefusals: number;
+  /** Bare-label candidates the apex attestation refused. */
+  apexRefusals: number;
   /** The independent corpus, before and after the vocabulary was installed. */
   corpus: {
     total: number;
@@ -392,7 +428,7 @@ export function tierVocabularyProvenance(input: {
   /** What the seed pass read, per tier. */
   seedSet: TierVocabularySeedSet;
   /** The hand-written tokens the seed pass ran with. */
-  seedVocabulary: { adTokens: number; trackerTokens: number };
+  seedVocabulary: { adTokens: number; trackerTokens: number; consentTokens: number };
   derivation: TierVocabularyDerivation;
   /** The independent corpus before any candidate was considered. */
   baseline: TierVocabularyCorpusSample;
@@ -409,9 +445,13 @@ export function tierVocabularyProvenance(input: {
     hostsRead: seedSet.hostsRead,
     seedVocabulary: input.seedVocabulary,
     seedsConsidered: derivation.seedsConsidered,
-    acceptedTokens: derivation.adTokens.length + derivation.trackerTokens.length,
+    acceptedTokens:
+      derivation.adTokens.length +
+      derivation.trackerTokens.length +
+      derivation.consentTokens.length,
     rejectedHosts: derivation.rejections.length,
     corpusRefusals: derivation.corpusRefusals,
+    apexRefusals: derivation.apexRefusals,
     corpus: final
       ? {
           total: final.total,
@@ -487,6 +527,11 @@ ${tokens.map((token) => `  '${token}',`).join('\n')}
   lines.push(tokenList(derivation.trackerTokens));
   lines.push(';');
   lines.push('');
+  lines.push('/** Vendors the annoyance tier carries whose names read as consent-management or annoyance platforms. */');
+  lines.push('export const TIER_DERIVED_CONSENT_TOKENS: readonly string[] = ');
+  lines.push(tokenList(derivation.consentTokens));
+  lines.push(';');
+  lines.push('');
   lines.push('/** Which host justified which token, and the family it places that host in. */');
   lines.push('export const TIER_VOCABULARY_EVIDENCE: readonly TierVocabularyEvidence[] =');
   lines.push(JSON.stringify(derivation.evidence, null, 2));
@@ -511,10 +556,18 @@ export interface DeriveTierVocabularyInput {
   /** The hosts the model cannot place, with the tier that ships them. */
   seeds: readonly TierVocabularySeed[];
   /** The vocabulary in the hand-written lists, so an already-carried token is reported as such. */
-  knownTokens?: { adTokens?: readonly string[]; trackerTokens?: readonly string[] };
+  knownTokens?: {
+    adTokens?: readonly string[];
+    trackerTokens?: readonly string[];
+    consentTokens?: readonly string[];
+  };
   /** Runs `fn` with extra tokens installed in the live lists, then restores them. */
   withVocabulary: <T>(
-    tokens: { adTokens?: readonly string[]; trackerTokens?: readonly string[] },
+    tokens: {
+      adTokens?: readonly string[];
+      trackerTokens?: readonly string[];
+      consentTokens?: readonly string[];
+    },
     fn: () => T,
   ) => T;
   /** Classifies one host. Called with the accumulated vocabulary installed. */
@@ -529,7 +582,23 @@ export interface DeriveTierVocabularyInput {
   corpusGate?: (tokens: {
     adTokens: readonly string[];
     trackerTokens: readonly string[];
+    consentTokens: readonly string[];
   }) => { ok: boolean; detail: string };
+  /**
+   * The host sets the seeds were drawn from, so a bare-label candidate can be refused when the
+   * brand's own apex was never listed.
+   *
+   * `metrics.walmart.com` in a tier says the publisher tracked that zone — it cannot prove
+   * `walmart` is a vendor, because a bare token also claims `walmart.com`, `mail.walmart.com`
+   * and every other host under the brand. Only `walmart.com` itself, listed in the same tier,
+   * attests the whole zone. The compound `zone.sld` form is exempt: its reach stays inside the
+   * listed subdomain's subtree.
+   *
+   * When omitted the check still runs against the floor it can prove: the seeds themselves,
+   * each of which is in its tier's host set by construction. Real callers should pass the full
+   * sets — an apex that is listed *and* placeable is never a seed, so the floor under-attests.
+   */
+  tierHosts?: ReadonlyMap<StaticTierId, readonly string[]>;
 }
 
 /**
@@ -544,39 +613,85 @@ export interface DeriveTierVocabularyInput {
 export function deriveTierVocabulary(input: DeriveTierVocabularyInput): TierVocabularyDerivation {
   const adTokens: string[] = [];
   const trackerTokens: string[] = [];
+  const consentTokens: string[] = [];
   const evidence: TierVocabularyEvidence[] = [];
   const rejections: TierVocabularyRejection[] = [];
   const knownAd = new Set(input.knownTokens?.adTokens ?? []);
   const knownTracker = new Set(input.knownTokens?.trackerTokens ?? []);
+  const knownConsent = new Set(input.knownTokens?.consentTokens ?? []);
   let corpusRefusals = 0;
+  let apexRefusals = 0;
+
+  // The apex attestation sets: what each tier listed, used to refuse bare-label candidates
+  // whose reach would exceed the evidence. Defaults to the seeds themselves — the floor of
+  // hosts guaranteed listed — when the caller does not pass the full sets.
+  const listedByTier = new Map<StaticTierId, ReadonlySet<string>>();
+  if (input.tierHosts) {
+    for (const [tier, hosts] of input.tierHosts) listedByTier.set(tier, new Set(hosts));
+  } else {
+    for (const seed of input.seeds) {
+      const hosts = listedByTier.get(seed.tier) ?? new Set<string>();
+      if (!listedByTier.has(seed.tier)) listedByTier.set(seed.tier, hosts);
+      (hosts as Set<string>).add(normalizeHostname(seed.host) || seed.host);
+    }
+  }
 
   for (const seed of input.seeds) {
     const families = seed.families ?? TIER_MODEL_FAMILIES[seed.tier] ?? [];
     const candidates = vocabularyCandidatesFor(seed.host);
     const attempts: TierVocabularyAttempt[] = [];
-    let placed: { token: string; vocabulary: 'ad' | 'tracker'; family: ThreatCategory } | null = null;
+    let placed: { token: string; vocabulary: TierVocabularyKind; family: ThreatCategory } | null = null;
+    const hostLabels = normalizeHostname(seed.host).split('.');
+    const apex = hostLabels.length >= 2 ? hostLabels.slice(-2).join('.') : seed.host;
 
     for (const token of candidates) {
-      // The tracker list is tried first for every tier but the ad tier: if the model has to file a
-      // vendor under one of two coarse families, the one that describes data collection is the
-      // truthful one, and the ad family is the fallback rather than the default.
-      const order: Array<'tracker' | 'ad'> = seed.tier === 'tier_ads' ? ['ad'] : ['tracker', 'ad'];
+      // The list tried first is the tier's own family: the ad tier tries ad vocabulary, the
+      // annoyance tier tries consent vocabulary, and everything else tries the tracker list
+      // because data collection is the truthful approximation when a tier carries a vendor whose
+      // family the model does not have. The tiers' family contracts make the other orders moot —
+      // a placement a family does not accept is recorded in the attempts and refused either way.
+      const order: TierVocabularyKind[] =
+        seed.tier === 'tier_ads'
+          ? ['ad']
+          : seed.tier === 'tier_annoyances'
+          ? ['consent']
+          : ['tracker', 'ad'];
       for (const vocabulary of order) {
-        const isAd = vocabulary === 'ad';
-        const present = isAd ? knownAd.has(token) : knownTracker.has(token);
-        const nextAd = isAd ? [...adTokens, token] : adTokens;
-        const nextTracker = isAd ? trackerTokens : [...trackerTokens, token];
+        const present =
+          vocabulary === 'ad'
+            ? knownAd.has(token)
+            : vocabulary === 'tracker'
+            ? knownTracker.has(token)
+            : knownConsent.has(token);
+        const nextAd = vocabulary === 'ad' ? [...adTokens, token] : adTokens;
+        const nextTracker = vocabulary === 'tracker' ? [...trackerTokens, token] : trackerTokens;
+        const nextConsent = vocabulary === 'consent' ? [...consentTokens, token] : consentTokens;
         const attempt: TierVocabularyAttempt = { token, vocabulary, present, family: 'Clean' };
         attempt.family = input.withVocabulary(
-          { adTokens: nextAd, trackerTokens: nextTracker },
+          { adTokens: nextAd, trackerTokens: nextTracker, consentTokens: nextConsent },
           () => input.classifyHost(seed.host),
         );
         attempts.push(attempt);
         if (!families.includes(attempt.family)) continue;
 
+        // A bare label claims the brand's whole zone, not just the listed subdomain — so it is
+        // admitted only when the apex itself was listed under the same family. `metrics.x` may
+        // place the zone `metrics`; it may not place `x` on a subdomain row's say-so.
+        if (!token.includes('.') && !(listedByTier.get(seed.tier)?.has(apex) ?? false)) {
+          attempt.attestation =
+            `refused: '${token}' is a bare label naming ${apex}, ` +
+            `which ${seed.tier} did not list — a subdomain row cannot attest the whole brand`;
+          apexRefusals += 1;
+          continue;
+        }
+
         // The model moved, and now the one instrument that was not built out of the tiers decides.
         if (input.corpusGate) {
-          const gate = input.corpusGate({ adTokens: nextAd, trackerTokens: nextTracker });
+          const gate = input.corpusGate({
+            adTokens: nextAd,
+            trackerTokens: nextTracker,
+            consentTokens: nextConsent,
+          });
           attempt.gate = gate.detail;
           if (!gate.ok) {
             corpusRefusals += 1;
@@ -591,12 +706,17 @@ export function deriveTierVocabulary(input: DeriveTierVocabularyInput): TierVoca
     }
 
     if (!placed) {
-      const movedButRefused = attempts.some((attempt) => attempt.gate && !attempt.gate.startsWith('passed'));
+      const movedButRefused = attempts.some(
+        (attempt) => (attempt.gate && !attempt.gate.startsWith('passed')) || attempt.attestation,
+      );
       rejections.push({
         tier: seed.tier,
         host: seed.host,
         reason: candidates.length === 0
           ? 'no candidate label survived the vocabulary rules (too short, generic, or a function word)'
+          : attempts.some((attempt) => attempt.attestation) &&
+            !attempts.some((attempt) => attempt.gate && !attempt.gate.startsWith('passed'))
+          ? 'the only candidates that moved this host were bare labels the tier could not attest'
           : movedButRefused
           ? 'the only candidates that moved this host were refused by the independent corpus'
           : 'no candidate token moved this host into a family the tier may be called',
@@ -605,7 +725,12 @@ export function deriveTierVocabulary(input: DeriveTierVocabularyInput): TierVoca
       continue;
     }
 
-    const list = placed.vocabulary === 'ad' ? adTokens : trackerTokens;
+    const list =
+      placed.vocabulary === 'ad'
+        ? adTokens
+        : placed.vocabulary === 'tracker'
+        ? trackerTokens
+        : consentTokens;
     if (!list.includes(placed.token)) list.push(placed.token);
     const existing = evidence.find(
       (entry) => entry.token === placed!.token && entry.vocabulary === placed!.vocabulary,
@@ -625,6 +750,7 @@ export function deriveTierVocabulary(input: DeriveTierVocabularyInput): TierVoca
 
   adTokens.sort();
   trackerTokens.sort();
+  consentTokens.sort();
   evidence.sort((a, b) =>
     a.token === b.token ? a.tier.localeCompare(b.tier) : a.token.localeCompare(b.token),
   );
@@ -632,9 +758,11 @@ export function deriveTierVocabulary(input: DeriveTierVocabularyInput): TierVoca
   return {
     adTokens,
     trackerTokens,
+    consentTokens,
     evidence,
     rejections,
     seedsConsidered: input.seeds.length,
     corpusRefusals,
+    apexRefusals,
   };
 }

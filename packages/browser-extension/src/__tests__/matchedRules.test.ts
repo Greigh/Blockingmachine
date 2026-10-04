@@ -4,11 +4,20 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_MATCHED_RULES_BUDGET,
+  LIVE_MATCH_HORIZON_MS,
+  LIVE_MATCH_PAIRING_MS,
   canRequestMatchedRules,
+  dedupePolledRecords,
   hostFromFilter,
+  ledgerLineFor,
+  liveMatchKey,
+  makeKeyedSerializer,
+  matchIsBlock,
   matchedRulesQuotaView,
   readMatchedRuleRecords,
+  recordLiveMatch,
   summarizeMatches,
+  type LiveMatchLog,
 } from '../background/matchedRules.js';
 
 const extensionRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -211,11 +220,173 @@ describe('hostFromFilter', () => {
   });
 });
 
+describe('ledgerLineFor', () => {
+  test('a block rule is its own urlFilter', () => {
+    expect(ledgerLineFor('||ads.example^', 'block', {}, 1)).toBe('||ads.example^');
+  });
+
+  test('an allow match becomes an exception line, not a block', () => {
+    // `@@||host^` and `||host^` compile to the *same* urlFilter — the action is the only
+    // thing keeping a paused site or an exception off the block axis and out of the hot set.
+    expect(ledgerLineFor('||site.example^', 'allow', {}, 2)).toBe('@@||site.example^');
+    expect(ledgerLineFor('||site.example^', 'allowAllRequests', {}, 1000)).toBe(
+      '@@||site.example^',
+    );
+    expect(matchIsBlock('allow')).toBe(false);
+    expect(matchIsBlock('allowAllRequests')).toBe(false);
+    expect(matchIsBlock(undefined)).toBe(true);
+  });
+
+  test('the initiator scope rides along so a scoped rule round-trips scoped', () => {
+    // Without the `$domain=` suffix, `||host^$domain=site` would be recorded as `||host^`
+    // and reinstalled globally the next time the ledger rebuilt the hot set.
+    expect(
+      ledgerLineFor('||ads.example^', 'block', { initiatorDomains: ['news.example'] }, 1),
+    ).toBe('||ads.example^$domain=news.example');
+    expect(
+      ledgerLineFor('||ads.example^', 'allow', {
+        initiatorDomains: ['news.example'],
+        excludedInitiatorDomains: ['blog.news.example'],
+      }),
+    ).toBe('@@||ads.example^$domain=news.example|~blog.news.example');
+  });
+
+  test('the important modifier survives as `,important`', () => {
+    expect(ledgerLineFor('||ads.example^', 'block', {}, 3)).toBe(
+      '||ads.example^$important',
+    );
+    expect(
+      ledgerLineFor('||ads.example^', 'block', { initiatorDomains: ['a.example'] }, 3),
+    ).toBe('||ads.example^$domain=a.example,important');
+  });
+});
+
+describe('the match path records the line, not the bare filter', () => {
+  const background = readFileSync(join(extensionRoot, 'src/background/index.ts'), 'utf8');
+
+  test('resolveMatchedFilter carries the action and reconstructs the ledger line', () => {
+    // The regression this pins: a snapshot that dropped `rule.action.type` recorded an allow
+    // match's urlFilter as a block hit, and `firedRules()` then exported a paused site's
+    // allowAllRequests as a block line — reinstalled as a global block on the next apply.
+    expect(background).toContain('action: rule.action?.type');
+    expect(background).toContain('initiatorDomains: rule.condition?.initiatorDomains');
+    expect(background).toContain('excludedInitiatorDomains: rule.condition?.excludedInitiatorDomains');
+    expect(background).toContain('ledgerLineFor(');
+  });
+
+  test('applyMatches keeps allow matches off every block axis', () => {
+    // Block counters, badge counts, tier attribution and the hot-set tally must all live
+    // behind the same `matchIsBlock` gate — an allow on any one of them is the inversion.
+    const matches = background.indexOf('!matchIsBlock(action)');
+    expect(matches).toBeGreaterThan(-1);
+    const after = background.slice(matches);
+    expect(after.indexOf('ledger.record(line ?? null')).toBeLessThan(
+      after.indexOf('sessionTrackersBlocked += count'),
+    );
+    expect(after).toContain('ruleHits.record(line, count)');
+    expect(after).toContain('ruleHits.recordTier(tier, count)');
+    expect(after).toContain('ledger.record(line ?? null, count, Date.now(), { tier: tier ?? null })');
+  });
+});
+
 describe('the packed-build path has the permission it needs', () => {
   test('the manifest grants activeTab, without which getMatchedRules cannot be called packed', () => {
     const manifest = JSON.parse(readFileSync(join(extensionRoot, 'manifest.json'), 'utf8'));
     // `declarativeNetRequestFeedback` unlocks getMatchedRules for unpacked extensions only; for a
     // packed build the only route is `activeTab` granted on the tab named in the filter.
     expect(manifest.permissions).toContain('activeTab');
+  });
+});
+
+describe('live-match dedup', () => {
+  function log(): LiveMatchLog {
+    return new Map();
+  }
+
+  test('a polled record a live arrival already claimed is not counted again', () => {
+    const live = log();
+    // The debug event carries no timestamp; its arrival at ~match time is the record.
+    recordLiveMatch(live, liveMatchKey(3, '_dynamic', 7), 10_000, 10_000);
+    const records = dedupePolledRecords([record(7, 3, 10_050)], live);
+    expect(records).toHaveLength(0);
+    // The stamp was consumed, so a second identical poll is not deduplicated against it.
+    expect(dedupePolledRecords([record(7, 3, 10_060)], live)).toHaveLength(1);
+  });
+
+  test('a record no live arrival saw is fresh — the wake-drop case this exists for', () => {
+    const live = log();
+    recordLiveMatch(live, liveMatchKey(3, '_dynamic', 7), 10_000, 10_000);
+    // A match live delivery dropped has the same key but a different timestamp… unless it
+    // sits inside the pairing window — then it cannot be told apart, which is why the worker
+    // is expected to be either alive (all live) or down (all polled), not straddling a match.
+    const missed = record(7, 3, 10_000 + LIVE_MATCH_PAIRING_MS + 5_000);
+    expect(dedupePolledRecords([missed], live)).toHaveLength(1);
+  });
+
+  test('records pair against the same key across tabs and rulesets, never across them', () => {
+    const live = log();
+    recordLiveMatch(live, liveMatchKey(3, 'tier_ads', 9), 50_000, 50_000);
+    expect(dedupePolledRecords([record(9, 4, 50_000, 'tier_ads')], live)).toHaveLength(1);
+    expect(dedupePolledRecords([record(9, 3, 50_000, 'tier_ads')], live)).toHaveLength(0);
+  });
+
+  test('live stamps prune once they pass the horizon the poll can still report', () => {
+    const live = log();
+    const key = liveMatchKey(3, '_dynamic', 7);
+    recordLiveMatch(live, key, 100_000, 100_000);
+    recordLiveMatch(live, key, 100_000 + LIVE_MATCH_HORIZON_MS + 1, 100_000 + LIVE_MATCH_HORIZON_MS + 1);
+    // The first stamp aged out; the second survives.
+    expect(live.get(key)).toEqual([100_000 + LIVE_MATCH_HORIZON_MS + 1]);
+  });
+
+  test('the poll side and the live side build the same key from their different shapes', () => {
+    // summarizeMatches groups by this key too, so a tally and a live event name one match alike.
+    expect(liveMatchKey(3, '_dynamic', 7)).toBe('3#_dynamic#7');
+    expect(liveMatchKey(3, undefined, 7)).toBe('3#_dynamic#7');
+    expect(liveMatchKey(3, 'tier_ads', 9)).toBe('3#tier_ads#9');
+  });
+});
+
+describe('makeKeyedSerializer', () => {
+  test('read-modify-writes on one key cannot clobber each other', async () => {
+    // The failure this guards: two match events each read the stored count, add one and write —
+    // unchained, the second overwrites the first and an increment vanishes.
+    const stored = { value: 0 };
+    const commit = makeKeyedSerializer<number>();
+    const readModifyWrite = () => async () => {
+      const read = stored.value;
+      await new Promise((r) => setTimeout(r, 5));
+      stored.value = read + 1;
+    };
+    await Promise.all([
+      commit(3, readModifyWrite()),
+      commit(3, readModifyWrite()),
+      commit(3, readModifyWrite()),
+    ]);
+    expect(stored.value).toBe(3);
+  });
+
+  test('different keys still run concurrently', async () => {
+    const order: string[] = [];
+    const commit = makeKeyedSerializer<number>();
+    const task = (name: string, ms: number) => async () => {
+      await new Promise((r) => setTimeout(r, ms));
+      order.push(name);
+    };
+    // The fast task on key 4 finishes before the slow one on key 3 — no cross-key blocking.
+    await Promise.all([commit(3, task('slow3', 20)), commit(4, task('fast4', 1))]);
+    expect(order).toEqual(['fast4', 'slow3']);
+  });
+
+  test('a failed commit does not break the chain behind it', async () => {
+    const commit = makeKeyedSerializer<number>();
+    let ran = false;
+    await Promise.all([
+      commit(3, () => Promise.reject(new Error('boom'))).catch(() => {}),
+      commit(3, async () => {
+        ran = true;
+      }),
+    ]);
+    expect(ran).toBe(true);
   });
 });

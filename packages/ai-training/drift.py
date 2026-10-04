@@ -136,8 +136,11 @@ def psi_report(baseline_path: Path, shadow_path: Path) -> dict:
     if not samples:
         raise SystemExit(
             "no sample records in the shadow log — drift needs the unbiased "
-            "production slice. Enable sampleRate in the Electron shadow hook "
-            "(M5) so runShadowComparison logs ~1% of all scored domains."
+            "production slice. The Electron hook passes LEARNED_SHADOW_SAMPLE_RATE "
+            "(1%) explicitly, so reaching this means no watchdog sweep has written "
+            "yet: the AI watchdog is off, the app has not run, or the shadow log is "
+            "empty. Disagreement records alone cannot substitute — they are the "
+            "biased population. See docs/learned-shadow-privacy.md."
         )
     _, _, featurize, _ = load_featurizer(fversion, None)
     domains = [r["domain"] for r in samples]

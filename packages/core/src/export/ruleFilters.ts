@@ -151,6 +151,24 @@ export interface DnsPrecedenceResult {
  * and subdomain allowlisting) for DNS-level exports (hosts, dnsmasq, unbound, bind).
  * Ensures allowlisted domains are pruned from blocking sinkholes.
  */
+/**
+ * Yields a domain's ancestor zones: `a.b.example.com` gives `a.b.example.com`, `b.example.com`,
+ * `example.com`, `com`. Every suffix-cover check in `resolveDnsPrecedence` is a search over the
+ * covering side's keys — and only a domain's own ancestors can cover it — so walking the label
+ * chain turns each lookup from a scan of the whole map into a handful of `Map.get`s. On a real
+ * ~190k-rule compile the scans below were the difference between seconds and a hang.
+ */
+function* ancestorDomains(domain: string, includeSelf = true): Generator<string> {
+  let rest = domain;
+  if (includeSelf) yield rest;
+  let idx = rest.indexOf(".");
+  while (idx >= 0) {
+    rest = rest.slice(idx + 1);
+    yield rest;
+    idx = rest.indexOf(".");
+  }
+}
+
 export function resolveDnsPrecedence(rules: StoredRule[]): DnsPrecedenceResult {
   const dnsRules = filterDNSRules(rules);
 
@@ -187,6 +205,7 @@ export function resolveDnsPrecedence(rules: StoredRule[]): DnsPrecedenceResult {
   const effectiveExceptionsMap = new Map<string, StoredRule>();
   const overriddenExceptionsMap = new Map<string, StoredRule>();
   const allowlistedDomains = new Set<string>();
+  const importantActiveBlocks = new Set<string>();
 
   for (const blockRule of rawBlocks) {
     const domain = getDnsDomain(blockRule);
@@ -194,14 +213,18 @@ export function resolveDnsPrecedence(rules: StoredRule[]): DnsPrecedenceResult {
     const blockDom = domain.toLowerCase();
     const isImportantBlock = getNetworkModifiers(blockRule).includes("important");
 
-    // Check if an exception covers this block rule
+    // Check if an exception covers this block rule. Covering exceptions live on the block's own
+    // ancestor chain, so the walk finds them without scanning every stored exception. An important
+    // answer is the strongest possible, so the walk may stop there; among non-important matches
+    // the most specific ancestor wins, as it did under the scan.
     let coveredByException: ExceptionRecord | null = null;
-    for (const [exDom, exRecord] of exceptionMap) {
-      if (blockDom === exDom || blockDom.endsWith("." + exDom)) {
-        if (!coveredByException || (!coveredByException.isImportant && exRecord.isImportant)) {
-          coveredByException = exRecord;
-        }
+    for (const ancestor of ancestorDomains(blockDom)) {
+      const exRecord = exceptionMap.get(ancestor);
+      if (!exRecord) continue;
+      if (!coveredByException || (!coveredByException.isImportant && exRecord.isImportant)) {
+        coveredByException = exRecord;
       }
+      if (coveredByException.isImportant) break;
     }
 
     if (coveredByException) {
@@ -209,6 +232,7 @@ export function resolveDnsPrecedence(rules: StoredRule[]): DnsPrecedenceResult {
         // Important block overrides normal exception
         overriddenExceptionsMap.set(coveredByException.domain, coveredByException.rule);
         activeBlocksMap.set(blockDom, blockRule);
+        importantActiveBlocks.add(blockDom);
       } else {
         // Exception wins: block rule is pruned from active sinkholes
         effectiveExceptionsMap.set(coveredByException.domain, coveredByException.rule);
@@ -217,15 +241,18 @@ export function resolveDnsPrecedence(rules: StoredRule[]): DnsPrecedenceResult {
     } else {
       // No exception applies: block is retained
       activeBlocksMap.set(blockDom, blockRule);
+      if (isImportantBlock) importantActiveBlocks.add(blockDom);
     }
   }
 
   // A child exception must not create a bypass through an important parent.
   for (const [exDom, exRecord] of exceptionMap) {
-    const importantCoveringBlock = !exRecord.isImportant && Array.from(activeBlocksMap).some(
-      ([blockDom, blockRule]) => (exDom === blockDom || exDom.endsWith("." + blockDom)) &&
-        getNetworkModifiers(blockRule).includes("important"),
-    );
+    const importantCoveringBlock = !exRecord.isImportant && (() => {
+      for (const ancestor of ancestorDomains(exDom)) {
+        if (importantActiveBlocks.has(ancestor)) return true;
+      }
+      return false;
+    })();
     if (importantCoveringBlock) {
       overriddenExceptionsMap.set(exDom, exRecord.rule);
       effectiveExceptionsMap.delete(exDom);
@@ -239,9 +266,10 @@ export function resolveDnsPrecedence(rules: StoredRule[]): DnsPrecedenceResult {
   // Detect subdomain exceptions under active parent zone blocks (for dnsmasq/unbound bypass)
   const subdomainExceptions: { parentDomain: string; subdomain: string; rule: StoredRule }[] = [];
   for (const [exDom, exRule] of effectiveExceptionsMap) {
-    for (const [blockDom] of activeBlocksMap) {
-      if (exDom !== blockDom && exDom.endsWith("." + blockDom)) {
-        subdomainExceptions.push({ parentDomain: blockDom, subdomain: exDom, rule: exRule });
+    for (const ancestor of ancestorDomains(exDom, false)) {
+      const parentRule = activeBlocksMap.get(ancestor);
+      if (parentRule) {
+        subdomainExceptions.push({ parentDomain: ancestor, subdomain: exDom, rule: exRule });
       }
     }
   }

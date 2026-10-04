@@ -4,6 +4,7 @@ import {
   shadowrocketFeedFileName,
   shadowrocketFeedUrl,
   shadowrocketFormatWarning,
+  shadowrocketHomeAssistantUrl,
   shadowrocketSyntaxNote,
 } from '../shadowrocketDeploy';
 
@@ -89,6 +90,46 @@ describe('Shadowrocket deploy helpers', () => {
       const exceptions = SHADOWROCKET_STEPS.find((step) => step.id === 'exceptions')!;
       expect(exceptions.detail).toContain('omitted');
       expect(exceptions.detail).toContain('# EXCEPTION:');
+    });
+  });
+
+  describe('shadowrocketHomeAssistantUrl', () => {
+    test('points at the add-on path, which is not the desktop feed path', () => {
+      expect(shadowrocketHomeAssistantUrl()).toBe('http://homeassistant.local:9191/shadowrocket.conf');
+    });
+
+    test('takes the port, because the add-on\'s is configurable', () => {
+      expect(shadowrocketHomeAssistantUrl(8123)).toBe('http://homeassistant.local:8123/shadowrocket.conf');
+    });
+
+    test('names the add-on host, not the desktop\'s LAN address', () => {
+      // A phone that can reach homeassistant.local is on the LAN; the desktop hub's feed URL is a
+      // different machine, and the whole reason for offering the add-on is that it stays up.
+      expect(shadowrocketHomeAssistantUrl()).not.toContain('192.168');
+    });
+  });
+
+  describe('the Home Assistant add-on alternative', () => {
+    test('is offered as a step, after serving the desktop feed', () => {
+      const ids = SHADOWROCKET_STEPS.map((step) => step.id);
+      expect(ids).toContain('addon');
+      expect(ids.indexOf('addon')).toBeGreaterThan(ids.indexOf('feed'));
+      // Before the paste step, or the user is told to paste a URL that was never offered.
+      expect(ids.indexOf('addon')).toBeLessThan(ids.indexOf('subscribe'));
+    });
+
+    test('says the reason to prefer it: it keeps working when the desktop is off', () => {
+      const addon = SHADOWROCKET_STEPS.find((step) => step.id === 'addon')!;
+      expect(addon.detail).toContain('Home Assistant');
+      expect(addon.detail.toLowerCase()).toContain('shut down');
+    });
+
+    test('is honest that the add-on renders a smaller set than the export', () => {
+      // The add-on reads the DNS feed and cannot express the rules a rule set has no syntax for,
+      // so its count is genuinely lower. Saying "the same" without the caveat would overstate it.
+      const addon = SHADOWROCKET_STEPS.find((step) => step.id === 'addon')!;
+      expect(addon.detail).toContain('lower');
+      expect(addon.detail).toContain('DNS feed');
     });
   });
 

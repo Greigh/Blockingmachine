@@ -1,0 +1,69 @@
+# Browser-reported rule-hit ledger
+# Source: ledger/session-a.json, ledger/session-b.json, ledger/session-c.json, ledger/session-d.json
+# Sessions: 4
+# Days: 1
+# First seen: 2026-10-02
+# Last seen: 2026-10-02
+# Tiers: tier_privacy 60, tier_ads 25, tier_core 24, tier_annoyances 10, tier_unclassified 6
+# Tier sessions: 1 of 4
+# Produced by scripts/merge-browser-ledger.mjs
+#
+# <count> <rule>, highest first. @@ rules are exceptions that fired, not blocks.
+
+598 ||doubleclick.net^
+168 ||log.go.com^
+104 ||amazon-adsystem.com^
+80 ||g.doubleclick.net^
+73 ||googletagmanager.com^
+57 ||googlesyndication.com^
+54 ||googleadservices.com^
+53 ||scorecardresearch.com^
+49 ||cookielaw.org^
+37 ||adsrvr.org^
+34 ||beacon.wikia-services.com^
+30 ||criteo.com^
+30 ||optimizely.com^
+22 ||doubleverify.com^
+21 ||s.amazon-adsystem.com^
+19 ||ad.doubleclick.net^
+19 ||adsafeprotected.com^
+17 ||googletagservices.com^
+17 ||privacy-mgmt.com^
+17 ||rubiconproject.com^
+14 ||criteo.net^
+14 ||media.net^
+13 ||chartbeat.com^
+12 ||metrics.imdb.com^
+11 ||btloader.com^
+11 ||stats.wp.com^
+10 ||imrworldwide.com^
+9 ||taboola.com^
+8 ||ads-static.conde.digital^
+8 ||cdn-magiclinks.trackonomics.net^
+8 ||dianomi.com^
+8 ||direct-events-collector.spot.im^
+8 ||googleads.g.doubleclick.net^
+7 ||connect.facebook.net^
+7 ||onesignal.com^
+7 ||teads.tv^
+6 ||cmp.dmgmediaprivacy.co.uk^
+6 ||collector.github.com^
+6 ||edge.ads.twitch.tv^
+6 ||error-tracking.reddit.com^
+6 ||pixel.wp.com^
+4 ||google-analytics.com^
+4 ||gumgum.com^
+4 ||mybbc-analytics.files.bbci.co.uk^
+3 ||adnxs.com^
+3 ||ads.pubmatic.com^
+3 ||amplitude.com^
+3 ||casalemedia.com^
+3 ||cmp.nature.com^
+3 ||ct.pinterest.com^
+3 ||lijit.com^
+3 ||minutemedia-prebid.com^
+3 ||onetrust.com^
+3 ||osano.com^
+3 ||pubmatic.com^
+2 ||adform.net^
+2 ||quantserve.com^

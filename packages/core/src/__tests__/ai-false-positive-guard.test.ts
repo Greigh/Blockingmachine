@@ -1,3 +1,4 @@
+import { describe, expect, it } from '@jest/globals';
 import { existsSync, readFileSync } from 'node:fs';
 import { AiDetectorService } from '../ai/AiDetectorService.js';
 import { globalMiniAiClassifier } from '../ai/MiniAiClassifier.js';

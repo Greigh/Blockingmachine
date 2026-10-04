@@ -433,7 +433,11 @@ export function synthesizeRules(input: RuleSynthesisInput): string[] {
           rules.push(`||${cleanDomain}^`);
           if (category === 'Advertising' || verdict === 'ad_server') {
             rules.push(`||${cleanDomain}^$dnsrewrite=NOERROR;NODATA`);
-          } else if (category === 'Telemetry/Analytics' || verdict === 'tracker') {
+          } else if (
+            category === 'Telemetry/Analytics' ||
+            category === 'Consent/Annoyance' ||
+            verdict === 'tracker'
+          ) {
             rules.push(`||${cleanDomain}^$third-party`);
           } else if (category === 'Malware/Phishing' || verdict === 'malicious') {
             rules.push(`||${cleanDomain}^$important`);
@@ -467,7 +471,11 @@ export function synthesizeRules(input: RuleSynthesisInput): string[] {
           rules.push(`0.0.0.0 ${cleanDomain}`);
         } else {
           rules.push(`||${cleanDomain}^`);
-          if (category === 'Telemetry/Analytics' || verdict === 'tracker') {
+          if (
+            category === 'Telemetry/Analytics' ||
+            category === 'Consent/Annoyance' ||
+            verdict === 'tracker'
+          ) {
             rules.push(`||${cleanDomain}^$third-party`);
           }
           // Provide cosmetic defuser scriptlet for ad domains
@@ -505,7 +513,11 @@ export function synthesizeRules(input: RuleSynthesisInput): string[] {
             rules.push(`||${cleanDomain}^$third-party`);
           } else if (category === 'Advertising' || verdict === 'ad_server') {
             rules.push(`||${cleanDomain}^`);
-          } else if (category === 'Telemetry/Analytics' || verdict === 'tracker') {
+          } else if (
+            category === 'Telemetry/Analytics' ||
+            category === 'Consent/Annoyance' ||
+            verdict === 'tracker'
+          ) {
             rules.push(`||${cleanDomain}^`);
             rules.push(`||${cleanDomain}^$third-party`);
           } else {

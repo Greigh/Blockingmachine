@@ -17,7 +17,12 @@ Record kinds (all JSON, one per line):
   sample        same fields + {"sample": true} — a random slice of ALL
                 scored domains (opt-in via sampleRate), used for drift.
   summary       {"type": "summary", at, evaluated, disagreements,
-                 modelVersion} — per-sweep counters.
+                 modelVersion} — per-sweep counters. `modelVersion` is
+                 the promotion version of the weights that scored the
+                 sweep, or null when they have no manifest. Written by
+                 the app's shadow scorer once per sweep that scored at
+                 least one domain; `coverage()` splits its totals by
+                 whether that version is known.
 
 Unknown kinds are ignored so the format can grow without breaking
 this parser.
@@ -89,15 +94,38 @@ def load_log(path: Path) -> list[dict]:
 
 
 def coverage(records: list[dict]) -> dict:
-    """Shadow coverage: days spanned, domains scored, from summaries+samples."""
+    """Shadow coverage: days spanned, domains scored, from summaries+samples.
+
+    `scored_domains` counts what the app actually scored, which only
+    summary records can say: a domain the model and the reference agreed
+    about is never written down, so a log of disagreements alone cannot
+    measure how much traffic passed through the model. Summaries are
+    split by `modelVersion` because "30,000 domains scored" means
+    something different when the weights that scored them were never
+    versioned — the count is reported either way, and the unversioned
+    part is reported beside it so a gate report cannot present
+    unversioned evidence as if it identified a model.
+
+    A summary with `evaluated: 0` does not count as a day of shadow: the
+    sweep ran, nothing was scored, and that is not coverage.
+    """
+    summaries = [r for r in records if r["kind"] == "summary"]
+    scored = [r for r in summaries if r.get("evaluated", 0) > 0]
     ats = sorted(r["at"] for r in records if r.get("at"))
-    days = sorted({a[:10] for a in ats})
-    evaluated = sum(r.get("evaluated", 0) for r in records if r["kind"] == "summary")
+    days = sorted({a[:10] for a, r in
+                   ((r["at"], r) for r in records if r.get("at"))
+                   if not (r["kind"] == "summary" and r.get("evaluated", 0) <= 0)})
+    evaluated = sum(r.get("evaluated", 0) for r in summaries)
+    unversioned = sum(r.get("evaluated", 0) for r in scored if r.get("modelVersion") is None)
+    versions = sorted({str(r["modelVersion"]) for r in scored if r.get("modelVersion") is not None})
     return {
         "first_at": ats[0] if ats else None,
         "last_at": ats[-1] if ats else None,
         "days": len(days),
         "scored_domains": evaluated,
+        "summaries": len(summaries),
+        "unversioned_scored_domains": unversioned,
+        "model_versions": versions,
         "disagreement_records": sum(1 for r in records if r["kind"] == "disagreement"),
         "sample_records": sum(1 for r in records if r["kind"] == "sample"),
     }

@@ -4,17 +4,36 @@
  * The tab strip used to be nine hand-written `<button>` blocks: the label, the icon, the id and the
  * order all lived in JSX, so renaming a platform, reordering them, or rendering a tooltip meant
  * editing markup nine times, and nothing tied a tab to the pane behind it. The registry makes the
- * list data — id, label, summary, icon, order — and `DeployHubView` renders it, dispatching the
- * active id to its pane. A new platform is therefore one entry here plus one renderer there.
+ * list data — id, label, summary, icon, order — and `DeployHubView` renders it. A new platform is
+ * therefore one entry here plus one pane module.
  *
- * The pairing is enforced rather than documented: the pane dispatch is a switch whose `default`
- * narrows the id to `never`, so a target added here without a renderer is a compile error instead
- * of a tab that renders nothing.
+ * Each entry also names the pane that renders it. That is the coupling the file exists to hold: the
+ * pane is a required field, so a target added without one does not compile, and it was the same
+ * property as a `switch` whose `default` narrowed to `never`. What changed is which side holds the
+ * link — the registry now points at the pane instead of the Hub pointing at each platform by name —
+ * so the Hub's `renderDeployPane` switch went away with the two thousand lines it dispatched to, and
+ * a target can no longer be spelled out anywhere in the view.
  *
- * Pure data with no `chrome.*`, no IPC and no state, so the list itself is asserted in tests.
+ * The list itself is still inert: no `chrome.*`, no IPC, no state, and no side effects on import.
+ * The pane reference is a render function, which is only markup, and `selectEffect` stays a name
+ * rather than a callback so that adding a platform cannot quietly make the registry do something at
+ * mount time.
  */
 
 import React, { type ReactNode } from 'react';
+import { renderBrowserExtensionPane, browserExtensionPaneKeys } from './panes/BrowserExtensionPane';
+import { renderAdGuardHomePane, adGuardHomePaneKeys } from './panes/AdGuardHomePane';
+import { renderPiholePane, piholePaneKeys } from './panes/PiholePane';
+import { renderHomeAssistantPane, homeAssistantPaneKeys } from './panes/HomeAssistantPane';
+import { renderSystemDaemonPane, systemDaemonPaneKeys } from './panes/SystemDaemonPane';
+import { renderAdGuardDesktopPane, adGuardDesktopPaneKeys } from './panes/AdGuardDesktopPane';
+import { renderHostsPane, hostsPaneKeys } from './panes/HostsPane';
+import { renderDnsmasqPane, dnsmasqPaneKeys } from './panes/DnsmasqPane';
+import { renderUnboundPane, unboundPaneKeys } from './panes/UnboundPane';
+import { renderShadowrocketPane, shadowrocketPaneKeys } from './panes/ShadowrocketPane';
+import { renderPrivoxyPane, privoxyPaneKeys } from './panes/PrivoxyPane';
+import { renderBindPane, bindPaneKeys } from './panes/BindPane';
+import type { DeployPaneRenderer, HubPaneProps } from './panes/paneProps';
 
 /**
  * A side effect a tab runs when it becomes active.
@@ -29,14 +48,22 @@ export type DeploySelectEffect = 'refresh-daemon-status';
  *
  * Deliberately looser than `DeployTargetSpec`: every id here is a plain string literal, because the
  * id union is derived from the list below rather than declared beside it. That is what makes an
- * added target flow all the way through — a new entry widens `DeployTargetId` on its own, so the
- * pane dispatch stops compiling until it handles the new id.
+ * added target flow all the way through — a new entry widens `DeployTargetId` on its own, and
+ * because `pane` is required, the same entry has to say what renders it before it compiles.
  */
 interface DeployTargetEntry {
   id: string;
   label: string;
   summary: string;
   icon: ReactNode;
+  /**
+   * The fields of the Hub bundle the pane reads, imported from the pane module itself so the
+   * declaration and the props type can never drift. The Hub narrows the bundle to this list before
+   * invoking `pane` — a pane receives what it uses, nothing else.
+   */
+  paneKeys: readonly (keyof HubPaneProps)[];
+  /** The pane this tab opens. Required, so a target cannot be added without something to render. */
+  pane: DeployPaneRenderer;
   selectEffect?: DeploySelectEffect;
 }
 
@@ -61,15 +88,31 @@ function tabIcon(children: ReactNode): ReactNode {
 /**
  * The targets, in tab order.
  *
- * Order is deliberate and user-facing: the sinkhole integrations people actually run come first,
- * the hosts/rules/resolver views after them.
+ * Order is deliberate and user-facing: the browser extension is the install most users are here
+ * for, so it leads; the sinkhole integrations follow it, the hosts/rules/resolver views after.
  */
 const TARGETS = [
+  {
+    id: 'browser-extension',
+    label: 'Browser',
+    summary: 'The extension itself: build, download, and load it into the browser.',
+    icon: tabIcon(
+      <>
+        <rect x="2" y="4" width="20" height="16" rx="2" />
+        <path d="M2 9h20" />
+        <path d="M8 4v5" />
+      </>,
+    ),
+    paneKeys: browserExtensionPaneKeys,
+    pane: renderBrowserExtensionPane,
+  },
   {
     id: 'adguard-home',
     label: 'AdGuard Home',
     summary: 'Sync through the AdGuard Home API, Home Assistant, or a webhook.',
     icon: tabIcon(<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />),
+    paneKeys: adGuardHomePaneKeys,
+    pane: renderAdGuardHomePane,
   },
   {
     id: 'pihole',
@@ -85,6 +128,8 @@ const TARGETS = [
         <line x1="15" y1="20" x2="15" y2="23" />
       </>,
     ),
+    paneKeys: piholePaneKeys,
+    pane: renderPiholePane,
   },
   {
     id: 'home-assistant',
@@ -96,6 +141,8 @@ const TARGETS = [
         <polyline points="9 22 9 12 15 12 15 22" />
       </>,
     ),
+    paneKeys: homeAssistantPaneKeys,
+    pane: renderHomeAssistantPane,
   },
   {
     id: 'system-daemon',
@@ -112,6 +159,8 @@ const TARGETS = [
     // The pane reports live service state, so selecting it refreshes rather than showing stale
     // readings from the last mount.
     selectEffect: 'refresh-daemon-status',
+    paneKeys: systemDaemonPaneKeys,
+    pane: renderSystemDaemonPane,
   },
   {
     id: 'adguard-desktop',
@@ -124,6 +173,8 @@ const TARGETS = [
         <line x1="12" y1="17" x2="12" y2="21" />
       </>,
     ),
+    paneKeys: adGuardDesktopPaneKeys,
+    pane: renderAdGuardDesktopPane,
   },
   {
     id: 'hosts',
@@ -135,6 +186,8 @@ const TARGETS = [
         <line x1="12" y1="19" x2="20" y2="19" />
       </>,
     ),
+    paneKeys: hostsPaneKeys,
+    pane: renderHostsPane,
   },
   {
     id: 'dnsmasq',
@@ -147,6 +200,8 @@ const TARGETS = [
         <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
       </>,
     ),
+    paneKeys: dnsmasqPaneKeys,
+    pane: renderDnsmasqPane,
   },
   {
     id: 'unbound',
@@ -159,6 +214,8 @@ const TARGETS = [
         <path d="M12 7v8" />
       </>,
     ),
+    paneKeys: unboundPaneKeys,
+    pane: renderUnboundPane,
   },
   {
     id: 'shadowrocket',
@@ -172,11 +229,13 @@ const TARGETS = [
         <path d="M9 11h6" />
       </>,
     ),
+    paneKeys: shadowrocketPaneKeys,
+    pane: renderShadowrocketPane,
   },
   {
     id: 'privoxy',
     label: 'Privoxy',
-    summary: 'A section-based action-file feed for the Privoxy filtering proxy.',
+    summary: 'A section-based action file for the Privoxy filtering proxy, copied as a local file.',
     icon: tabIcon(
       <>
         <path d="M4 4h16v12H4z" />
@@ -185,6 +244,8 @@ const TARGETS = [
         <path d="M8 8h8" />
       </>
     ),
+    paneKeys: privoxyPaneKeys,
+    pane: renderPrivoxyPane,
   },
   {
     id: 'bind',
@@ -197,6 +258,8 @@ const TARGETS = [
         <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
       </>
     ),
+    paneKeys: bindPaneKeys,
+    pane: renderBindPane,
   },
 ] as const satisfies readonly DeployTargetEntry[];
 
@@ -211,6 +274,13 @@ export interface DeployTargetSpec {
   summary: string;
   /** Inline icon, sized to match the strip. */
   icon: ReactNode;
+  /**
+   * The fields of the Hub bundle this pane reads — the pane module's own list, so what the pane
+   * declares it uses is the same array the Hub narrows the bundle down to before invoking `pane`.
+   */
+  paneKeys: readonly (keyof HubPaneProps)[];
+  /** Renders the tab's pane, given the subset of the Hub's state `paneKeys` names. */
+  pane: DeployPaneRenderer;
   /** Runs when the tab is selected, when the target needs live state to render. */
   selectEffect?: DeploySelectEffect;
 }
@@ -218,8 +288,8 @@ export interface DeployTargetSpec {
 /** The registry the UI reads, in tab order. */
 export const DEPLOY_TARGETS: readonly DeployTargetSpec[] = TARGETS;
 
-/** The tab the Hub opens on. */
-export const DEFAULT_DEPLOY_TARGET_ID: DeployTargetId = 'adguard-home';
+/** The tab the Hub opens on — the extension is the install most users are here for. */
+export const DEFAULT_DEPLOY_TARGET_ID: DeployTargetId = 'browser-extension';
 
 const BY_ID = new Map<string, DeployTargetSpec>(DEPLOY_TARGETS.map((target) => [target.id, target]));
 

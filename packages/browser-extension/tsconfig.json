@@ -10,12 +10,13 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "outDir": "./dist",
-    "baseUrl": ".",
+    "noEmit": true,
     "paths": {
       "@blockingmachine/core/element-ai": ["../core/src/ai/elementClassifier.ts"],
-      "@blockingmachine/core/domain-ai": ["../core/src/ai/MiniAiClassifier.ts"]
-    }
+      "@blockingmachine/core/domain-ai": ["../core/src/ai/MiniAiClassifier.ts"],
+      "@blockingmachine/core/ruleHost": ["../core/src/ruleHost.ts"]
+    },
+    "types": ["chrome"]
   },
   "include": ["src/**/*"]
 }

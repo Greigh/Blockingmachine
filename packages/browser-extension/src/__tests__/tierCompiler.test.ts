@@ -122,6 +122,10 @@ function writeInput(name: string, lines: string[]): string {
 const adsHosts = (count: number) =>
   Array.from({ length: count }, (_, i) => `host-${String(i).padStart(2, '0')}.adnet-example.com`);
 
+/** A second category with the same shape, for the cases that need the split to be contested. */
+const privacyHosts = (count: number) =>
+  Array.from({ length: count }, (_, i) => `host-${String(i).padStart(2, '0')}.tracker-example.com`);
+
 /** The hosts that made it into a tier, in the order the file holds them. */
 const shippedHosts = (tier: string) =>
   readTier(tier).map((rule) => rule.condition.urlFilter.replace(/^\|\||\^$/g, ''));
@@ -228,18 +232,149 @@ describe('tier compiler', () => {
     expect(ads).not.toContain('||plain-name.example^');
   });
 
-  test('places hosts that match no vocabulary in the residual, which is an opt-in tier by default', () => {
+  test('places hosts that match no vocabulary in a tier whose name says so', () => {
     const input = writeInput('unclassifiable.txt', ['0.0.0.0 plain-domain-example.com']);
     const result = runCompiler(['--input', input, '--budget', '1000', '--json']);
 
     expect(result.status).toBe(0);
     const report = JSON.parse(result.stdout);
     expect(report.unclassified).toBe(1);
-    // The default is opt-in on purpose: `tier_core` ships enabled on a fresh install, and most of
-    // a merged blocklist matches no vocabulary at all, so parking these there would silently make
-    // every user block thousands of hosts the classifier could not justify.
-    expect(report.residualTier).toBe('tier_ads');
-    expect(shippedHosts('tier_ads')).toContain('plain-domain-example.com');
+    // The residual used to default to `tier_ads`, which meant the popup's "Ad networks" row shipped
+    // a catch-all: on this repository's real list 104,818 of that tier's 108,459 rules were hosts
+    // nothing had ever called an ad, so enabling a row labelled ad blocking meant turning on
+    // "block everything the lists did not explain". The tier that holds them now says that instead,
+    // and it is still opt-in — `tier_core` ships enabled on a fresh install, and parking hosts the
+    // classifier could not justify there would silently make every user block thousands of them.
+    expect(report.residualTier).toBe('tier_unclassified');
+    expect(shippedHosts('tier_unclassified')).toContain('plain-domain-example.com');
+    // And the point of the split: the categorised tiers hold only what was actually placed in them.
+    expect(shippedHosts('tier_ads')).not.toContain('plain-domain-example.com');
+  });
+
+  test('keeps the residual out of every categorised tier, which is the property the split exists for', () => {
+    // One input holding hosts that each match a different vocabulary, plus hosts that match
+    // nothing at all. The unclassified ones have exactly one place to land, and the point of the
+    // tier is that it is the only place: a host nobody claimed must never turn up under a name
+    // that claims something.
+    const input = writeInput('mixed.txt', [
+      '0.0.0.0 banner-host-adnet-example.com',
+      '0.0.0.0 beacon-metrics-example.com',
+      '0.0.0.0 popup-nag-example.com',
+      '0.0.0.0 utterly-unremarkable-9f3a2b.example',
+      '0.0.0.0 another-bare-domain-71c4.example',
+    ]);
+    const result = runCompiler(['--input', input, '--budget', '1000', '--json']);
+    expect(result.status).toBe(0);
+
+    const unclassifiedHosts = ['utterly-unremarkable-9f3a2b.example', 'another-bare-domain-71c4.example'];
+    const categorised: Array<[string, string]> = [
+      ['tier_ads', 'banner-host-adnet-example.com'],
+      ['tier_privacy', 'beacon-metrics-example.com'],
+      ['tier_annoyances', 'popup-nag-example.com'],
+    ];
+
+    // Every categorised tier holds its own host and only its own.
+    for (const [tier, host] of categorised) {
+      const shipped = shippedHosts(tier);
+      expect([tier, shipped.includes(host)]).toEqual([tier, true]);
+      for (const unclassified of unclassifiedHosts) {
+        expect([tier, unclassified, shipped.includes(unclassified)]).toEqual([tier, unclassified, false]);
+      }
+    }
+    // And the unclassified tier holds both of them, so nothing is lost by refusing to misfile them.
+    const residual = shippedHosts('tier_unclassified');
+    for (const host of unclassifiedHosts) {
+      expect(residual).toContain(host);
+    }
+    expect(residual).not.toContain('banner-host-adnet-example.com');
+  });
+
+  test('a share of zero ships none of the unclassified tier, which is what zero is for', () => {
+    // The flag this closes. Redistribution hands capacity out in proportion to what each tier still
+    // holds back, and this tier holds 104,818 of the 117,303 hosts on the real list — so its share
+    // behaved as a floor. Measured there, `--shares tier_unclassified=0` shipped **19,933** rules,
+    // and the only place that showed up was the per-tier omission line, which reads as ordinary
+    // overflow. An operator turning this bucket off was told, by the output, that it was off.
+    const unclassified = Array.from({ length: 200 }, (_, i) => `0.0.0.0 bare-host-${i}.example`);
+    const input = writeInput('bare.txt', unclassified);
+
+    const off = runCompiler(['--input', input, '--budget', '1000', '--shares', 'tier_unclassified=0', '--json']);
+    expect(off.status).toBe(0);
+    expect(shippedHosts('tier_unclassified')).toHaveLength(0);
+
+    // The omission line names every host it did not ship, because a bucket nobody can switch off is
+    // worse than a silent one: here at least the count is visible in the report.
+    const report = JSON.parse(off.stdout);
+    expect(report.counts.tier_unclassified).toBe(0);
+    expect(report.omitted.tier_unclassified).toBe(200);
+
+    // And the share moves, monotonically, rather than being ignored. Pinned by count because a
+    // share that "binds" to some arbitrary number would pass every other assertion here.
+    // The baseline is re-seeded between runs: the compiler writes over the curated directory it
+    // was pointed at and reads it back as vocabulary, so sharing one directory between two runs
+    // would compare the first run's output rather than the flag's effect.
+    const sizes: number[] = [];
+    for (const share of [0, 10, 20, 40]) {
+      writeBaselineCurated();
+      writeCatalogue(Object.fromEntries(ALL_STATIC_TIER_IDS.map((tier) => [tier, 1])));
+      const result = runCompiler([
+        '--input', input, '--budget', '1000', '--shares', `tier_unclassified=${share}`, '--json',
+      ]);
+      expect(result.status).toBe(0);
+      sizes.push(shippedHosts('tier_unclassified').length);
+    }
+    for (let i = 1; i < sizes.length; i += 1) {
+      expect(sizes[i]).toBeGreaterThan(sizes[i - 1]);
+    }
+    // Four shares, four different answers. The old behaviour gave 19,933 / 20,169 / 20,470 /
+    // 20,780 on the real list — a spread of 4%, which is what "a dial that does nothing" looks like.
+    expect(new Set(sizes).size).toBe(4);
+  });
+
+  test('a budget too small for the share floors the capped tier to nothing, and says so', () => {
+    // Stated rather than left to be discovered. Pass 1 has always floored each tier's cap, so at a
+    // tiny budget the small tiers get zero slots — `tier_security` at a share of 12 out of 112 has
+    // always got nothing from a budget of 8. Capping the residual makes it behave like its
+    // neighbours instead of like a tier that ignores its share, and the operator sees it as
+    // `--shares tier_unclassified=0` behaves: zero.
+    const input = writeInput('bare-small.txt', ['0.0.0.0 bare-host.example']);
+    const result = runCompiler(['--input', input, '--budget', '8', '--json']);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).counts.tier_unclassified).toBe(0);
+  });
+
+  test('the slots a capped residual gives up go to the categorised tiers', () => {
+    // The safety property, and the reason this fix was scoped to one tier rather than applied to
+    // every share. Pass 2 hands capacity to whatever still has candidates, so switching the residual
+    // off does not waste its share — it moves it, to the tiers whose pools are evidence. Making
+    // *every* share a ceiling would take that away: a thin category would waste its slots for good,
+    // which is the bug redistribution exists to prevent.
+    const categorised = Array.from({ length: 2000 }, (_, i) => `0.0.0.0 beacon-metrics-host-${i}.example`);
+    const bare = Array.from({ length: 2000 }, (_, i) => `0.0.0.0 bare-host-${i}.example`);
+    const input = writeInput('mixed-budget.txt', [...categorised, ...bare]);
+
+    const off = JSON.parse(
+      runCompiler(['--input', input, '--budget', '1000', '--shares', 'tier_unclassified=0', '--json']).stdout,
+    );
+    // The compiler writes its output over the curated baseline it was pointed at, and reads that
+    // directory as the vocabulary for the next run — so a second run in the same directory starts
+    // from the first run's 1,000 rules, which are then curated hosts a lower budget may not drop.
+    // Re-seed rather than share a directory between the two runs being compared.
+    writeBaselineCurated();
+    writeCatalogue(Object.fromEntries(ALL_STATIC_TIER_IDS.map((tier) => [tier, 1])));
+    const on = JSON.parse(
+      runCompiler(['--input', input, '--budget', '1000', '--shares', 'tier_unclassified=40', '--json']).stdout,
+    );
+
+    // Nobody loses a rule: every categorised tier is the same size or larger.
+    for (const tier of ['tier_core', 'tier_ads', 'tier_privacy', 'tier_annoyances', 'tier_security']) {
+      expect([tier, off.counts[tier]]).toEqual([tier, expect.any(Number)]);
+      expect(off.counts[tier]).toBeGreaterThanOrEqual(on.counts[tier]);
+    }
+    // And at least one gains measurably, so the assertion above is not passing because nothing moved.
+    expect(off.counts.tier_privacy).toBeGreaterThan(on.counts.tier_privacy);
+    expect(off.counts.tier_unclassified).toBe(0);
+    expect(on.counts.tier_unclassified).toBeGreaterThan(0);
   });
 
   test('an explicit --residual takes the unclassified hosts, including the enabled tier', () => {
@@ -273,6 +408,205 @@ describe('tier compiler', () => {
     expect(missing.stdout).toContain('--residual needs a tier name');
   });
 
+  test('refuses a --shares part that is not a tier instead of compiling on the default split', () => {
+    const input = writeInput('ads.txt', adsHosts(40));
+    const before = readTier('tier_ads');
+
+    const typo = runCompiler(['--input', input, '--budget', '40', '--shares', 'privacyy=40']);
+    expect(typo.status).toBe(1);
+    expect(typo.stdout).toContain('--shares is not a tier');
+    // The valid names are printed, so the flag can be corrected without reading the source.
+    expect(typo.stdout).toContain('tier_privacy');
+    expect(readTier('tier_ads')).toEqual(before);
+
+    // One bad part refuses the *whole* argument even when the rest of it is valid. Applying
+    // `tier_ads=60` and dropping `privacyy=10` would be the same silent answer the flag exists
+    // to prevent, one clause further along — and a half-applied split is the hardest kind to
+    // notice later, because it looks deliberate.
+    const mixed = runCompiler(['--input', input, '--budget', '40', '--shares', 'tier_ads=60,privacyy=10']);
+    expect(mixed.status).toBe(1);
+    expect(mixed.stdout).toContain('--shares is not a tier');
+    expect(readTier('tier_ads')).toEqual(before);
+
+    // A flag with no value at all is its own sentence, like `--residual`.
+    const missing = runCompiler(['--input', input, '--budget', '40', '--shares']);
+    expect(missing.status).toBe(1);
+    expect(missing.stdout).toContain('--shares needs at least one tier=share pair');
+  });
+
+  test('refuses a --shares value that is not a whole number of points', () => {
+    const input = writeInput('ads.txt', adsHosts(40));
+    const before = readTier('tier_ads');
+
+    // `parseInt(share) || 0` used to answer all of these with 0 — a share of nothing, which is
+    // the opposite of what a typo means — and 0 is a legal value, so the result was a plan that
+    // looked deliberate and starved the tier it was written to protect. Each case carries its
+    // own spelling into the assertion so a failure names which one broke.
+    for (const bad of ['tier_ads=abc', 'tier_ads=12abc', 'tier_ads=-4', 'tier_ads=']) {
+      const result = runCompiler(['--input', input, '--budget', '40', '--shares', bad]);
+      expect([bad, result.status, result.stdout]).toEqual([
+        bad,
+        1,
+        expect.stringContaining('--shares needs a whole number'),
+      ]);
+    }
+
+    // No separator at all is not a pair, and is refused as one rather than read as tier with an
+    // empty share.
+    const noPair = runCompiler(['--input', input, '--budget', '40', '--shares', 'tier_ads']);
+    expect(noPair.status).toBe(1);
+    expect(noPair.stdout).toContain('--shares takes comma-separated tier=share pairs');
+
+    expect(readTier('tier_ads')).toEqual(before);
+  });
+
+  test('refuses an argument nothing matched instead of compiling on defaults', () => {
+    const input = writeInput('ads.txt', adsHosts(40));
+    const before = readTier('tier_ads');
+
+    // A typo'd flag used to parse as a flag nobody read, so `--residul tier_ads` compiled a plan
+    // with the default residual and reported it as the plan that was asked for.
+    for (const bad of ['--residul', '--budjet', '--jsonn']) {
+      const result = runCompiler(['--input', input, '--budget', '40', bad]);
+      expect([bad, result.status, result.stdout]).toEqual([
+        bad,
+        1,
+        expect.stringContaining('Unknown argument'),
+      ]);
+    }
+
+    // A stray positional is the same class of mistake — usually a value separated from its flag
+    // by a typo — and is refused rather than ignored.
+    const stray = runCompiler(['--input', input, '--budget', '40', 'some-file.txt']);
+    expect(stray.status).toBe(1);
+    expect(stray.stdout).toContain('Unknown argument');
+
+    expect(readTier('tier_ads')).toEqual(before);
+  });
+
+  test('refuses a value flag with nothing, or another flag, where its value goes', () => {
+    const input = writeInput('ads.txt', adsHosts(40));
+    const before = readTier('tier_ads');
+
+    // Missing values used to land as `undefined` and read identically to "flag never passed" —
+    // a `--hits` with no ledger compiled the unmeasured plan the flag exists to ask for.
+    for (const flag of ['--input', '--hits', '--attribution', '--security', '--rules-dir']) {
+      const missing = runCompiler(['--input', input, '--budget', '40', flag]);
+      expect([flag, missing.status, missing.stdout]).toEqual([
+        flag,
+        1,
+        expect.stringContaining(`${flag} needs`),
+      ]);
+    }
+
+    // `--hits --check` used to consume `--check` as the ledger path: the file it named was a
+    // flag, so both the path and the check were lost. A flag-shaped value is a missing value.
+    const flagShaped = runCompiler(['--input', input, '--budget', '40', '--hits', '--check']);
+    expect(flagShaped.status).toBe(1);
+    expect(flagShaped.stdout).toContain('--hits needs');
+
+    // A bare `=` is an empty value, not an omitted one.
+    const bareEq = runCompiler(['--input', input, '--budget=']);
+    expect(bareEq.status).toBe(1);
+    expect(bareEq.stdout).toContain('--budget needs');
+
+    expect(readTier('tier_ads')).toEqual(before);
+  });
+
+  test('honours the --name=value spelling for every flag that takes a value', () => {
+    const ads = writeInput('ads.txt', adsHosts(40));
+    const result = runCompiler(['--input', `tier_ads=${ads}`, '--budget=40', '--residual=tier_ads', '--json']);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).counts.tier_ads).toBeGreaterThan(0);
+  });
+
+  test('refuses a --input spec whose name is not a tier instead of reading it as a path', () => {
+    const input = writeInput('ads.txt', adsHosts(40));
+    const before = readTier('tier_ads');
+
+    // `--input tier_adz=file` used to compile `tier_adz=file` as a filename — a named tier that
+    // does not exist, silently answered by a path that was never meant to be one.
+    const typo = runCompiler(['--input', `tier_adz=${input}`, '--budget', '40']);
+    expect(typo.status).toBe(1);
+    expect(typo.stdout).toContain('--input is not a tier');
+    expect(typo.stdout).toContain('tier_adz');
+
+    // A file whose name genuinely carries an `=` still parses — a path's separators are what
+    // makes `file` untier-shaped, so the `=` is read as part of the path, not a tier binding.
+    const withEquals = join(workDir, 'file=name.txt');
+    writeFileSync(withEquals, adsHosts(5).join('\n'));
+    const ok = runCompiler(['--input', withEquals, '--budget', '40', '--json']);
+    expect(ok.status).toBe(0);
+
+    expect(readTier('tier_ads')).toEqual(before);
+  });
+
+  test('refuses a --budget that is not a whole number of rules instead of using the guaranteed floor', () => {
+    const input = writeInput('ads.txt', adsHosts(40));
+    const before = readTier('tier_ads');
+
+    // Every one of these used to compile on 30,000 rules — except `1e6`, which `parseInt` read
+    // as *one* rule. A budget is the number every plan is measured against, so an unanswered
+    // request for it does not fail; it produces a different plan, confidently.
+    for (const bad of ['abc', '0', '-5', '1e6', '30,000', '']) {
+      const result = runCompiler(['--input', input, '--budget', bad]);
+      expect([bad, result.status, result.stdout]).toEqual([
+        bad,
+        1,
+        expect.stringContaining('--budget is not a whole number of rules'),
+      ]);
+    }
+
+    const missing = runCompiler(['--input', input, '--budget']);
+    expect(missing.status).toBe(1);
+    expect(missing.stdout).toContain('--budget needs a whole number of rules');
+    // The refusal names Chrome's number, because that is the one an operator reaching for the
+    // flag usually wants and it is not otherwise written down in the message.
+    expect(missing.stdout).toContain('30000');
+
+    expect(readTier('tier_ads')).toEqual(before);
+  });
+
+  test('honours the shares it is given, in either spelling and with or without the tier_ prefix', () => {
+    const ads = writeInput('ads.txt', adsHosts(40));
+    const privacy = writeInput('privacy.txt', privacyHosts(40));
+    const compile = (shares?: string) => {
+      // The compiler seeds each run from the tier files on disk, so without this the second run
+      // compiles on top of the first one's output and every count inherits the previous split.
+      writeBaselineCurated();
+      const args = ['--input', `tier_ads=${ads}`, '--input', `tier_privacy=${privacy}`, '--budget', '40', '--json'];
+      if (shares) args.push('--shares', shares);
+      const result = runCompiler(args);
+      expect(result.status).toBe(0);
+      return JSON.parse(result.stdout).counts as Record<string, number>;
+    };
+
+    // The shipped defaults, unchanged by the existence of the flag: two contested tiers, and ads
+    // holds more of the 40-rule budget than privacy because its default share is larger.
+    const defaults = compile();
+    expect(defaults.tier_ads).toBeGreaterThan(defaults.tier_privacy);
+
+    // Skewed hard, the split follows the shares instead of the defaults — which is the whole
+    // point of the flag. Before, `tier_ads=100` and `ads=100` were both dropped on the floor.
+    const prefixed = compile('tier_ads=100,tier_privacy=1');
+    const bare = compile('ads=100,privacy=1');
+    expect(prefixed.tier_ads).toBeGreaterThan(prefixed.tier_privacy * 2);
+    expect(prefixed.tier_ads).toBeGreaterThan(defaults.tier_ads);
+    // The prefix is optional here exactly as it is for `--residual`, so the short name must land
+    // on the same plan rather than being silently ignored.
+    expect(bare).toEqual(prefixed);
+
+    // Reversed, so the flag is not just a way to favour ads.
+    const reversed = compile('tier_ads=1,tier_privacy=100');
+    expect(reversed.tier_privacy).toBeGreaterThan(reversed.tier_ads);
+
+    // The colon is what this parser used to split on, and it is still accepted, so an existing
+    // invocation keeps working rather than becoming a second silent no-op.
+    const colon = compile('tier_ads:60');
+    expect(colon.tier_ads).toBeGreaterThan(colon.tier_privacy);
+    expect(colon).not.toEqual(defaults);
+  });
+
   test('stays inside the budget and never exceeds the guaranteed static limit', () => {
     const hosts = Array.from({ length: 400 }, (_, i) => `0.0.0.0 host-${i}.budget-example.com`);
     const input = writeInput('large.txt', hosts);
@@ -281,9 +615,10 @@ describe('tier compiler', () => {
     expect(result.status).toBe(0);
     const report = JSON.parse(result.stdout);
     expect(report.total).toBeLessThanOrEqual(400);
-    expect(report.counts.tier_core + report.counts.tier_ads + report.counts.tier_privacy + report.counts.tier_annoyances).toBe(
-      report.total,
-    );
+    // Every tier, not the four the residual used to land in: `ALL_STATIC_TIER_IDS` rather than a
+    // spelled-out list, so a tier added later is included in the arithmetic instead of quietly
+    // dropping rules out of the total this asserts.
+    expect(ALL_STATIC_TIER_IDS.reduce((sum, tier) => sum + report.counts[tier], 0)).toBe(report.total);
     // The overflow is reported, never silent.
     expect(report.omittedTotal).toBeGreaterThan(0);
 
@@ -743,12 +1078,18 @@ describe('compile-tier-rulesets — per-category attribution', () => {
     });
 
     const result = runCompiler([
-      '--input', input, '--attribution', attribution, '--budget', '8',
+      '--input', input, '--attribution', attribution, '--budget', '400',
     ]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('no tier for: security, unbreak');
-    // The residual is the opt-in tier, so nothing lands in the default-on one.
-    expect(shippedHosts('tier_ads')).toContain('threat-gateway-example.com');
+    // A category that maps to no tier goes to the residual, and the residual is an opt-in tier that
+    // is not the default-on one.
+    //
+    // The budget is 400 rather than the 8 this used to use because the residual's share is now a
+    // ceiling: at a budget of 8 its own share floors to zero slots, so the residual would ship
+    // nothing and the test would be measuring the budget rather than the routing. Every tier's cap
+    // has always been floored; this is the tier where that now shows.
+    expect(shippedHosts('tier_unclassified')).toContain('threat-gateway-example.com');
     expect(shippedHosts('tier_core')).not.toContain('threat-gateway-example.com');
   });
 
@@ -898,5 +1239,90 @@ describe('compile-tier-rulesets — per-category attribution', () => {
       expect(shippedHosts('tier_ads')).toContain(host);
     }
     expect(shippedHosts('tier_ads')).not.toContain('blocked.example.com');
+  });
+
+  test('reports which sources the compilation was built from', () => {
+    const input = writeInput('list.txt', ['||tracker-widget-example.com^', '||plain-example.com^']);
+    const attribution = writeAttribution(
+      'attr-sources',
+      {
+        ads: ['||tracker-widget-example.com^'],
+        privacy: ['||plain-example.com^'],
+      },
+      {
+        sources: [
+          {
+            name: 'EasyList',
+            url: 'https://easylist.to/easylist/easylist.txt',
+            categories: ['ads'],
+            rules: 12,
+            hosts: 1,
+          },
+          {
+            name: 'Broken List',
+            url: 'https://lists.example/broken.txt',
+            categories: [],
+            rules: 0,
+            hosts: 0,
+            error: 'HTTP 503',
+          },
+        ],
+      },
+    );
+
+    const report = JSON.parse(
+      runCompiler(['--input', input, '--attribution', attribution, '--budget', '8', '--json']).stdout,
+    );
+    // The names reach the report untouched, and a fetch that failed stays on the record with
+    // its error — the report answers "what was this built from", not just "what produced".
+    expect(report.attribution.sources).toHaveLength(2);
+    expect(report.attribution.sources[0]).toMatchObject({ name: 'EasyList', hosts: 1 });
+    expect(report.attribution.sources[1]).toMatchObject({
+      name: 'Broken List',
+      error: 'HTTP 503',
+    });
+  });
+
+  test('a manifest written before the field existed reports no sources, rather than none', () => {
+    // `sources` absent is `sources` unrecorded — the report should say it was given none,
+    // not pretend the compilation had no inputs.
+    const input = writeInput('list.txt', ['||tracker-widget-example.com^']);
+    const attribution = writeAttribution('attr-nosources', {
+      ads: ['||tracker-widget-example.com^'],
+    });
+
+    const report = JSON.parse(
+      runCompiler(['--input', input, '--attribution', attribution, '--budget', '8', '--json']).stdout,
+    );
+    expect(report.attribution.sources).toEqual([]);
+  });
+
+  test('carries the source names into the generated provenance a build ships', () => {
+    const input = writeInput('list.txt', ['||tracker-widget-example.com^', '||plain-example.com^']);
+    const attribution = writeAttribution(
+      'attr-provenance',
+      { ads: ['||tracker-widget-example.com^'], privacy: ['||plain-example.com^'] },
+      {
+        sources: [
+          {
+            name: 'EasyList',
+            url: 'https://easylist.to/easylist/easylist.txt',
+            categories: ['ads'],
+            rules: 4,
+            hosts: 1,
+          },
+        ],
+      },
+    );
+
+    const result = runCompiler([
+      '--input', input, '--attribution', attribution, '--budget', '8',
+    ]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('built from EasyList');
+
+    const counts = readFileSync(join(workDir, 'counts.ts'), 'utf8');
+    expect(counts).toContain('"name": "EasyList"');
+    expect(counts).toContain('"url": "https://easylist.to/easylist/easylist.txt"');
   });
 });

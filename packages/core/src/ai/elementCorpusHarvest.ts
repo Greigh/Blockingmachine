@@ -22,8 +22,11 @@
  *    metric over it would be perfect and none of them would mean anything, and the
  *    weight fit would move nothing while appearing to have been taught something.
  * 2. **A label is a decision, and the only accepted one is a person's.** `hide` on a real
- *    element says the product must remove that shape; `keep` says it is content and must
- *    survive. That is a statement about the page, made by someone who looked at it.
+ *    element says that element should be removed; `keep` says it is content and must
+ *    survive. A click rules on *one element*, so a decision's `scope` records how far the
+ *    claim reaches: absent means element scope, and only a reviewer-recorded `'shape'`
+ *    scope lets a proposal pin the whole shape at `hide` or `leave` — see
+ *    {@link proposeHarvestEvalCase}.
  * 3. **A harvested case cannot enter the graded corpus on its own.** These candidates
  *    are written to their own artifact and imported by nothing that grades, fits or
  *    calibrates. Promotion into `elementEvalCorpus.ts` is a human act, because the
@@ -78,14 +81,25 @@ export interface HarvestedVerdict {
   confidence: number;
 }
 
+/** How far a harvested decision's claim reaches: one element, or its whole shape. */
+export type HarvestDecisionScope = 'element' | 'shape';
+
 /**
- * A decision a person made about a real element: `hide` teaches the shape must be
- * removed, `keep` teaches it is content and must stay visible.
+ * A decision a person made about a real element: `hide` teaches the element
+ * must be removed, `keep` teaches it is content and must stay visible.
  */
 export interface HarvestedHumanDecision {
   action: 'hide' | 'keep';
   /** Epoch ms of the decision. */
   at: number;
+  /**
+   * What the decision is claimed to cover. Absent means `element` — the click
+   * ruled on one element, and a proposal derived from it may not floor the
+   * whole shape at `hide` or pin it at `leave`. A reviewer who has checked that
+   * the shape generalises sets `'shape'` on the decision in the harvest file;
+   * that recorded choice, not the click, is what promotes a shape-wide band.
+   */
+  scope?: HarvestDecisionScope;
 }
 
 /** One real element captured from a real page, with where it came from. */
@@ -107,12 +121,19 @@ export interface HarvestedElement {
   human?: HarvestedHumanDecision;
 }
 
-/** One shape on one host, collapsed from every sighting of it. */
+/** One module on one host, collapsed from every sighting of it. */
 export interface ElementHarvestCandidate {
-  /** Stable id: the host and signature, so a re-run names the same candidate. */
+  /** Stable id: host, signature and leading identifier, so a re-run names the same candidate. */
   id: string;
   host: string;
   signature: string;
+  /**
+   * The snapshot's leading class or id — `classes[0] ?? id`. Two modules can share a
+   * signature token (`div|promo` is both a promo strip and a promo card) while being
+   * different elements, so the candidate key carries this as well as the signature.
+   * `null` when the element carried no identifier at all.
+   */
+  leadingIdentifier: string | null;
   /** Epoch ms of the first and most recent sighting. */
   firstSeen: number;
   lastSeen: number;
@@ -178,6 +199,7 @@ export function isHarvestedHumanDecision(value: unknown): value is HarvestedHuma
   if (!value || typeof value !== 'object') return false;
   const candidate = value as HarvestedHumanDecision;
   if (candidate.action !== 'hide' && candidate.action !== 'keep') return false;
+  if (candidate.scope !== undefined && candidate.scope !== 'element' && candidate.scope !== 'shape') return false;
   return Number.isFinite(candidate.at) && candidate.at > 0;
 }
 
@@ -203,9 +225,14 @@ export function redactHarvestSnapshot(snapshot: ElementSnapshot): ElementSnapsho
  */
 export type SanitizedHarvestedElement = HarvestedElement & { signature: string };
 
-/** The candidate id for a shape on a host. */
-export function harvestCandidateId(host: string, signature: string): string {
-  return `${host}/${signature}`;
+/** The candidate's leading identifier: `classes[0] ?? id`, or `null` for a nameless element. */
+export function harvestLeadingIdentifier(snapshot: ElementSnapshot): string | null {
+  return (snapshot.classes ?? [])[0] ?? snapshot.id ?? null;
+}
+
+/** The candidate id for one module on one host: signature plus its leading identifier. */
+export function harvestCandidateId(host: string, signature: string, leadingIdentifier?: string | null): string {
+  return leadingIdentifier ? `${host}/${signature}/${leadingIdentifier}` : `${host}/${signature}`;
 }
 
 /**
@@ -310,13 +337,18 @@ export function selectHarvestCandidates(
       stale += 1;
       continue;
     }
-    const id = harvestCandidateId(record.host, record.signature);
+    const id = harvestCandidateId(
+      record.host,
+      record.signature,
+      harvestLeadingIdentifier(record.snapshot),
+    );
     const existing = byShape.get(id);
     if (!existing) {
       byShape.set(id, {
         id,
         host: record.host,
         signature: record.signature,
+        leadingIdentifier: harvestLeadingIdentifier(record.snapshot),
         firstSeen: record.capturedAt,
         lastSeen: record.capturedAt,
         sightings: 1,
@@ -455,43 +487,188 @@ export function parseHarvestFile(text: string): {
  * `packages/core/src/ai/elementEvalCorpus.ts` on purpose, with the class checked by eye.
  *
  * The two labels map onto the two ends of the action band, which is the only part of a
- * case a click can honestly state:
+ * case a click can honestly state — and the decision's `scope` decides how wide that
+ * statement reaches:
  *
- *  - `keep` → `Content`, `leave` on both sides. The element is page content and hiding it
- *    is a defect; the class follows, because "this must stay visible" and "this is
- *    content" are the same statement about a real element.
- *  - `hide` → the three removal classes with `minAction: 'hide'`. A click says the
- *    product must remove this shape and says nothing about whether it is an ad, a
- *    tracker or a nag, so the class stays open — `expected[0]` is the canonical label by
- *    convention, which is why the note says plainly that a reviewer has to name it. The
- *    action, not the class, is what a click has established, and `hide` is the one that
- *    the corpus weighs most.
+ *  - `keep` → `Content`. With `scope: 'shape'` the band pins `leave` on both sides —
+ *    the class follows, because "this shape must stay visible" and "this shape is
+ *    content" are the same statement about a real shape. Element scope (the default —
+ *    what one click actually establishes) caps the band at `suggest`: hiding this
+ *    element's shape is still a defect, but one element's keep cannot forbid the
+ *    product ever pointing at the shape elsewhere.
+ *  - `hide` → the three removal classes. With `scope: 'shape'` the band pins `hide` on
+ *    both sides: a reviewed assertion that this shape is removed wherever it appears.
+ *    Element scope floors at `suggest` instead — the person saw one real element that
+ *    should at least be identified, and said nothing that makes the *shape*
+ *    must-remove everywhere. The class stays open either way — `expected[0]` is the
+ *    canonical label by convention, which is why the note says plainly that a reviewer
+ *    has to name it. The action, not the class, is what a click has established.
+ *
+ * `harvestScope` records on the proposal which of the two the evidence was, so a
+ * promoted case keeps the scope it was built from.
  */
 export function proposeHarvestEvalCase(candidate: ElementHarvestCandidate): ElementEvalCase | null {
   if (!candidate.human) return null;
   const where = `${candidate.host} · ${candidate.signature} · ${candidate.sightings} sighting(s)`;
+  const scope = candidate.human.scope ?? 'element';
+  const label = `harvest-${candidate.id.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;
   if (candidate.human.action === 'keep') {
-    return {
-      label: `harvest-${candidate.id.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`,
-      family: 'harvest',
-      snapshot: candidate.snapshot,
-      expected: ['Content'],
-      maxAction: 'leave',
-      minAction: 'leave',
-      notes: `Harvested from ${where}; a person marked this element "keep". Promotion is a review, not a merge.`,
-    };
+    return scope === 'shape'
+      ? {
+          label,
+          family: 'harvest',
+          snapshot: candidate.snapshot,
+          expected: ['Content'],
+          maxAction: 'leave',
+          minAction: 'leave',
+          harvestScope: 'shape',
+          notes: `Harvested from ${where}; a person marked this "keep" at shape scope, so the whole shape is content that must survive. Promotion is a review, not a merge.`,
+        }
+      : {
+          label,
+          family: 'harvest',
+          snapshot: candidate.snapshot,
+          expected: ['Content'],
+          maxAction: 'suggest',
+          harvestScope: 'element',
+          notes:
+            `Harvested from ${where}; a person marked this element "keep" — element scope, so hiding it is a defect but the shape is not pinned at leave. ` +
+            'Set `scope: \'shape\'` on the decision only if a reviewer has checked the shape is always content.',
+        };
   }
-  return {
-    label: `harvest-${candidate.id.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`,
-    family: 'harvest',
-    snapshot: candidate.snapshot,
-    expected: ['Ad', 'Tracker', 'Annoyance'],
-    maxAction: 'hide',
-    minAction: 'hide',
-    notes:
-      `Harvested from ${where}; a person marked this element "hide", which fixes the action and not the class. ` +
-      'Name the class before promoting — `expected[0]` is canonical and is currently a placeholder.',
-  };
+  return scope === 'shape'
+    ? {
+        label,
+        family: 'harvest',
+        snapshot: candidate.snapshot,
+        expected: ['Ad', 'Tracker', 'Annoyance'],
+        maxAction: 'hide',
+        minAction: 'hide',
+        harvestScope: 'shape',
+        notes:
+          `Harvested from ${where}; a person marked this "hide" at shape scope — the shape must be removed. ` +
+          'Name the class before promoting — `expected[0]` is canonical and is currently a placeholder.',
+      }
+    : {
+        label,
+        family: 'harvest',
+        snapshot: candidate.snapshot,
+        expected: ['Ad', 'Tracker', 'Annoyance'],
+        maxAction: 'hide',
+        minAction: 'suggest',
+        harvestScope: 'element',
+        notes:
+          `Harvested from ${where}; a person marked this element "hide" — element scope, so the case requires identification, not removal. ` +
+          'Set `scope: \'shape\'` on the decision only if a reviewer has checked the shape generalises, and name the class before promoting — `expected[0]` is canonical and is currently a placeholder.',
+      };
+}
+
+/**
+ * Whether a written corpus case covers a candidate's proposal — the same
+ * signature, a compatible leading identifier, and a band that sits inside the
+ * proposal's.
+ *
+ * The signature alone is too coarse to match on: `div|promo` is both a promo
+ * strip and a promo card, and a case written for one must not close the other's
+ * review. So a case whose snapshot carries a leading identifier only covers the
+ * candidates that carry the same one, while a case with no identifier at all
+ * falls back to bare-signature coverage of every module under it.
+ *
+ * The band must contain rather than equal: a leave-only case drains an
+ * element-scoped `keep` proposal (`leave`–`suggest`) because it forbids more
+ * than the click claimed, while a `suggest`–`hide` case does not cover a
+ * shape-scoped `hide`–`hide` one — the corpus asserts less than the reviewer
+ * recorded, so the stronger claim still needs writing.
+ */
+export function corpusCaseCoversHarvestProposal(
+  entry: ElementEvalCase,
+  candidate: ElementHarvestCandidate,
+  proposal: ElementEvalCase,
+): boolean {
+  if (elementSignature(entry.snapshot).exact !== candidate.signature) return false;
+  const caseLeading = harvestLeadingIdentifier(entry.snapshot);
+  if (caseLeading !== null && caseLeading !== candidate.leadingIdentifier) return false;
+  const floor = (testCase: ElementEvalCase) => ACTION_RANK[testCase.minAction ?? 'leave'];
+  return (
+    floor(entry) >= floor(proposal) &&
+    ACTION_RANK[entry.maxAction] <= ACTION_RANK[proposal.maxAction]
+  );
+}
+
+/** Whether any corpus case covers the candidate's proposal — the `promoted` flag. */
+export function harvestProposalIsPromoted(
+  candidate: ElementHarvestCandidate,
+  proposal: ElementEvalCase,
+  corpus: readonly ElementEvalCase[],
+): boolean {
+  return corpus.some((entry) => corpusCaseCoversHarvestProposal(entry, candidate, proposal));
+}
+
+/**
+ * Plans the promotion of a reviewed candidate into a corpus case.
+ *
+ * Every refusal is a thrown message rather than a silent default, for the same reason the
+ * argv parser refuses a missing value: a promote that guesses a scope or a class answers a
+ * question the reviewer never asked. The rules:
+ *
+ *   - the candidate must carry a human decision;
+ *   - scope must be explicit — recorded on the decision, or named by `options.scope`; a
+ *     flag that disagrees with the record refuses rather than rewriting it;
+ *   - a `hide` decision must name its class (the proposal's expected set is a placeholder);
+ *     a `keep` decision fixes the class itself, so naming one is refused;
+ *   - the corpus must not already cover the proposal, and the label must be free.
+ *
+ * The scope the plan used is returned so the caller can write it back onto the record —
+ * the file then states what the promotion asserted.
+ */
+export function planHarvestPromotion(
+  candidate: ElementHarvestCandidate,
+  corpus: readonly ElementEvalCase[],
+  options: { scope?: string; classes?: readonly string[]; label?: string; note?: string } = {},
+): { scope: HarvestDecisionScope; entry: ElementEvalCase } {
+  const human = candidate.human;
+  if (!human) throw new Error(`${candidate.id} carries no human decision — only a reviewed candidate promotes`);
+
+  const flag = options.scope;
+  if (flag !== undefined && flag !== 'element' && flag !== 'shape') {
+    throw new Error(`--scope must be 'element' or 'shape': ${flag}`);
+  }
+  if (human.scope && flag && human.scope !== flag) {
+    throw new Error(`the record says scope '${human.scope}' and --scope says '${flag}' — change the record or drop the flag`);
+  }
+  const scope = human.scope ?? (flag as HarvestDecisionScope | undefined);
+  if (!scope) {
+    throw new Error(`--promote needs an explicit --scope (element|shape) — the record's decision states neither`);
+  }
+
+  const proposal = proposeHarvestEvalCase({ ...candidate, human: { ...human, scope } });
+  if (!proposal) throw new Error(`${candidate.id} produced no proposal — nothing to promote`);
+
+  const covering = corpus.find((entry) => corpusCaseCoversHarvestProposal(entry, candidate, proposal));
+  if (covering) throw new Error(`already covered by corpus case '${covering.label}' — nothing to promote`);
+
+  let expected = proposal.expected;
+  const named = options.classes?.filter((c) => c.length > 0) ?? [];
+  if (human.action === 'keep') {
+    if (named.length) throw new Error('a keep decision fixes the class to Content — --class has nothing to name');
+  } else {
+    const allowed = [...proposal.expected];
+    const wrong = named.filter((c) => !allowed.includes(c as ElementClass));
+    if (!named.length) {
+      throw new Error(`--promote needs --class <${allowed.join('|')}> — a hide decision names the action, not the class`);
+    }
+    if (wrong.length) {
+      throw new Error(`--class must name the removal classes (${allowed.join(', ')}): got ${wrong.join(', ')}`);
+    }
+    expected = proposal.expected.filter((cls) => named.includes(cls));
+  }
+
+  const label = options.label ?? proposal.label;
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(label)) throw new Error(`--label must be a corpus slug (lowercase, digits, hyphens): ${label}`);
+  if (corpus.some((entry) => entry.label === label)) throw new Error(`label '${label}' already exists in the corpus`);
+
+  const notes = [proposal.notes, options.note].filter(Boolean).join(' ');
+  return { scope, entry: { ...proposal, label, expected, notes } };
 }
 
 /** A human-readable summary of a harvest run, for the driver script and the CLI. */
@@ -507,6 +684,6 @@ export function formatHarvestReport(selection: ElementHarvestSelection): string 
   lines.push(
     '   label    a person\'s decision is the only label; the model\'s own verdict is recorded as provenance',
   );
-  lines.push('   promote  candidates are not graded — a case enters elementEvalCorpus.ts by hand');
+  lines.push('   promote  candidates are not graded — a case enters elementEvalCorpus.ts via --promote');
   return lines.join('\n');
 }

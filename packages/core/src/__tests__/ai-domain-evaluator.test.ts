@@ -1,3 +1,4 @@
+import { describe, expect, it } from '@jest/globals';
 import {
   evaluateDomainRules,
   isDomainBlocked,
@@ -51,6 +52,29 @@ describe('AI Domain Rule Evaluator Engine', () => {
       const res = evaluateDomainRules('overridden-by-important-ex.com', rules);
       expect(res.verdict).toBe('exception');
       expect(res.exceptionRule).toBe('@@||overridden-by-important-ex.com^$important');
+    });
+
+    it('does not fire a path-preserving exception at hostname level', () => {
+      // `@@||cdn.example.com/keep.js` allows one URL shape, not the zone. The hostname indexes
+      // have nowhere to put the path, so indexing it under the host would allowlist every
+      // request to it — it stays unfired until a request URL can decide it.
+      const ruleSet = new CompiledDomainRuleSet([
+        '||cdn.example.com^',
+        '@@||cdn.example.com/keep.js',
+        '@@||news.example.co.uk^*/adverts.js',
+      ]);
+      const res = ruleSet.evaluate('cdn.example.com');
+      expect(res.verdict).toBe('blocked');
+      // And the ^-with-a-path form is not silently widened into a zone allowlist either.
+      expect(ruleSet.evaluate('news.example.co.uk').verdict).toBe('not_blocked');
+      // The matcher the replay consults is what the compile step kept.
+      expect(ruleSet.matchPathException('https://cdn.example.com/keep.js')?.rule).toBe(
+        '@@||cdn.example.com/keep.js',
+      );
+      expect(
+        ruleSet.matchPathException('https://news.example.co.uk/x/adverts.js')?.rule,
+      ).toBe('@@||news.example.co.uk^*/adverts.js');
+      expect(ruleSet.matchPathException('https://cdn.example.com/other.js')).toBeUndefined();
     });
 
     it('honors $denyallow modifier to exonerate specific subdomains from block rules', () => {

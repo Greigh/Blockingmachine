@@ -24,11 +24,26 @@
  * The text format is deliberately the one `scripts/build-hot-list.mjs --hits` already parses
  * (`<count> <rule>`, `#` comments, `@@` exceptions) rather than a new one: the file a browser
  * exports is the file the build reads, with no translation step to drift.
+ *
+ * A fourth axis rides along, and it is the one that decides a plan rather than a hot list: **the
+ * tier that shipped each rule.** It is merged with the same durability semantics as a rule — days
+ * and sessions per tier, not just a total — because "this tier blocked a lot once" and "this tier
+ * blocks every day" are the same distinction a rule gets. It is kept separate because it cannot be
+ * derived: one filter shipped in two tiers is one rule line and two tier rows, and a tier is
+ * credited for a match whose filter text was never resolved.
  */
+
+import { isTierId, type TierHitCounts } from './tiers.js';
 
 /** One rule's hits inside one session, as the browser reported them. */
 export interface BrowserLedgerHit {
   rule: string;
+  count: number;
+}
+
+/** One shipped tier's blocks inside one session. */
+export interface BrowserLedgerTierHit {
+  tier: string;
   count: number;
 }
 
@@ -41,6 +56,15 @@ export interface BrowserLedgerSession {
   /** Which extension reporting path produced these numbers, for provenance. */
   feed?: 'live' | 'polled' | 'unknown';
   hits: BrowserLedgerHit[];
+  /**
+   * Blocks attributed to each shipped tier, by the tier id the browser named.
+   *
+   * Absent on sessions exported before the axis existed, and read as *no measurement* rather than as
+   * a measurement of zero. That distinction is the reason `tierSessions` is reported below.
+   */
+  tiers?: BrowserLedgerTierHit[];
+  /** Blocks this session made that named no shipped tier — the synced list, usually. */
+  tierUnattributed?: number;
   /** Rules that fired as exceptions (`@@`) in this session. */
   exceptions?: string[];
 }
@@ -55,9 +79,34 @@ export interface BrowserLedgerRule {
   days: string[];
 }
 
+/** One tier in the merged ledger, measured the same way a rule is. */
+export interface BrowserLedgerTier {
+  tier: string;
+  count: number;
+  /** Sessions the tier blocked in. */
+  sessions: number;
+  /** Distinct UTC dates the tier blocked on, oldest first. */
+  days: string[];
+}
+
 export interface BrowserLedgerAggregate {
   rules: BrowserLedgerRule[];
   exceptions: BrowserLedgerRule[];
+  /** Per-tier block counts, highest first. Empty when no session carried the axis. */
+  tiers: BrowserLedgerTier[];
+  /**
+   * Sessions of `sessions` that carried a tier split.
+   *
+   * The coverage number for the tier axis, and the reason it is not implied by `tiers.length`:
+   * merging three exports written before the axis with one written after produces a tier table that
+   * describes a quarter of the evidence, and a plan weighted by it would look measured where it is
+   * not.
+   */
+  tierSessions: number;
+  /** Blocks across all sessions that named no shipped tier. */
+  tierUnattributed: number;
+  /** Tier entries dropped as unusable, so a reader can see what the split could not cover. */
+  tierRejected: number;
   /** Sessions merged, including any that contributed nothing. */
   sessions: number;
   /** Distinct UTC dates across every session, oldest first. */
@@ -132,16 +181,18 @@ function isObject(value: unknown): value is Record<string, unknown> {
 export function readBrowserLedgerSessions(input: unknown): {
   sessions: BrowserLedgerSession[];
   rejected: number;
+  tierRejected: number;
 } {
   const raw = Array.isArray(input)
     ? input
     : isObject(input) && Array.isArray(input.sessions)
       ? input.sessions
       : null;
-  if (!raw) return { sessions: [], rejected: 0 };
+  if (!raw) return { sessions: [], rejected: 0, tierRejected: 0 };
 
   const sessions: BrowserLedgerSession[] = [];
   let rejected = 0;
+  let tierRejected = 0;
 
   for (const entry of raw) {
     if (!isObject(entry) || !ledgerDateOf(entry.startedAt) || !Array.isArray(entry.hits)) {
@@ -156,6 +207,21 @@ export function readBrowserLedgerSessions(input: unknown): {
       if (!rule || count <= 0) continue;
       hits.push({ rule, count: Math.floor(count) });
     }
+    // A tier id the catalogue does not know is refused, not normalised. These ids are what a plan's
+    // weightings are keyed on, so one nobody recognises could not be weighed — and storing it would
+    // put a row in the table that looks measured. Counted rather than dropped, like sessions.
+    const tiers: BrowserLedgerTierHit[] = [];
+    if (Array.isArray(entry.tiers)) {
+      for (const hit of entry.tiers) {
+        if (!isObject(hit) || !isTierId(hit.tier)) {
+          tierRejected += 1;
+          continue;
+        }
+        const count = typeof hit.count === 'number' && Number.isFinite(hit.count) ? hit.count : 0;
+        if (count <= 0) continue;
+        tiers.push({ tier: hit.tier, count: Math.floor(count) });
+      }
+    }
     const exceptions: string[] = [];
     if (Array.isArray(entry.exceptions)) {
       for (const rule of entry.exceptions) {
@@ -168,16 +234,22 @@ export function readBrowserLedgerSessions(input: unknown): {
         ? entry.feed
         : 'unknown';
     const startedAt = String(entry.startedAt);
+    const tierUnattributed =
+      typeof entry.tierUnattributed === 'number' && Number.isFinite(entry.tierUnattributed)
+        ? Math.max(0, Math.floor(entry.tierUnattributed))
+        : 0;
     sessions.push({
       startedAt,
       ...(typeof entry.endedAt === 'string' ? { endedAt: entry.endedAt } : {}),
       feed,
       hits,
+      ...(tiers.length > 0 ? { tiers } : {}),
+      ...(tierUnattributed > 0 ? { tierUnattributed } : {}),
       ...(exceptions.length > 0 ? { exceptions } : {}),
     });
   }
 
-  return { sessions, rejected };
+  return { sessions, rejected, tierRejected };
 }
 
 interface Accumulator {
@@ -212,6 +284,18 @@ function finalize(entries: Map<string, Accumulator>): BrowserLedgerRule[] {
     .sort((a, b) => b.count - a.count || a.rule.localeCompare(b.rule));
 }
 
+/** The same merge, keyed by tier: a total, plus the sessions and days it was observed on. */
+function finalizeTiers(entries: Map<string, Accumulator>): BrowserLedgerTier[] {
+  return [...entries.entries()]
+    .map(([tier, acc]) => ({
+      tier,
+      count: acc.count,
+      sessions: acc.sessions,
+      days: [...acc.days].sort(),
+    }))
+    .sort((a, b) => b.count - a.count || a.tier.localeCompare(b.tier));
+}
+
 /**
  * Merges browser-reported sessions into one ledger.
  *
@@ -228,8 +312,12 @@ export function mergeBrowserLedger(
 
   const blocks = new Map<string, Accumulator>();
   const allows = new Map<string, Accumulator>();
+  const tierBlocks = new Map<string, Accumulator>();
   const days = new Set<string>();
   let accepted = 0;
+  let tiered = 0;
+  let tierUnattributed = 0;
+  let tierRejected = 0;
 
   for (const session of Array.isArray(sessions) ? sessions : []) {
     if (!isObject(session)) continue;
@@ -249,6 +337,29 @@ export function mergeBrowserLedger(
       accumulate(target, rule, Math.floor(count), day);
     }
 
+    // The tier axis is read from the session's own tally, never inferred from the rules above: a
+    // filter shipped in two tiers is one line here and two entries there, and a tier is credited for
+    // a match whose filter could not be resolved at all — so both directions of guessing are wrong.
+    const sessionTiers = Array.isArray(session.tiers) ? session.tiers : [];
+    if (sessionTiers.length > 0) tiered += 1;
+    for (const hit of sessionTiers) {
+      // A tier id the catalogue does not know is unusable, and it is counted here rather than
+      // dropped quietly: a caller that hands raw session JSON straight to the merge never went
+      // through the reader's count, so the refusal has to be measured where it happens.
+      // On the shipped path this finds nothing — the reader already dropped and counted these —
+      // so the two counts cover disjoint sets and the script adds them rather than choosing one.
+      if (!isObject(hit) || !isTierId(hit.tier)) {
+        tierRejected += 1;
+        continue;
+      }
+      const count = typeof hit.count === 'number' && Number.isFinite(hit.count) ? hit.count : 0;
+      if (count <= 0) continue;
+      accumulate(tierBlocks, hit.tier, Math.floor(count), day);
+    }
+    if (typeof session.tierUnattributed === 'number' && Number.isFinite(session.tierUnattributed)) {
+      tierUnattributed += Math.max(0, Math.floor(session.tierUnattributed));
+    }
+
     for (const rule of Array.isArray(session.exceptions) ? session.exceptions : []) {
       const normalized = normalizeLedgerRule(rule);
       if (!normalized) continue;
@@ -264,6 +375,14 @@ export function mergeBrowserLedger(
   return {
     rules: durable(finalize(blocks)),
     exceptions: durable(finalize(allows)),
+    // `minDays` is the caller's statement about *rules*: it is asking which rules are durable
+    // enough to ship. A tier is a measurement of the plan rather than an entry in it, so filtering
+    // it by the same threshold would delete a tier from the evidence that judged the very filter
+    // being applied — the tier table keeps every tier it was told about, with its own days.
+    tiers: finalizeTiers(tierBlocks),
+    tierSessions: tiered,
+    tierUnattributed,
+    tierRejected,
     sessions: accepted,
     days: orderedDays,
     firstSeen: orderedDays[0] ?? null,
@@ -291,6 +410,18 @@ export function toHitLedgerText(
   if (aggregate.firstSeen) lines.push(`# First seen: ${aggregate.firstSeen}`);
   if (aggregate.lastSeen) lines.push(`# Last seen: ${aggregate.lastSeen}`);
   if (aggregate.rejected > 0) lines.push(`# Rejected sessions: ${aggregate.rejected}`);
+  // The per-tier tally, in the header rather than as rule lines. It is not blockable evidence —
+  // `readTierLedger` and the tier compiler both key rules to tiers, never the reverse — so writing
+  // it as `tier_core 543` would invent 543 rules named `tier_core` and let them into a host list.
+  // `Tier sessions` is the coverage claim: a table built from two of ten sessions says so here.
+  if (aggregate.tiers.length > 0) {
+    lines.push(`# Tiers: ${aggregate.tiers.map((tier) => `${tier.tier} ${tier.count}`).join(', ')}`);
+    lines.push(`# Tier sessions: ${aggregate.tierSessions} of ${aggregate.sessions}`);
+  }
+  if (aggregate.tierUnattributed > 0) {
+    lines.push(`# Tier unattributed: ${aggregate.tierUnattributed}`);
+  }
+  if (aggregate.tierRejected > 0) lines.push(`# Rejected tier entries: ${aggregate.tierRejected}`);
   if (options.note) lines.push(`# ${options.note}`);
   lines.push('#');
   lines.push('# <count> <rule>, highest first. @@ rules are exceptions that fired, not blocks.');
@@ -309,10 +440,75 @@ export interface ParsedHitLedger {
   header: Record<string, string>;
 }
 
-function readHeaderValue(line: string): { key: string; value: string } | null {
+/**
+ * Extracts one `Key: value` field from a `#` header line, or null when it is not that shape.
+ *
+ * Keys are lowercased (`# Tier sessions:` → `tier sessions`), so a reader can match the header
+ * `toHitLedgerText` writes without caring about the writer's casing. Shared between
+ * `parseHitLedgerText` and `readTierLedger` so a comment means the same thing to both readers.
+ */
+export function readLedgerHeaderLine(line: string): { key: string; value: string } | null {
   const match = /^#\s*([A-Za-z][A-Za-z ]*):\s*(.+?)\s*$/.exec(line);
   if (!match) return null;
   return { key: match[1].trim().toLowerCase(), value: match[2] };
+}
+
+/**
+ * The per-tier tally a merged ledger's header carries, when it carries one.
+ *
+ * Unlike a rule line this is the browser's own split — the ruleset that shipped the winning
+ * filter, credited even when the filter text never resolved — so where it covers every session
+ * it is the more exact measurement. `tierSessions`/`sessions` say how much of the ledger it
+ * covers: a tally from one session of four is a measurement of one session, and a plan that
+ * weighted it as though it covered all four would be silently discarding three.
+ */
+export interface LedgerTierTally {
+  /** Per-tier block counts as the browser reported them at match time. */
+  hits: TierHitCounts;
+  /** Sessions that carried a tier split — the tally's coverage numerator, or null if unrecorded. */
+  tierSessions: number | null;
+  /** Sessions the ledger merged — the tally's coverage denominator, or null if unrecorded. */
+  sessions: number | null;
+  /** Tally entries that named no known tier, counted rather than silently dropped. */
+  rejected: number;
+}
+
+/**
+ * Reads the `# Tiers:` / `# Tier sessions:` / `# Sessions:` header fields, when present.
+ *
+ * Returns null when the file carries no `# Tiers:` line at all — absent means "this ledger
+ * predates the axis or was written by something else", which a caller must not turn into a
+ * tally of zero. Entries naming an unknown tier id are refused exactly the way the session
+ * reader refuses them: counted, not normalised, because these ids are what a plan keys on.
+ */
+export function readLedgerTierTally(header: Record<string, string>): LedgerTierTally | null {
+  const raw = header['tiers'];
+  if (typeof raw !== 'string') return null;
+
+  const hits: TierHitCounts = {};
+  let rejected = 0;
+  for (const part of raw.split(',')) {
+    const match = /^(\S+)\s+(\d+)$/.exec(part.trim());
+    const id = match?.[1];
+    const count = match ? Number(match[2]) : NaN;
+    if (!id || !isTierId(id) || !Number.isFinite(count) || count <= 0) {
+      rejected += 1;
+      continue;
+    }
+    hits[id] = (hits[id] ?? 0) + Math.floor(count);
+  }
+
+  const int = (value: string | undefined): number | null => {
+    const match = value === undefined ? null : /^(\d+)$/.exec(value.trim());
+    return match ? Number(match[1]) : null;
+  };
+  // `Tier sessions` is written `X of Y`; a hand-edited or foreign file may carry the bare count,
+  // so the denominator falls back to the `Sessions:` line when the "of Y" is absent.
+  const split = /^(\d+)\s+of\s+(\d+)$/.exec(header['tier sessions'] ?? '');
+  const tierSessions = split ? Number(split[1]) : int(header['tier sessions']);
+  const sessions = split ? Number(split[2]) : int(header['sessions']);
+
+  return { hits, tierSessions, sessions, rejected };
 }
 
 /**
@@ -336,7 +532,7 @@ export function parseHitLedgerText(text: string): ParsedHitLedger {
     const line = rawLine.replace(/^\uFEFF/, '').trim();
     if (!line) continue;
     if (line.startsWith('#') || line.startsWith('!')) {
-      const parsed = readHeaderValue(line);
+      const parsed = readLedgerHeaderLine(line);
       if (parsed) header[parsed.key] = parsed.value;
       continue;
     }
@@ -391,7 +587,18 @@ export function summarizeBrowserLedger(aggregate: BrowserLedgerAggregate): strin
         ? ` (${aggregate.firstSeen})`
         : '';
   const parts = [`${sessions} across ${days}${span}`, `${aggregate.rules.length} blocking rules`];
+  if (aggregate.tiers.length > 0) {
+    // Coverage first, then the size. "4 tiers over 1 of 10 sessions" is the honest reading of a
+    // mixed-age merge, and leading with the total would invite the other one.
+    parts.push(
+      `${aggregate.tiers.length} tiers over ${aggregate.tierSessions} of ${aggregate.sessions} session${aggregate.sessions === 1 ? '' : 's'}`,
+    );
+  }
+  if (aggregate.tierUnattributed > 0) {
+    parts.push(`${aggregate.tierUnattributed.toLocaleString()} blocks in no tier`);
+  }
   if (aggregate.exceptions.length > 0) parts.push(`${aggregate.exceptions.length} exceptions`);
   if (aggregate.rejected > 0) parts.push(`${aggregate.rejected} rejected as unusable`);
+  if (aggregate.tierRejected > 0) parts.push(`${aggregate.tierRejected} tier entries rejected`);
   return parts.join(' · ');
 }

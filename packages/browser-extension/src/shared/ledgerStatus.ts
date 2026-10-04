@@ -20,6 +20,12 @@ import type { LedgerSessionFeed } from './ledgerExport.js';
 export type LedgerFeed =
   /** `onRuleMatchedDebug`: every match, live, with the request URL (unpacked builds). */
   | 'live'
+  /**
+   * Both paths: live events while the worker runs, `getMatchedRules` backstopping the matches
+   * live delivery drops across a worker wake. A suspended worker is the normal state of an MV3
+   * build, so this is what an unpacked deployment actually gets — not a dev-mode extra.
+   */
+  | 'hybrid'
   /** `getMatchedRules`: batched, five minutes back, no request URL (packed builds). */
   | 'polled'
   /** Neither path exists, so nothing can feed the ledger. */
@@ -33,8 +39,7 @@ export type LedgerFeed =
  * was told honestly rather than being handed the nearest of three words.
  */
 export function ledgerFeedForSession(feed: LedgerFeed): LedgerSessionFeed {
-  if (feed === 'live') return 'live';
-  if (feed === 'polled') return 'polled';
+  if (feed === 'live' || feed === 'polled' || feed === 'hybrid') return feed;
   return 'unknown';
 }
 
@@ -63,15 +68,19 @@ export interface LedgerStatus {
 }
 
 /**
- * Picks the path the browser will actually use.
+ * Names the paths the browser will actually use.
  *
- * Live feedback wins when both exist because it is strictly better: same matches, plus the request
- * URL. The polling path is not attempted at all in that case, so its quota stays untouched.
+ * Both existing is not "live wins": `onRuleMatchedDebug` wakes the worker but drops events in
+ * flight during the cold start — and an MV3 worker is suspended most of the time.
+ * `getMatchedRules` polls regardless, because the records it returns are the only report of what
+ * live delivery missed. 'hybrid' names that arrangement: live events for the URL detail they
+ * carry, the poll for completeness.
  */
 export function ledgerFeedFromAvailability(input: {
   liveAvailable: boolean;
   pollAvailable: boolean;
 }): LedgerFeed {
+  if (input.liveAvailable && input.pollAvailable) return 'hybrid';
   if (input.liveAvailable) return 'live';
   if (input.pollAvailable) return 'polled';
   return 'unavailable';
@@ -79,6 +88,7 @@ export function ledgerFeedFromAvailability(input: {
 
 const FEED_LABELS: Record<LedgerFeed, string> = {
   live: 'Live',
+  hybrid: 'Live+poll',
   polled: 'Polled',
   unavailable: 'Off',
 };
@@ -89,7 +99,7 @@ export function ledgerFeedLabel(feed: LedgerFeed): string {
 
 /** The badge tone: green for the honest path, amber for the degraded one, grey for neither. */
 export function ledgerFeedTone(feed: LedgerFeed): 'ok' | 'warn' | 'off' {
-  if (feed === 'live') return 'ok';
+  if (feed === 'live' || feed === 'hybrid') return 'ok';
   if (feed === 'polled') return 'warn';
   return 'off';
 }
@@ -99,6 +109,8 @@ export function ledgerFeedDetail(feed: LedgerFeed): string {
   switch (feed) {
     case 'live':
       return 'Fed by onRuleMatchedDebug — every match, live, with the request URL. Unpacked builds only.';
+    case 'hybrid':
+      return 'Fed by live match events plus a getMatchedRules backstop for the matches live delivery drops across a worker wake. Live matches carry the request URL; polled ones do not.';
     case 'polled':
       return 'Fed by getMatchedRules — the last five minutes, batched and without the request URL, so blocked hosts are inferred from the matching rule.';
     case 'unavailable':

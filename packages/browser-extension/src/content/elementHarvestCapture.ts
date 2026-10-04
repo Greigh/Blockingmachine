@@ -91,10 +91,13 @@ export function captureScannedElements(
 /**
  * Records an element a person just ruled on.
  *
- * `action` is the picker's own vocabulary — `hide` teaches the shape must be removed,
- * `keep` teaches it is content — so it maps straight onto the harvest decision. The
- * element is snapshotted here rather than taken from a scan because a decision is usually
- * about something the scan never flagged, which is the more interesting capture of the two.
+ * `action` is the picker's own vocabulary — `hide` teaches this element should be
+ * removed, `keep` teaches it is content — so it maps straight onto the harvest
+ * decision. A click rules on one element, not the shape: whether the decision
+ * generalises is a reviewer's `scope` choice at promotion time, not a second
+ * question the picker asks. The element is snapshotted here rather than taken
+ * from a scan because a decision is usually about something the scan never
+ * flagged, which is the more interesting capture of the two.
  */
 export function captureDecision(
   element: Element,

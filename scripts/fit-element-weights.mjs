@@ -20,13 +20,16 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseArgvOrExit } from './argv.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 const dist = join(root, 'packages', 'core', 'dist', 'ai');
 const target = join(root, 'packages', 'core', 'src', 'ai', 'elementWeights.generated.ts');
 
-const flags = new Set(process.argv.slice(2).filter((arg) => arg.startsWith('--')));
+// Refusing parse: a bare `--wirte` used to filter into a Set nobody ever read, so a typo'd flag
+// did nothing and the run reported a dry run as if that were the request.
+const { flags } = parseArgvOrExit(process.argv.slice(2), { flags: ['--write', '--check'] });
 
 /** Full-batch Adam steps. Matches the value the test suite re-fits with. */
 const EPOCHS = 1500;
@@ -52,12 +55,20 @@ const evaluation = await load('elementEvaluation.js');
 const cases = [...corpus.ELEMENT_EVAL_CORPUS];
 const { train, holdout } = fitting.splitElementCorpus(cases);
 
-// Select the prior strength by cross-validating over the training cases only. Choosing it
-// against the held-out cases would make the held-out result partly a fitted quantity,
-// which is exactly the dishonesty this exercise is meant to remove.
-const selection = fitting.selectPriorStrength({ cases: train, epochs: EPOCHS });
+// Select the regularisation by cross-validating over the training cases only — the prior
+// strengths *and* the early-stop challenger flag 12 asked for. Choosing against the
+// held-out cases would make the held-out result partly a fitted quantity, which is
+// exactly the dishonesty this exercise is meant to remove.
+const selection = fitting.selectRegularisation({ cases: train, epochs: EPOCHS });
+const chosen = selection.regularisation;
+const fitOptions =
+  chosen.kind === 'prior'
+    ? { priorStrength: chosen.strength }
+    : chosen.kind === 'early-stop'
+      ? { priorStrength: 0, earlyStop: {} }
+      : { priorStrength: 0 };
 
-const fit = fitting.fitElementWeights({ cases: train, priorStrength: selection.priorStrength, epochs: EPOCHS });
+const fit = fitting.fitElementWeights({ cases: train, ...fitOptions, epochs: EPOCHS });
 
 const comparison = fitting.compareWeightSets(classifier.ELEMENT_HAND_TUNED_WEIGHTS, fit.weights, holdout);
 const baselineEval = evaluation.evaluateElementClassifier(
@@ -75,7 +86,12 @@ const provenance = {
   corpusCases: cases.length,
   trainingCases: train.length,
   holdoutCases: holdout.length,
-  priorStrength: selection.priorStrength,
+  regularisation:
+    chosen.kind === 'prior'
+      ? { kind: 'prior', strength: chosen.strength }
+      : chosen.kind === 'early-stop'
+        ? { kind: 'early-stop', stoppedAtEpoch: fit.stoppedAtEpoch }
+        : { kind: 'none' },
   epochs: EPOCHS,
   holdout: {
     baselineAccuracy: comparison.baseline.accuracy,
@@ -125,8 +141,12 @@ export const ELEMENT_FITTED_WEIGHTS: ElementWeightSet = ${fitting.renderWeightSe
 console.log('\nElement weight fit');
 console.log('');
 console.log(`  corpus                : ${cases.length} cases (${train.length} train / ${holdout.length} holdout)`);
-console.log(`  prior selection       : ${selection.scores.map((s) => `${s.priorStrength}:${s.logLoss.toFixed(4)}`).join('  ')}`);
-console.log(`  chosen prior          : ${selection.priorStrength} pseudo-examples, ${EPOCHS} epochs`);
+console.log(
+  `  regularisation grid   : ${selection.scores.map((s) => `${fitting.formatRegularisation(s.regularisation)}=${s.logLoss.toFixed(4)}`).join('  ')}`,
+);
+console.log(
+  `  chosen                : ${fitting.formatRegularisation(chosen)}${fit.stoppedAtEpoch !== undefined ? ` (stopped at epoch ${fit.stoppedAtEpoch} of ${EPOCHS})` : ', ' + EPOCHS + ' epochs'}`,
+);
 console.log(`  ${fitting.formatWeightFit(fit)}`);
 console.log(`  largest move from prior: ${provenance.largestWeightChange.feature} ${provenance.largestWeightChange.from} -> ${provenance.largestWeightChange.to}`);
 console.log('');

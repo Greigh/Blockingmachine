@@ -22,12 +22,14 @@ contextBridge.exposeInMainWorld('electron', {
     try {
       if (clipboard && typeof clipboard.writeText === 'function') {
         clipboard.writeText(String(text ?? ''));
-        return;
+        return { success: true };
       }
     } catch {
       // Fallback to IPC
     }
-    ipcRenderer.invoke('copy-to-clipboard', text).catch(() => {});
+    return ipcRenderer
+      .invoke('copy-to-clipboard', text)
+      .catch((error) => ({ success: false, error: String(error) }));
   },
   getFilterSources: () => ipcRenderer.invoke('get-sources') as Promise<FilterSource[]>,
   setFilterSources: (sources: FilterSource[]) => ipcRenderer.invoke('save-sources', sources),
@@ -52,6 +54,14 @@ contextBridge.exposeInMainWorld('electron', {
   selectElementHarvest: () => ipcRenderer.invoke('select-element-harvest') as Promise<string>,
   /** Forgets the chosen harvest, and deletes the file. */
   clearElementHarvest: () => ipcRenderer.invoke('clear-element-harvest') as Promise<string>,
+  /** Builds the extension and copies it where the user picks, for browser-side loading. */
+  downloadExtension: () =>
+    ipcRenderer.invoke('download-extension') as Promise<{
+      success: boolean;
+      cancelled?: boolean;
+      path?: string;
+      error?: string;
+    }>,
   setSavePath: (path: string) => ipcRenderer.invoke('set-save-path', path),
   selectSavePath: () => ipcRenderer.invoke('select-save-path') as Promise<string>,
   getExportFormat: () => ipcRenderer.invoke('get-export-format'),
@@ -71,6 +81,13 @@ contextBridge.exposeInMainWorld('electron', {
   testFeedUrl: (url: string) => ipcRenderer.invoke('test-feed-url', url),
   getUnboundReachability: () => ipcRenderer.invoke('get-unbound-reachability'),
   checkUnboundReachability: () => ipcRenderer.invoke('check-unbound-reachability'),
+  onUnboundReachabilityUpdated: (callback: (snapshot: unknown) => void) => {
+    const handler = (_event: IpcRendererEvent, snapshot: unknown) => callback(snapshot);
+    ipcRenderer.on('unbound-reachability-updated', handler);
+    return () => {
+      ipcRenderer.removeListener('unbound-reachability-updated', handler);
+    };
+  },
   getUnboundResolvers: () => ipcRenderer.invoke('get-unbound-resolvers'),
   setUnboundResolvers: (values: { address?: string; referenceAddress?: string }) =>
     ipcRenderer.invoke('set-unbound-resolvers', values),
@@ -83,6 +100,8 @@ contextBridge.exposeInMainWorld('electron', {
   getAppVersion: () => ipcRenderer.invoke('get-app-version') as Promise<string>,
   getAutoStartFeedServer: () => ipcRenderer.invoke('get-auto-start-feed-server'),
   setAutoStartFeedServer: (enabled: boolean) => ipcRenderer.invoke('set-auto-start-feed-server', enabled),
+  getFeedToken: () => ipcRenderer.invoke('get-feed-token') as Promise<{ configured: boolean; token: string }>,
+  setFeedToken: (token: string) => ipcRenderer.invoke('set-feed-token', token) as Promise<{ success: boolean; error?: string }>,
   getLaunchOnStartup: () => ipcRenderer.invoke('get-launch-on-startup'),
   setLaunchOnStartup: (enabled: boolean) => ipcRenderer.invoke('set-launch-on-startup', enabled),
   getModuleContent: (moduleName: string) => ipcRenderer.invoke('get-module-content', moduleName) as Promise<string | null>,

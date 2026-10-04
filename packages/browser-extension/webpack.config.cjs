@@ -62,7 +62,10 @@ module.exports = {
       // The element Mini-AI lives in core and is shared with the desktop app. Point
       // the bundler at core's source so the extension never needs core's `dist`
       // built first, and so only this one module (not the whole of core) is bundled.
-      '@blockingmachine/core/element-ai': path.resolve(__dirname, '../core/src/ai/elementClassifier.ts')
+      '@blockingmachine/core/element-ai': path.resolve(__dirname, '../core/src/ai/elementClassifier.ts'),
+      // The rule→host reader behind the benefit fallback — bundled from source for the same
+      // reason: one module, not the whole of core (which pulls in node builtins).
+      '@blockingmachine/core/ruleHost': path.resolve(__dirname, '../core/src/ruleHost.ts')
     }
   },
   module: {

@@ -33,11 +33,19 @@ export interface StaticRuleIndexOptions {
 
 interface StoredRuleLike {
   id?: unknown;
+  action?: { type?: unknown };
   condition?: { urlFilter?: unknown };
 }
 
+/** What the index knows about one shipped rule: the filter text and what it did to the match. */
+export interface StaticRuleEntry {
+  filter: string;
+  /** `block` unless the shipped rule says otherwise — an allow match is not a blocked request. */
+  action: string;
+}
+
 export class StaticRuleIndex {
-  private readonly filters = new Map<string, string>();
+  private readonly filters = new Map<string, StaticRuleEntry>();
   private build: Promise<void> | null = null;
 
   constructor(private readonly options: StaticRuleIndexOptions) {}
@@ -55,6 +63,18 @@ export class StaticRuleIndex {
    * and the caller records the match as unattributed rather than inventing one.
    */
   filterFor(rulesetId: unknown, ruleId: unknown): string | undefined {
+    return this.entryFor(rulesetId, ruleId)?.filter;
+  }
+
+  /**
+   * The filter and the action of a matched rule.
+   *
+   * The action matters as much as the filter: a `@@` exception compiles to `allow`, and the
+   * urlFilter it leaves behind is identical to the block on the same host. Counting that match
+   * as a block would put an allow on the block axis — the inversion the ledger's exception axis
+   * exists to prevent.
+   */
+  entryFor(rulesetId: unknown, ruleId: unknown): StaticRuleEntry | undefined {
     if (typeof ruleId !== 'number') return undefined;
     const ruleset = typeof rulesetId === 'string' ? rulesetId : '';
     return this.filters.get(`${ruleset}#${ruleId}`);
@@ -79,7 +99,8 @@ export class StaticRuleIndex {
         for (const rule of rules as StoredRuleLike[]) {
           const filter = rule?.condition?.urlFilter;
           if (typeof rule?.id === 'number' && typeof filter === 'string' && filter) {
-            this.filters.set(`${tier.id}#${rule.id}`, filter);
+            const action = typeof rule?.action?.type === 'string' ? rule.action.type : 'block';
+            this.filters.set(`${tier.id}#${rule.id}`, { filter, action });
           }
         }
       } catch {

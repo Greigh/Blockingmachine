@@ -11,6 +11,18 @@
 # third-party hosts. A refused connection still counts, which is the traffic a network blocker has
 # to decide on, so the trace is measured in the units the blocker works in.
 #
+# **These lines are hostnames, not URLs, and that is the whole limit on this measurement.**
+# A replay fed a hostname can decide a zone block and nothing else, so every path-scoped rule in
+# the list is reported as a rule "a hostname cannot decide" — which is a statement about this
+# capture's shape rather than about the list. The replay now matches path-scoped rules against a
+# request URL, so the moment this file carries URLs those rules become decisions. The entries came
+# from `performance.getEntriesByType('resource')`, which always handed back full URLs; the hosts
+# are all that was kept, because at the time a hostname was all there was any use for.
+#
+# The next capture records URLs, via `scripts/capture-request-trace.js` (paste into devtools on
+# each page, append to one file, measure with `--trace`). Nothing else about the format changes:
+# a URL is accepted anywhere a host is.
+#
 # Reproduce with:
 #   npx --workspace=@blockingmachine/cli blockingmachine coverage \
 #     --rules packages/cli/filters/output/genericBrowserRules.txt \

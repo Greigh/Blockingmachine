@@ -8,20 +8,28 @@
  * either: the core formatter wrote one `{ +block { host } }` header per rule, a section with an empty
  * pattern list, which blocks nothing.
  *
- * The helpers here build the feed URL and the copy-pasteable steps, as data rather than inline JSX,
- * so the wording is asserted in tests.
+ * Privoxy reads action files off its own filesystem: the `actionsfile` directive in `config` names a
+ * *path* — and the file itself is only read at startup, since Privoxy has no reload signal. The
+ * deployment is therefore a copy-and-restart recipe like the BIND one, and the helpers here build
+ * the paths, commands and copy-pasteable steps as data rather than inline JSX, so the wording is
+ * asserted in tests.
  *
  * One property of the format has to be explained rather than hidden: **the last matching action
  * wins**, the opposite of a Shadowrocket rule set, so a child bypass is emitted *after* the parent
  * block it escapes.
  */
 
+/** Where a packaged install keeps `config` and its action files. */
+export const PRIVOXY_CONF_DIR = '/etc/privoxy';
+
 /**
- * The file the Privoxy feed should point at.
+ * The action-file name the deployment uses end to end.
  *
- * When Privoxy is the configured export the compiled file *is* the action file whatever it is
- * named, so the real filename is served verbatim. Otherwise no action file exists and the
- * conventional name is shown as a placeholder next to a warning about the format.
+ * One name has to agree everywhere: it is what the feed serves, what the copy step saves the
+ * fetched file as, and what the `actionsfile` line names — `actionsfile` resolves a bare name
+ * against the config directory. When Privoxy is the configured export the compiled file *is* the
+ * action file whatever it is named, so the real filename is used verbatim; otherwise no action
+ * file exists yet and the conventional name is the placeholder next to a warning about the format.
  */
 export function privoxyFeedFileName(exportFormat: string, savePath: string): string {
   const fileName = (savePath || '').split(/[/\\]/).pop() || '';
@@ -29,21 +37,49 @@ export function privoxyFeedFileName(exportFormat: string, savePath: string): str
   return 'privoxy.action';
 }
 
-/** The LAN feed URL for the Privoxy export. */
+/** The LAN address the compiled file is fetched from for the copy step. */
 export function privoxyFeedUrl(lanUrl: string, exportFormat: string, savePath: string): string {
   const base = (lanUrl || '').replace(/\/+$/, '') || 'http://<your-computer-ip>:9191';
   return `${base}/${privoxyFeedFileName(exportFormat, savePath)}`;
 }
 
-/** Why the feed URL below cannot work yet, or null when it can. */
+/**
+ * The Home Assistant add-on's address for the same action file.
+ *
+ * The add-on renders the action file from the published DNS feed itself rather than serving a
+ * file the desktop compiled, so this URL answers whatever export format the desktop is set to —
+ * and, being a long-lived service on the LAN, it answers while this machine is off. The fetch is
+ * still just transport: Privoxy reads the file locally and nothing subscribes to anything.
+ */
+export function privoxyHomeAssistantUrl(port: number = 9191): string {
+  return `http://homeassistant.local:${port}/privoxy.action`;
+}
+
+/** Why the fetched file cannot be a Privoxy action file yet, or null when it can. */
 export function privoxyFormatWarning(exportFormat: string): string | null {
   if (exportFormat === 'privoxy') return null;
   return `The compiled export is currently "${exportFormat}". Set Format to Privoxy so the hub writes a {+block} action file instead of ${exportFormat} syntax.`;
 }
 
-/** The `actionsfile` line to add to `config`, with the feed URL already substituted. */
-export function privoxyActionsFileDirective(feedUrl: string): string {
-  return `actionsfile ${feedUrl}`;
+/**
+ * The `actionsfile` line to add to `config` — a file name, never a URL.
+ *
+ * `actionsfile` resolves its argument against the config directory, so a bare file name is the
+ * complete directive. A feed address here is the deployment that reads as plausible and loads
+ * nothing: Privoxy will not fetch it.
+ */
+export function privoxyActionsFileDirective(fileName: string): string {
+  return `actionsfile ${fileName}`;
+}
+
+/** The copy step: pull the compiled file once from the hub onto the proxy host. */
+export function privoxyFetchCommand(feedUrl: string, fileName: string): string {
+  return `curl -fsSL "${feedUrl}" -o ${PRIVOXY_CONF_DIR}/${fileName}`;
+}
+
+/** Privoxy has no reload signal — a restart is how it picks up a changed action file. */
+export function privoxyReloadCommand(): string {
+  return 'sudo systemctl restart privoxy';
 }
 
 export interface PrivoxyRecipeStep {
@@ -55,28 +91,40 @@ export interface PrivoxyRecipeStep {
 /**
  * The setup steps, in order.
  *
- * Privoxy fetches a remote actions file itself, so unlike the Unbound drop-in there is no
- * server-side refresh command to write: the proxy is the client. The interval is Privoxy's own
- * business, so the wording does not promise one.
+ * Privoxy consumes a local file, so the recipe mirrors the BIND one: compile, copy the artifact
+ * into the config directory, point `config` at it, and restart — the reload is explicit because
+ * replacing the file while Privoxy runs leaves the old rules in effect.
  */
 export const PRIVOXY_STEPS: PrivoxyRecipeStep[] = [
   {
-    id: 'feed',
-    title: 'Serve the action file',
+    id: 'compile',
+    title: 'Compile the action file',
     detail:
-      'Turn the LAN feed server on above and leave Auto-start on, so the address below answers after a restart. The feed serves the compiled file at the path shown, so the format has to be Privoxy for it to contain an action file.',
+      'Set Format to Privoxy so the hub writes a {+block} action file \u2014 an AdGuard or hosts export is not a format Privoxy can read. The saved file is what gets copied in the next step.',
+  },
+  {
+    id: 'copy',
+    title: 'Copy it onto the proxy host',
+    detail:
+      'Action files live beside `config` \u2014 `/etc/privoxy/` on a packaged Linux install, or `etc/privoxy` under the Homebrew prefix on macOS. The command below fetches the compiled file once from the hub\u2019s feed address; transferring the file any other way works the same.',
+  },
+  {
+    id: 'addon',
+    title: 'Or fetch it from the Home Assistant add-on',
+    detail:
+      'If Home Assistant is on the same LAN, the add-on renders this action file from the published DNS feed \u2014 sections, leading-dot patterns and bypass ordering included \u2014 and serves it while this desktop is off, whatever export format the desktop compiles. The command below saves it under the same name, so the rest of the recipe is unchanged.',
   },
   {
     id: 'actionsfile',
-    title: 'Point Privoxy at it',
+    title: 'Point Privoxy at the file',
     detail:
-      'Add the actionsfile line below to Privoxy\u2019s config. Privoxy fetches a remote actions file itself and re-reads it on its own schedule, so nothing has to run on the proxy host and no cron job is needed.',
+      'Add the actionsfile line below to `config`. It names a file \u2014 a bare name resolves inside the config directory \u2014 not a URL: a feed address in it is the deployment that reads as plausible and loads nothing.',
   },
   {
     id: 'reload',
-    title: 'Restart or re-read the config',
+    title: 'Restart Privoxy',
     detail:
-      'The actionsfile line is read at startup, so restart Privoxy once after adding it \u2014 after that the file itself is re-fetched without a restart. On a router package that is usually a service restart from its web UI.',
+      'Privoxy reads `config` and its action files at startup and has no reload signal, so replacing the file without restarting leaves the old rules running. On systemd hosts the command below is the restart; on a router package, restart the service from its UI.',
   },
   {
     id: 'ordering',

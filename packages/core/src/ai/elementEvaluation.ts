@@ -11,12 +11,15 @@
  *     had no business hiding. The target is zero, and it is the number to watch.
  *  2. **Coverage** — `missedHides` counts ads, trackers and nags left alone. This is
  *     the number to *improve*; it trades directly against safety only if the fixes
- *     are sloppy, which is why the corpus pins both directions. * 3. **Accuracy & calibration** — whether the class label means anything over every
+ *     are sloppy, which is why the corpus pins both directions.
+ *  3. **Accuracy & calibration** — whether the class label means anything over every
  *     case, and whether the stated confidence means anything over the cases where the
  *     corpus states an expectation about acting — required or forbidden — rather than
- *     merely permitting it (ECE and Brier). Acting is the only thing a confidence is
- *     attached to, so it is the only thing it can be honest or dishonest about;
- *     restraint is measured by `missedHides` and the action mix instead.
+ *     merely permitting it (ECE and Brier). A verdict's stated confidence is charged
+ *     against whether the band position it chose was right, so a required action the
+ *     model dodged with a `leave` is scored as the out-of-band decision it is rather
+ *     than leaving the average; restraint on cases that require nothing is measured by
+ *     `missedHides` and the action mix instead.
  */
 
 import type { ElementAction, ElementClass, ElementPrediction, ElementSnapshot } from './elementClassifier.js';
@@ -41,28 +44,35 @@ const ACTION_RANK: Record<ElementAction, number> = { leave: 0, suggest: 1, hide:
 /**
  * The pair for one case, or `null` when the corpus states no expectation about acting.
  *
- * Calibration here is precision calibration: **when the model acts, is its stated
- * confidence the probability that acting was right?** That question needs ground truth
- * about acting, and the corpus states one only at the edges of its action band:
+ * Calibration here is precision calibration: **when the model commits to a position on
+ * the action band, is its stated confidence the probability that position was inside
+ * the band the corpus required?** That question needs ground truth about the band, and
+ * the corpus states one at the edges:
  *
- *  - **Required** (`minAction: 'hide'`): acting is the job. The label is 1 when the
- *    verdict sits inside the band and 0 when it does not — an undersold hide is a
- *    calibration error, not a validated action.
- *  - **Forbidden** (`maxAction: 'leave'`): acting is a defect. Any verdict the model
- *    takes here is labelled 0, which is the only place overconfidence can show.
- *  - **Merely permitted** (`minAction` unset, `maxAction` above `leave`): the corpus
- *    deliberately says both acting and restraint are acceptable, so there is no honest
- *    label — scoring it 1 would claim the corpus validated acting (a permitted suggest
- *    counted as an expected one), scoring it 0 would claim it forbade acting. Either
- *    reading lets the metric be gamed by acting on exactly the cases nobody labelled,
- *    so the pair is `null`. These cases are not unmeasured: `destroyedContent`,
- *    `undersoldHides`, `missedHides` and the action mix all still see them.
+ *  - **Required** (`minAction` set): acting is the job. The label is 1 when the verdict
+ *    sits inside the band and 0 when it does not — an undersold hide is a calibration
+ *    error, not a validated action. That includes a `leave`: a required action the
+ *    model dodged by staying silent is a decision it made below the band, and the
+ *    confidence it stated on that call is charged against it (a confident silence
+ *    costs more, a hesitant one less — but never drops out, which is the failure shape
+ *    where a regression leaves the scored set and the average improves by losing
+ *    cases).
+ *  - **Forbidden direction** (`maxAction` below `'hide'`, or the verdict exceeding the
+ *    ceiling): the ceiling is a stated expectation whether or not a floor is. A verdict
+ *    above it — hiding a suggest-capped case, acting at all on a leave-only one — is a
+ *    labelled error scored `{confidence, 0}`; a flag-14 hide is calibration-visible,
+ *    not just safety-counted.
+ *  - **Merely permitted in-band** (`minAction` unset and the verdict inside the
+ *    allowed band): the corpus deliberately says both acting and restraint are
+ *    acceptable, so there is no honest label — scoring it 1 would claim the corpus
+ *    validated that particular choice, 0 would claim it forbade it, and either reading
+ *    pads the metric with cases nobody graded. The pair is `null`; the ceiling still
+ *    stands, so a violation above it does score.
  *
- * A `leave` verdict is likewise never scored, for a second reason: its confidence is a
- * class probability ("84% sure this is Content"), not an action probability ("16%
- * chance that hiding would have been right"), and nothing in the model produces that
- * second number. Scoring leaves anyway once dragged the metric's floor to ~0.10 and made
- * its ceiling move whenever a leave-only case was added — including for the hand-tuned
+ * A `leave` on a case with no requirement is still unscored: its confidence is a class
+ * probability ("84% sure this is Content") and correct restraint would only pad the
+ * average. Scoring *those* leaves once dragged the metric's floor to ~0.10 and made its
+ * ceiling move whenever a leave-only case was added — including for the hand-tuned
  * reference, which is how a *threshold* got to be knife-edge without the weights
  * changing at all.
  */
@@ -70,10 +80,10 @@ export function elementActionCalibrationPair(
   entry: ElementEvalCase,
   prediction: ElementPrediction,
 ): ElementActionCalibrationPair | null {
-  if (prediction.action === 'leave') return null;
-  // `minAction` unset means the corpus requires nothing; unless acting is forbidden
-  // outright, the case carries no expectation to score against.
-  if (entry.minAction === undefined && entry.maxAction !== 'leave') return null;
+  const exceedsCeiling = ACTION_RANK[prediction.action] > ACTION_RANK[entry.maxAction];
+  // With no floor set, the only expectation the corpus states is the ceiling — so a
+  // case that stays inside it carries nothing to score, whatever it did.
+  if (entry.minAction === undefined && !exceedsCeiling) return null;
   const minimum = entry.minAction ?? 'leave';
   const actingInsideTheBand =
     ACTION_RANK[prediction.action] >= ACTION_RANK[minimum] &&
@@ -151,8 +161,23 @@ export interface ElementEvaluationReport {
   confusion: Array<{ expected: ElementClass; actual: ElementClass; count: number; examples: string[] }>;
   macroF1: number;
   weightedF1: number;
-  /** `scored` of the cases carried an expectation the model could be held to; the rest specified none. */
-  calibration: { ece: number; brier: number; bins: number; scored: number; total: number };
+  /**
+   * `scored` of the cases carried an expectation the model could be held to — a stated
+   * floor (`minAction`), or a stated ceiling the verdict exceeded. `unacted` counts
+   * scored cases the model dodged by staying silent — a required action answered
+   * `leave`, which stays in the average as an out-of-band decision rather than
+   * shrinking it. `overacted` counts scored cases that went above the ceiling — a hide
+   * on a suggest-capped case is a calibration error, not just a `destroyedContent` row.
+   */
+  calibration: {
+    ece: number;
+    brier: number;
+    bins: number;
+    scored: number;
+    total: number;
+    unacted: number;
+    overacted: number;
+  };
   byFamily: Array<{ family: string; total: number; accuracy: number }>;
   actionMix: Record<ElementAction, number>;
   confidenceStats: { mean: number; max: number; atOrAbove90: number; acting: number };
@@ -218,6 +243,8 @@ export function evaluateElementClassifier(
   const unexplainedHides: ElementMisclassifiedCase[] = [];
   const actionMix: Record<ElementAction, number> = { hide: 0, suggest: 0, leave: 0 };
   const calibrationPairs: ElementActionCalibrationPair[] = [];
+  let unacted = 0;
+  let overacted = 0;
   let acting = 0;
   let confidenceSum = 0;
   let maxConfidence = 0;
@@ -247,7 +274,11 @@ export function evaluateElementClassifier(
     }
 
     const pair = elementActionCalibrationPair(entry, prediction);
-    if (pair) calibrationPairs.push(pair);
+    if (pair) {
+      calibrationPairs.push(pair);
+      if (ACTION_RANK[prediction.action] > ACTION_RANK[entry.maxAction]) overacted++;
+      else if (prediction.action === 'leave') unacted++;
+    }
   }
 
   const classes: ElementClass[] = ['Ad', 'Tracker', 'Annoyance', 'Content'];
@@ -305,7 +336,15 @@ export function evaluateElementClassifier(
     confusion,
     macroF1: round(macroF1),
     weightedF1: round(weightedF1),
-    calibration: { ece: round(ece), brier: round(brier), bins, scored: calibrationPairs.length, total: results.length },
+    calibration: {
+      ece: round(ece),
+      brier: round(brier),
+      bins,
+      scored: calibrationPairs.length,
+      total: results.length,
+      unacted,
+      overacted,
+    },
     byFamily: Array.from(familyMap.entries())
       .map(([family, bucket]) => ({ family, total: bucket.total, accuracy: round(bucket.correct / bucket.total) }))
       .sort((a, b) => a.family.localeCompare(b.family)),
@@ -328,7 +367,10 @@ export function formatElementReport(report: ElementEvaluationReport): string {
   lines.push(`  macro F1              : ${report.macroF1.toFixed(3)}   weighted F1: ${report.weightedF1.toFixed(3)}`);
   lines.push(
     `  acting calibration    : ECE ${report.calibration.ece.toFixed(3)}   Brier ${report.calibration.brier.toFixed(3)}` +
-      `   (${report.calibration.scored} of ${report.calibration.total} cases stated an expectation about acting)`,
+      `   (${report.calibration.scored} of ${report.calibration.total} cases stated an expectation about acting` +
+      `${report.calibration.unacted ? `, ${report.calibration.unacted} dodged by staying silent` : ''}` +
+      `${report.calibration.overacted ? `, ${report.calibration.overacted} above their ceiling` : ''}` +
+      `${report.calibration.unacted || report.calibration.overacted ? ', all scored as errors' : ''})`,
   );
   lines.push(`  actions               : ${report.actionMix.hide} hide, ${report.actionMix.suggest} suggest, ${report.actionMix.leave} leave`);
   lines.push('');

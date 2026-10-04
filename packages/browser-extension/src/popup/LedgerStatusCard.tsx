@@ -28,6 +28,7 @@ export interface LedgerStatusCardProps {
 
 const SOURCE_LABELS: Record<LedgerStatus['feed'], string> = {
   live: 'Live events',
+  hybrid: 'Live + poll',
   polled: 'Polled',
   unavailable: 'None',
 };

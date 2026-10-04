@@ -95,7 +95,12 @@ export class HaBridge {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
-        if (this.config.token && url.includes(this.config.url)) {
+        // The token is presented to every endpoint the user configured — the HA webhook and the
+        // hub feed alike. A hub with `feedToken` set refuses unauthenticated mutations, so
+        // restricting the header to the HA URL would leave the feed push permanently denied.
+        // Every candidate endpoint is user-configured or localhost, so there is no third party
+        // for the credential to leak to.
+        if (this.config.token) {
           headers['Authorization'] = `Bearer ${this.config.token}`;
         }
 

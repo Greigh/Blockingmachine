@@ -162,7 +162,7 @@ function sanitizeInputDomain(raw: unknown): string {
 }
 
 /**
- * Extracts 25 numerical features for domain threat classification.
+ * Extracts 26 numerical features for domain threat classification.
  * All feature values are strictly finite numbers bounded between 0.0 and 1.5.
  * @beta
  */
@@ -268,6 +268,13 @@ export function extractDomainFeatures(
   }
   trackerKeywordWeight = Math.max(0, Math.min(1.5, trackerKeywordWeight));
 
+  let consentKeywordWeight = 0;
+  for (const token of dbLists.suspiciousConsentTokens) {
+    if (!hostnameHasToken(clean, token)) continue;
+    consentKeywordWeight += token.length >= 4 ? 0.5 : 0.4;
+  }
+  consentKeywordWeight = Math.max(0, Math.min(1.5, consentKeywordWeight));
+
   // 8. CNAME Cloaking Flags (bounded)
   const cnameKnownTracker = context?.knownTrackerTarget ? 1.0 : 0.0;
   const cnameExternal = context?.hasCnameCloaking ? 1.0 : 0.0;
@@ -331,6 +338,7 @@ export function extractDomainFeatures(
     trigramPerplexity,
     adKeywordWeight,
     trackerKeywordWeight,
+    consentKeywordWeight,
     cnameKnownTracker,
     cnameExternal,
     cnameDepth,
@@ -348,7 +356,7 @@ export function extractDomainFeatures(
 /**
  * Calibrated weight coefficients for Multi-Class Mini-AI Inference.
  */
-interface ModelClassWeights {
+export interface ModelClassWeights {
   bias: number;
   entropyFull: number;
   entropySld: number;
@@ -358,6 +366,7 @@ interface ModelClassWeights {
   trigramPerplexity: number;
   adKeywordWeight: number;
   trackerKeywordWeight: number;
+  consentKeywordWeight: number;
   cnameKnownTracker: number;
   cnameExternal: number;
   knownSafeInfra: number;
@@ -368,7 +377,7 @@ interface ModelClassWeights {
   brandSpoofScore: number;
 }
 
-const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
+export const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
   Clean: {
     bias: 1.5,
     entropyFull: -3.0,
@@ -379,6 +388,7 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     trigramPerplexity: -2.0,
     adKeywordWeight: -7.0,
     trackerKeywordWeight: -7.0,
+    consentKeywordWeight: -7.0,
     cnameKnownTracker: -10.0,
     cnameExternal: -2.5,
     knownSafeInfra: 20.0,
@@ -398,6 +408,7 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     trigramPerplexity: 0.5,
     adKeywordWeight: 16.0,
     trackerKeywordWeight: 0.5,
+    consentKeywordWeight: 0.5,
     cnameKnownTracker: 0.0,
     cnameExternal: 0.5,
     knownSafeInfra: -12.0,
@@ -417,6 +428,27 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     trigramPerplexity: 0.2,
     adKeywordWeight: 0.5,
     trackerKeywordWeight: 16.0,
+    consentKeywordWeight: 0.5,
+    cnameKnownTracker: 0.0,
+    cnameExternal: 0.8,
+    knownSafeInfra: -12.0,
+    highRiskTld: 0.8,
+    digitRatio: 0.5,
+    punycode: 0.2,
+    userTuneBias: 3.5,
+    brandSpoofScore: 0,
+  },
+  'Consent/Annoyance': {
+    bias: -2.0,
+    entropyFull: 0.8,
+    entropySld: 1.0,
+    lenSld: 0.5,
+    consecutiveConsonants: 0.2,
+    hexScore: 0.5,
+    trigramPerplexity: 0.2,
+    adKeywordWeight: 0.5,
+    trackerKeywordWeight: 0.5,
+    consentKeywordWeight: 16.0,
     cnameKnownTracker: 0.0,
     cnameExternal: 0.8,
     knownSafeInfra: -12.0,
@@ -436,6 +468,7 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     trigramPerplexity: 0.2,
     adKeywordWeight: 1.0,
     trackerKeywordWeight: 1.0,
+    consentKeywordWeight: 1.0,
     cnameKnownTracker: 14.0,
     cnameExternal: 5.0,
     knownSafeInfra: -12.0,
@@ -455,6 +488,7 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     trigramPerplexity: 2.5,
     adKeywordWeight: -5.0,
     trackerKeywordWeight: -5.0,
+    consentKeywordWeight: -5.0,
     cnameKnownTracker: 0.0,
     cnameExternal: 1.0,
     knownSafeInfra: -12.0,
@@ -474,6 +508,7 @@ const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     trigramPerplexity: 0,
     adKeywordWeight: 0,
     trackerKeywordWeight: 0,
+    consentKeywordWeight: 0,
     cnameKnownTracker: 0,
     cnameExternal: 0,
     knownSafeInfra: 0,
@@ -492,6 +527,13 @@ export interface MiniAiClassifierOptions {
   maxFeedbackEntries?: number;
   maxCacheSize?: number;
   enableCache?: boolean;
+  /**
+   * Scoring table override. The shipped head runs {@link MODEL_WEIGHTS}; the
+   * evaluation harness runs a reference table through the same pipeline so
+   * calibration gates can be stated as a margin over a real competitor rather
+   * than as absolute numbers.
+   */
+  weights?: Record<ThreatCategory, ModelClassWeights>;
 }
 
 /**
@@ -550,6 +592,7 @@ export class MiniAiClassifier {
   private readonly maxFeedbackEntries: number;
   private readonly maxCacheSize: number;
   private readonly enableCache: boolean;
+  private readonly weights: Record<ThreatCategory, ModelClassWeights>;
   private cacheHits = 0;
   private cacheMisses = 0;
 
@@ -561,6 +604,7 @@ export class MiniAiClassifier {
       ? Math.min(20000, options.maxCacheSize)
       : 5000;
     this.enableCache = options?.enableCache !== false;
+    this.weights = options?.weights ?? MODEL_WEIGHTS;
   }
 
   /**
@@ -760,6 +804,7 @@ export class MiniAiClassifier {
             Clean: 1.0,
             Advertising: 0,
             'Telemetry/Analytics': 0,
+            'Consent/Annoyance': 0,
             'CNAME Cloaking': 0,
             'Malware/Phishing': 0,
             Unknown: 0,
@@ -780,7 +825,7 @@ export class MiniAiClassifier {
             category: 'Clean',
             confidence: 99,
             riskLevel: 'none',
-            classProbabilities: { Clean: 1.0, Advertising: 0, 'Telemetry/Analytics': 0, 'CNAME Cloaking': 0, 'Malware/Phishing': 0, Unknown: 0 },
+            classProbabilities: { Clean: 1.0, Advertising: 0, 'Telemetry/Analytics': 0, 'Consent/Annoyance': 0, 'CNAME Cloaking': 0, 'Malware/Phishing': 0, Unknown: 0 },
             topContributions: [
               {
                 name: 'Private/Local IP Address',
@@ -801,7 +846,7 @@ export class MiniAiClassifier {
             category: 'Clean',
             confidence: 99,
             riskLevel: 'none',
-            classProbabilities: { Clean: 1.0, Advertising: 0, 'Telemetry/Analytics': 0, 'CNAME Cloaking': 0, 'Malware/Phishing': 0, Unknown: 0 },
+            classProbabilities: { Clean: 1.0, Advertising: 0, 'Telemetry/Analytics': 0, 'Consent/Annoyance': 0, 'CNAME Cloaking': 0, 'Malware/Phishing': 0, Unknown: 0 },
             topContributions: [
               {
                 name: 'Known Public DNS',
@@ -821,7 +866,7 @@ export class MiniAiClassifier {
           category: 'Clean',
           confidence: 85,
           riskLevel: 'none',
-          classProbabilities: { Clean: 0.9, Advertising: 0.02, 'Telemetry/Analytics': 0.02, 'CNAME Cloaking': 0.01, 'Malware/Phishing': 0.05, Unknown: 0 },
+          classProbabilities: { Clean: 0.9, Advertising: 0.02, 'Telemetry/Analytics': 0.02, 'Consent/Annoyance': 0, 'CNAME Cloaking': 0.01, 'Malware/Phishing': 0.05, Unknown: 0 },
           topContributions: [],
           inferenceTimeMs: elapsed,
           reasons: ['Raw IP address endpoint (not a domain hostname)'],
@@ -862,6 +907,7 @@ export class MiniAiClassifier {
             Clean: 1.0,
             Advertising: 0,
             'Telemetry/Analytics': 0,
+            'Consent/Annoyance': 0,
             'CNAME Cloaking': 0,
             'Malware/Phishing': 0,
             Unknown: 0,
@@ -892,6 +938,7 @@ export class MiniAiClassifier {
         'Clean',
         'Advertising',
         'Telemetry/Analytics',
+        'Consent/Annoyance',
         'CNAME Cloaking',
         'Malware/Phishing',
       ];
@@ -900,6 +947,7 @@ export class MiniAiClassifier {
         Clean: 0,
         Advertising: 0,
         'Telemetry/Analytics': 0,
+        'Consent/Annoyance': 0,
         'CNAME Cloaking': 0,
         'Malware/Phishing': 0,
         Unknown: -999,
@@ -908,7 +956,7 @@ export class MiniAiClassifier {
       const contributions: MiniAiFeatureContribution[] = [];
 
       for (const cat of categories) {
-        const w = MODEL_WEIGHTS[cat];
+        const w = this.weights[cat];
         let z = w.bias;
         z += features.entropyFull * w.entropyFull;
         z += features.entropySld * w.entropySld;
@@ -918,6 +966,7 @@ export class MiniAiClassifier {
         z += features.trigramPerplexity * w.trigramPerplexity;
         z += features.adKeywordWeight * w.adKeywordWeight;
         z += features.trackerKeywordWeight * w.trackerKeywordWeight;
+        z += features.consentKeywordWeight * w.consentKeywordWeight;
         z += features.cnameKnownTracker * w.cnameKnownTracker;
         z += features.cnameExternal * w.cnameExternal;
         z += features.knownSafeInfra * w.knownSafeInfra;
@@ -939,6 +988,7 @@ export class MiniAiClassifier {
         Clean: 0,
         Advertising: 0,
         'Telemetry/Analytics': 0,
+        'Consent/Annoyance': 0,
         'CNAME Cloaking': 0,
         'Malware/Phishing': 0,
         Unknown: 0,
@@ -1000,6 +1050,10 @@ export class MiniAiClassifier {
         verdict = highestProb >= 0.65 ? 'ad_server' : 'suspicious';
       } else if (bestCategory === 'Telemetry/Analytics') {
         verdict = highestProb >= 0.65 ? 'tracker' : 'suspicious';
+      } else if (bestCategory === 'Consent/Annoyance') {
+        // An annoyance is not a threat family, so it has its own rung rather than the
+        // "low-confidence leftover" one — the verdict says what it is, not just "not clean".
+        verdict = 'annoyance';
       } else if (bestCategory === 'CNAME Cloaking') {
         verdict = highestProb >= 0.65 ? 'tracker' : 'suspicious';
       } else if (bestCategory === 'Malware/Phishing') {
@@ -1014,6 +1068,9 @@ export class MiniAiClassifier {
       else if (verdict === 'ad_server' || verdict === 'tracker') {
         riskLevel = highestProb >= 0.8 ? 'high' : 'medium';
       } else if (bestCategory === 'Unknown') {
+        riskLevel = 'low';
+      } else if (verdict === 'annoyance') {
+        // Confident non-threat: below the uncertainty rung on purpose.
         riskLevel = 'low';
       } else if (verdict === 'suspicious') {
         riskLevel = 'medium';
@@ -1079,6 +1136,17 @@ export class MiniAiClassifier {
           description: 'Matches tracking / analytics beacon signatures',
         });
         reasons.push(`Contains behavioral telemetry token signature (Weight: ${features.trackerKeywordWeight.toFixed(2)})`);
+      }
+
+      if (bestCategory !== 'Clean' && features.consentKeywordWeight > 0.3) {
+        contributions.push({
+          name: 'Consent Platform Tokens',
+          value: features.consentKeywordWeight,
+          weight: 7.2,
+          impact: 'threat',
+          description: 'Matches consent-management or annoyance platform signatures',
+        });
+        reasons.push(`Contains consent / annoyance platform token signature (Weight: ${features.consentKeywordWeight.toFixed(2)})`);
       }
 
       if (bestCategory !== 'Clean' && features.cnameKnownTracker > 0) {
@@ -1204,6 +1272,7 @@ export class MiniAiClassifier {
           Clean: 1.0,
           Advertising: 0,
           'Telemetry/Analytics': 0,
+          'Consent/Annoyance': 0,
           'CNAME Cloaking': 0,
           'Malware/Phishing': 0,
           Unknown: 0,

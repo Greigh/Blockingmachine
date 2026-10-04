@@ -55,12 +55,24 @@ number over it would be perfect, the weight fit would move nothing, and the corp
 look like it had grown by dozens of cases while teaching nothing at all. The suite pins the
 refusal directly — an undecided capture produces no case *however confident the model was*.
 
-What a click *can* honestly state is the action, because that is the consequential axis:
+What a click *can* honestly state is the action, because that is the consequential axis —
+and how far it reaches is a second question the picker deliberately does not ask. A click
+rules on **one element**; whether the claim covers the whole shape is the decision's
+`scope`, recorded on the `human` record in the harvest file. Absent scope means
+`element`, and the bands below show both:
 
-| decision | `expected` | band | what it does not say |
-|---|---|---|---|
-| `keep` | `['Content']` | `min: leave`, `max: leave` | — the class follows, since "must stay visible" and "is content" are the same statement about a real element |
-| `hide` | `['Ad', 'Tracker', 'Annoyance']` | `min: hide`, `max: hide` | whether it is an ad, a tracker or a nag. `expected[0]` is canonical by convention, so the note says plainly that a reviewer has to name it |
+| decision | scope | `expected` | band | what it does not say |
+|---|---|---|---|---|
+| `keep` | `element` (default) | `['Content']` | `max: suggest` | that the shape may never be pointed at — one element's keep forbids hiding, nothing wider |
+| `keep` | `shape` | `['Content']` | `min: leave`, `max: leave` | — the class follows, since "must stay visible" and "is content" are the same statement about a real shape |
+| `hide` | `element` (default) | `['Ad', 'Tracker', 'Annoyance']` | `min: suggest`, `max: hide` | that the shape must be removed everywhere — the click saw one element |
+| `hide` | `shape` | `['Ad', 'Tracker', 'Annoyance']` | `min: hide`, `max: hide` | whether it is an ad, a tracker or a nag. `expected[0]` is canonical by convention, so the note says plainly that a reviewer has to name it |
+
+`shape` scope is never inferred — not from sightings, not from confidence. It is a
+reviewer's assertion that the decision generalises, recorded on the decision itself
+(`"scope": "shape"` in the JSONL record) so the queue shows *why* a proposal carries a
+shape-wide band. The proposal carries `harvestScope` through into the promoted case, so a
+corpus entry keeps which evidence it was built from.
 
 ## Why candidates are not cases
 
@@ -69,13 +81,46 @@ The queue is written to its own artifact,
 or calibrates imports it**. This change added no case to the graded corpus: when the
 pipeline landed, `elementEvalCorpus.ts` held 117 cases with 54 of them scored for action
 calibration (reference ECE 0.0346, shipped 0.0369) and the weight table not refitted. It now
-holds **162** cases with **74** scored (reference ECE 0.0351, shipped 0.0377) — grown by
+holds **222** cases with **101** scored (reference ECE 0.0950, shipped 0.0958) — grown by
 hand in `elementEvalCorpus.ts` and **not** by promoting anything out of this queue, which is
-the separation above doing its job rather than being overtaken by it.
+the separation above doing its job rather than being overtaken by it. (The scored count
+moved because the calibration metric now also scores required-but-silent cases and ceiling
+violations; see `element-classifier-live-scan.md`.)
 
-Promotion is a person editing the corpus. The queue helps them by marking a candidate whose
-shape and action band a corpus case already pins as `promoted`, so the queue **drains** as
-cases land instead of re-proposing the same shape forever.
+Promotion is a person running `--promote` — not a person hand-editing the corpus, and not
+the pipeline promoting itself:
+
+```console
+$ npm run harvest:elements -- --promote theguardian.com/div|promo/g-promo-slim \
+    --scope element --class Annoyance          # previews the case it would write
+$ npm run harvest:elements -- --promote theguardian.com/div|promo/g-promo-slim \
+    --scope element --class Annoyance --write  # appends it under the marker
+```
+
+Every refusal is deliberate, because each one is a question the reviewer did not answer:
+
+- a candidate with **no human decision** cannot promote;
+- **scope must be explicit** — recorded on the decision (`"scope": "shape"` in the JSONL)
+  or passed as `--scope`; a flag that disagrees with the record refuses rather than
+  rewriting it, and the scope the plan used is written back onto the record;
+- a `hide` decision must **name its class** (`--class Ad|Tracker|Annoyance`, repeatable or
+  comma-separated) — the proposal's expected set is a placeholder by design;
+- a `keep` decision refuses `--class` — "must stay visible" already fixed the class;
+- a label already in the corpus file refuses a second copy.
+
+`--write` appends the rendered case under the `// ─── Harvested promotions` marker at the
+end of `ELEMENT_EVAL_CORPUS`, in the file's own `snap()`/`attr()` style — the render and
+insertion are core functions the suite pins, so the write path is not a string a reviewer
+trims by hand. Afterward: rebuild core (`--promote` reads the compiled corpus), run the
+suite, then `npm run harvest:elements` to refresh the queue — the newly-covered candidate
+reports `promoted` and stops being proposed.
+
+A promoted case's band can only be as wide as the recorded `scope` allows, so a
+single click can never land a `hide`–`hide` floor on its own. The queue helps by marking a
+candidate whose shape and action band a corpus case already covers as `promoted` (the
+corpus band must sit inside the proposal's, so a stronger written case still drains a
+weaker claim), and the queue **drains** as cases land instead of re-proposing the same
+shape forever.
 
 ## What a harvest record is allowed to hold
 
@@ -98,7 +143,9 @@ same core parser.
 A page can hold hundreds of candidates and one site can be seen ten times a day, so the queue
 is a review queue:
 
-- repeats of one shape on one host collapse into one candidate with a **sighting count**;
+- repeats of one module on one host collapse into one candidate with a **sighting count** —
+  and a module is keyed on the signature *plus its leading class or id*, so two shapes that
+  share a token (`div|promo` as a strip and `div|promo` as a rail) stay separate entries;
 - a **decision is never overwritten** by a later undecided sighting of the same shape;
 - the **strongest verdict** a shape ever got is the one kept, not the most recent shrug;
 - captures older than **90 days** are dropped — last year's DOM is not evidence about this
@@ -120,13 +167,12 @@ transcribed — the same elements, with the verdicts the model gave them *before
 fixes that scan produced. Running the pipeline over it:
 
 ```
-16 records → 10 candidates from 5 hosts
-  6 labelled, 0 unlabelled · 6 repeat sightings merged
-  8 already promoted · 2 awaiting review
+16 records → 11 candidates from 5 hosts
+  11 labelled, 0 unlabelled · 5 repeat sightings merged
+  6 already promoted · 5 awaiting review
 ```
 
-The two awaiting review are worth reading, because they are the argument for the whole
-exercise:
+The candidates worth reading are the argument for the whole exercise:
 
 - one is the NYT's hidden `tpc-check` frame — `Tracker/hide 98%`, the file's only `hide`
   label, and the one real detection the reviewer agreed with. A corpus grown only from
@@ -134,23 +180,23 @@ exercise:
 - one is the Guardian's own ad-named promo div — `theguardian.com/div|ad — Content/leave
   84%` — which the model already leaves alone. A verdict-scoped harvest would never have
   collected it; the reviewer's `keep` is the whole record.
+- and three are `div|promo` keeps the queue used to merge: the NYT's `.g-promo-slim` and
+  `.live-updates-promo` are now two candidates with one sighting each, and the Guardian's
+  `g-promo-slim` is its own — none of them retired by `event-promo-card`, whose leading
+  class (`event-promo`) is a different module than any of theirs.
 
-**The queue has drained from 4 to 2, and the two that left are the queue working.** Both
-were `div|promo` on a news site, marked `keep` by the reviewer — the publisher's own
-promotion, which the model already leaves alone. A hand-written case now pins that shape
-(`event-promo-card`: "a promoted thing is not a promotion"), so both candidates are reported
-as `promoted` and stop being proposed. That is the intended loop end to end: a person
-declines to remove an element, the case lands in the corpus, and the queue stops asking.
-It is also a live demonstration of the limitation below — the NYT's `.g-promo-slim` and
-`.live-updates-promo` are two different modules that share the `div|promo` signature, so
-the one promoted case retires the *pair* as a single queue entry, and the drained entry
-still carries two sightings.
+**Six candidates report `promoted`; the rest await a case.** A promoted mark means a corpus
+case pins the same signature, a compatible leading identifier, and a band at least as strong
+as the proposal's — `corpusCaseCoversHarvestProposal`. The band containment is what keeps
+the drain honest after scopes: a leave-only case still retires an element-scoped `keep`
+proposal (`leave`–`suggest`), because it forbids more than the click claimed.
 
-## The limitation this found
+## The key change this produced
 
-The queue keys on the classifier's signature, and the signature is the classifier's grouping
-token. Two genuinely different modules whose first ad token is the same therefore collapse
-into one candidate: the NYT's `.g-promo-slim` and `.live-updates-promo` are one queue entry
-with two sightings. It is recorded as open flag 6 rather than papered over, because the fix
-is not obvious — a finer key would also have to be the key a *promoted case* is matched
-against, or the queue would report a covered shape as still to-do.
+Candidates used to key on the signature alone — the classifier's grouping token — so two
+genuinely different modules whose first ad token was the same collapsed into one entry,
+and one promoted case closed the merged reviews of both. The key is now signature plus
+leading identifier (`classes[0] ?? id`), and the promoted match runs on the same pair with
+one fallback: a case whose snapshot names no identifier (a token carried by the tag itself,
+like `amp-ad`) still covers every module under its signature. A case that names a module
+closes only that module's review — which is exactly what a case covers, and nothing wider.

@@ -1,7 +1,7 @@
 /**
  * Fitting the element classifier's weights from the labelled corpus.
  *
- * The classifier's statistical head is a linear model over 25 evidence features feeding
+ * The classifier's statistical head is a linear model over 26 evidence features feeding
  * a softmax; {@link ELEMENT_HAND_TUNED_WEIGHTS} was written by hand and never measured
  * against an alternative. This module replaces guesswork with a fit, and — more
  * importantly — makes the replacement *checkable*:
@@ -9,48 +9,47 @@
  *  1. **The corpus is split, once, deterministically.** {@link splitElementCorpus}
  *     stratifies by canonical label and takes every *k*-th case, so the held-out set is
  *     a fixed property of the corpus rather than something a run chooses.
- *  2. **The selection set is not the test set.** The one hyperparameter that matters —
- *     how hard to pull the fit back toward the hand-tuned prior — is chosen by
- *     cross-validation over the *training* cases ({@link selectPriorStrength}), never on
- *     the held-out cases that the claim rests on.
+ *  2. **The selection set is not the test set.** The choice that matters — which
+ *     regulariser, and for the prior kind at what strength — is chosen by
+ *     cross-validation over the *training* cases ({@link selectRegularisation}), never
+ *     on the held-out cases that the claim rests on.
  *  3. **Both sets are scored through the shipping code path.** {@link weightSetMetrics}
  *     behaves like the classifier: same feature extraction, same `softmaxFor`, same
  *     argmax. {@link compareWeightSets} reports the delta and names the individual cases
  *     that changed hands, so a win that is really two trades is visible as such.
  *
- * The prior is a regulariser with a measured size, and its size is much smaller than it
- * first appeared. There are four classes × 26 parameters = 104 free numbers and 107
- * training elements, and the features are heavily correlated by construction (every
- * "strong token" family also sets its "weak token" partner), so centring a Gaussian prior
- * on the hand-tuned table is a real constraint: unregularised, the fit has to spend
- * examples separating features that co-occur. Measured by cross-validation over the
- * training cases, the chosen strength has fallen from 5 to **1** as the selection moved
- * from a single inner split to folding every training case into validation. The data term
- * is a class-balanced mean, so it sums to exactly one example per case; strength 1 is
- * therefore the hand-tuning being worth a single labelled element against 107, i.e. the
- * corpus outweighs the prior about **107:1** in the shipped fit. `priorStrength` is
- * measured in average-examples, so "1" reads plainly as "the prior is worth one labelled
- * element".
+ * The selection chooses among regularisation kinds, not only prior strengths — flag 12's
+ * charge was that the prior shipped unevidenced, having never faced a regulariser of a
+ * different kind, so the grid carries an **early-stop** candidate (unregularised Adam
+ * halted at the checkpoint a deterministic inner validation slice liked best) beside the
+ * bare fit and the prior sweep. For three corpus rounds `prior:1` won that selection —
+ * a regulariser had to beat the unregularised head on ~116 training elements per fold,
+ * and the margin shrank corpus round over corpus round (25×, 3.5×, 1.9×, 1.11×, 1.09×).
+ * At 230 cases the margin inverted: **`none` leads the folds outright** — 0.7721 against
+ * early stopping's 0.8843 and prior:1's 0.9330 — so the shipped table is, for the first
+ * time since flag 12, the unregularised fit. The machinery did not change; the evidence
+ * did. A later corpus can move the answer back, and the suite pins the ordering so the
+ * move would be loud.
  *
- * The prior's standing is narrower than it was at 117 cases, and the width is worth
- * stating rather than quietly re-asserting. Five folds over 107 train on ~86 and score
- * ~21 each, which was enough to show that *no* regularisation was the worst candidate
- * (mean fold logLoss 1.0929 against 0.5813 at strength 1) and is no longer enough to say
- * so: unregularised scores 0.6120 and only strengths 1 (0.5229) and 2 (0.5611) beat it,
- * while 5, 10, 20 and 50 (0.6219 → 0.7376) are all worse. So the folds are a weak
- * discriminator at the heavy-regularisation end, and the prior earns its place against the
- * alternatives the selection actually chooses between rather than against its absence.
+ * On the 78 held-out cases the shipped table leads the hand-tuned one on both head
+ * metrics — accuracy 0.8462 → **0.9615**, cross-entropy 0.6446 → **0.2540** — and the
+ * honest comparison is now against the strongest shrinkage candidate the grid offers,
+ * since the bare fit *is* the shipped head. Measured against prior:1 on the same holdout:
+ * 75 of 78 against 72 of 78 on accuracy (all three separating cases go the bare head's
+ * way), cross-entropy 0.2623 against 0.2905, Brier 0.1085 against 0.1138. The tail the
+ * prior existed to protect did not need it: the unregularised head's deepest accepted-
+ * probability case is 0.1605, while the prior:1 fit itself puts `app-install-banner` at
+ * 0.0488 — the shrinkage manufactures the nearest thing to a floor case either head has.
+ * What the prior still buys, recorded so the account is not only negative: it puts more
+ * probability on accepted labels on average (0.8615 against 0.8209), the conservative
+ * behaviour a prior is for, and pays for it with three held-out Content cases read as
+ * threats.
  *
- * On the 55 held-out cases the shipped strength leads the hand-tuned table on all three
- * head metrics (cross-entropy 0.6193 → **0.4234**, accuracy 0.8545 → **0.9455**), and the
- * shipped strength is not the one that set is best at: strength 2 scores fractionally
- * lower held-out cross-entropy (0.4227) at the same accuracy, and the folds still choose 1.
- * That is the point — the held-out set cannot pick the hyperparameter without becoming a
- * fitted quantity. The residual disagreement has narrowed without closing: an unregularised
- * fit is still *ahead* on held-out accuracy (0.9818 against 0.9455, two more cases), which
- * the folds cannot see. So that gap is recorded rather than tuned away, because the fix is
- * more labelled cases in the classes where the two heads currently agree on everything, not
- * a better hyperparameter.
+ * The cost of the sharper head is recorded, not hidden: fitted ECE reads 0.065 against
+ * the hand-tuned 0.0495 — the flag-9 corpus's new suggest-banded cases sit in the
+ * mid-confidence bins where ECE is most sensitive — at essentially flat Brier (0.0408
+ * against 0.0406). `element-weights-fit.test.ts` pins every measurement above, so the
+ * note and the numbers cannot drift apart silently.
  *
  * Soft targets come from the corpus's own acceptance rule: `expected` lists every label
  * the case would accept, so the target distribution is uniform over exactly that set.
@@ -101,6 +100,7 @@ export const ELEMENT_FEATURE_ORDER: readonly ElementFeatureName[] = [
   'socialHostMatch',
   'urlPathToken',
   'thirdPartyFrame',
+  'cnameCloak',
   'passiveSource',
   'pixelGeometry',
   'adSizeGeometry',
@@ -135,6 +135,25 @@ export interface ElementWeightFitOptions {
    * see the module note on why 104 parameters from 107 elements needs a centre.
    */
   priorStrength?: number;
+  /**
+   * Early stopping, the alternative regulariser open flag 12 asked the selection to try:
+   * instead of pulling the fit toward a prior centre, halt it the moment a held-out
+   * validation slice stops improving and keep the best checkpoint seen.
+   *
+   * `validation` defaults to a deterministic ~1/5 stratified slice of `cases` — the same
+   * stride split {@link splitElementCorpus} uses — carved *before* fitting, so the cases
+   * that decide when to stop are never trained on. Inside `selectRegularisation`'s folds
+   * that means each early-stopped fit is nested two levels in from the held-out set the
+   * claim rests on; there is no path by which those cases can decide the stopping point.
+   */
+  earlyStop?: {
+    /** Cases monitored for improvement. Defaults to an inner split of `cases`. */
+    validation?: readonly ElementEvalCase[];
+    /** Score the validation set this often, in epochs. Defaults to 25. */
+    every?: number;
+    /** Stop after this many consecutive non-improving checks. Defaults to 4. */
+    patience?: number;
+  };
   /** Full-batch Adam steps. */
   epochs?: number;
   learningRate?: number;
@@ -151,6 +170,13 @@ export interface ElementWeightFitResult {
   epochs: number;
   examples: number;
   priorStrength: number;
+  /**
+   * When `earlyStop` ran, the epoch whose validation loss produced the returned weights —
+   * always below `epochs` when stopping fired. Absent means the full schedule ran.
+   */
+  stoppedAtEpoch?: number;
+  /** When `earlyStop` ran, how many cases the stopping decision was read from. */
+  validationCases?: number;
 }
 
 export interface ElementWeightMetrics {
@@ -186,8 +212,16 @@ export interface ElementWeightProvenance {
   corpusCases: number;
   trainingCases: number;
   holdoutCases: number;
-  /** Chosen by cross-validation over the training cases, in average-examples. */
-  priorStrength: number;
+  /**
+   * What cross-validation over the training cases chose, stated by kind so the record
+   * cannot pretend a stopped fit was pulled by a prior or vice versa. `prior` carries
+   * its strength in average-examples; `early-stop` carries the epoch whose checkpoint
+   * shipped.
+   */
+  regularisation:
+    | { kind: 'none' }
+    | { kind: 'prior'; strength: number }
+    | { kind: 'early-stop'; stoppedAtEpoch: number };
   epochs: number;
   /** Held-out head accuracy and cross-entropy, both weight sets, same cases. */
   holdout: {
@@ -306,16 +340,45 @@ function prepare(cases: readonly ElementEvalCase[]): PreparedExample[] {
  * table as a build artifact rather than a snapshot someone has to eyeball.
  */
 export function fitElementWeights(options: ElementWeightFitOptions = {}): ElementWeightFitResult {
-  const cases = options.cases ?? ELEMENT_EVAL_CORPUS;
+  const allCases = options.cases ?? ELEMENT_EVAL_CORPUS;
   const prior = cloneWeightSet(options.prior ?? ELEMENT_HAND_TUNED_WEIGHTS);
   const priorStrength = Math.max(0, options.priorStrength ?? 5);
   const epochs = Math.max(0, Math.floor(options.epochs ?? 1500));
   const learningRate = options.learningRate ?? 0.05;
   const balanceClasses = options.balanceClasses !== false;
+  const earlyStop = options.earlyStop;
+  const stopEvery = Math.max(1, Math.floor(earlyStop?.every ?? 25));
+  const stopPatience = Math.max(1, Math.floor(earlyStop?.patience ?? 4));
+
+  // When early stopping runs, the cases that decide when to stop are carved out before
+  // fitting — a default inner split when none is given, and an explicit set is filtered
+  // out of the training cases so a monitored case is never also an example.
+  let cases = allCases;
+  let validation: readonly ElementEvalCase[] | undefined;
+  if (earlyStop) {
+    if (earlyStop.validation) {
+      validation = earlyStop.validation;
+      cases = allCases.filter((entry) => !validation!.includes(entry));
+    } else {
+      const inner = splitElementCorpus(allCases, 5);
+      cases = inner.train;
+      validation = inner.holdout;
+    }
+  }
 
   const examples = prepare(cases);
+  const validationExamples = prepare(validation ?? []);
   if (examples.length === 0) {
-    return { weights: prior, trainingLoss: 0, initialLoss: 0, epochs: 0, examples: 0, priorStrength };
+    return {
+      weights: prior,
+      trainingLoss: 0,
+      initialLoss: 0,
+      epochs: 0,
+      examples: 0,
+      priorStrength,
+      stoppedAtEpoch: earlyStop ? 0 : undefined,
+      validationCases: validationExamples.length || undefined,
+    };
   }
 
   // Class balance: without it the 51 content cases would dominate, and Content is the
@@ -387,6 +450,34 @@ export function fitElementWeights(options: ElementWeightFitOptions = {}): Elemen
     return loss;
   };
 
+  /** Plain mean cross-entropy on the validation slice — the same quantity the folds score. */
+  const meanValidationLoss = (): number => {
+    if (validationExamples.length === 0) return Infinity;
+    let loss = 0;
+    for (const { x, targets } of validationExamples) {
+      let max = -Infinity;
+      for (const cls of ELEMENT_CLASSES) {
+        let score = biases[cls];
+        const vector = weights[cls];
+        for (let f = 0; f < x.length; f += 1) score += vector[f] * x[f];
+        probabilities[cls] = score;
+        if (score > max) max = score;
+      }
+      let sum = 0;
+      for (const cls of ELEMENT_CLASSES) {
+        const exp = Math.exp(probabilities[cls] - max);
+        probabilities[cls] = exp;
+        sum += exp;
+      }
+      for (const cls of ELEMENT_CLASSES) {
+        const target = targets[cls];
+        if (target === 0) continue;
+        loss -= target * Math.log(Math.max(probabilities[cls] / sum, PROBABILITY_FLOOR));
+      }
+    }
+    return loss / validationExamples.length;
+  };
+
   const initialLoss = meanCrossEntropy();
   if (epochs === 0) {
     return {
@@ -396,12 +487,33 @@ export function fitElementWeights(options: ElementWeightFitOptions = {}): Elemen
       epochs: 0,
       examples: examples.length,
       priorStrength,
+      stoppedAtEpoch: earlyStop ? 0 : undefined,
+      validationCases: validationExamples.length || undefined,
     };
   }
 
   const beta1 = 0.9;
   const beta2 = 0.999;
   const epsilon = 1e-8;
+
+  // Early stopping keeps the best checkpoint *seen*, scored at `stopEvery` intervals
+  // starting from the untrained prior — a fit that only makes validation worse restores
+  // epoch 0 rather than the least-bad drifted state.
+  let bestValidationLoss = earlyStop ? meanValidationLoss() : Infinity;
+  let bestEpoch = 0;
+  let bestWeights: Record<ElementClass, number[]> | undefined;
+  let bestBiases: Record<ElementClass, number> | undefined;
+  let misses = 0;
+  let stoppedAt = epochs;
+  const checkpoint = (): void => {
+    bestWeights = {} as Record<ElementClass, number[]>;
+    bestBiases = {} as Record<ElementClass, number>;
+    for (const cls of ELEMENT_CLASSES) {
+      bestWeights[cls] = [...weights[cls]];
+      bestBiases[cls] = biases[cls];
+    }
+  };
+  if (earlyStop) checkpoint();
 
   for (let epoch = 0; epoch < epochs; epoch += 1) {
     const gradWeights = {} as Record<ElementClass, number[]>;
@@ -467,6 +579,29 @@ export function fitElementWeights(options: ElementWeightFitOptions = {}): Elemen
       vBiases[cls] = beta2 * vBiases[cls] + (1 - beta2) * gradient * gradient;
       biases[cls] -= (learningRate * (mBiases[cls] / biasCorrection1)) / (Math.sqrt(vBiases[cls] / biasCorrection2) + epsilon);
     }
+
+    if (earlyStop && ((epoch + 1) % stopEvery === 0 || epoch === epochs - 1)) {
+      const loss = meanValidationLoss();
+      if (loss < bestValidationLoss) {
+        bestValidationLoss = loss;
+        bestEpoch = epoch + 1;
+        checkpoint();
+        misses = 0;
+      } else {
+        misses += 1;
+        if (misses >= stopPatience) break;
+      }
+    }
+  }
+
+  // `stoppedAtEpoch` reports the checkpoint whose weights ship — where validation was
+  // best — not merely where the loop happened to notice the stall.
+  if (earlyStop && bestWeights && bestBiases) {
+    for (const cls of ELEMENT_CLASSES) {
+      weights[cls] = bestWeights[cls];
+      biases[cls] = bestBiases[cls];
+    }
+    stoppedAt = bestEpoch;
   }
 
   const fitted = {} as ElementWeightSet;
@@ -485,6 +620,8 @@ export function fitElementWeights(options: ElementWeightFitOptions = {}): Elemen
     epochs,
     examples: examples.length,
     priorStrength,
+    stoppedAtEpoch: earlyStop ? stoppedAt : undefined,
+    validationCases: validationExamples.length || undefined,
   };
 }
 
@@ -684,51 +821,113 @@ function stratifiedFolds(cases: readonly ElementEvalCase[], foldCount: number): 
 }
 
 /**
- * Picks the prior strength by cross-validation over the training cases.
+ * A regularisation candidate the selection can score. `prior` pulls every step back
+ * toward the hand-tuned centre by `strength` pseudo-examples; `early-stop` runs without a
+ * prior and instead keeps the checkpoint a carved-out validation slice liked best;
+ * `none` is the unregularised baseline every candidate has to beat.
  *
- * This is the step that keeps the held-out number honest: choosing the strength by
+ * Open flag 12 asked the selection to stop choosing *between prior strengths* — a family
+ * whose measured value had shrunk to a tie — and choose between regularisers. The fold
+ * machinery, the held-out rule and the deterministic splits are unchanged; the grid is
+ * what grew a second kind.
+ */
+export type ElementRegularisation =
+  | { kind: 'none' }
+  | { kind: 'prior'; strength: number }
+  | { kind: 'early-stop' };
+
+/** The candidates the shipped fit is chosen between, in scoring order. */
+export const ELEMENT_REGULARISATION_GRID: readonly ElementRegularisation[] = [
+  { kind: 'none' },
+  { kind: 'early-stop' },
+  { kind: 'prior', strength: 1 },
+  { kind: 'prior', strength: 2 },
+  { kind: 'prior', strength: 5 },
+  { kind: 'prior', strength: 10 },
+  { kind: 'prior', strength: 20 },
+  { kind: 'prior', strength: 50 },
+];
+
+/** Short label for a candidate, used in reports and the run log. */
+export function formatRegularisation(regularisation: ElementRegularisation): string {
+  if (regularisation.kind === 'prior') return `prior:${regularisation.strength}`;
+  return regularisation.kind;
+}
+
+const fitOptionsFor = (
+  regularisation: ElementRegularisation,
+): Pick<ElementWeightFitOptions, 'priorStrength' | 'earlyStop'> =>
+  regularisation.kind === 'prior'
+    ? { priorStrength: regularisation.strength }
+    : regularisation.kind === 'early-stop'
+      ? { priorStrength: 0, earlyStop: {} }
+      : { priorStrength: 0 };
+
+/**
+ * How conservative a candidate is when the data cannot separate it from another —
+ * the tie-break ordering. Early stopping ships the least-drifted good checkpoint it
+ * measured, a stronger prior pulls harder toward the hand-tuned centre, and no
+ * regularisation is the least constrained fit. On a cross-entropy tie the order decides;
+ * ties are rare and the rule is stated so nobody reads meaning into a float.
+ */
+const conservatism = (regularisation: ElementRegularisation): number =>
+  regularisation.kind === 'early-stop'
+    ? Number.POSITIVE_INFINITY
+    : regularisation.kind === 'prior'
+      ? regularisation.strength
+      : 0;
+
+/**
+ * Picks the regularisation by cross-validation over the training cases.
+ *
+ * This is the step that keeps the held-out number honest: choosing the candidate by
  * looking at held-out performance would make that performance partly a fitted quantity,
  * so the training cases are folded, the grid is scored on the held-out fold of each
- * split, and the winner is refit on all of the training cases.
+ * split, and the winner is refit on all of the training cases. An `early-stop` candidate
+ * never monitors the fold it is scored on — its stopping signal comes from an inner
+ * split the fit carves for itself, so the nesting holds at every level.
  *
  * It used to score a *single* inner split of the training set, which meant each candidate
  * was fitted on ~half the cases it would finally see and validated on ~a quarter. That
- * measured the fit's starvation rather than the prior's value: an unregularised fit looked
- * catastrophic there (inner logLoss 1.18 against 0.34) while the same fit on all the
- * training cases generalised *at least as well* as any regularised one (held-out logLoss
- * 0.09 against 0.18). Folding every training case into validation removes the regime
- * change: the scored fit and the shipped fit now differ only in how much data they see,
- * and the answer is allowed to come out either way.
+ * measured the fit's starvation rather than the regulariser's value: an unregularised fit
+ * looked catastrophic there (inner logLoss 1.18 against 0.34) while the same fit on all
+ * the training cases generalised *at least as well* as any regularised one (held-out
+ * logLoss 0.09 against 0.18). Folding every training case into validation removes the
+ * regime change: the scored fit and the shipped fit now differ only in how much data they
+ * see, and the answer is allowed to come out either way.
  */
-export function selectPriorStrength(options: {
+export function selectRegularisation(options: {
   cases?: readonly ElementEvalCase[];
-  grid?: readonly number[];
+  candidates?: readonly ElementRegularisation[];
   epochs?: number;
   learningRate?: number;
   /** Validation folds. More folds means less data held out per fit, and less bias. */
   folds?: number;
-} = {}): { priorStrength: number; scores: Array<{ priorStrength: number; logLoss: number; accuracy: number }> } {
+} = {}): {
+  regularisation: ElementRegularisation;
+  scores: Array<{ regularisation: ElementRegularisation; logLoss: number; accuracy: number }>;
+} {
   const cases = options.cases ?? splitElementCorpus().train;
-  const grid = options.grid ?? [0, 1, 2, 5, 10, 20, 50];
+  const candidates = options.candidates ?? ELEMENT_REGULARISATION_GRID;
   const folds = stratifiedFolds(cases, options.folds ?? 5);
 
-  const scores = grid.map((priorStrength) => {
+  const scores = candidates.map((regularisation) => {
     let logLoss = 0;
     let accuracy = 0;
     for (const heldOut of folds) {
       const training = cases.filter((entry) => !heldOut.includes(entry));
       const fit = fitElementWeights({
         cases: training,
-        priorStrength,
+        ...fitOptionsFor(regularisation),
         epochs: options.epochs,
         learningRate: options.learningRate,
       });
-      const metrics = weightSetMetrics(fit.weights, heldOut, `prior=${priorStrength}`);
+      const metrics = weightSetMetrics(fit.weights, heldOut, formatRegularisation(regularisation));
       logLoss += metrics.logLoss / folds.length;
       accuracy += metrics.accuracy / folds.length;
     }
     return {
-      priorStrength,
+      regularisation,
       // Rounded so two candidates that tie to the precision the artifact keeps tie here
       // too, and the tie-break rule is deciding rather than a float nobody can see.
       logLoss: roundTo(logLoss, WEIGHT_PRECISION),
@@ -736,15 +935,20 @@ export function selectPriorStrength(options: {
     };
   });
 
-  // Lowest mean cross-validated cross-entropy wins; ties go to the stronger prior, which
-  // is the more conservative choice when the data cannot tell the difference.
+  // Lowest mean cross-validated cross-entropy wins; ties go to the more conservative
+  // candidate, the choice that changes the table least when the data cannot separate them.
   let best = scores[0];
   for (const score of scores) {
     if (score.logLoss < best.logLoss) best = score;
-    else if (score.logLoss === best.logLoss && score.priorStrength > best.priorStrength) best = score;
+    else if (
+      score.logLoss === best.logLoss &&
+      conservatism(score.regularisation) > conservatism(best.regularisation)
+    ) {
+      best = score;
+    }
   }
 
-  return { priorStrength: best?.priorStrength ?? 5, scores };
+  return { regularisation: best?.regularisation ?? { kind: 'prior', strength: 5 }, scores };
 }
 
 /** The single largest move away from the prior, reported so a human can sanity-check it. */
@@ -793,5 +997,9 @@ export function renderWeightSetSource(weights: ElementWeightSet, indent = '  '):
 
 /** Human-readable one-line summary, for scripts and test output. */
 export function formatWeightFit(result: ElementWeightFitResult): string {
-  return `fit ${result.examples} cases, prior ${result.priorStrength}, ${result.epochs} epochs — loss ${result.initialLoss.toFixed(4)} → ${result.trainingLoss.toFixed(4)}`;
+  const regularisation =
+    result.stoppedAtEpoch !== undefined
+      ? `early-stop @ epoch ${result.stoppedAtEpoch} on ${result.validationCases} validation cases`
+      : `prior ${result.priorStrength}`;
+  return `fit ${result.examples} cases, ${regularisation}, ${result.epochs} epochs — loss ${result.initialLoss.toFixed(4)} → ${result.trainingLoss.toFixed(4)}`;
 }

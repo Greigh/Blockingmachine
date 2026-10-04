@@ -41,6 +41,7 @@ export {
 } from './modelLoader.js';
 
 export {
+  LEARNED_SHADOW_SAMPLE_RATE,
   runShadowComparison,
   type ShadowDisagreement,
   type ShadowReference,

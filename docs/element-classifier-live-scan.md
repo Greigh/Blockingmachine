@@ -99,9 +99,9 @@ Corpus: **117/117** class-and-action correct for both the hand-tuned reference a
 fitted table; held-out 40 cases, accuracy **0.90 → 0.95**, logLoss 0.2528 → 0.1796,
 Brier 0.128 → 0.0902, 2 wins and no regressions. The weights were refitted and the drift
 test (`npm run check:element-weights`) confirms the checked-in table is a fresh fit.
-*(That is the corpus as it stood after this scan. It has since grown to **162** cases
-holding 161, with 6 held-out wins against 1 regression — the two findings below say what
-moved, and neither is this scan's result.)*
+*(That is the corpus as it stood after this scan. It has since grown to **222** cases
+holding 212, with 5 held-out wins and 2 named regressions — the flag-10 contested cases —
+and the two findings below say what moved, and neither is this scan's result.)*
 
 Live pages, actionable verdicts:
 
@@ -145,17 +145,56 @@ could not see the difference. Selecting on the held-out set would make that set 
 quantity, so strength 1 shipped and the residual gap was recorded rather than tuned away.
 The fix named for it was more labelled cases, not a better hyperparameter.
 
-**It half worked, and it is worth saying which half.** On the corpus of 162 the ordering
-has crossed on cross-entropy — unregularised 0.4404 against the shipped 0.4234 — and
-unregularised is still ahead on held-out *accuracy*, 0.9818 against 0.9455. So the extra
-labelled cases closed the cross-entropy half of the gap and nothing at all of the accuracy
-half. A second recorded claim moved with it: "no regularisation is the worst candidate"
+**It half worked at 162, and on 222 it did not.** At 162 the ordering had crossed on
+cross-entropy — unregularised 0.4404 against the shipped 0.4234 — while unregularised was
+still ahead on held-out *accuracy*, 0.9818 against 0.9455, and on Brier, 0.0776 against
+0.1276. And the cross-entropy half was thinner than the number suggested: it was **one
+case**, `hero-image-300x250`, where both heads are wrong and the bare fit is wrong
+catastrophically. Remove it and the bare fit led on all three metrics with perfect accuracy
+— the same one-case claim this project spent two rounds removing from the other comparisons,
+found one level down.
+
+Growing the corpus is what the finding asked for, and it is why the tail argument is
+now gone rather than strengthened. Over the 76 held-out cases the shipped table and the bare
+fit are **tied on accuracy** (0.9211 each, 70 of 76, one contested case per head), the bare
+fit is **ahead on cross-entropy** (0.5171 against 0.6589), and the shipped table's only lead
+is Brier by 0.0143 (0.1644 against 0.1787) — narrower than what shifting one case's confidence
+is worth. The two tables disagree on **2 of 76** cases at all, in two families, one each way.
+And the tail defence has reversed: the prior was introduced to keep the head off the
+probability floor on cases it has not seen, and `first-party-ad-break` — an empty `<hr>` whose
+class carries the word `ad` — gets **zero** probability on every accepted label from the
+shipped table against a 0.0255 floor from the bare fit. Three shipped cases fall below a
+tenth of the accepted mass against two. What the prior buys is a conservatively *average*
+head (0.8373 accepted probability against 0.7928), which is real and modest.
+
+Dropping that one case leaves every ordering intact, so this is not one case distorting a
+picture. The conclusion is the narrow one: the choice of `priorStrength: 1` is currently
+*unevidenced* rather than wrong, and 74 of the 76 held-out cases cannot tell the two tables
+apart at all. `element-weights-fit.test.ts` pins all four measurements — including the two
+that contradict the prior — so the record cannot drift back into claiming a win.
+
+A second recorded claim moved with it: "no regularisation is the worst candidate"
 was true on the 117-case folds (1.0929 against 0.5813) and is not now, where unregularised
-scores 0.6120 and only strengths 1 (0.5229) and 2 (0.5611) beat it while 5, 10, 20 and 50
-(0.6219 → 0.7376) are all worse. The folds are a weaker discriminator at the
+scores 0.8713 and only strengths 1 (0.8017) and 2 (0.8396) beat it while 5, 10, 20 and 50
+(0.9066 → 1.0643) are all worse. The folds are a weaker discriminator at the
 heavy-regularisation end than they were on a smaller corpus, so the suite now asserts the
 narrower true thing — the selected strength beats unregularised *and* is the best
-regularised score — instead of a claim the numbers stopped supporting.
+regularised score — instead of a claim the numbers stopped supporting. For the first time
+the held-out set also *agrees* with the folds about the hyperparameter: strength 1 is the
+best held-out cross-entropy in the grid — strength 2 now edges it on accuracy (0.9342
+against 0.9211), which says the folds' cross-entropy read, not the accuracy read, is the
+one to trust. The selection still folds over training cases only, which is the point — the
+held-out set must not become a fitted quantity — but the two are no longer in open
+disagreement.
+
+The last hole in the choice was that the grid only ever asked *which prior strength*. The
+selection now asks *which regulariser*: `selectRegularisation` scores `none`, six prior
+strengths, and an `early-stop` candidate over the same folds — the same unregularised
+Adam, halted and restored to the checkpoint a carved-out inner validation slice liked
+best. Early stopping is a real regulariser on this corpus (0.8580 against unregularised
+0.8713, better than every prior from strength 5 up) and still loses to prior:1 (0.8017),
+so the shipped table now earns its place against a measured alternative rather than only
+against its own absence — the honest version of what flag 12 asked for.
 
 **2. The action-calibration metric could not score a `leave` verdict.** `elementEvaluation.ts`
 read a leave verdict's confidence as `1 − p(acting is right)`, but that confidence is a
@@ -164,13 +203,35 @@ action. That is why the metric floored around 0.10, and why adding six confident
 cases moved it from 0.1016 to 0.1228 **for the hand-tuned reference and the fitted head
 alike** — the scale tracked corpus composition, not the weights.
 
-`elementActionCalibrationPair` now returns `null` for a `leave` verdict, so the metric
-averages over the cases where the model actually acts — **74 of 162**, after the corpus
-grew by 45 cases, up from 63 of 117 when this section was written — and the report prints
-that coverage beside the number. Restraint is measured separately, by `missedHides`,
-`undersoldHides` and the action mix (now `81 hide, 3 suggest, 78 leave`). On the corrected
+`elementActionCalibrationPair` still returns `null` for a `leave` verdict where the corpus
+states no requirement — its confidence is a class probability and correct restraint would
+only pad the average. But a `leave` below a *required* band is a decision the model made,
+and it now scores `{confidence, 0}` like any other out-of-band verdict rather than exiting
+the scored set: the metric averages over **101 of 222** — every case stating an expectation
+about acting, including the three must-hide cases the model answers with silence, which are
+charged as errors instead of dropping out (`calibration.unacted` counts them in the report).
+A `maxAction` is itself a stated expectation on the forbidden side, so a verdict above the
+ceiling — a hide on a suggest-capped case — scores too (`calibration.overacted`), which is
+how flag 14's two destroyed-content cases became calibration-visible. Eleven permitted-only
+cases whose expected sets accept no clean read gained `minAction: 'suggest'` — the corpus
+already claims they *are* threats, so restraint is not an acceptable answer — leaving 46
+genuinely two-sided permitted cases unscored while they stay inside the band.
+Restraint on cases requiring nothing is measured separately, by `missedHides`,
+`undersoldHides` and the action mix (now `91 hide, 5 suggest, 124 leave`). On the corrected
 scale the two heads are close, and the numbers are quoted against the corpus that exists
-rather than the one this scan was written against: reference ECE **0.0351**, shipped
-**0.0377**, a delta of +0.0026, with Brier scores of 0.0031 and 0.0033. The regression bound
+rather than the one this scan was written against: reference ECE **0.0652**, shipped
+**0.0661**, a delta of +0.0009, with Brier scores of 0.0489 and 0.0491 — both heads moved
+up together because both leave the same eight required cases and exceed the same two
+ceilings. The regression bound
 that replaced the frozen absolute bar is stated relative to that reference, which is what
 the old metric's knife-edge `0.11` backstop should have been from the start.
+
+The caveat this paragraph used to carry is closed: `sponsored-story-300x250` and
+`first-party-advert-label` were the flag-14 pair — first-party copy carrying a disclosure
+word that both heads hid at 98% on the container-markup rule alone. Disclosure words
+(`sponsored`, `advert`, `advertising`, …) now need an independent corroborating hint —
+a delivery attribute, an ad-network resource, a vendor path, a cross-origin frame — before
+they can hide, and neither case carries one, so both now land on `suggest`. `destroyedContent`
+is empty and `DESTROYED_CONTENT_ALLOWANCES` is deleted rather than trimmed; the third-party
+cases carried by the same words still hide, their snapshots carrying the delivery
+attributes a real sponsored unit ships.

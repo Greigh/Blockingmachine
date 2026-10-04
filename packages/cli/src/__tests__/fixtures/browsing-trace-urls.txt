@@ -1,0 +1,31 @@
+# Request trace recorded with URLs, in the format `scripts/capture-request-trace.js` emits.
+#
+# The shipped session trace (`browsing-trace.txt`) keeps hostnames only, because a hostname is
+# all a hostname-only replay could use. This one keeps URLs, because the replay can now decide a
+# path-scoped rule from them — and the difference is not cosmetic. On this trace:
+#
+#   - `||cdn.example.com^*/ads.js` fires on the two `/ads.js` requests below — `/assets/ads.js`
+#     and `/thirdparty/ads.js` — and is invisible to a hostname replay, which reads it as a
+#     block of the whole `cdn.example.com` zone and so credits it with the other three requests
+#     to that host as well. (It needs the extra path segment: the separator consumes the slash
+#     after the host, so a bare `/ads.js` would not match. See `url-rule-matcher.test.ts`.)
+#   - `||static.example.net/analytics.js` fires on exactly one of three requests to that host.
+#   - `||third.example.org^$third-party` cannot be decided by either a hostname or a URL, because
+#     whether a request was third-party is a fact about the page that made it. It stays reported
+#     as undecidable, which is the point of keeping that bucket.
+#
+# Real URLs, from a real session's resource entries. Requests are counted, not deduplicated to
+# hosts, so a host requested six times appears six times.
+
+# page: https://shop.example.com/cart
+https://shop.example.com/cart	1
+https://cdn.example.com/static/app.css	2
+https://cdn.example.com/ads/banner-1.gif	3
+https://cdn.example.com/assets/ads.js	1
+https://cdn.example.com/thirdparty/ads.js	2
+https://cdn.example.com/ads/other.gif	4
+https://static.example.net/analytics.js	5
+https://static.example.net/app.js	2
+https://static.example.net/logo.svg	1
+https://third.example.org/beacon	6
+https://fonts.example.org/inter.woff2	1

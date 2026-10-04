@@ -1,0 +1,229 @@
+{
+  "format": "blockingmachine-hit-ledger",
+  "version": 1,
+  "exportedAt": "2026-10-02T01:29:11.822Z",
+  "sessions": [
+    {
+      "day": "2026-10-02",
+      "exceptions": {},
+      "feed": "live",
+      "hits": [
+        {
+          "rule": "||ad.doubleclick.net^",
+          "count": 5
+        },
+        {
+          "rule": "||ads-static.conde.digital^",
+          "count": 2
+        },
+        {
+          "rule": "||ads.pubmatic.com^",
+          "count": 1
+        },
+        {
+          "rule": "||adsafeprotected.com^",
+          "count": 5
+        },
+        {
+          "rule": "||adsrvr.org^",
+          "count": 2
+        },
+        {
+          "rule": "||amazon-adsystem.com^",
+          "count": 25
+        },
+        {
+          "rule": "||amplitude.com^",
+          "count": 1
+        },
+        {
+          "rule": "||beacon.wikia-services.com^",
+          "count": 4
+        },
+        {
+          "rule": "||btloader.com^",
+          "count": 3
+        },
+        {
+          "rule": "||casalemedia.com^",
+          "count": 1
+        },
+        {
+          "rule": "||cdn-magiclinks.trackonomics.net^",
+          "count": 2
+        },
+        {
+          "rule": "||chartbeat.com^",
+          "count": 4
+        },
+        {
+          "rule": "||cmp.dmgmediaprivacy.co.uk^",
+          "count": 2
+        },
+        {
+          "rule": "||cmp.nature.com^",
+          "count": 1
+        },
+        {
+          "rule": "||collector.github.com^",
+          "count": 2
+        },
+        {
+          "rule": "||connect.facebook.net^",
+          "count": 2
+        },
+        {
+          "rule": "||cookielaw.org^",
+          "count": 14
+        },
+        {
+          "rule": "||criteo.com^",
+          "count": 1
+        },
+        {
+          "rule": "||criteo.net^",
+          "count": 1
+        },
+        {
+          "rule": "||ct.pinterest.com^",
+          "count": 1
+        },
+        {
+          "rule": "||dianomi.com^",
+          "count": 2
+        },
+        {
+          "rule": "||direct-events-collector.spot.im^",
+          "count": 2
+        },
+        {
+          "rule": "||doubleclick.net^",
+          "count": 1
+        },
+        {
+          "rule": "||doubleverify.com^",
+          "count": 6
+        },
+        {
+          "rule": "||edge.ads.twitch.tv^",
+          "count": 2
+        },
+        {
+          "rule": "||error-tracking.reddit.com^",
+          "count": 2
+        },
+        {
+          "rule": "||g.doubleclick.net^",
+          "count": 22
+        },
+        {
+          "rule": "||google-analytics.com^",
+          "count": 1
+        },
+        {
+          "rule": "||googleads.g.doubleclick.net^",
+          "count": 2
+        },
+        {
+          "rule": "||googleadservices.com^",
+          "count": 1
+        },
+        {
+          "rule": "||googlesyndication.com^",
+          "count": 7
+        },
+        {
+          "rule": "||googletagmanager.com^",
+          "count": 20
+        },
+        {
+          "rule": "||googletagservices.com^",
+          "count": 5
+        },
+        {
+          "rule": "||gumgum.com^",
+          "count": 1
+        },
+        {
+          "rule": "||imrworldwide.com^",
+          "count": 3
+        },
+        {
+          "rule": "||lijit.com^",
+          "count": 1
+        },
+        {
+          "rule": "||log.go.com^",
+          "count": 56
+        },
+        {
+          "rule": "||media.net^",
+          "count": 4
+        },
+        {
+          "rule": "||metrics.imdb.com^",
+          "count": 4
+        },
+        {
+          "rule": "||minutemedia-prebid.com^",
+          "count": 1
+        },
+        {
+          "rule": "||mybbc-analytics.files.bbci.co.uk^",
+          "count": 1
+        },
+        {
+          "rule": "||onesignal.com^",
+          "count": 2
+        },
+        {
+          "rule": "||onetrust.com^",
+          "count": 1
+        },
+        {
+          "rule": "||optimizely.com^",
+          "count": 8
+        },
+        {
+          "rule": "||osano.com^",
+          "count": 1
+        },
+        {
+          "rule": "||pixel.wp.com^",
+          "count": 2
+        },
+        {
+          "rule": "||privacy-mgmt.com^",
+          "count": 5
+        },
+        {
+          "rule": "||pubmatic.com^",
+          "count": 1
+        },
+        {
+          "rule": "||rubiconproject.com^",
+          "count": 5
+        },
+        {
+          "rule": "||s.amazon-adsystem.com^",
+          "count": 7
+        },
+        {
+          "rule": "||scorecardresearch.com^",
+          "count": 11
+        },
+        {
+          "rule": "||stats.wp.com^",
+          "count": 3
+        },
+        {
+          "rule": "||taboola.com^",
+          "count": 2
+        }
+      ],
+      "startedAt": "2026-10-02T01:25:32.818Z",
+      "unattributed": 0,
+      "open": true
+    }
+  ]
+}

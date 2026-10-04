@@ -1,0 +1,89 @@
+name: Weekly ledger cut
+
+# Re-derive the shipped blocklist cut from the accumulated browser ledger, once a week.
+#
+# This job cannot collect browsing data — the extension does that, on someone's machine, and the
+# merge is committed to `ledger/ledger-hits.txt`. What runs here is the half that can be
+# scheduled: every week, prove that what ships still matches the evidence and that the cut still
+# fits Chrome's guaranteed static-rule minimum. When the ledger moves, the same run produces the
+# PR that carries the regenerated artifacts, so the change is reviewed rather than pushed.
+#
+# With an empty dropbox the script is a no-op and no PR is opened, which is the correct outcome
+# rather than a failure — see `ledger/README.md`.
+
+on:
+  schedule:
+    # Mondays, 04:17 UTC. Deliberately not :00 — every scheduled GitHub workflow in the world
+    # fires at :00 and the queues are measurably worse there.
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Two PRs a week would both try to regenerate the same artifact from the same ledger and race.
+concurrency:
+  group: weekly-ledger-cut
+  cancel-in-progress: false
+
+jobs:
+  derive:
+    name: Re-derive the cut from the ledger
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The whole job. One script, not a pile of steps, so that what CI runs weekly is literally
+      # what a maintainer runs by hand when a derivation looks wrong — see
+      # `scripts/weekly-tier-compile.sh`.
+      - name: Re-derive and verify
+        run: scripts/weekly-tier-compile.sh
+
+      - name: Open a PR for the regenerated artifacts
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: weekly/ledger-cut
+          delete-branch: true
+          commit-message: |
+            Weekly: re-derive the shipped cut from the accumulated browser ledger
+
+            The hot set is regenerated from `ledger/ledger-hits.txt` and verified against it.
+            See `ledger/last-tier-plan.json` in the job log for the tier plan this produced —
+            how many hosts carried measured evidence, and how many were promoted over input
+            order.
+          title: 'Weekly: shipped cut re-derived from the browser ledger'
+          body: |
+            Automated weekly run of `scripts/weekly-tier-compile.sh`.
+
+            The hot set below was re-derived from `ledger/ledger-hits.txt`. The job log carries the
+            tier plan the same ledger produces, including how many of the 30,000 shipped rules carry
+            measured rule hits and how many were promoted over input order.
+
+            **What to look at:** `Coverage`, `Scopes kept` and `Left behind` in the hot list header.
+            A week where `Left behind` jumps and `Coverage` drops is a ledger that stopped
+            describing real traffic, and that is the thing this PR exists to make visible.
+
+            The tier rulesets are deliberately *not* in this diff. They are compiled at package
+            time from the ledger directly, so the cut that ships tracks the evidence without a
+            30,000-rule commit. `ledger/README.md` explains why.
+          labels: |
+            automated
+            ledger
+
+      - name: Report when nothing changed
+        if: steps.pull-request.outputs.pull-request-number == ''
+        run: |
+          echo "No artifact changed, so there is nothing to review."
+          echo "That is the expected outcome in a week where the ledger did not move."

@@ -30,6 +30,14 @@ import {
 
 let classifier: LearnedClassifier | null = null;
 let initAttempted = false;
+/**
+ * The verified promotion version of the shipped weights, or null when
+ * there is no manifest — a pre-M5 export, which is what ships today.
+ * Null is an honest value here rather than a missing one: without a
+ * manifest there is no version to claim, and a summary that named a
+ * version nothing could check would be worse than one that admits it.
+ */
+let modelVersion: number | null = null;
 
 function weightsDir(): string | null {
   try {
@@ -66,6 +74,7 @@ export function getLearnedClassifier(): LearnedClassifier | null {
         JSON.parse(readFileSync(manifestPath, 'utf8')),
       );
       console.log(`[Learned Shadow] manifest v${manifest.version} verified`);
+      modelVersion = manifest.version;
     }
     classifier = createLearnedClassifier(JSON.parse(modelText), JSON.parse(allowText));
     console.log(`[Learned Shadow] loaded model (${classifier.treeCount} trees)`);
@@ -90,20 +99,35 @@ export function scoreDomainLearned(domain: string): LearnedVerdict | null {
 
 export interface WatchdogShadowResult extends ShadowRunResult {
   logPath: string;
+  /** Promotion version of the weights that scored this sweep; null if unversioned. */
+  modelVersion: number | null;
 }
 
 /**
  * Shadow-score a watchdog sweep. `referenceDecide` maps each domain to
  * the production verdict ('block' for quarantined threats, 'allow'
- * otherwise). Disagreements append as JSONL. `sampleRate` (default 0)
- * additionally logs that fraction of ALL scored domains as
- * `sample: true` records — the unbiased slice the drift monitor needs.
+ * otherwise). Disagreements append as JSONL. `sampleRate` additionally
+ * logs that fraction of ALL scored domains as `sample: true` records —
+ * the unbiased slice the M5 drift stage needs, and the only input PSI
+ * has, since disagreements alone are a biased population.
+ *
+ * `sampleRate` is required, with no default, because a default here is
+ * how the drift stage ended up with nothing to read: the hook called
+ * this with two arguments, the third defaulted to 0, and `drift.py`
+ * failed with "no sample records" while the app looked healthy. The
+ * caller states the rate it runs at — normally
+ * `LEARNED_SHADOW_SAMPLE_RATE` — so the number in the log, the number
+ * in the docs and the number the code uses cannot disagree.
+ *
+ * What a sampled record holds, and what it never holds, is specified in
+ * `docs/learned-shadow-privacy.md` and pinned by test.
+ *
  * Returns null when the model is unavailable.
  */
 export function shadowScoreWatchdogDomains(
   domains: string[],
   referenceDecide: (domain: string) => LearnedDecision,
-  sampleRate = 0,
+  sampleRate: number,
 ): WatchdogShadowResult | null {
   const clf = getLearnedClassifier();
   if (!clf) return null;
@@ -136,5 +160,20 @@ export function shadowScoreWatchdogDomains(
       `[Learned Shadow] ${result.disagreements}/${result.evaluated} disagreements -> ${logPath}`,
     );
   }
-  return { ...result, logPath };
+  // The per-sweep counters. `shadow.py` derives `scored_domains` from
+  // these and from nothing else, so a sweep that scored 30,000 domains
+  // and agreed with the reference about all of them left no trace: the
+  // log was silent about the case the gate is mostly made of, and
+  // `gate.py`'s shadow_scored read 0 forever. A sweep that scored
+  // nothing is not written at all — "we ran" is not coverage.
+  if (result.evaluated > 0) {
+    append({
+      type: 'summary',
+      at: new Date().toISOString(),
+      evaluated: result.evaluated,
+      disagreements: result.disagreements,
+      modelVersion,
+    });
+  }
+  return { ...result, logPath, modelVersion };
 }

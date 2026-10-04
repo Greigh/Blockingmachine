@@ -5,12 +5,19 @@
   --border-color: rgba(255, 255, 255, 0.08);
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
-  --accent: #06b6d4;
-  --accent-glow: rgba(6, 182, 212, 0.25);
-  --danger: #ef4444;
-  --success: #10b981;
-  --warning: #f59e0b;
+  /* The desktop app's accent, so the popup reads as the same product. */
+  --accent: #0a84ff;
+  --accent-glow: rgba(10, 132, 255, 0.25);
+  --on-accent: #ffffff;
+  --bg-subtle: rgba(127, 127, 127, 0.08);
+  --danger: #ff453a;
+  --success: #30d158;
+  --warning: #ffd60a;
   --radius: 8px;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* Plan/recommendation surfaces — the app's indigo tier-plan tone. */
+  --tone-plan: #818cf8;
   /* Element-AI tones, matching the picker's on-page outlines. */
   --tone-ad: #f97316;
   --tone-tracker: #a855f7;
@@ -26,8 +33,12 @@
     --border-color: rgba(15, 23, 42, 0.1);
     --text-primary: #0f172a;
     --text-secondary: #64748b;
-    --accent: #0891b2;
-    --accent-glow: rgba(8, 145, 178, 0.18);
+    --accent: #007aff;
+    --accent-glow: rgba(0, 122, 255, 0.18);
+    --danger: #ff3b30;
+    --success: #248a3d;
+    --warning: #b25000;
+    --tone-plan: #4f46e5;
   }
 }
 
@@ -37,7 +48,7 @@ body {
   width: 360px;
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-ui);
   user-select: none;
 }
 
@@ -93,17 +104,17 @@ body {
 
 .status-dot.ok {
   background: var(--success);
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
 }
 
 .status-dot.warn {
   background: var(--warning);
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent);
 }
 
 .status-dot.off {
   background: var(--text-secondary);
-  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.18);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-secondary) 18%, transparent);
 }
 
 .live-chip {
@@ -241,7 +252,7 @@ body {
 .protection-site {
   font-size: 10px;
   color: var(--text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -287,7 +298,7 @@ body {
   width: 38px;
   height: 22px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.25);
+  background: color-mix(in srgb, var(--text-secondary) 25%, transparent);
   position: relative;
   transition: background 0.18s ease;
   /* The track is decoration painted over the real input, so it must not
@@ -482,7 +493,7 @@ body {
   font-size: 9.5px;
   padding: 1px 5px;
   border-radius: 4px;
-  background: rgba(239, 68, 68, 0.18);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
   color: var(--danger);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -490,7 +501,7 @@ body {
 }
 
 .tracker-count.muted {
-  background: rgba(148, 163, 184, 0.18);
+  background: color-mix(in srgb, var(--text-secondary) 18%, transparent);
   color: var(--text-secondary);
 }
 
@@ -560,12 +571,12 @@ body {
 
 .action-btn:hover:not(:disabled) {
   background: var(--bg-surface-hover);
-  border-color: rgba(148, 163, 184, 0.4);
+  border-color: color-mix(in srgb, var(--text-secondary) 40%, transparent);
 }
 
 .action-btn.primary {
   background: var(--accent);
-  color: #04121a;
+  color: var(--on-accent);
   border-color: transparent;
   font-weight: 700;
 }
@@ -631,7 +642,7 @@ body {
 .quota-bar {
   height: 4px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.2);
+  background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
   overflow: hidden;
 }
 
@@ -662,8 +673,15 @@ body {
   font-weight: 600;
 }
 
+.form-hint {
+  font-size: 9.5px;
+  color: var(--text-secondary);
+  opacity: 0.8;
+  line-height: 1.4;
+}
+
 .form-input {
-  background: rgba(148, 163, 184, 0.08);
+  background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
   border: 1px solid var(--border-color);
   border-radius: 5px;
   padding: 6px 8px;
@@ -735,11 +753,11 @@ body {
   font-size: 11px;
   padding: 3px 6px;
   border-radius: 5px;
-  background: rgba(148, 163, 184, 0.07);
+  background: color-mix(in srgb, var(--text-secondary) 7%, transparent);
 }
 
 .decision-name {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -778,12 +796,12 @@ body {
 }
 
 .toast.ok {
-  border-color: rgba(16, 185, 129, 0.5);
+  border-color: color-mix(in srgb, var(--success) 50%, transparent);
   color: var(--success);
 }
 
 .toast.warn {
-  border-color: rgba(245, 158, 11, 0.5);
+  border-color: color-mix(in srgb, var(--warning) 50%, transparent);
   color: var(--warning);
 }
 
@@ -811,7 +829,7 @@ body {
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.6px;
-  color: #04121a;
+  color: var(--on-accent);
   background: var(--accent);
   border-radius: 4px;
   padding: 1px 5px;
@@ -896,6 +914,14 @@ body {
   border-left-color: var(--danger);
 }
 
+/* The unclassified row gets a dashed rail in the muted text colour rather than a tone from the
+   element palette. Every other row has a class that says what kind of thing it blocks, and this one
+   has none — a dashed line is the only rail in the popup that means "we could not say", which is
+   the tier's entire claim. */
+.tier-row.tone-unclassified {
+  border-left: 3px dashed var(--text-secondary);
+}
+
 .tier-main {
   display: flex;
   flex-direction: column;
@@ -918,7 +944,7 @@ body {
   font-size: 9.5px;
   font-weight: 700;
   color: var(--text-secondary);
-  background: rgba(148, 163, 184, 0.16);
+  background: color-mix(in srgb, var(--text-secondary) 16%, transparent);
   border-radius: 4px;
   padding: 1px 5px;
   font-variant-numeric: tabular-nums;
@@ -934,8 +960,8 @@ body {
   font-size: 10px;
   line-height: 1.4;
   color: var(--warning);
-  background: rgba(245, 158, 11, 0.1);
-  border: 1px solid rgba(245, 158, 11, 0.28);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 28%, transparent);
   border-radius: 6px;
   padding: 6px 8px;
 }
@@ -952,8 +978,8 @@ body {
   font-size: 10px;
   line-height: 1.4;
   color: var(--warning);
-  background: rgba(245, 158, 11, 0.1);
-  border: 1px solid rgba(245, 158, 11, 0.28);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 28%, transparent);
   border-radius: 6px;
   padding: 7px 9px;
 }
@@ -961,8 +987,8 @@ body {
 /* A browser that would not answer: unknown, which is not the same claim as a disagreement. */
 .tier-drift.unknown {
   color: var(--text-secondary);
-  background: rgba(148, 163, 184, 0.1);
-  border-color: rgba(148, 163, 184, 0.28);
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+  border-color: color-mix(in srgb, var(--text-secondary) 28%, transparent);
 }
 
 .tier-drift-title {
@@ -979,7 +1005,7 @@ body {
   margin-top: 2px;
   font-size: 10px;
   font-weight: 600;
-  color: var(--accent-contrast, #fff);
+  color: var(--on-accent);
   background: var(--accent);
   border: none;
   border-radius: 4px;
@@ -999,8 +1025,8 @@ body {
   gap: 6px;
   padding: 8px 9px;
   border-radius: 6px;
-  background: rgba(99, 102, 241, 0.08);
-  border: 1px solid rgba(99, 102, 241, 0.24);
+  background: color-mix(in srgb, var(--tone-plan) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone-plan) 24%, transparent);
 }
 
 .tier-plan-head {
@@ -1021,7 +1047,7 @@ body {
 .tier-plan-apply {
   font-size: 10px;
   font-weight: 600;
-  color: var(--accent-contrast, #fff);
+  color: var(--on-accent);
   background: var(--accent);
   border: none;
   border-radius: 4px;
@@ -1052,7 +1078,7 @@ body {
   color: var(--text-secondary);
   padding: 4px 6px;
   border-radius: 4px;
-  background: var(--bg-subtle, rgba(127, 127, 127, 0.08));
+  background: var(--bg-subtle);
 }
 
 /* Evidence is the interesting state, so it is the one that reads as deliberate rather than as a
@@ -1060,7 +1086,7 @@ body {
    whether the plan changed basis. */
 .tier-plan-basis[data-basis='evidence'] {
   color: var(--text-primary);
-  border-left: 2px solid var(--accent-color, #4a9eff);
+  border-left: 2px solid var(--accent);
 }
 
 .tier-plan-why {
@@ -1096,6 +1122,38 @@ body {
   color: var(--text-secondary);
 }
 
+/* The popup's copy of the hub/CLI redundancy finding: how much of the shipped tiers the
+   installed dynamic rules already block. */
+.tier-redundancy {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+/* A finding is an amber like an idle tier: it names static slots the dynamic rules are already
+   paying for. The unknown and negative states stay secondary — there is nothing to act on. */
+.tier-redundancy.finding {
+  color: var(--warning);
+}
+
+.tier-redundancy.empty {
+  font-style: italic;
+  opacity: 0.8;
+}
+
+.tier-redundancy.unknown {
+  font-style: italic;
+  opacity: 0.8;
+}
+
+.tier-redundancy-caveat {
+  display: block;
+  font-style: italic;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
 /* A tier that has been given real traffic and still never matched. Its slots are the cheapest
    thing the user can reclaim, so it is called out rather than merely reported. */
 .tier-usage.idle {
@@ -1112,8 +1170,8 @@ body {
   border-radius: 4px;
   cursor: pointer;
   color: var(--warning);
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
 }
 
 .tier-drop:disabled {
@@ -1153,7 +1211,7 @@ body {
 }
 
 .ai-group-selector {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--accent);
   overflow: hidden;
@@ -1224,7 +1282,7 @@ body {
 }
 
 .ai-evidence-detail {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--accent);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1245,7 +1303,7 @@ body {
 .ai-harvest {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid var(--border, rgba(148, 163, 184, 0.18));
+  border-top: 1px solid var(--border-color);
 }
 
 .ai-harvest .card-hint {
@@ -1257,7 +1315,7 @@ body {
 }
 
 .chip-btn.primary {
-  color: #04121a;
+  color: var(--on-accent);
   background: var(--accent);
   border-color: transparent;
   font-weight: 700;

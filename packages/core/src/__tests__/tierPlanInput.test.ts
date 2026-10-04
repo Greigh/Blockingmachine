@@ -17,14 +17,24 @@
  */
 
 import { describe, expect, test } from '@jest/globals';
+import { readFileSync } from 'node:fs';
 import {
   computeTierPlan,
   findTierRedundancy,
+  readDynamicRuleHosts,
   readSyncedHosts,
   readTierLedger,
   parseEnabledTierIds,
 } from '../tierPlanInput.js';
-import { STATIC_RULE_TIERS, type StaticTierId } from '../tiers.js';
+import {
+  mergeBrowserLedger,
+  readBrowserLedgerSessions,
+  toHitLedgerText,
+} from '../ledgerAggregate.js';
+import { buildTierBlocking, planTierBenefits, STATIC_RULE_TIERS, type StaticTierId, type TierHitCounts } from '../tiers.js';
+
+const loadJson = (relative: string): unknown =>
+  JSON.parse(readFileSync(new URL(relative, import.meta.url), 'utf8'));
 
 const tierFile = (hosts: string[]) =>
   hosts.map((host, index) => ({
@@ -43,6 +53,9 @@ const files = {
   // holds the classifier's verdicts, so a checkout that has never run the classifier ships it with
   // no rules at all and the validator is told so by the catalogue's `curatedSeed: false`.
   tier_security: tierFile([]),
+  // Empty for the same reason and not by accident: this is the residual bucket, and a checkout with
+  // no hub compilation has no input list to have anything unclassified *from*.
+  tier_unclassified: tierFile([]),
 };
 
 const ALL: StaticTierId[] = STATIC_RULE_TIERS.map((tier) => tier.id);
@@ -109,7 +122,7 @@ describe('computeTierPlan', () => {
     // Not the catalogue's curated numbers: a packaged build ships tens of thousands per tier, and
     // a plan computed from the baseline would be a plan about a different bundle.
     const result = computeTierPlan(input());
-    expect(result.rows.map((row) => row.rules)).toEqual([2, 2, 1, 1, 0]);
+    expect(result.rows.map((row) => row.rules)).toEqual([2, 2, 1, 1, 0, 0]);
     expect(result.plan.totalRules).toBe(6);
     expect(result.plan.benefitSource).toBe('coverage');
   });
@@ -260,6 +273,97 @@ describe('computeTierPlan', () => {
     );
     expect(result.broken[0]?.errors.join(' ')).toContain('cannot read /tmp/tier_ads.json');
   });
+
+  describe('the exported per-tier tally', () => {
+    const ledgerWithTally = (tiers: string, tierSessions: string, ruleLines: string[]) =>
+      [
+        '# Browser-reported rule-hit ledger',
+        '# Sessions: 1',
+        `# Tiers: ${tiers}`,
+        `# Tier sessions: ${tierSessions}`,
+        '#',
+        ...ruleLines,
+      ].join('\n');
+
+    test('a tally covering every session overrides the host-join, and the rows name the axis', () => {
+      // The disagreement the axis exists for: `shared.example.com` is shipped by two tiers, so the
+      // host-join credits both — while the browser's tally credits only the ruleset that won the
+      // match. A tally covering all sessions is the exact split, so it is the one the plan uses.
+      const result = computeTierPlan(
+        input({
+          ledger: {
+            text: ledgerWithTally('tier_core 300, tier_ads 200', '1 of 1', [
+              '500 ||shared.example.com^',
+              '900 ||ads.example.com^',
+              '30 ||privacy.example.com^',
+              '4 ||consent.example.com^',
+            ]),
+          },
+        }),
+      );
+
+      expect(result.rows.every((row) => row.hitsAxis === 'tally')).toBe(true);
+      expect(result.rows.find((row) => row.id === 'tier_core')?.hits).toBe(300);
+      expect(result.plan.benefitSource).toBe('evidence');
+      // 300+200 from the tally — not 500-credited-twice from the rule lines.
+      expect(result.plan.benefit).toBe(500);
+      expect(result.ledger?.tally?.hits).toEqual({ tier_core: 300, tier_ads: 200 });
+    });
+
+    test('a tally covering only some sessions stays visible but never feeds a tier', () => {
+      // Two sessions merged, one of them predating the axis: the tally measured half the evidence,
+      // so the plan stays on the axis that saw all of it — and says so on every row rather than
+      // silently blending.
+      const result = computeTierPlan(
+        input({
+          ledger: {
+            text: ledgerWithTally('tier_ads 999', '1 of 2', [
+              '500 ||core.example.com^',
+              '900 ||ads.example.com^',
+              '30 ||privacy.example.com^',
+              '4 ||consent.example.com^',
+            ]),
+          },
+        }),
+      );
+
+      expect(result.ledger?.tally?.tierSessions).toBe(1);
+      expect(result.ledger?.tally?.sessions).toBe(2);
+      expect(result.rows.every((row) => row.hitsAxis === 'rule-lines')).toBe(true);
+      // The rule-line read, not the tally: tier_ads keeps its joined 900, not the partial 999.
+      expect(result.rows.find((row) => row.id === 'tier_ads')?.hits).toBe(900);
+      expect(result.plan.benefit).toBe(1434);
+    });
+
+    test('a ledger without a tally header is the rule-line axis throughout', () => {
+      const result = computeTierPlan(
+        input({ ledger: { text: '500 ||core.example.com^\n900 ||ads.example.com^' } }),
+      );
+      expect(result.ledger?.tally).toBeNull();
+      expect(result.rows.every((row) => row.hitsAxis === 'rule-lines')).toBe(true);
+    });
+
+    test('a tally naming an unknown tier id is counted as refused, never trusted', () => {
+      const result = computeTierPlan(
+        input({
+          ledger: {
+            text: ledgerWithTally('tier_invented 900, tier_ads 40', '1 of 1', [
+              '500 ||core.example.com^',
+              '900 ||ads.example.com^',
+              '30 ||privacy.example.com^',
+              '4 ||consent.example.com^',
+            ]),
+          },
+        }),
+      );
+
+      expect(result.ledger?.tally?.rejected).toBe(1);
+      expect(result.ledger?.tally?.hits).toEqual({ tier_ads: 40 });
+      // Complete coverage with at least one valid entry still drives the plan — the refused id
+      // is surfaced rather than normalised into a real tier.
+      expect(result.rows.every((row) => row.hitsAxis === 'tally')).toBe(true);
+    });
+  });
 });
 
 describe('parseEnabledTierIds', () => {
@@ -321,6 +425,133 @@ describe('readSyncedHosts', () => {
   });
 });
 
+describe('readDynamicRuleHosts', () => {
+  const BLOCK_TYPES = ['script', 'image', 'xmlhttprequest', 'sub_frame', 'media', 'ping'];
+  /** A compiled host block, exactly the shape dnrManager installs. */
+  const dnrRule = (
+    urlFilter: string,
+    action: 'block' | 'allow' | 'allowAllRequests' | 'redirect' = 'block',
+    condition: Record<string, unknown> = {},
+  ) => ({
+    id: 1,
+    priority: 1,
+    action: { type: action },
+    condition: { urlFilter, resourceTypes: [...BLOCK_TYPES], ...condition },
+  });
+
+  test('reads the installed block and allow rules into the same two sets', () => {
+    const read = readDynamicRuleHosts(
+      [dnrRule('||tracker.com^'), dnrRule('||allowed.tracker.com^', 'allow')],
+      { blockResourceTypes: BLOCK_TYPES },
+    );
+    expect([...read.block]).toEqual(['tracker.com']);
+    expect([...read.allow]).toEqual(['allowed.tracker.com']);
+    expect(read.lines).toBe(2);
+    expect(read.skipped).toBe(0);
+  });
+
+  test('accepts only the exact host claim — a path or substring filter blocks less', () => {
+    // `urlFilter` is a substring match: `||a.com/path` covers only paths under the host and
+    // `a.com` alone matches `tracker.com/?u=a.com`. Crediting either as a host block would report
+    // a tier redundant where it is the only thing still blocking the bare host.
+    const read = readDynamicRuleHosts(
+      [
+        dnrRule('||a.com/path'),
+        dnrRule('a.com'),
+        dnrRule('|https://b.com'),
+        { id: 2, action: { type: 'block' }, condition: { regexFilter: '^https?://c\\.com' } },
+        dnrRule('||real.com^'),
+      ],
+      { blockResourceTypes: BLOCK_TYPES },
+    );
+    expect([...read.block]).toEqual(['real.com']);
+    expect(read.lines).toBe(5);
+    expect(read.skipped).toBe(4);
+  });
+
+  test('refuses a rule narrowed by where or when it fires', () => {
+    const read = readDynamicRuleHosts(
+      [
+        dnrRule('||a.com^', 'block', { initiatorDomains: ['site.example'] }),
+        dnrRule('||b.com^', 'block', { excludedInitiatorDomains: ['site.example'] }),
+        dnrRule('||c.com^', 'block', { tabIds: [3] }),
+        dnrRule('||d.com^', 'block', { domainType: 'thirdParty' }),
+        dnrRule('||e.com^', 'block', { requestMethods: ['post'] }),
+        dnrRule('||f.com^', 'block', { resourceTypes: ['script'] }),
+        dnrRule('||g.com^', 'block', { excludedRequestDomains: ['g.com'] }),
+        dnrRule('||h.com^', 'block', { responseHeaders: [{ header: 'x', values: ['y'] }] }),
+        // Both matchers at once name their intersection, which is narrower than either.
+        dnrRule('||i.com^', 'block', { requestDomains: ['i.com'] }),
+        // An exception held to the same standard: a scoped allow does not except the host.
+        dnrRule('||j.com^', 'allow', { initiatorDomains: ['site.example'] }),
+      ],
+      { blockResourceTypes: BLOCK_TYPES },
+    );
+    expect(read.block.size).toBe(0);
+    expect(read.allow.size).toBe(0);
+    expect(read.skipped).toBe(10);
+  });
+
+  test('the resource-type baseline decides whether the set narrows the claim', () => {
+    // Every compiled block carries the same six types, so their presence is the list's spelling
+    // of "unconditional", not a scope. With no baseline to compare, any type list narrows —
+    // matching the text reader's refusal of every `$` modifier.
+    const rule = dnrRule('||a.com^');
+    expect(readDynamicRuleHosts([rule]).block.size).toBe(0);
+    expect(readDynamicRuleHosts([rule], { blockResourceTypes: BLOCK_TYPES }).block.has('a.com')).toBe(
+      true,
+    );
+    // A superset is not a narrowing either: it still covers everything the baseline covers.
+    const wider = dnrRule('||b.com^', 'block', { resourceTypes: [...BLOCK_TYPES, 'websocket'] });
+    expect(
+      readDynamicRuleHosts([wider], { blockResourceTypes: BLOCK_TYPES }).block.has('b.com'),
+    ).toBe(true);
+  });
+
+  test('reads the multi-host spelling a bare requestDomains rule carries', () => {
+    const read = readDynamicRuleHosts(
+      [
+        { id: 1, action: { type: 'block' }, condition: { requestDomains: ['a.com', 'b.com'] } },
+        // One unreadable entry refuses the whole claim rather than crediting half a coverage.
+        { id: 2, action: { type: 'block' }, condition: { requestDomains: ['a.com', 'not a host!'] } },
+      ],
+      { blockResourceTypes: BLOCK_TYPES },
+    );
+    expect([...read.block].sort()).toEqual(['a.com', 'b.com']);
+    expect(read.skipped).toBe(1);
+  });
+
+  test('skips actions that are not a block-or-allow claim about a host', () => {
+    // `allowAllRequests` names the page whose subrequests are freed — its urlFilter is a site, not
+    // a request target — and a redirect transforms rather than blocks.
+    const read = readDynamicRuleHosts(
+      [dnrRule('||site.example^', 'allowAllRequests'), dnrRule('||cdn.example^', 'redirect')],
+      { blockResourceTypes: BLOCK_TYPES },
+    );
+    expect(read.block.size).toBe(0);
+    expect(read.allow.size).toBe(0);
+    expect(read.skipped).toBe(2);
+  });
+
+  test('the read feeds findTierRedundancy with the same ancestor and exception semantics', () => {
+    const synced = readDynamicRuleHosts(
+      [
+        dnrRule('||doubleclick.net^'),
+        dnrRule('||allowed.tracker.com^', 'allow'),
+        // Scoped rules never enter the sets, so they can never retire a tier rule.
+        dnrRule('||scoped.example^', 'block', { initiatorDomains: ['site.example'] }),
+      ],
+      { blockResourceTypes: BLOCK_TYPES },
+    );
+    const tier = tierFile(['ads.doubleclick.net', 'allowed.tracker.com', 'scoped.example', 'fresh.com']);
+    const result = findTierRedundancy(tier, synced);
+    // The parent covers its subdomain; the excepted host stays load-bearing; the scoped rule
+    // contributes nothing; `fresh.com` is uncovered outright.
+    expect(result.rules).toBe(1);
+    expect(result.complete).toBe(false);
+  });
+});
+
 describe('findTierRedundancy', () => {
   const rules = (hosts: string[]) =>
     hosts.map((host, index) => ({
@@ -375,7 +606,7 @@ describe('findTierRedundancy', () => {
 
   test('reports a tier as complete only when every rule is duplicated', () => {
     const all = findTierRedundancy(rules(['a.com', 'b.com']), syncedOf('||a.com^\n||b.com^'));
-    expect(all).toEqual({ rules: 2, hosts: 2, complete: true });
+    expect(all).toEqual({ rules: 2, hosts: 2, typeLimited: 0, complete: true });
 
     const most = findTierRedundancy(
       rules(['a.com', 'b.com', 'c.com']),
@@ -427,9 +658,9 @@ describe('computeTierPlan redundancy', () => {
     const byId = new Map(result.rows.map((row) => [row.id, row]));
     // tier_core ships two hosts, only one of which is covered: a 50% figure that must not be
     // reported as a finding.
-    expect(byId.get('tier_core')?.redundant).toEqual({ rules: 1, hosts: 1, complete: false });
-    expect(byId.get('tier_ads')?.redundant).toEqual({ rules: 2, hosts: 2, complete: true });
-    expect(byId.get('tier_annoyances')?.redundant).toEqual({ rules: 1, hosts: 1, complete: false });
+    expect(byId.get('tier_core')?.redundant).toEqual({ rules: 1, hosts: 1, typeLimited: 0, complete: false });
+    expect(byId.get('tier_ads')?.redundant).toEqual({ rules: 2, hosts: 2, typeLimited: 0, complete: true });
+    expect(byId.get('tier_annoyances')?.redundant).toEqual({ rules: 1, hosts: 1, typeLimited: 0, complete: false });
 
     expect(result.synced).toEqual({ hosts: 4, exceptions: 0, lines: 4, skipped: 0 });
   });
@@ -449,7 +680,129 @@ describe('computeTierPlan redundancy', () => {
       }),
     );
     const ads = result.rows.find((row) => row.id === 'tier_ads');
-    expect(ads?.redundant).toEqual({ rules: 0, hosts: 0, complete: false });
+    expect(ads?.redundant).toEqual({ rules: 0, hosts: 0, typeLimited: 0, complete: false });
     expect(ads?.errors.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The same computation on real captured data.
+ *
+ * Everything above is synthetic: `||core.example.com^` firing exactly the counts a test needs.
+ * That pins the arithmetic but not that a real export survives the whole path — its own per-tier
+ * tally through the merge, and its rule lines through the host-join the plan is weighted by.
+ *
+ * The fixture is the first export to carry the tier axis: a copy of `ledger/session-d.json`, an
+ * automated Chrome run over twenty pages with every tier enabled (`session-d.meta.json` in the
+ * dropbox records the sites). The tier files beside it are copies of the curated baselines the
+ * rulesets were seeded from — pinned, so the numbers here do not move when `compile:tiers`
+ * rewrites the live files. The capture itself ran against compiled tiers, which is why the two
+ * attributions below disagree: the browser credits the ruleset that won a match even for a host
+ * the baseline does not ship, and the host-join cannot. That gap is open flag 31; the difference
+ * between the two tallies here is what it looks like on real data.
+ */
+describe('the captured session export', () => {
+  const session = loadJson('./fixtures/browser-ledger-session.json');
+  const fixtureFiles = () =>
+    ALL.map((id) => ({ id, rules: loadJson(`./fixtures/tier-rulesets/${id}.json`) }));
+  const read = readBrowserLedgerSessions(session);
+  const aggregate = mergeBrowserLedger(read.sessions);
+  const ledgerText = toHitLedgerText(aggregate);
+
+  test('merges with the browser-reported tier tally intact, coverage stated', () => {
+    expect(read.sessions).toHaveLength(1);
+    expect(read.rejected).toBe(0);
+    expect(read.tierRejected).toBe(0);
+    // The tally the browser wrote at match time — summed from `session.tiers`, never re-derived
+    // from the rule lines.
+    expect(aggregate.tiers.map((tier) => [tier.tier, tier.count])).toEqual([
+      ['tier_privacy', 60],
+      ['tier_ads', 25],
+      ['tier_core', 24],
+      ['tier_annoyances', 10],
+      ['tier_unclassified', 6],
+    ]);
+    expect(aggregate.tierSessions).toBe(1);
+    expect(aggregate.tierUnattributed).toBe(0);
+    expect(ledgerText).toContain(
+      '# Tiers: tier_privacy 60, tier_ads 25, tier_core 24, tier_annoyances 10, tier_unclassified 6',
+    );
+    expect(ledgerText).toContain('# Tier sessions: 1 of 1');
+  });
+
+  test('weights the plan by the browser tally once the ledger reaches the sample it needs', () => {
+    const result = computeTierPlan(
+      input({ files: fixtureFiles(), ledger: { text: ledgerText } }),
+    );
+    // All six tiers were enabled for the capture, so `enabled: ALL` is not a convenience — it is
+    // the state the measurement was taken under.
+    expect(result.basis?.source).toBe('evidence');
+    expect(result.plan.benefitSource).toBe('evidence');
+    expect(result.basis?.unmeasured).toEqual([]);
+    // Every one of the session's 32 rule lines named a blockable host.
+    expect(result.ledger?.lines).toBe(32);
+    expect(result.ledger?.skipped).toBe(0);
+    // The host-join's read of the same session stays visible as the fallback axis: 70 of 125
+    // blocks land on a baseline-shipped host — but it is not what weighted the plan.
+    expect(result.ledger?.hits).toEqual({
+      tier_privacy: 33,
+      tier_core: 24,
+      tier_annoyances: 10,
+      tier_ads: 3,
+    });
+    // The tally covers the whole ledger (1 of 1 sessions), so it is the override: 125 blocks,
+    // with `tier_unclassified`'s six real ones credited rather than dropped with its curated
+    // count — a zero rule count cannot erase a measurement the ledger recorded.
+    expect(result.ledger?.tally?.hits.tier_unclassified).toBe(6);
+    expect(result.rows.every((row) => row.hitsAxis === 'tally')).toBe(true);
+    expect(result.rows.find((row) => row.id === 'tier_unclassified')?.hits).toBe(6);
+    expect(result.plan.benefit).toBe(125);
+    expect(result.basis?.reason).toContain('125 attributed blocks across 5 tiers');
+  });
+
+  test('the two per-tier attributions disagree where the fixture predicts they must', () => {
+    // The browser's tally is the truth the session was measured in; the host-join is the truth
+    // the plan can reconstruct from the curated files alone. They agree for `tier_core` and
+    // `tier_annoyances` — every hit there landed on a host the baseline ships — and diverge for
+    // `tier_privacy` (60 reported, 33 joined), `tier_ads` (25, 3) and `tier_unclassified` (6, 0),
+    // whose compiled rules reach hosts the baseline never carried. Both axes are readable off
+    // the ledger read itself now — the tally from its header, the join from its rule lines —
+    // so the divergence is two named numbers rather than a difference you have to know about.
+    const result = computeTierPlan(
+      input({ files: fixtureFiles(), ledger: { text: ledgerText } }),
+    );
+    expect(result.ledger?.hits.tier_privacy).toBe(33);
+    expect(result.ledger?.hits.tier_unclassified).toBeUndefined();
+    expect(result.ledger?.tally?.hits.tier_privacy).toBe(60);
+    expect(result.ledger?.tally?.hits.tier_unclassified).toBe(6);
+    expect(result.ledger?.tally?.tierSessions).toBe(1);
+    expect(result.ledger?.tally?.sessions).toBe(1);
+  });
+
+  test('the tally the popup hands the benefit gate lands on the same basis', () => {
+    // The popup never re-reads the rule lines — it hands the session's own `tiers` tally to
+    // `buildTierBlocking`, the way `RuleHitStats` feeds it live. On the captured numbers that is
+    // an evidence basis too, which is the agreement the two surfaces are supposed to keep.
+    const hits: TierHitCounts = {};
+    for (const entry of (session as { sessions: Array<{ tiers?: Array<{ tier: StaticTierId; count: number }> }> })
+      .sessions[0]?.tiers ?? []) {
+      hits[entry.tier] = entry.count;
+    }
+    const basis = planTierBenefits(
+      buildTierBlocking({ tiers: STATIC_RULE_TIERS, enabledIds: ALL, hits }),
+    );
+    expect(basis.source).toBe('evidence');
+    // `tier_security` is absent because it genuinely carries nothing — no curated count and no
+    // hits. `tier_unclassified` is *present* with its six measured blocks: the catalogue's zero
+    // count cannot grade a tier the ledger watched fire as empty. The other four carry the
+    // browser's numbers.
+    expect(basis.benefits).toEqual({
+      tier_privacy: 60,
+      tier_ads: 25,
+      tier_core: 24,
+      tier_annoyances: 10,
+      tier_unclassified: 6,
+    });
+    expect(basis.reason).toContain('125 attributed blocks');
   });
 });

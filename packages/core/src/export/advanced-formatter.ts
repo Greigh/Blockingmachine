@@ -5,10 +5,15 @@ import {
   formatRuleForType,
   formatExceptionComment,
   isExportableRule,
+  getDnsDomain,
+  bindRpzBlockRecords,
+  bindRpzPassthruRecords,
+  BIND_NULL_ZONE_CONTENTS,
   PRIVOXY_BLOCK_SECTION,
   PRIVOXY_BYPASS_SECTION,
   RPZ_ZONE_PREAMBLE,
 } from "./formatters.js";
+import type { FormattableRule } from "./formatters.js";
 import { filterBrowserRules, resolveDnsPrecedence } from "./ruleFilters.js";
 import { sanitizeHeaderMetadata } from "./headers.js";
 
@@ -19,6 +24,7 @@ export type FilterFormat =
   | "dnsmasq"
   | "unbound"
   | "bind"
+  | "bind-null"
   | "privoxy"
   | "shadowrocket"
   | "domains"
@@ -152,7 +158,7 @@ export function generateHeader(
     lines.push("# Last updated: " + metadata.lastUpdated);
     lines.push("# Format: Domain list");
     lines.push("# Rules count: " + rulesCount);
-  } else if (format === "privoxy" || format === "bind") {
+  } else if (format === "privoxy" || format === "bind" || format === "bind-null") {
     const rulesCount =
       metadata.stats?.uniqueRules ?? metadata.stats?.totalRules ?? 0;
     // `;` for a BIND master file, `#` for a Privoxy action file.
@@ -163,7 +169,11 @@ export function generateHeader(
     lines.push(prefix + "Version: " + metadata.version);
     lines.push(prefix + "Last updated: " + metadata.lastUpdated);
     lines.push(
-      prefix + "Format: " + (format === "bind" ? "BIND Response Policy Zone (RPZ)" : "Privoxy"),
+      prefix + "Format: " + (
+        format === "bind" ? "BIND Response Policy Zone (RPZ)"
+          : format === "bind-null" ? "BIND shared null-zone stanzas (named.conf fragment)"
+            : "Privoxy"
+      ),
     );
     lines.push(prefix + "Rules count: " + rulesCount);
   } else {
@@ -207,7 +217,34 @@ export function generateHeader(
     lines.push("; and inside options { }:");
     lines.push(";   response-policy { zone \"rpz.blockingmachine\"; };");
     lines.push("");
+    lines.push("; Each blocked domain is TWO records: the name and a wildcard for its subdomains.");
+    lines.push("; An RPZ QNAME trigger matches that exact name only, so without the wildcard every");
+    lines.push("; subdomain of a blocked domain would resolve — and unlike Unbound, dnsmasq and");
+    lines.push("; Shadowrocket, which all match the domain and everything under it.");
+    lines.push("");
     lines.push(...RPZ_ZONE_PREAMBLE.split("\n"));
+  }
+
+  // The shared null-zone mechanism is the mirror image: the *file* is fixed and the *configuration*
+  // is what changes, so the fixed file travels with the artifact and the artifact is the stanzas.
+  // Comments are `#` because this artifact is a named.conf fragment, not a zone file — see
+  // `exportCommentPrefix`, and `named-checkconf` is what proved the difference.
+  if (format === "bind-null") {
+    lines.push("");
+    lines.push("# Save this file once, as db.blockingmachine.null, next to your other zone files:");
+    lines.push("#");
+    for (const line of BIND_NULL_ZONE_CONTENTS.split("\n")) lines.push(`#   ${line}`);
+    lines.push("");
+    lines.push("# Then add the stanzas below to named.conf, or include this file from it:");
+    lines.push("#   include \"/etc/bind/blockingmachine-zones.conf\";");
+    lines.push("");
+    lines.push("# Note the inversion against the RPZ format: here you copy the CONFIGURATION, and the");
+    lines.push("# zone file never changes. A null zone cannot release a child — BIND answers the parent");
+    lines.push("# zone before any forwarding or policy lookup — so an allowed subdomain is recorded below");
+    lines.push("# as EXCEPTION NOT HONOURED. Move it out of the list or use the RPZ format instead.");
+    lines.push("");
+    lines.push("# A null zone answers NXDOMAIN for subdomains but NODATA at the apex, because the apex");
+    lines.push("# exists (it holds the SOA and NS). RPZ is NXDOMAIN for both.");
   }
 
   lines.push("");
@@ -215,7 +252,7 @@ export function generateHeader(
   return lines.join("\n");
 }
 
-export function formatRule(rule: StoredRule, format: FilterFormat): string {
+export function formatRule(rule: FormattableRule, format: FilterFormat): string {
   return formatRuleForType(rule, format);
 }
 
@@ -230,6 +267,7 @@ export function generateFilterList(
     format === "dnsmasq" ||
     format === "unbound" ||
     format === "bind" ||
+    format === "bind-null" ||
     format === "privoxy" ||
     format === "shadowrocket" ||
     format === "domains"
@@ -248,6 +286,13 @@ export function generateFilterList(
 
     // 1. Emitted active blocking rules (alphabetically sorted)
     for (const rule of precedence.activeBlocks) {
+      // RPZ needs a *pair* of records per blocked domain — the bare name plus a wildcard — or it
+      // matches only that exact name and lets every subdomain through. See `bindRpzBlockRecords`.
+      if (format === "bind") {
+        const domain = getDnsDomain(rule);
+        if (domain) emittedLines.push(...bindRpzBlockRecords(domain));
+        continue;
+      }
       const line = formatRule(rule, format);
       if (line) emittedLines.push(line);
     }
@@ -272,9 +317,19 @@ export function generateFilterList(
         }
       }
     } else if (format === "bind") {
-      // RPZ policy is resolved by longest match, not by file order.
+      // RPZ policy is resolved by longest match, not by file order. Emitted as a pair — the child
+      // and its wildcard — so the exemption covers the subtree the source rule released.
       for (const sub of precedence.subdomainExceptions) {
-        emittedLines.push(`${sub.subdomain} CNAME rpz-passthru.`);
+        emittedLines.push(...bindRpzPassthruRecords(sub.subdomain));
+      }
+    } else if (format === "bind-null") {
+      // A null zone cannot release a child — it is authoritative for the whole subtree, and
+      // BIND answers the parent before any forward or policy lookup is consulted. The only
+      // mechanism that delegates a child out (an `NS` record in the parent's zone data) needs a
+      // per-domain file this mechanism exists to avoid. Recorded as NOT HONOURED rather than
+      // dropped, because a silently re-blocked allowlist is the failure nobody can see.
+      for (const sub of precedence.subdomainExceptions) {
+        emittedLines.push(`# EXCEPTION NOT HONOURED: @@||${sub.subdomain}^`);
       }
     }
 

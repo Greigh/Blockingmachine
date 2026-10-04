@@ -60,6 +60,11 @@ import {
   type TierPlan,
 } from './tiers.js';
 import { extractHostFromRule as hostFromRule } from './ruleHost.js';
+import {
+  readLedgerHeaderLine,
+  readLedgerTierTally,
+  type LedgerTierTally,
+} from './ledgerAggregate.js';
 
 export interface TierFileInput {
   id: StaticTierId;
@@ -74,7 +79,21 @@ export interface TierLedgerInput {
 }
 
 export interface TierLedgerRead {
+  /**
+   * Per-tier blocks credited by matching each rule line's host to the tiers that ship it.
+   *
+   * This is the inferred axis: a host two tiers ship is credited to both, and a block whose
+   * filter never resolved to a host contributes nothing anywhere. When the ledger's header
+   * carries the browser's own tally over *every* session, `computeTierPlan` prefers it — this
+   * number is what remains when the better one is not available.
+   */
   hits: TierHitCounts;
+  /**
+   * The ledger's own per-tier tally, parsed from its `# Tiers:` header — or null when the file
+   * carries no tally. Coverage is on the tally itself (`tierSessions` of `sessions`), so a
+   * partial one can be told apart from a complete one rather than silently trusted.
+   */
+  tally: LedgerTierTally | null;
   /** Lines that named a blockable host and were counted. */
   lines: number;
   /** Lines that named no blockable host: exceptions, bare numbers, directives. */
@@ -90,6 +109,13 @@ export interface TierPlanRow {
   rules: number;
   /** Measured blocks attributed to this tier, or null when no ledger was given. */
   hits: number | null;
+  /**
+   * Which axis produced `hits`: the ledger's own per-tier tally when its coverage is complete,
+   * or the host-join over its rule lines otherwise. Null when no ledger was given. A partial
+   * tally never feeds a row — mixing an exact-but-narrower number with a wider-but-inferred one
+   * would rank a tier on evidence its peers did not get, so the whole plan stays on one axis.
+   */
+  hitsAxis: 'tally' | 'rule-lines' | null;
   /**
    * How much of this tier the synced list already blocks, or null when no list was given.
    *
@@ -152,6 +178,14 @@ export interface SyncedHostRead {
   block: Set<string>;
   /** Hosts it excepts, which it therefore does not block. */
   allow: Set<string>;
+  /**
+   * Each blocked host's union of `resourceTypes` claims — `'all'` when any covering rule is
+   * unrestricted, the union set otherwise. Present only when the read was asked to track
+   * them (`trackTypeClaims`), because only an installed-rules read has `resourceTypes` to
+   * track — a source-text read carries none, and a `complete` verdict against it keeps the
+   * list's own documented semantics rather than pretending per-type knowledge.
+   */
+  blockTypeClaims?: Map<string, 'all' | ReadonlySet<string>>;
   /** Blockable lines read, excluding comments and blanks. */
   lines: number;
   /** Lines naming no blockable host in either direction. */
@@ -251,11 +285,25 @@ export interface TierRedundancy {
   /** Distinct hosts among those rules. */
   hosts: number;
   /**
+   * Host-covered tier rules whose *full* type claim no covering rule makes.
+   *
+   * Only populated when the synced read tracked per-rule `resourceTypes` (the installed-rules
+   * read — a source-text read has none to track). A tier `||host^` claims every resource type,
+   * so a compiled block stamped `script,image,xmlhttprequest,sub_frame,media,ping` covers the
+   * host but never the claim: navigations, websockets and the rest still rely on the tier.
+   * Zero when the read did not track types, so a text-side verdict keeps its documented
+   * "the list's own spelling of blocked" semantics.
+   */
+  typeLimited: number;
+  /**
    * The tier blocks nothing the synced list does not.
    *
    * This is the answer to "is this tier redundant", and it is deliberately not the same as a low
    * ratio. A tier that is 90% duplicated is mostly redundant but still 10% load-bearing, and
-   * dropping it is a different decision from dropping one that adds nothing at all.
+   * dropping it is a different decision from dropping one that adds nothing at all. When type
+   * claims were tracked, `complete` also requires the covering rules to make the tier's full
+   * type claim — a claim the compiled list never makes for `main_frame`, so an all-types tier
+   * rule is honestly "mostly redundant", not fully.
    */
   complete: boolean;
 }
@@ -270,10 +318,11 @@ export interface TierRedundancy {
  * a broad tier, which is the opposite of what the number is for.
  */
 export function findTierRedundancy(rules: unknown, synced: SyncedHostRead): TierRedundancy {
-  if (!Array.isArray(rules)) return { rules: 0, hosts: 0, complete: false };
+  if (!Array.isArray(rules)) return { rules: 0, hosts: 0, typeLimited: 0, complete: false };
   const redundantHosts = new Set<string>();
   let total = 0;
   let redundantRules = 0;
+  let typeLimited = 0;
 
   for (const rule of rules) {
     const filter = (rule as { condition?: { urlFilter?: unknown } })?.condition?.urlFilter;
@@ -284,13 +333,58 @@ export function findTierRedundancy(rules: unknown, synced: SyncedHostRead): Tier
     if (!coversSynced(synced.block, host) || coversSynced(synced.allow, host)) continue;
     redundantRules += 1;
     redundantHosts.add(host);
+    // A host the synced rules cover is only *fully* covered when their type claims reach as
+    // far as the tier rule's — the difference between "the list blocks this" and "the list
+    // blocks the requests this host makes that the list claims".
+    if (synced.blockTypeClaims && !typeClaimCovered(synced.blockTypeClaims, host, tierRuleTypeClaim(rule))) {
+      typeLimited += 1;
+    }
   }
 
   return {
     rules: redundantRules,
     hosts: redundantHosts.size,
-    complete: total > 0 && redundantRules === total,
+    typeLimited,
+    complete: total > 0 && redundantRules === total && typeLimited === 0,
   };
+}
+
+/**
+ * What a tier rule claims, read the same way an installed rule's is: `all` for no
+ * `resourceTypes` (the shipped shape), the set when the file stamps one.
+ */
+function tierRuleTypeClaim(rule: unknown): 'all' | ReadonlySet<string> {
+  const types = (rule as { condition?: { resourceTypes?: unknown } })?.condition?.resourceTypes;
+  return Array.isArray(types) && types.length > 0 ? new Set(types as string[]) : 'all';
+}
+
+/**
+ * Whether the covering rules' union of type claims reaches the tier rule's.
+ *
+ * `all` covers only `all`: no finite union adds up to every resource type, so an unrestricted
+ * tier claim needs at least one covering rule that is itself unrestricted — which is exactly
+ * the claim a compiled, type-stamped block never makes.
+ */
+function typeClaimCovered(
+  claims: ReadonlyMap<string, 'all' | ReadonlySet<string>>,
+  host: string,
+  claim: 'all' | ReadonlySet<string>,
+): boolean {
+  let sawAll = false;
+  const union = new Set<string>();
+  for (let candidate = host; ; ) {
+    const entry = claims.get(candidate);
+    if (entry === 'all') {
+      sawAll = true;
+      break;
+    }
+    if (entry) for (const type of entry) union.add(type);
+    const dot = candidate.indexOf('.');
+    if (dot < 0) break;
+    candidate = candidate.slice(dot + 1);
+  }
+  if (claim === 'all') return sawAll;
+  return sawAll || [...claim].every((type) => union.has(type));
 }
 
 /** What a surface can report about the synced list without shipping two 120,000-entry sets. */
@@ -314,6 +408,170 @@ export function summarizeSyncedList(read: SyncedHostRead): SyncedListSummary {
   };
 }
 
+export interface DynamicRuleHostsOptions {
+  /**
+   * The `resourceTypes` an unconditional block carries in this list.
+   *
+   * Needed because a compiled rule's type list is not a scope in itself — the compiler stamps the
+   * same set on every plain host block — so its presence cannot be read as narrowing the way any
+   * `$` modifier narrows on the text side. Only a rule holding *fewer* types than this baseline is
+   * refused, which is the same refusal a `$script` modifier gets. When the option is absent there
+   * is no baseline to compare, so any `resourceTypes` at all narrows — matching `readSyncedHosts`,
+   * which refuses every modifier.
+   */
+  blockResourceTypes?: readonly string[];
+  /**
+   * Keep each covering rule's type claim, keyed by host, so `findTierRedundancy` can answer
+   * "fully redundant" at type-set precision rather than host precision. A rule carrying the
+   * baseline contributes that set; a rule with no `resourceTypes` contributes `all`.
+   */
+  trackTypeClaims?: boolean;
+}
+
+/**
+ * `condition` fields that make a DNR rule's claim narrower than a tier's `||host^`.
+ *
+ * Anything here scopes *where* or *when* the rule fires — a `$domain=`-style initiator scope, a
+ * tab, a request method, a first/third-party split — and a scoped claim cannot retire an
+ * unscoped one, so the whole rule is refused rather than partially credited.
+ * `excludedRequestDomains` and `excludedResourceTypes` belong with them because "every host
+ * except" is not "this host". `regexFilter` is checked separately: alone it names no host anyway,
+ * but combined with a `urlFilter` it narrows a claim that would otherwise parse. `requestDomains`
+ * is handled apart too since it *is* the host claim when it stands alone.
+ */
+const DNR_NARROWING_CONDITIONS = [
+  'initiatorDomains',
+  'excludedInitiatorDomains',
+  'tabIds',
+  'excludedTabIds',
+  'domainType',
+  'requestMethods',
+  'excludedRequestMethods',
+  'responseHeaders',
+  'excludedResponseHeaders',
+  'excludedRequestDomains',
+  'excludedResourceTypes',
+] as const;
+
+/**
+ * The hosts a DNR rule claims at domain level, or null when it claims something narrower.
+ *
+ * The gate is the compiled shape, not just the extractor: `urlFilter` is a substring match, so
+ * `ads.example` hits `tracker.com/?u=ads.example` and `||a.com/path` hits only paths under the
+ * host. Neither is "the host is blocked", so only the exact `||host` / `||host^` form a host
+ * block compiles to is accepted, and only when no narrowing condition travels with it. A rule
+ * that fails any of that names no host — the same refusal `readSyncedHosts` gives a cosmetic or
+ * modifier-scoped line.
+ */
+function dynamicRuleHostClaim(
+  rule: unknown,
+  options: DynamicRuleHostsOptions | undefined,
+): { hosts: string[]; excepted: boolean; typeClaim: 'all' | readonly string[] } | null {
+  if (!rule || typeof rule !== 'object') return null;
+  const action = (rule as { action?: { type?: unknown } }).action?.type;
+  // `allowAllRequests` names the page whose subrequests are freed, not a request target, and
+  // `redirect`/`upgradeScheme`/`modifyHeaders` transform rather than block — none of them can
+  // stand in for a tier's block or exception either way.
+  const excepted = action === 'allow';
+  if (action !== 'block' && !excepted) return null;
+  const condition = (rule as { condition?: unknown }).condition;
+  if (!condition || typeof condition !== 'object') return null;
+  const cond = condition as Record<string, unknown>;
+
+  for (const field of DNR_NARROWING_CONDITIONS) {
+    const value = cond[field];
+    if (Array.isArray(value) ? value.length > 0 : value !== undefined) return null;
+  }
+  if (cond.regexFilter !== undefined) return null;
+
+  const resourceTypes = cond.resourceTypes;
+  if (resourceTypes !== undefined) {
+    if (!Array.isArray(resourceTypes)) return null;
+    const baseline = options?.blockResourceTypes;
+    if (!baseline ? resourceTypes.length > 0 : baseline.some((t) => !resourceTypes.includes(t))) {
+      return null;
+    }
+  }
+
+  // After the baseline check above, `resourceTypes` is either absent — the unrestricted claim —
+  // or a set that reaches at least the baseline. That set is what the per-type verdict unions.
+  const typeClaim: 'all' | readonly string[] =
+    resourceTypes === undefined ? 'all' : (resourceTypes as string[]);
+
+  const urlFilter = cond.urlFilter;
+  const requestDomains = cond.requestDomains;
+  if (typeof urlFilter === 'string') {
+    // A urlFilter together with requestDomains names the intersection, which is narrower than
+    // either alone.
+    if (Array.isArray(requestDomains) && requestDomains.length > 0) return null;
+    const host = hostFromRule(urlFilter);
+    if (!host) return null;
+    // The claim is only a host claim when the filter is exactly the host — a path, a query or a
+    // trailing pattern would leave the tier blocking strictly more than the rule credits.
+    const lower = urlFilter.toLowerCase();
+    if (lower !== `||${host}` && lower !== `||${host}^`) return null;
+    return { hosts: [host], excepted, typeClaim };
+  }
+  if (Array.isArray(requestDomains) && requestDomains.length > 0) {
+    // `requestDomains` with no urlFilter is the multi-host spelling of the same block. One
+    // unreadable entry refuses the whole rule: extracting the others would claim a coverage the
+    // rule does not quite have.
+    const hosts: string[] = [];
+    for (const entry of requestDomains) {
+      const host = hostFromRule(entry);
+      if (!host) return null;
+      hosts.push(host);
+    }
+    return { hosts, excepted, typeClaim };
+  }
+  return null;
+}
+
+/**
+ * The browser's installed dynamic rules read as the same two host sets `readSyncedHosts` gives.
+ *
+ * This is the synced-list question asked of the artifact that decides real traffic rather than
+ * of the source text it was compiled from — the rules that were actually installed, which is
+ * what the popup can reach. The semantics are identical: block rules fill `block`, allow rules
+ * fill `allow`, and a rule scoped below a whole domain is `skipped` rather than counted, so a
+ * `findTierRedundancy` run over this read cannot disagree with one run over the list's text.
+ */
+export function readDynamicRuleHosts(
+  rules: readonly unknown[],
+  options?: DynamicRuleHostsOptions,
+): SyncedHostRead {
+  const block = new Set<string>();
+  const allow = new Set<string>();
+  const blockTypeClaims = options?.trackTypeClaims
+    ? new Map<string, 'all' | ReadonlySet<string>>()
+    : undefined;
+  let lines = 0;
+  let skipped = 0;
+
+  for (const rule of rules ?? []) {
+    lines += 1;
+    const claim = dynamicRuleHostClaim(rule, options);
+    if (!claim) {
+      skipped += 1;
+      continue;
+    }
+    for (const host of claim.hosts) {
+      (claim.excepted ? allow : block).add(host);
+      if (blockTypeClaims && !claim.excepted) {
+        const existing = blockTypeClaims.get(host);
+        blockTypeClaims.set(
+          host,
+          existing === 'all' || claim.typeClaim === 'all'
+            ? 'all'
+            : new Set([...(existing ?? []), ...claim.typeClaim]),
+        );
+      }
+    }
+  }
+
+  return { block, allow, blockTypeClaims, lines, skipped };
+}
+
 /**
  * Credits every measured line to the tier that could have produced it.
  *
@@ -330,13 +588,21 @@ export function readTierLedger(
   tierHosts: ReadonlyMap<StaticTierId, Set<string>>,
 ): TierLedgerRead {
   const hits: TierHitCounts = {};
+  const header: Record<string, string> = {};
   let lines = 0;
   let skipped = 0;
   let shared = 0;
 
   for (const raw of String(text || '').split('\n')) {
     const line = raw.replace(/^\uFEFF/, '').trim();
-    if (!line || line.startsWith('#') || line.startsWith('!')) continue;
+    if (!line) continue;
+    if (line.startsWith('#') || line.startsWith('!')) {
+      // The tally in the header is read, not skipped: it is the browser's own per-tier split and
+      // the more exact of the two measurements in this file when its coverage is complete.
+      const parsed = readLedgerHeaderLine(line);
+      if (parsed) header[parsed.key] = parsed.value;
+      continue;
+    }
 
     let count = 1;
     let rule = line;
@@ -372,7 +638,7 @@ export function readTierLedger(
     }
   }
 
-  return { hits, lines, skipped, shared };
+  return { hits, tally: readLedgerTierTally(header), lines, skipped, shared };
 }
 
 /** The synced list's text, as the hub writes it and as the CLI reads it off disk. */
@@ -416,8 +682,9 @@ export function computeTierPlan(input: ComputeTierPlanInput): TierPlanComputatio
         label: tier.label,
         rules: 0,
         hits: null,
+        hitsAxis: null,
         // A tier with no file cannot be redundant, because there is nothing to duplicate.
-        redundant: synced ? { rules: 0, hosts: 0, complete: false } : null,
+        redundant: synced ? { rules: 0, hosts: 0, typeLimited: 0, complete: false } : null,
         errors: [`no file was supplied for ${tier.id}`],
       });
       tierHosts.set(tier.id, new Set());
@@ -432,6 +699,7 @@ export function computeTierPlan(input: ComputeTierPlanInput): TierPlanComputatio
       label: tier.label,
       rules: result.ruleCount,
       hits: null,
+      hitsAxis: null,
       redundant: synced ? findTierRedundancy(file.rules, synced) : null,
       errors: result.errors,
     });
@@ -446,8 +714,27 @@ export function computeTierPlan(input: ComputeTierPlanInput): TierPlanComputatio
   let basis: PlanBenefitView | null = null;
   if (input.ledger) {
     ledger = readTierLedger(input.ledger.text, tierHosts);
+    // The ledger's own per-tier tally wins when it covers every session: it is the browser's
+    // split recorded at match time — exact about a filter two tiers ship and about a block whose
+    // filter text never resolved — where the host-join over the rule lines is an inference from
+    // the tier files. A tally covering fewer than all sessions is a strict undercount for every
+    // tier it names (the untallied sessions are missing from it), so it never feeds a row: the
+    // plan stays on the one axis that saw everything, and the tally rides along on
+    // `ledger.tally` for a caller to report rather than silently blend in.
+    const tally = ledger.tally;
+    const tallyComplete =
+      tally !== null &&
+      tally.sessions !== null &&
+      tally.sessions > 0 &&
+      tally.tierSessions === tally.sessions &&
+      Object.keys(tally.hits).length > 0;
+    const measured = tallyComplete ? tally.hits : ledger.hits;
+    const axis: NonNullable<TierPlanRow['hitsAxis']> = tallyComplete ? 'tally' : 'rule-lines';
     for (const row of rows) {
-      if (row.errors.length === 0) row.hits = ledger.hits[row.id] ?? 0;
+      if (row.errors.length === 0) {
+        row.hits = measured[row.id] ?? 0;
+        row.hitsAxis = axis;
+      }
     }
     basis = planTierBenefits(
       buildTierBlocking({
@@ -461,7 +748,7 @@ export function computeTierPlan(input: ComputeTierPlanInput): TierPlanComputatio
           ruleCount: countOf(tier),
         })),
         enabledIds: input.enabled,
-        hits: ledger.hits,
+        hits: measured,
       }),
     );
   }

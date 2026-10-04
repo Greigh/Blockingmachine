@@ -1,20 +1,36 @@
-import { DnrManager, customRulesAreInstalled, userDecisionsAreInstalled } from './dnrManager.js';
+import {
+  DnrManager,
+  computeSiteControlDrift,
+  customRulesAreInstalled,
+  planListRules,
+  ruleFamily,
+  userDecisionsAreInstalled,
+} from './dnrManager.js';
 import { RulesetManager } from './rulesetManager.js';
 import { ALARM_PERIODIC_SYNC, ALARM_TELEMETRY_PUSH, reconcileAlarms } from './alarmSchedule.js';
 import { RuleHitStats } from './ruleHitStats.js';
 import { LedgerSessionRecorder } from './ledgerSession.js';
 import { exportElementHarvest, previewElementHarvest, storeHarvestRecords } from './elementHarvestStore.js';
 import { StaticRuleIndex } from './staticRuleIndex.js';
+import { TierBenefitIndex } from './tierBenefit.js';
+import { computeTierRedundancy } from './tierRedundancy.js';
 import { SyncClient } from './syncClient.js';
 import { Mv3Guard } from './mv3Guard.js';
 import { LiveListener } from './liveListener.js';
 import {
   DEFAULT_MATCHED_RULES_BUDGET,
   canRequestMatchedRules,
+  dedupePolledRecords,
   hostFromFilter,
+  ledgerLineFor,
+  liveMatchKey,
+  makeKeyedSerializer,
+  matchIsBlock,
   matchedRulesQuotaView,
   readMatchedRuleRecords,
+  recordLiveMatch,
   summarizeMatches,
+  type LiveMatchLog,
 } from './matchedRules.js';
 import { HaBridge } from './haBridge.js';
 import {
@@ -28,6 +44,7 @@ import {
   urlFilterFor,
 } from './contextMenu.js';
 import type {
+  AppliedRuleSource,
   ExtensionMessage,
   ExtensionStatus,
   SiteControlView,
@@ -41,12 +58,14 @@ import {
   type LedgerStatus,
 } from '../shared/ledgerStatus.js';
 import { tierFromRulesetId } from '../shared/tierAttribution.js';
+import { categoryForTier } from '../shared/trackerCategory.js';
 import {
   DEFAULT_HUB_PORT,
   STORAGE_KEY_COSMETICS,
   STORAGE_KEY_COSMETICS_ENABLED,
   STORAGE_KEY_CUSTOM_RULES,
   STORAGE_KEY_LAST_SYNC_AT,
+  STORAGE_KEY_RULE_SOURCE,
   STORAGE_KEY_SITE_CONTROL,
   STORAGE_KEY_USER_COSMETICS,
 } from '../shared/constants.js';
@@ -128,14 +147,29 @@ async function saveCustomRules(rules: string[]): Promise<void> {
   }
 }
 
-function siteControlView(url?: string): SiteControlView {
+/**
+ * The view the popup renders — storage's claim *plus* the browser's own answer about whether
+ * it is enforcing it.
+ *
+ * The drift is composed from the same read `reconcileDynamicRules` runs (`installedFamilies`
+ * against the user's decisions and saved rules), so the notice and the repair see the same
+ * disagreement — and a response built without the read would describe state the browser may
+ * not be in, which is exactly the failure this field exists to end.
+ */
+async function siteControlView(url?: string): Promise<SiteControlView> {
   const site = siteFromUrl(url);
+  const [families, customRules] = await Promise.all([
+    dnr.installedFamilies(),
+    loadCustomRules(),
+  ]);
   return {
     globalPaused: siteControl.globalPaused,
     site,
     sitePaused: site ? siteControl.pausedSites.some((s) => s === site || site.endsWith(`.${s}`)) : false,
     pausedSites: [...siteControl.pausedSites],
     allowedDomains: [...siteControl.allowedDomains],
+    drift: computeSiteControlDrift(families, siteControl, customRules),
+    ...(lastApplyError !== null ? { applyError: lastApplyError } : {}),
   };
 }
 
@@ -157,12 +191,31 @@ const sessionRecentTrackers: Map<string, number> = new Map();
  */
 let lastSyncedNetworkRules: string[] = [];
 /**
+ * The measured hot set from the last successful sync, or `null` when the deployment has none.
+ *
+ * Held beside the full list rather than inside it, and passed to the planner on every application
+ * rather than substituted into the lines here. The planner decides which of the two to install from
+ * the budget alone, so the same full export plus the same hot set always gives the same answer —
+ * including on the local-change path that has no network at all, which is the path that runs when
+ * the user pauses a site.
+ */
+let lastSyncedHotRules: string[] | null = null;
+/**
  * What the browser is holding, as of the last read.
  *
  * A reading rather than a ledger of this worker's own calls: the popup shows this next to a live
  * quota bar, and two numbers about the same rules that disagree is worse than one that is missing.
  */
 let lastAppliedRuleCount = 0;
+/**
+ * Why the last `updateDynamicRules` call refused, or `null` when it last succeeded.
+ *
+ * Kept beside `lastAppliedRuleCount` because it is the same kind of reading — the answer the
+ * browser gave, not a ledger entry. The popup's drift notice names it so a disagreement the
+ * reconcile finds can say *why* rather than only *that*, and a successful apply clears it so a
+ * repaired state does not keep wearing the old failure.
+ */
+let lastApplyError: string | null = null;
 let lastSyncAt: number | null = null;
 
 /** Persists when the list was last fetched, so the readout survives the worker that fetched it. */
@@ -172,6 +225,33 @@ async function saveLastSyncAt(at: number): Promise<void> {
     await chrome.storage.local.set({ [STORAGE_KEY_LAST_SYNC_AT]: at });
   } catch (err) {
     console.warn('[Blockingmachine] Could not persist the last sync time:', err);
+  }
+}
+
+/**
+ * Persists which list source a successful application installed — the full export or the measured
+ * hot set. Recorded rather than recomputed because the question the popup answers is "what is the
+ * browser running", and nothing outside this extension can change its own dynamic rules, so the
+ * record stays true until the next application replaces it.
+ */
+async function saveRuleSource(source: AppliedRuleSource): Promise<void> {
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEY_RULE_SOURCE]: source });
+  } catch (err) {
+    console.warn('[Blockingmachine] Could not persist the applied rule source:', err);
+  }
+}
+
+/** The recorded source, or null when no application has been recorded (a fresh install). */
+async function loadRuleSource(): Promise<AppliedRuleSource | null> {
+  try {
+    const stored = await chrome.storage.local.get(STORAGE_KEY_RULE_SOURCE);
+    const record = (stored as { [STORAGE_KEY_RULE_SOURCE]?: AppliedRuleSource })[
+      STORAGE_KEY_RULE_SOURCE
+    ];
+    return record && (record.source === 'full' || record.source === 'hot') ? record : null;
+  } catch {
+    return null;
   }
 }
 
@@ -338,7 +418,7 @@ async function updateBadge(tabId: number, blockedRequests: number): Promise<void
  * Applies the last fetched blocklist plus the user's custom rules and site
  * decisions. Used after any local change so toggling a site never needs a fetch.
  */
-async function applyCurrentRules(): Promise<number> {
+async function applyCurrentRulesInner(): Promise<number> {
   try {
     // Reconciling the static tiers belongs here, on every rule application, not only on a package
     // update: the global pause clears the dynamic rules, so a paused extension has to silence the
@@ -347,6 +427,10 @@ async function applyCurrentRules(): Promise<number> {
     // paused, which is what repairs an update that reset those rulesets to the manifest defaults.
     await rulesets.setSuspended(siteControl.globalPaused);
     const customRules = await loadCustomRules();
+    // Built on the first apply: the tier files are local reads and the tally is whatever
+    // `ruleHits` holds by then — a worker that had not finished its startup load simply ranks
+    // by compile order alone, which is still a measured answer.
+    await tierBenefitIndex.ensure();
     // `replaceInstalledList` is the whole guard: this runs on every local decision — a paused site,
     // an allowed domain, a new custom rule — and a worker that has not fetched the list yet holds no
     // lines to compile. Rebuilding the dynamic rules from an empty list would spend a site pause by
@@ -356,13 +440,47 @@ async function applyCurrentRules(): Promise<number> {
     lastAppliedRuleCount = await dnr.updateDynamicRules(
       [...customRules, ...lastSyncedNetworkRules],
       siteControl,
-      { replaceInstalledList: lastSyncedNetworkRules.length > 0 },
+      {
+        replaceInstalledList: lastSyncedNetworkRules.length > 0,
+        // No hot set held means the planner prunes the full export — by measured tier benefit
+        // when the ranking placed any of the list's hosts, list order only when it could not.
+        // `ownRuleLines` rides beside the shipped set rather than replacing it: the browser's
+        // own ledger is the deployment's measured traffic, and its fired rules lead the merge.
+        hotRuleLines: lastSyncedHotRules,
+        ownRuleLines: ledger.firedRules().map((hit) => hit.rule),
+        benefitRank: (host) => tierBenefitIndex.rankFor(host),
+        onRuleSource: (source) => void saveRuleSource(source),
+      },
     );
+    lastApplyError = null;
     return lastAppliedRuleCount;
   } catch (err) {
+    // The drift read will still name the disagreement — what it could never name before is
+    // the cause, so the refusal is kept for the popup to read rather than only logged.
+    lastApplyError = err instanceof Error ? err.message : String(err);
     console.warn('[Blockingmachine] Failed to apply dynamic rules:', err);
     return 0;
   }
+}
+
+/**
+ * Applies must never interleave. Each call reads the browser's rules before it writes, so two
+ * overlapping applies can both plan as if the other's rules were absent — the second then pushes
+ * the family past the browser's dynamic-rule budget and gets its whole batch refused (which used
+ * to read as "applied 0" in the log). Queuing is safe because applies are idempotent and ordered:
+ * a later call only ever sees an earlier call's committed state.
+ */
+let applyChain: Promise<unknown> = Promise.resolve();
+
+async function applyCurrentRules(): Promise<number> {
+  const queued = applyChain.then(() => applyCurrentRulesInner());
+  // The inner apply never rejects — refusals land on `lastApplyError` — but a rejection would
+  // poison every later call without the reset branch.
+  applyChain = queued.then(
+    () => undefined,
+    () => undefined,
+  );
+  return queued;
 }
 
 /**
@@ -413,13 +531,33 @@ async function reconcileDynamicRules(): Promise<void> {
   }
 }
 
+/**
+ * Syncs are single-flight: install, worker-start reconcile, the live stream and the popup's
+ * manual sync can all ask inside the same window, and a second fetch while the first is still
+ * ingesting is pure duplicate work — hundreds of thousands of rules parsed twice, and a second
+ * apply racing the first past the browser's rule budget. A caller that asks mid-sync gets the
+ * in-flight answer: it is fetching the same feed, so "the latest" is the same list either way.
+ */
+let syncInFlight: Promise<number> | null = null;
+
 async function syncAndApplyRules(): Promise<number> {
+  syncInFlight ??= syncAndApplyRulesInner().finally(() => {
+    syncInFlight = null;
+  });
+  return syncInFlight;
+}
+
+async function syncAndApplyRulesInner(): Promise<number> {
   try {
     console.log('[Blockingmachine] Fetching latest compiled rules from hub...');
-    const { networkRules, cosmeticSelectors } = await sync.fetchCompiledRules();
+    const { networkRules, cosmeticSelectors, hotRuleLines } = await sync.fetchCompiledRules();
     if (networkRules.length > 0) {
       lastSyncedNetworkRules = networkRules;
     }
+    // Assigned unconditionally, including when it comes back null. A deployment that has dropped
+    // its hot set must stop being offered the stale one, and the only way to know it dropped it is
+    // a sync that says so — the same reason `networkRules` above is guarded but this is not.
+    lastSyncedHotRules = hotRuleLines;
     if (cosmeticSelectors.length > 0) {
       await chrome.storage.local.set({ [STORAGE_KEY_COSMETICS]: cosmeticSelectors });
       console.log(
@@ -428,7 +566,11 @@ async function syncAndApplyRules(): Promise<number> {
     }
     await saveLastSyncAt(Date.now());
     const count = await applyCurrentRules();
-    console.log(`[Blockingmachine] Successfully applied ${count} dynamic DNR network rules.`);
+    // The apply reports failures as `lastApplyError` and returns 0 — logging "applied 0" after
+    // a refused batch would claim an empty ruleset while the previous rules are still installed.
+    if (lastApplyError === null) {
+      console.log(`[Blockingmachine] Successfully applied ${count} dynamic DNR network rules.`);
+    }
     await pruneOrphanedTabTelemetry();
     return count;
   } catch (err) {
@@ -455,13 +597,28 @@ async function appendCustomRule(rule: string): Promise<boolean> {
  * ruleset files, indexed lazily and once per worker lifetime — without this the counts would be
  * keyed by an opaque `ruleset#id` pair that cannot be compared with the compiled list.
  */
+/** Reads one shipped tier ruleset inside the extension bundle. */
+async function readTierFile(path: string): Promise<unknown> {
+  const response = await fetch(chrome.runtime.getURL(path));
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
 const staticRuleIndex = new StaticRuleIndex({
   tiers: STATIC_RULE_TIERS,
-  readTier: async (path) => {
-    const response = await fetch(chrome.runtime.getURL(path));
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
-  },
+  readTier: readTierFile,
+});
+
+/**
+ * The measured-benefit ranking behind the no-hot-set fallback trim: each shipped tier file's
+ * host order is the compile's evidence rank, and the deployment's own per-tier hit tally
+ * (`bm_tier_hits`) weights the order across tiers. Built lazily on the first apply — the
+ * files ship inside the package, so the ranking can never be absent for a missing file.
+ */
+const tierBenefitIndex = new TierBenefitIndex({
+  tiers: STATIC_RULE_TIERS,
+  readTier: readTierFile,
+  tierHits: () => ruleHits.snapshot().tiers,
 });
 
 async function flushTelemetryReport(): Promise<void> {
@@ -853,9 +1010,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_PERIODIC_SYNC) {
     await syncAndApplyRules();
   } else if (alarm.name === ALARM_TELEMETRY_PUSH) {
-    // In a packed build this is the only thing that keeps per-tab counters moving between popup
-    // visits; `reconcileActiveTab` no-ops outright when the debug event is available.
-    await reconcileActiveTab();
+    // The poll is what keeps per-tab counters moving between popup visits — on a packed build it
+    // is the whole report, and on an unpacked one it recovers the matches live delivery dropped
+    // across a worker wake.
+    await reconcileRecentMatches();
     await flushTelemetryReport();
   }
 });
@@ -895,17 +1053,29 @@ liveListener.start();
 // There are two ways the browser can report that a DNR rule matched, and they are not equivalent.
 //
 // `onRuleMatchedDebug` is the honest one: it carries the request URL, the initiator and the tab
-// for every match, live. Chrome only exposes it to *unpacked* extensions though, so a packed build
-// used to receive nothing at all from it — no per-tab counts, no badge, and an empty rule-hit
-// ledger for `blockingmachine coverage --hits`. `getMatchedRules` is the packed-build path, at the
-// costs Chrome imposes on it: no request URL, only the last five minutes, only a tab the user has
-// granted `activeTab` on, and a hard rate limit.
+// for every match, live — but delivery across a worker wake is lossy. A suspended worker does
+// wake on a match, yet events in flight during the cold start are dropped: measured live, a
+// three-request burst at a sleeping worker delivered a single event. An MV3 worker suspends
+// roughly thirty seconds after its last event, so most page loads begin inside that window.
 //
-// Both paths converge on `applyMatches`, so they can never disagree about what a block is.
+// `getMatchedRules` is the catch-up: a poll returns every match from the last five minutes, live
+// or not, at the costs Chrome imposes — no request URL, only a tab the user has granted
+// `activeTab` on (or any tab when the feedback permission exists), and a hard rate limit. It runs
+// on every build because a suspended worker is not an edge case but the normal state.
+//
+// Both paths converge on `applyMatches`, so they can never disagree about what a block is. What
+// they can disagree about is whether a match is new: the poll re-reports matches the live event
+// already counted, so the live log in `matchedRules.ts` pairs each polled record with the live
+// arrival that claimed it before anything is counted twice.
 
 interface DynamicRuleEntry {
   urlFilter?: string;
   priority?: number;
+  /** What the rule did to the request — `allow`/`allowAllRequests` matches are not blocks. */
+  action?: string;
+  /** `$domain=` scope the installed rule carries, when it was scoped. */
+  initiatorDomains?: readonly string[];
+  excludedInitiatorDomains?: readonly string[];
   source: TrackerDetection['source'];
 }
 
@@ -932,7 +1102,10 @@ async function snapshotDynamicRules(): Promise<DynamicRuleIndex> {
       snapshot.set(rule.id, {
         urlFilter: rule.condition?.urlFilter,
         priority: rule.priority,
-        source: (rule.priority ?? 0) >= 500 ? 'user' : 'list',
+        action: rule.action?.type,
+        initiatorDomains: rule.condition?.initiatorDomains,
+        excludedInitiatorDomains: rule.condition?.excludedInitiatorDomains,
+        source: ruleFamily(rule.priority),
       });
     }
   } catch {
@@ -941,13 +1114,16 @@ async function snapshotDynamicRules(): Promise<DynamicRuleIndex> {
   return snapshot;
 }
 
-/** The filter line a match came from, plus where it came from. */
+/** The filter line a match came from, plus where it came from and what it did to the request. */
 async function resolveMatchedFilter(
   dynamicRules: DynamicRuleIndex,
   ruleId?: number,
   rulesetId?: string,
 ): Promise<{
   filter?: string;
+  /** The ledger-ready text — `@@`-prefixed and `$domain=`-scoped as the installed rule was. */
+  line?: string;
+  action?: string;
   priority?: number;
   source: TrackerDetection['source'];
   tier?: StaticTierId;
@@ -956,7 +1132,13 @@ async function resolveMatchedFilter(
 
   const dynamic = dynamicRules.get(ruleId);
   if (dynamic?.urlFilter !== undefined) {
-    return { filter: dynamic.urlFilter, priority: dynamic.priority, source: dynamic.source };
+    return {
+      filter: dynamic.urlFilter,
+      line: ledgerLineFor(dynamic.urlFilter, dynamic.action, dynamic, dynamic.priority),
+      action: dynamic.action,
+      priority: dynamic.priority,
+      source: dynamic.source,
+    };
   }
 
   // Not a dynamic rule, so it came from a shipped static tier. The tier is readable straight off
@@ -966,11 +1148,24 @@ async function resolveMatchedFilter(
   const tier = tierFromRulesetId(rulesetId);
   if (tier) {
     await staticRuleIndex.ensure();
-    return { filter: staticRuleIndex.filterFor(rulesetId, ruleId), source: 'list', tier };
+    const entry = staticRuleIndex.entryFor(rulesetId, ruleId);
+    return {
+      filter: entry?.filter,
+      line: entry ? ledgerLineFor(entry.filter, entry.action, {}) : undefined,
+      action: entry?.action,
+      source: 'list',
+      tier,
+    };
   }
 
   return { source: 'list' };
 }
+
+// A per-tab commit is a read-modify-write on session storage, so two matches arriving together —
+// which is every page load — would otherwise race: each applies against the pre-write counter and
+// the loser's increment silently vanishes. Chaining commits per tab makes the stored count the
+// sum of what actually matched, in arrival order.
+const enqueueTabCommit = makeKeyedSerializer<number>();
 
 /** Applies browser-reported matches to the session counters and the per-tab ledgers. */
 async function applyMatches(
@@ -984,66 +1179,96 @@ async function applyMatches(
   ledger.setFeed(ledgerFeedForSession(ledgerStatus().feed));
 
   const index = dynamicRules ?? (await snapshotDynamicRules());
-  const touched = new Map<number, TabTelemetry>();
+  const perTab = new Map<
+    number,
+    Array<{
+      match: BrowserMatch;
+      count: number;
+      priority?: number;
+      source: TrackerDetection['source'];
+      tier?: StaticTierId;
+    }>
+  >();
 
   for (const match of matches) {
-    if (!Number.isInteger(match.tabId) || match.tabId < 0) continue;
     const count =
       Number.isFinite(match.count) && (match.count as number) > 0
         ? Math.floor(match.count as number)
         : 1;
+
+    const { line, action, priority, source, tier } = await resolveMatchedFilter(
+      index,
+      match.ruleId,
+      match.rulesetId,
+    );
+
+    if (!matchIsBlock(action)) {
+      // The rule *allowed* the request — a paused site's allowAllRequests or an `@@` exception.
+      // It goes to the ledger's exceptions axis, where the `@@` line lands it, and nowhere else:
+      // a blocked-request count, a badge number, a per-host tally or a hot-set entry built from
+      // an allow match would each be the block/exception inversion this branch exists to stop.
+      ledger.record(line ?? null, count, Date.now(), {});
+      continue;
+    }
 
     sessionTrackersBlocked += count;
     if (match.host) {
       sessionRecentTrackers.set(match.host, (sessionRecentTrackers.get(match.host) || 0) + count);
     }
 
-    const current =
-      touched.get(match.tabId) ??
-      (await getTabTelemetry(match.tabId)) ??
-      emptyTabTelemetry(match.tabId, match.url ?? '', match.host);
-    current.blockedRequests += count;
-
-    const { filter, priority, source, tier } = await resolveMatchedFilter(
-      index,
-      match.ruleId,
-      match.rulesetId,
-    );
     // Real browsing is the only honest source for coverage, so record what actually matched.
-    if (filter) ruleHits.record(filter, count);
+    if (line) ruleHits.record(line, count);
     // Attribution to the tier that shipped the rule, which is what lets a tier be judged on real
     // traffic rather than on how many rules it happens to contain.
     if (tier) ruleHits.recordTier(tier, count);
     // The same match, dated into a session: this is the evidence the hot set is built from, where
     // durability is distinct days rather than a hit total. A match whose filter could not be
     // resolved is counted as unattributed — "we cannot say what matched" and "nothing matched" are
-    // different findings, and only one of them is a hole in the ledger.
-    ledger.record(filter ?? null, count, Date.now());
+    // different findings, and only one of them is a hole in the ledger. The tier rides along so the
+    // export carries the split the tier plan is weighted by, which the filter text cannot give: a
+    // tier is named whether or not its rule file could be read, and one filter can ship in two.
+    ledger.record(line ?? null, count, Date.now(), { tier: tier ?? null });
 
-    if (match.host) {
-      const existing = current.trackers.find((t) => t.domain === match.host);
-      if (existing) {
-        existing.blockedCount += count;
-        existing.lastSeen = Date.now();
-      } else {
-        current.trackers.push({
-          domain: match.host,
-          category: 'tracker',
-          blockedCount: count,
-          firstParty: false,
-          priority,
-          source,
-          lastSeen: Date.now(),
-        });
-      }
-    }
+    // A polled record can outlive its tab — `getMatchedRules` reports tabId -1 for one that
+    // closed — and the block still happened, so everything above counts it. Only the per-tab
+    // telemetry and the badge have nowhere left to go.
+    if (!Number.isInteger(match.tabId) || match.tabId < 0) continue;
 
-    touched.set(match.tabId, current);
+    const batch = perTab.get(match.tabId) ?? [];
+    batch.push({ match, count, priority, source, tier });
+    perTab.set(match.tabId, batch);
   }
 
-  for (const [tabId, telemetry] of touched) {
-    await setTabTelemetry(tabId, telemetry);
-    await updateBadge(tabId, telemetry.blockedRequests);
+  // The stored-telemetry half is the part that races, so each tab's read-modify-write is chained
+  // onto the last commit for the same tab — two overlapping batches can no longer drop a count.
+  for (const [tabId, batch] of perTab) {
+    await enqueueTabCommit(tabId, async () => {
+      const current =
+        (await getTabTelemetry(tabId)) ??
+        emptyTabTelemetry(tabId, batch[0].match.url ?? '', batch[0].match.host);
+      for (const { match, count, priority, source, tier } of batch) {
+        current.blockedRequests += count;
+        if (match.host) {
+          const existing = current.trackers.find((t) => t.domain === match.host);
+          if (existing) {
+            existing.blockedCount += count;
+            existing.lastSeen = Date.now();
+          } else {
+            current.trackers.push({
+              domain: match.host,
+              category: categoryForTier(tier),
+              blockedCount: count,
+              firstParty: false,
+              priority,
+              source,
+              lastSeen: Date.now(),
+            });
+          }
+        }
+      }
+      await setTabTelemetry(tabId, current);
+      await updateBadge(tabId, current.blockedRequests);
+    });
   }
 }
 
@@ -1090,14 +1315,78 @@ function noteTierTransitions(
   }
 }
 
-// The polling path's own state: a cursor so a poll cannot count the tail of the previous batch
-// twice, a log of recent calls to stay inside Chrome's quota, and per-tab spacing so a refreshing
-// popup cannot hammer the API.
+// The reporting state: a cursor so a poll cannot count the tail of the previous batch twice, a
+// log of live-counted matches so the same poll cannot count a live match again, a log of recent
+// calls to stay inside Chrome's quota, and per-tab spacing so a refreshing popup cannot hammer
+// the API. The cursor and the live log are persisted in session storage because a suspended
+// worker is the normal state of an MV3 build — an in-memory cursor restarting at zero would let
+// the first poll after every restart re-count the whole five-minute window.
 const matchedRuleCalls: number[] = [];
 let matchedRuleCursor = 0;
+const liveMatchLog: LiveMatchLog = new Map();
 let matchedRuleQuotaWarned = false;
 const lastReconcileAt = new Map<number, number>();
 const MATCHED_RULES_MIN_INTERVAL_MS = 15_000;
+// The `lastReconcileAt` key for an all-tabs poll — tab ids start at 0, so -1 cannot collide.
+const ALL_TABS_SCOPE = -1;
+
+const MATCH_STATE_KEY = 'bm_match_state';
+const MATCH_STATE_SAVE_MS = 5_000;
+let matchStateReady: Promise<void> | null = null;
+let matchStateSavedAt = 0;
+
+/** The storage area tab telemetry already prefers: session, falling back to local where absent. */
+function matchStateStorage(): typeof chrome.storage.session | undefined {
+  return chrome.storage?.session ?? chrome.storage?.local;
+}
+
+/**
+ * Restores the cursor and the live-match log a previous worker generation left behind. Every
+ * caller awaits the same in-flight restore, so a poll arriving mid-restore cannot dedupe against
+ * a half-loaded log.
+ */
+function ensureMatchState(): Promise<void> {
+  if (!matchStateReady) matchStateReady = restoreMatchState();
+  return matchStateReady;
+}
+
+async function restoreMatchState(): Promise<void> {
+  try {
+    const stored = (await matchStateStorage()?.get(MATCH_STATE_KEY))?.[MATCH_STATE_KEY] as
+      | { cursor?: unknown; live?: unknown }
+      | undefined;
+    const cursor = Number(stored?.cursor);
+    if (Number.isFinite(cursor) && cursor > matchedRuleCursor) matchedRuleCursor = cursor;
+    if (stored?.live && typeof stored.live === 'object') {
+      for (const [key, stamps] of Object.entries(stored.live as Record<string, unknown>)) {
+        if (!Array.isArray(stamps)) continue;
+        const kept = stamps.filter((s): s is number => Number.isFinite(s));
+        if (kept.length === 0) continue;
+        liveMatchLog.set(key, [...(liveMatchLog.get(key) ?? []), ...kept].sort((a, b) => a - b));
+      }
+    }
+  } catch {
+    // Match accounting is best-effort; a restore failure just means the window is re-read.
+  }
+}
+
+/**
+ * Checkpoints the cursor and the live-match log so a worker restart does not lose the dedup state.
+ * Live events throttle themselves — a blocked-request burst writes at most once per interval —
+ * while polls always save, since a poll is exactly what the cursor exists to bound.
+ */
+function persistMatchState(immediate = false): void {
+  const now = Date.now();
+  if (!immediate && now - matchStateSavedAt < MATCH_STATE_SAVE_MS) return;
+  matchStateSavedAt = now;
+  const live: Record<string, number[]> = {};
+  for (const [key, stamps] of liveMatchLog) {
+    if (stamps.length > 0) live[key] = [...stamps];
+  }
+  void matchStateStorage()
+    ?.set({ [MATCH_STATE_KEY]: { cursor: matchedRuleCursor, live } })
+    .catch(() => {});
+}
 
 /**
  * Reconciles one tab from `getMatchedRules`.
@@ -1107,16 +1396,18 @@ const MATCHED_RULES_MIN_INTERVAL_MS = 15_000;
  * granted for the tab being asked about.
  */
 async function reconcileMatchedRules(
-  tabId: number,
+  tabId: number | null,
   options: { gesture?: boolean } = {},
 ): Promise<number> {
   const api = chrome.declarativeNetRequest;
-  if (hasLiveMatchFeedback()) return 0;
   if (!api || typeof api.getMatchedRules !== 'function') return 0;
-  if (!Number.isInteger(tabId) || tabId < 0) return 0;
+  // `null` is the all-tabs query, which only the feedback permission makes legal — a packed
+  // build must name the one tab its `activeTab` grant covers.
+  if (tabId === null ? !hasLiveMatchFeedback() : !Number.isInteger(tabId) || tabId < 0) return 0;
 
+  const scope = tabId ?? ALL_TABS_SCOPE;
   const now = Date.now();
-  const last = lastReconcileAt.get(tabId);
+  const last = lastReconcileAt.get(scope);
   if (last !== undefined && now - last < MATCHED_RULES_MIN_INTERVAL_MS) return 0;
 
   if (!options.gesture && !canRequestMatchedRules(matchedRuleCalls, now)) {
@@ -1127,7 +1418,7 @@ async function reconcileMatchedRules(
     return 0;
   }
 
-  lastReconcileAt.set(tabId, now);
+  lastReconcileAt.set(scope, now);
   matchedRuleCalls.push(now);
   // Keep the call log bounded: this worker can outlive thousands of polls.
   const windowStart = now - DEFAULT_MATCHED_RULES_BUDGET.windowMs;
@@ -1135,8 +1426,23 @@ async function reconcileMatchedRules(
 
   let delta;
   try {
-    const result = await api.getMatchedRules({ tabId, minTimeStamp: matchedRuleCursor });
-    delta = summarizeMatches(readMatchedRuleRecords(result), matchedRuleCursor);
+    await ensureMatchState();
+    const result = await api.getMatchedRules(
+      tabId === null
+        ? { minTimeStamp: matchedRuleCursor }
+        : { tabId, minTimeStamp: matchedRuleCursor },
+    );
+    const records = readMatchedRuleRecords(result);
+    // The live debug path may already have counted some of these — the poll cannot see its own
+    // blind spots, so a record is only fresh when no live arrival claimed the same match.
+    delta = summarizeMatches(dedupePolledRecords(records, liveMatchLog), matchedRuleCursor);
+    // The cursor advances over every record the browser returned, including deduplicated ones —
+    // they were counted, just on the other path, and re-reading them only makes the next poll
+    // repeat this same dedup work.
+    delta.cursor = records.reduce(
+      (cursor, record) => Math.max(cursor, record.timeStamp),
+      delta.cursor,
+    );
   } catch (err) {
     // No `activeTab` grant for this tab, or the quota was already exhausted.
     console.warn('[MatchedRules] Could not read matched rules:', err);
@@ -1144,6 +1450,7 @@ async function reconcileMatchedRules(
   }
 
   matchedRuleCursor = delta.cursor;
+  persistMatchState(true);
 
   const dynamicRules = await snapshotDynamicRules();
   const matches: BrowserMatch[] = [];
@@ -1167,10 +1474,19 @@ async function reconcileMatchedRules(
   return delta.counted;
 }
 
-/** Reconciles the active tab — the only one `activeTab` can have been granted on. */
-async function reconcileActiveTab(): Promise<void> {
-  if (hasLiveMatchFeedback()) return;
+/**
+ * Reconciles whatever the build can see — every open tab when the feedback permission makes the
+ * all-tabs query legal, else just the active tab an `activeTab` grant can cover. Scoping to the
+ * active tab on an unpacked build would leave background tabs' blocks uncounted even though the
+ * same one call could have recovered them. The poll costs quota, so it stays on the telemetry
+ * interval rather than shadowing the live event.
+ */
+async function reconcileRecentMatches(): Promise<void> {
   try {
+    if (hasLiveMatchFeedback()) {
+      await reconcileMatchedRules(null);
+      return;
+    }
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tabs[0]?.id;
     if (typeof tabId === 'number' && tabId >= 0) await reconcileMatchedRules(tabId);
@@ -1179,7 +1495,10 @@ async function reconcileActiveTab(): Promise<void> {
   }
 }
 
-// Unpacked builds get the real thing: every match, live, with the request URL attached.
+// Unpacked builds get the real thing while the worker runs: every match, live, with the request
+// URL attached. Delivery across a wake is lossy, so each live match is also logged here for the
+// poll to deduplicate against — what the live listener missed is exactly what the poll recovers,
+// and this log is what keeps the recovery from counting the live half again.
 if (chrome.declarativeNetRequest?.onRuleMatchedDebug) {
   chrome.declarativeNetRequest.onRuleMatchedDebug.addListener((info) => {
     const tabId = info.request?.tabId ?? -1;
@@ -1195,9 +1514,21 @@ if (chrome.declarativeNetRequest?.onRuleMatchedDebug) {
       return;
     }
 
-    void applyMatches([
-      { tabId, url, host, ruleId: info.rule?.ruleId, rulesetId: info.rule?.rulesetId },
-    ]).catch(() => {});
+    // The stamp is written before anything awaits: a poll that passes in between must already
+    // see this match as live-counted, or the same block counts once here and once there.
+    recordLiveMatch(
+      liveMatchLog,
+      liveMatchKey(tabId, info.rule?.rulesetId, info.rule?.ruleId),
+      Date.now(),
+    );
+    void ensureMatchState()
+      .then(() => {
+        persistMatchState();
+        return applyMatches([
+          { tabId, url, host, ruleId: info.rule?.ruleId, rulesetId: info.rule?.rulesetId },
+        ]);
+      })
+      .catch(() => {});
   });
 }
 
@@ -1232,8 +1563,9 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       if (typeof tabId === 'number' && tabId > 0) {
         // Opening the popup is a user gesture, so this `getMatchedRules` call is exempt from
         // Chrome's quota — and it is the moment `activeTab` is granted for exactly this tab, which
-        // is what makes the call legal in a packed build in the first place.
-        reconcileMatchedRules(tabId, { gesture: true })
+        // is what makes the call legal in a packed build in the first place. A feedback build has
+        // no grant to wait for, so the same one call reconciles every open tab instead.
+        reconcileMatchedRules(hasLiveMatchFeedback() ? null : tabId, { gesture: true })
           .catch(() => {})
           .then(() => getTabTelemetry(tabId))
           .then((data) => sendResponse({ success: true, data }));
@@ -1248,7 +1580,9 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       return true;
 
     case 'GET_MV3_STATUS':
-      Mv3Guard.getQuotaStatus().then((data) => sendResponse({ success: true, data }));
+      Promise.all([Mv3Guard.getQuotaStatus(), loadRuleSource()]).then(([data, ruleSource]) =>
+        sendResponse({ success: true, data: { ...data, ruleSource } }),
+      );
       return true;
 
     // ── Block-ledger source + `getMatchedRules` quota ───────────────────────────
@@ -1264,6 +1598,35 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       rulesets.status().then((status) => sendResponse({ success: true, status }));
       return true;
 
+    // The redundancy read the tier card shows — the same diff the hub and CLI report, answered
+    // against the dynamic rules the browser actually holds rather than the list's source text.
+    // Read-only on purpose: opening the popup asks a question, and a question must not reconcile
+    // anything. A refusal to list the rules becomes `synced: null` inside a successful report,
+    // not an error, because "could not look" is a displayable state.
+    case 'GET_TIER_REDUNDANCY': {
+      const rulesPromise = (
+        chrome.declarativeNetRequest?.getDynamicRules() ?? Promise.resolve(null)
+      ).catch(() => null);
+      // The filters the user's own rules plan into — the provenance record. Custom rules share
+      // the list's priority band on purpose, so the recorded patterns are the only way the read
+      // can name a hand-typed rule as the user's rather than the list's. A storage refusal here
+      // loses the split, not the read: `userPatterns` stays undefined and every rule reads as
+      // list-derived, which is the pre-split answer rather than a wrong one.
+      const userPatternsPromise = Promise.all([loadCustomRules(), loadSiteControl()])
+        .then(
+          ([customRules, control]) =>
+            new Set(planListRules([...customRules], control).rules.map((rule) => rule.pattern)),
+        )
+        .catch(() => undefined);
+      Promise.all([rulesPromise, userPatternsPromise])
+        .then(([rules, userPatterns]) =>
+          computeTierRedundancy({ rules, userPatterns, readTier: readTierFile }),
+        )
+        .then((report) => sendResponse({ success: true, report }))
+        .catch((err) => sendResponse({ success: false, error: String(err) }));
+      return true;
+    }
+
     // Reads the browser and repairs it to the state it should be in — the saved selection while
     // blocking is active, silence while it is paused everywhere. `GET_RULESET_TIERS` can only
     // report a disagreement; this is the call that can end one, which is why the drift notice
@@ -1273,6 +1636,18 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
         .then((control) => rulesets.setSuspended(control.globalPaused))
         .then(() => rulesets.status())
         .then((status) => sendResponse({ success: true, status }))
+        .catch((err) => sendResponse({ success: false, error: String(err) }));
+      return true;
+
+    // The dynamic half of the same repair: read the browser, install what storage says should
+    // be enforced, and answer with a view read *after* the repair — a view read first would
+    // still show the drift it just fixed, or promise a fix that never ran. The notice's button
+    // is the only caller; the popup's reads stay read-only.
+    case 'RECONCILE_SITE_CONTROL':
+      loadSiteControl()
+        .then(() => reconcileDynamicRules())
+        .then(() => siteControlView(message.payload?.url))
+        .then((view) => sendResponse({ success: true, view }))
         .catch((err) => sendResponse({ success: false, error: String(err) }));
       return true;
 
@@ -1295,9 +1670,9 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
 
     // ── Rule hit ledger: what really fired during browsing ─────────────────────
     case 'GET_RULE_HIT_STATS': {
-      // The ledger is read from the popup, so fold in whatever the active tab has matched since
-      // the last read before answering.
-      reconcileActiveTab()
+      // The ledger is read from the popup, so fold in whatever the browser has matched since the
+      // last read before answering.
+      reconcileRecentMatches()
         .catch(() => {})
         .then(() => sendResponse({ success: true, data: ruleHits.snapshot() }));
       return true;
@@ -1385,7 +1760,9 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
 
     case 'GET_SITE_CONTROL':
       loadSiteControl()
-        .then(() => sendResponse({ success: true, view: siteControlView(message.payload?.url) }))
+        .then(async () =>
+          sendResponse({ success: true, view: await siteControlView(message.payload?.url) }),
+        )
         .catch((err) => sendResponse({ success: false, error: String(err) }));
       return true;
 
@@ -1398,7 +1775,9 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       const paused = message.payload?.paused === true;
       mutateSiteControl((current) => setSitePaused(current, site, paused))
         .then(() => applyCurrentRules())
-        .then(() => sendResponse({ success: true, view: siteControlView(message.payload?.url) }))
+        .then(async () =>
+          sendResponse({ success: true, view: await siteControlView(message.payload?.url) }),
+        )
         .catch((err) => sendResponse({ success: false, error: String(err) }));
       return true;
     }
@@ -1406,7 +1785,9 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
     case 'SET_GLOBAL_PAUSE':
       mutateSiteControl((current) => setGlobalPaused(current, message.payload?.paused === true))
         .then(() => applyCurrentRules())
-        .then(() => sendResponse({ success: true, view: siteControlView(message.payload?.url) }))
+        .then(async () =>
+          sendResponse({ success: true, view: await siteControlView(message.payload?.url) }),
+        )
         .catch((err) => sendResponse({ success: false, error: String(err) }));
       return true;
 
@@ -1419,11 +1800,11 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       const allowed = message.payload?.allowed !== false;
       mutateSiteControl((current) => setDomainAllowed(current, domain, allowed))
         .then(() => applyCurrentRules())
-        .then(() =>
+        .then(async () =>
           sendResponse({
             success: true,
             rule: allowed ? `@@||${domain}^` : null,
-            view: siteControlView(message.payload?.url),
+            view: await siteControlView(message.payload?.url),
           }),
         )
         .catch((err) => sendResponse({ success: false, error: String(err) }));
@@ -1487,8 +1868,9 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       const senderTabId = sender.tab?.id;
       if (typeof senderTabId === 'number') {
         getTabTelemetry(senderTabId).then(async (data) => {
+          const pageUrl = sender.tab?.url || '';
           const current =
-            data || emptyTabTelemetry(senderTabId, sender.tab?.url || '', sender.tab?.url || '');
+            data || emptyTabTelemetry(senderTabId, pageUrl, siteFromUrl(pageUrl) || '');
           current.elementsHidden += 1;
           await setTabTelemetry(senderTabId, current);
         });

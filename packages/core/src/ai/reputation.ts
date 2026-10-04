@@ -25,6 +25,7 @@ import { loadDb, loadDbSync, normalizeDbList, type DbLists } from './db-loader.j
 // the tiers are the source and the labelled corpus is the judge.
 import {
   TIER_DERIVED_AD_TOKENS,
+  TIER_DERIVED_CONSENT_TOKENS,
   TIER_DERIVED_TRACKER_TOKENS,
 } from './tierVocabulary.generated.js';
 
@@ -154,6 +155,44 @@ export const HAND_WRITTEN_TRACKER_TOKENS = [
   // belong to something else entirely — and the guard against that has to be a human reading it.
   'fpjs',
 ] as const;
+
+/**
+ * Consent-management and annoyance tokens, hand-written half.
+ *
+ * The consent/annoyance family is the `tier_annoyances` knowledge in vocabulary form: consent
+ * platforms, cookie walls, GDPR/CCPA machinery and popup vendors. None of these read as threats —
+ * they are third-party processors a user may want gone rather than infrastructure that is
+ * dangerous — which is why they carry their own category instead of being filed as advertising or
+ * telemetry.
+ *
+ * Same split as the ad and tracker lists: the labels a host is *for* (`cmp`, `consent`, `gdpr`)
+ * and the CMP vendors no shipped tier names (`usercentrics`, `didomi`, `trustarc`) are written
+ * here, where a person vouches for each one. The vendors the annoyance tier itself ships are the
+ * derivation's job — they arrive through {@link TIER_DERIVED_CONSENT_TOKENS}, not this list.
+ *
+ * `cmp` is three characters: under the derivation's five-character floor on purpose, so it exists
+ * only because a human wrote it here — the same contract as `fpjs` in the tracker list.
+ */
+export const HAND_WRITTEN_CONSENT_TOKENS = [
+  // Consent-management labels — what the host is for, not who runs it.
+  'cmp', 'consent', 'consentmanager', 'cookieconsent', 'cookienotice', 'gdpr', 'ccpa',
+  // The popup/interstitial half of the annoyance family.
+  'popup', 'popups',
+  // CMP vendors the shipped tiers do not name. Each is a known consent platform rather than
+  // an ordinary word — the property a hand-written token has to have.
+  'usercentrics', 'didomi', 'axeptio', 'sirdata', 'consensu', 'cookiepro',
+  'cookieinformation', 'trustarc', 'civicuk', 'cmpnet', 'privacymanager',
+  'sourcepoint', 'fundingchoices',
+] as const;
+
+/**
+ * The classifier's consent/annoyance vocabulary: the hand-written tokens above, plus the vendors
+ * the annoyance tier ships that the derivation found under the consent family.
+ */
+export const SUSPICIOUS_CONSENT_TOKENS: string[] = mergeVocabularyTokens(
+  HAND_WRITTEN_CONSENT_TOKENS,
+  TIER_DERIVED_CONSENT_TOKENS,
+);
 
 /**
  * The classifier's ad vocabulary: the hand-written tokens above, plus the vendors derived from the
@@ -799,7 +838,7 @@ const IOT_SUFFIXES = [
 ] as const;
 
 const VENDOR_SUFFIXES = [
-  'cursor.com', 'cursor.sh', 'codeium.com',
+  'cursor.com', 'cursor.sh', 'cursorvm.com', 'codeium.com', 'windsurf.com',
   'github.com', 'githubassets.com', 'githubusercontent.com', 'ghcr.io',
   'gitlab.com', 'bitbucket.org', 'atlassian.com', 'atlassian.net',
   'slack.com', 'slack-edge.com', 'slack-msgs.com', 'slackb.com', 'slack-core.com',
@@ -857,6 +896,7 @@ const VENDOR_SUFFIXES = [
   'askubuntu.com', 'mathoverflow.net', 'grafana.com', 'grafana.net', 'dev.to', 'hashnode.com', 'medium.com', 'substack.com',
   'developer.mozilla.org', 'mdn.mozillademos.org',
   'asana.com', 'clickup.com', 'monday.com', 'basecamp.com', 'miro.com', 'airtable.com',
+  'elastic.co', 'elastic.cloud', 'found.com', 'found.io', 'found.no',
   'canva.com', 'loom.com', 'calendly.com', 'grammarly.com', 'hubspot.com', 'salesforce.com', 'force.com',
   'zendesk.com', 'zdassets.com', 'freshdesk.com', 'intercom.io', 'intercomcdn.com', 'workday.com',
   'uber.com', 'ubereats.com', 'lyft.com', 'airbnb.com', 'booking.com', 'bstatic.com', 'expedia.com', 'tripadvisor.com',
@@ -873,7 +913,7 @@ const VENDOR_SUFFIXES = [
 ] as const;
 
 const PLATFORM_SUFFIXES = [
-  'github.io', 'gitlab.io', 'herokuapp.com', 'herokussl.com', 'netlify.app', 'netlify.com', 'vercel.app', 'vercel.dev', 'v0.dev',
+  'github.io', 'gitlab.io', 'herokuapp.com', 'herokussl.com', 'netlify.app', 'netlify.com', 'vercel.app', 'vercel.dev', 'vercel-dns-016.com', 'v0.dev',
   'pages.dev', 'workers.dev', 'r2.dev', 'cloudflarepages.com',
   'digitalocean.com', 'digitaloceanspaces.com', 'ondigitalocean.com',
   'supabase.co', 'supabase.in', 'supabase.net', 'supabase.com',
@@ -1418,9 +1458,19 @@ const tokenRegexCache = new Map<string, RegExp>();
 
 function boundaryRegex(token: string): RegExp {
   const cached = tokenRegexCache.get(token);
-  if (cached) return cached;
+  if (cached) {
+    // Refresh recency: Map iterates in insertion order, so re-inserting moves
+    // a hot entry to the end and keeps it out of the eviction line.
+    tokenRegexCache.delete(token);
+    tokenRegexCache.set(token, cached);
+    return cached;
+  }
   if (tokenRegexCache.size >= MAX_TOKEN_REGEX_CACHE) {
-    tokenRegexCache.clear();
+    // Evict the least-recently-used entry — the map's first key. Clearing the
+    // whole map on overflow also evicts the hot live-list regexes, which is
+    // what made derivation runs spend their time recompiling.
+    const oldest = tokenRegexCache.keys().next();
+    if (!oldest.done) tokenRegexCache.delete(oldest.value);
   }
   const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const compiled = new RegExp(`(?:^|[.\\-])${escaped}(?:[.\\-]|$)`, 'i');
@@ -2412,6 +2462,9 @@ export function isBenignServiceEndpoint(domain: string): boolean {
   // the classifier the moment a vocabulary change is installed without replacing the array, which
   // is precisely what a derivation's "would this token change the verdict?" question does.
   if (getDbLists().suspiciousAdTokens.some((tok) => hostnameHasToken(clean, tok))) return false;
+  // A consent token carries the same veto: `api.cookiebot.com` is the CMP's machinery,
+  // not a product endpoint, whatever its first label claims.
+  if (getDbLists().suspiciousConsentTokens.some((tok) => hostnameHasToken(clean, tok))) return false;
   if (scoreBrandSpoof(clean) > 0) return false;
 
   const labels = clean.split('.').filter(Boolean);
@@ -2549,7 +2602,11 @@ export function assessCorroboration(
   if (infra.adNetwork || infra.kind === 'ad-network' || infra.kind === 'tracker-network' || hasStrongAdIntent(clean)) {
     families.push('known-network');
   }
-  if (features.adKeywordWeight > 0.3 || features.trackerKeywordWeight > 0.3) {
+  if (
+    features.adKeywordWeight > 0.3 ||
+    features.trackerKeywordWeight > 0.3 ||
+    features.consentKeywordWeight > 0.3
+  ) {
     families.push('keyword');
   }
   if (features.brandSpoofScore > 0) {
@@ -2692,6 +2749,7 @@ export function adjustThreatCategory(
     const hasAnyThreatSignal =
       features.adKeywordWeight > 0.3 ||
       features.trackerKeywordWeight > 0.3 ||
+      (features.consentKeywordWeight ?? 0) > 0.3 ||
       features.brandSpoofScore > 0 ||
       features.highRiskTld > 0 ||
       (features.hexScore || 0) > 0 ||
@@ -2722,6 +2780,16 @@ export function adjustThreatCategory(
         category: 'Telemetry/Analytics',
         probability: Math.min(probability, 0.62),
         policyReason: 'Weak telemetry token without a known tracking network',
+      };
+    }
+    if ((features.consentKeywordWeight ?? 0) >= 0.9) {
+      return { category: 'Consent/Annoyance', probability: Math.max(probability, 0.8) };
+    }
+    if ((features.consentKeywordWeight ?? 0) >= 0.5) {
+      return {
+        category: 'Consent/Annoyance',
+        probability: Math.min(probability, 0.62),
+        policyReason: 'Consent-management token without a known annoyance network',
       };
     }
 
@@ -2799,6 +2867,7 @@ export const BASE_DB_LISTS: DbLists = {
   cdnRoutingSuffixes: [...CDN_ROUTING_SUFFIXES],
   suspiciousAdTokens: [...SUSPICIOUS_AD_TOKENS],
   suspiciousTrackerTokens: [...SUSPICIOUS_TRACKER_TOKENS],
+  suspiciousConsentTokens: [...SUSPICIOUS_CONSENT_TOKENS],
   specificNetworkTokens: [...SPECIFIC_NETWORK_TOKENS],
   highProfileBrands: [...HIGH_PROFILE_BRANDS],
   dictionaryExemptions: [...DICTIONARY_COMPOUND_EXEMPTIONS],
@@ -2829,6 +2898,7 @@ const LIVE_LIST_TARGETS: Readonly<Record<keyof DbLists, { type: 'set' | 'array';
   cdnRoutingSuffixes: { type: 'array', target: CDN_ROUTING_SUFFIXES as unknown as string[] },
   suspiciousAdTokens: { type: 'array', target: SUSPICIOUS_AD_TOKENS as unknown as string[] },
   suspiciousTrackerTokens: { type: 'array', target: SUSPICIOUS_TRACKER_TOKENS as unknown as string[] },
+  suspiciousConsentTokens: { type: 'array', target: SUSPICIOUS_CONSENT_TOKENS as unknown as string[] },
   specificNetworkTokens: { type: 'set', target: SPECIFIC_NETWORK_TOKENS },
   highProfileBrands: { type: 'array', target: HIGH_PROFILE_BRANDS as unknown as string[] },
   dictionaryExemptions: { type: 'set', target: DICTIONARY_COMPOUND_EXEMPTIONS as Set<string> },
@@ -2914,6 +2984,7 @@ export function withTemporaryVocabulary<T>(
   vocabulary: {
     adTokens?: readonly string[];
     trackerTokens?: readonly string[];
+    consentTokens?: readonly string[];
     /** Install these lists rather than adding them to the live vocabulary. */
     replace?: boolean;
   },
@@ -2928,8 +2999,11 @@ export function withTemporaryVocabulary<T>(
     suspiciousTrackerTokens: vocabulary.replace
       ? [...(vocabulary.trackerTokens ?? [])]
       : [...base.suspiciousTrackerTokens, ...(vocabulary.trackerTokens ?? [])],
+    suspiciousConsentTokens: vocabulary.replace
+      ? [...(vocabulary.consentTokens ?? [])]
+      : [...base.suspiciousConsentTokens, ...(vocabulary.consentTokens ?? [])],
   };
-  // Both halves of the vocabulary have to move together. `getDbLists()` is what the classifier's
+  // All halves of the vocabulary have to move together. `getDbLists()` is what the classifier's
   // feature extraction reads, and the exported arrays are what the endpoint guard reads directly —
   // installing only one of them would make "would this token change the verdict?" answerable with a
   // verdict that the shipped build could never produce, which is a worse lie than not asking.

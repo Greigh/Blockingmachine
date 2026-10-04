@@ -146,6 +146,8 @@ export interface SinkholeConfig {
   haToken?: string;
   haWebhookUrl?: string;
   customWebhookUrl?: string;
+  /** `get-sinkhole-config` only: whether safeStorage can seal the secrets at rest. */
+  encryptionAvailable?: boolean;
 }
 
 export interface SinkholeSyncResult {
@@ -173,8 +175,8 @@ export interface SinkholeTestResult {
   details?: string;
 }
 
-export type AiVerdict = 'ad_server' | 'tracker' | 'malicious' | 'clean' | 'suspicious';
-export type ThreatCategory = 'Advertising' | 'Telemetry/Analytics' | 'CNAME Cloaking' | 'Malware/Phishing' | 'Clean' | 'Unknown';
+export type AiVerdict = 'ad_server' | 'tracker' | 'malicious' | 'annoyance' | 'clean' | 'suspicious';
+export type ThreatCategory = 'Advertising' | 'Telemetry/Analytics' | 'Consent/Annoyance' | 'CNAME Cloaking' | 'Malware/Phishing' | 'Clean' | 'Unknown';
 export type RiskLevel = 'critical' | 'high' | 'medium' | 'low' | 'none';
 export type AiProviderType = 'mini-ai' | 'local-heuristics' | 'ollama' | 'gemini' | 'openai';
 
@@ -199,12 +201,16 @@ export interface AiProviderConfig {
   ollamaUrl?: string;
   ollamaModel?: string;
   apiKey?: string;
+  /** `safeStorage`-sealed form of `apiKey` — the two never coexist once the seal has run. */
+  apiKeyEncrypted?: string;
   apiEndpoint?: string;
   modelName?: string;
   allowlist?: string[];
   bypassCache?: boolean;
   skipDns?: boolean;
   dnsTimeoutMs?: number;
+  /** `get-ai-config` only: whether safeStorage can seal `apiKey` at rest. */
+  encryptionAvailable?: boolean;
 }
 
 export interface DomainLabelEntropy {
@@ -383,6 +389,24 @@ export interface StoreSchema {
   radarHeatMap?: RadarHeatMap;
   radarDisplayConfig?: RadarDisplayConfig;
   autoStartFeedServer?: boolean;
+  /**
+   * Optional bearer token the feed server requires on its mutation endpoints (`/v1/control/*`,
+   * `/v1/compile`, `/v1/telemetry/browser`). Empty means unset, and unset keeps the
+   * origin-guard-only trust model the LAN deployment assumes — the token is for a LAN the user
+   * does not fully trust, not a requirement the server can assume its clients satisfy.
+   */
+  feedToken?: string;
+  /**
+   * What each deploy target's scheduled refresh has reported back, keyed by target id
+   * (`unbound`, `bind`, …). The refresh command in the recipe POSTs its result to
+   * `/v1/deploy-report`; this record is what survives the window where the hub was closed,
+   * so "the 02:00 fetch failed" is a fact on the next launch rather than an absence.
+   */
+  deployRefreshReports?: Record<string, import('../deployRefresh').DeployRefreshReport>;
+  /** `safeStorage`-sealed credentials — the plaintext siblings are deleted when these exist. */
+  piholeApiKeyEncrypted?: string;
+  adguardHomePasswordEncrypted?: string;
+  haTokenEncrypted?: string;
   launchOnStartup?: boolean;
   /** `host`, `host:port`, or a URL for the Unbound instance the reachability check queries. */
   unboundResolver?: string;
@@ -430,7 +454,12 @@ export interface DaemonStatusInfo {
 
 // Electron API interface
 export interface ElectronAPI {
-  copyToClipboard?: (text: string) => void | Promise<{ success?: boolean; error?: string }>;
+  copyToClipboard?: (
+    text: string,
+  ) =>
+    | void
+    | { success?: boolean; error?: string }
+    | Promise<{ success?: boolean; error?: string }>;
   getTheme: () => Promise<ThemeType>;
   setTheme: (theme: ThemeType) => Promise<{ success: boolean; error?: string }>;
   getSources: () => Promise<FilterSource[]>;
@@ -475,6 +504,13 @@ export interface ElectronAPI {
   getElementHarvest: () => Promise<import('../elementHarvest.js').ElementHarvestSummary>;
   selectElementHarvest: () => Promise<string>;
   clearElementHarvest: () => Promise<string>;
+  /** Builds the extension and copies it where the user picks, for browser-side loading. */
+  downloadExtension?: () => Promise<{
+    success: boolean;
+    cancelled?: boolean;
+    path?: string;
+    error?: string;
+  }>;
   setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;
   selectSavePath: () => Promise<string>;
   runImportProcess: () => Promise<ProcessingResult>;
@@ -484,6 +520,15 @@ export interface ElectronAPI {
   testFeedUrl: (url: string) => Promise<FeedDiagnostic>;
   getUnboundReachability?: () => Promise<UnboundReachabilitySnapshot | null>;
   checkUnboundReachability?: () => Promise<UnboundReachability>;
+  /**
+   * Fired when the scheduled reachability check finishes, with its verdict.
+   *
+   * Optional like the rest of this surface, and unsubscribable: the pane only listens while it is
+   * mounted, and the main process sends whether or not anybody is.
+   */
+  onUnboundReachabilityUpdated?: (
+    callback: (snapshot: UnboundReachabilitySnapshot) => void,
+  ) => () => void;
   getUnboundResolvers?: () => Promise<UnboundResolverSettings>;
   setUnboundResolvers?: (values: {
     address?: string;
@@ -557,6 +602,8 @@ export interface ElectronAPI {
   getAppVersion?: () => Promise<string>;
   getAutoStartFeedServer?: () => Promise<boolean>;
   setAutoStartFeedServer?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  getFeedToken?: () => Promise<{ configured: boolean; token: string }>;
+  setFeedToken?: (token: string) => Promise<{ success: boolean; error?: string }>;
   getLaunchOnStartup?: () => Promise<boolean>;
   setLaunchOnStartup?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
 

@@ -37,10 +37,12 @@ import { EVAL_CORPUS } from '../../../core/src/ai/evalCorpus.js';
 import { evaluateClassifier } from '../../../core/src/ai/evaluation.js';
 import {
   HAND_WRITTEN_AD_TOKENS,
+  HAND_WRITTEN_CONSENT_TOKENS,
   HAND_WRITTEN_TRACKER_TOKENS,
   withTemporaryVocabulary,
 } from '../../../core/src/ai/reputation.js';
 import {
+  TIER_MODEL_FAMILIES,
   TIER_VOCABULARY_SOURCES,
   compareTierVocabularyCorpus,
   deriveTierVocabulary,
@@ -51,6 +53,7 @@ import {
 } from '../../../core/src/ai/tierVocabularyDerivation.js';
 import {
   TIER_DERIVED_AD_TOKENS,
+  TIER_DERIVED_CONSENT_TOKENS,
   TIER_DERIVED_TRACKER_TOKENS,
   TIER_VOCABULARY_EVIDENCE,
   TIER_VOCABULARY_PROVENANCE,
@@ -119,6 +122,7 @@ function derive() {
     {
       adTokens: HAND_WRITTEN_AD_TOKENS,
       trackerTokens: HAND_WRITTEN_TRACKER_TOKENS,
+      consentTokens: HAND_WRITTEN_CONSENT_TOKENS,
       replace: true,
     },
     () => {
@@ -136,14 +140,18 @@ function derive() {
 
       const result = deriveTierVocabulary({
         seeds: seedSet.seeds,
+        // Same argument the driver passes: the full host sets, not just the seeds, so a
+        // bare-label candidate is judged against the apex listing it can point to.
+        tierHosts,
         knownTokens: {
           adTokens: HAND_WRITTEN_AD_TOKENS,
           trackerTokens: HAND_WRITTEN_TRACKER_TOKENS,
+          consentTokens: HAND_WRITTEN_CONSENT_TOKENS,
         },
         withVocabulary: withTemporaryVocabulary,
         classifyHost: classifyWith,
-        corpusGate: ({ adTokens, trackerTokens }) => {
-          const report = withTemporaryVocabulary({ adTokens, trackerTokens }, () =>
+        corpusGate: ({ adTokens, trackerTokens, consentTokens }) => {
+          const report = withTemporaryVocabulary({ adTokens, trackerTokens, consentTokens }, () =>
             evaluateClassifier(classifier, EVAL_CORPUS),
           );
           return compareTierVocabularyCorpus(baseline, corpusSample(report));
@@ -153,8 +161,13 @@ function derive() {
       // Measured again for the vocabulary as it will actually ship, since the gate above ran per
       // candidate against a moving list.
       const final = corpusSample(
-        withTemporaryVocabulary({ adTokens: result.adTokens, trackerTokens: result.trackerTokens }, () =>
-          evaluateClassifier(classifier, EVAL_CORPUS),
+        withTemporaryVocabulary(
+          {
+            adTokens: result.adTokens,
+            trackerTokens: result.trackerTokens,
+            consentTokens: result.consentTokens,
+          },
+          () => evaluateClassifier(classifier, EVAL_CORPUS),
         ),
       );
 
@@ -163,6 +176,7 @@ function derive() {
         seedVocabulary: {
           adTokens: HAND_WRITTEN_AD_TOKENS.length,
           trackerTokens: HAND_WRITTEN_TRACKER_TOKENS.length,
+          consentTokens: HAND_WRITTEN_CONSENT_TOKENS.length,
         },
         derivation: result,
         baseline,
@@ -232,6 +246,7 @@ describe('the derived tier vocabulary', () => {
     expect(TIER_VOCABULARY_PROVENANCE.seedVocabulary).toEqual({
       adTokens: HAND_WRITTEN_AD_TOKENS.length,
       trackerTokens: HAND_WRITTEN_TRACKER_TOKENS.length,
+      consentTokens: HAND_WRITTEN_CONSENT_TOKENS.length,
     });
   });
 
@@ -242,19 +257,28 @@ describe('the derived tier vocabulary', () => {
     const everything = TIER_VOCABULARY_EVIDENCE.flatMap((entry) => entry.hosts);
     expect(everything.length).toBeGreaterThan(0);
 
+    const candidateInstall = (vocabulary: 'ad' | 'tracker' | 'consent', token: string) =>
+      vocabulary === 'ad'
+        ? { adTokens: [token] }
+        : vocabulary === 'tracker'
+          ? { trackerTokens: [token] }
+          : { consentTokens: [token] };
+
     for (const entry of TIER_VOCABULARY_EVIDENCE) {
       expect(entry.hosts.length).toBeGreaterThan(0);
       for (const host of entry.hosts) {
         const verdict = withTemporaryVocabulary(
-          { adTokens: HAND_WRITTEN_AD_TOKENS, trackerTokens: HAND_WRITTEN_TRACKER_TOKENS, replace: true },
+          {
+            adTokens: HAND_WRITTEN_AD_TOKENS,
+            trackerTokens: HAND_WRITTEN_TRACKER_TOKENS,
+            consentTokens: HAND_WRITTEN_CONSENT_TOKENS,
+            replace: true,
+          },
           () =>
-            withTemporaryVocabulary(
-              entry.vocabulary === 'ad' ? { adTokens: [entry.token] } : { trackerTokens: [entry.token] },
-              () => {
-                classifier.clearCache();
-                return classifier.classify(host).category;
-              },
-            ),
+            withTemporaryVocabulary(candidateInstall(entry.vocabulary, entry.token), () => {
+              classifier.clearCache();
+              return classifier.classify(host).category;
+            }),
         );
         expect([host, verdict]).toEqual([host, entry.family]);
       }
@@ -268,11 +292,17 @@ describe('the derived tier vocabulary', () => {
       [...new Set(TIER_VOCABULARY_EVIDENCE.map((entry) => entry.token))].sort(),
     );
     for (const entry of TIER_VOCABULARY_EVIDENCE) {
-      const list = entry.vocabulary === 'ad' ? TIER_DERIVED_AD_TOKENS : TIER_DERIVED_TRACKER_TOKENS;
+      const list =
+        entry.vocabulary === 'ad'
+          ? TIER_DERIVED_AD_TOKENS
+          : entry.vocabulary === 'tracker'
+            ? TIER_DERIVED_TRACKER_TOKENS
+            : TIER_DERIVED_CONSENT_TOKENS;
       expect(list).toContain(entry.token);
     }
     expect([...TIER_DERIVED_AD_TOKENS].sort()).toEqual([...TIER_DERIVED_AD_TOKENS]);
     expect([...TIER_DERIVED_TRACKER_TOKENS].sort()).toEqual([...TIER_DERIVED_TRACKER_TOKENS]);
+    expect([...TIER_DERIVED_CONSENT_TOKENS].sort()).toEqual([...TIER_DERIVED_CONSENT_TOKENS]);
   });
 
   test('refuses nothing it could have placed, and explains every host it could not', () => {
@@ -284,10 +314,14 @@ describe('the derived tier vocabulary', () => {
       expect(rejection.reason.length).toBeGreaterThan(0);
       // The host really is a host its tier ships.
       expect(tierHosts.get(rejection.tier)).toContain(rejection.host);
-      // And the model really does not place it under the shipped vocabulary — otherwise there is
-      // nothing to explain and this entry is stale.
+      // And the model really does not place it in a family this tier accepts — otherwise there is
+      // nothing to explain and this entry is stale. `Clean` is the usual outcome, but a host filed
+      // under a different contract (`onesignal.com` reads Telemetry under tracker-network policy)
+      // is still a real rejection: it is unplaceable *for this tier*, which is what the tier's
+      // family list is for.
       classifier.clearCache();
-      expect(classifier.classify(rejection.host).category).toBe('Clean');
+      const verdict = classifier.classify(rejection.host).category;
+      expect(TIER_MODEL_FAMILIES[rejection.tier] ?? []).not.toContain(verdict);
       if (rejection.reason.startsWith('no candidate label survived')) {
         expect(rejection.attempts).toEqual([]);
       } else {
@@ -322,7 +356,11 @@ describe('the derived tier vocabulary', () => {
     // fallible, so it is measured here from the shipped file rather than read out of the provenance.
     const classifier = new MiniAiClassifier();
     const report = withTemporaryVocabulary(
-      { adTokens: TIER_DERIVED_AD_TOKENS, trackerTokens: TIER_DERIVED_TRACKER_TOKENS },
+      {
+        adTokens: TIER_DERIVED_AD_TOKENS,
+        trackerTokens: TIER_DERIVED_TRACKER_TOKENS,
+        consentTokens: TIER_DERIVED_CONSENT_TOKENS,
+      },
       () => evaluateClassifier(classifier, EVAL_CORPUS),
     );
 

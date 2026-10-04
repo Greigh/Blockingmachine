@@ -1,15 +1,18 @@
-import { describe, test, expect } from '@jest/globals';
+import { describe, expect, test } from '@jest/globals';
 import {
   COVERAGE_SHARES,
   analyzeRuleCoverage,
   blockingRuleScope,
   countNetworkRules,
   countRuleScopes,
+  exceptionRequestUrlMatcher,
   formatCoverageReport,
   formatHotList,
   isContextScopedRule,
   isNetworkRule,
   minimumRulesForShare,
+  parseHotListDerivation,
+  pathRuleDecidability,
   selectHotList,
 } from '../coverage.js';
 
@@ -175,6 +178,73 @@ describe('blocking rule scopes', () => {
       request: 1,
       total: 5,
     });
+  });
+});
+
+describe('path-rule decidability', () => {
+  // The share the shipped-list gate (`check:path-decidability`) measures: of the rules a
+  // hostname cannot decide because they carry a path, how many a full request URL *can*.
+  test('counts only the path bucket, and only the subset a URL settles', () => {
+    const lines = [
+      '||a.com^', // hostname — never in either count
+      '||b.com^$domain=x.example', // initiator — never in either count
+      '||c.com^$popup', // request-scoped — never in either count
+      '||d.com^*/ads.js', // path, URL-decidable
+      '||e.com/banner.gif', // path, URL-decidable
+      '/banner\\d+/', // path regex, URL-decidable
+      '||f.com^*/track$script', // path, but the request type is not in the URL
+      '||^/hostless.js', // path, but no host the matcher can anchor on
+      '@@||g.com^*/allowed.js', // a path exception is not a blocking rule at all
+      'example.com##.ad', // cosmetic
+    ];
+    expect(pathRuleDecidability(lines)).toEqual({ pathScoped: 5, urlDecidable: 3, share: 0.6 });
+  });
+
+  test('a list with no path-scoped rules reports zero rather than a vacuous pass', () => {
+    expect(pathRuleDecidability(['||a.com^', '@@||b.com^'])).toEqual({
+      pathScoped: 0,
+      urlDecidable: 0,
+      share: 0,
+    });
+  });
+});
+
+describe('exception URL matchers', () => {
+  test('compiles a matcher for exceptions that carry a path', () => {
+    // Each of these used to drop or zone-widen at compile time; each now describes exactly
+    // the URL shape it names.
+    const cases: Array<[string, string, string]> = [
+      // rule, a URL it allows, a URL it does not
+      ['@@||cdn.example.com/keep.js', 'https://cdn.example.com/keep.js', 'https://cdn.example.com/ads.js'],
+      ['@@||news.example.co.uk^*/adverts.js', 'https://news.example.co.uk/x/adverts.js', 'https://news.example.co.uk/pixel.gif'],
+      ['@@|http://cdn.example.com/keep.js', 'http://cdn.example.com/keep.js', 'http://cdn.example.com/other.js'],
+      ['@@||cdn.example.com^*.js$important', 'https://cdn.example.com/x/y.js', 'https://cdn.example.com/x/y.css'],
+    ];
+    for (const [rule, allowed, refused] of cases) {
+      const test = exceptionRequestUrlMatcher(rule);
+      expect(`${rule}:${test === null ? 'null' : 'compiled'}`).toBe(`${rule}:compiled`);
+      expect(test?.(allowed)).toBe(true);
+      expect(test?.(refused)).toBe(false);
+    }
+  });
+
+  test('refuses what is not a path-carrying exception', () => {
+    for (const rule of [
+      // A zone exception stays in the hostname indexes; a matcher for it would only widen it.
+      '@@||safe.example.com^',
+      '@@||safe.example.com^$important',
+      // A bare token stays an exact-host exception rather than a URL-substring allowlist.
+      '@@token',
+      // Not an exception at all: the blocking matcher is the one that takes these.
+      '||ads.example.com^*/ads.js',
+      '||ads.example.com^',
+      // A path constraint a URL cannot settle keeps its honest refusal.
+      '@@||safe.example.com^*/ads.js$third-party',
+    ]) {
+      expect(`${rule}:${exceptionRequestUrlMatcher(rule) === null ? 'refused' : 'compiled'}`).toBe(
+        `${rule}:refused`,
+      );
+    }
   });
 });
 
@@ -425,5 +495,85 @@ describe('coverage report formatting', () => {
     expect(text).toContain('Coverage curve');
     expect(text).toContain('Hottest rules');
     expect(text).toContain('||doubleclick.net^');
+  });
+});
+
+/**
+ * The provenance round-trip.
+ *
+ * `build-hot-list.mjs --check` re-derives the checked-in list from the inputs its own header
+ * names, because a list derived from the accumulated browser ledger has to stay verifiable by a
+ * check that is not told which input to use. The pair is pinned here rather than only through the
+ * script: the writer and the reader have to agree on the format, and the script is the only place
+ * that would notice if they stopped.
+ */
+describe('hot list derivation provenance', () => {
+  const build = (derivation?: string) =>
+    formatHotList(
+      selectHotList({
+        lines: ['||ads.example^', '||tracker.example^', '@@||safe.example^'],
+        hits: [{ rule: '||ads.example^', count: 4 }],
+        exceptions: ['@@||safe.example^'],
+      }),
+      { source: 'list.txt', measuredOn: 'ledger-hits.txt (9 sessions across 4 days)', derivation },
+    );
+
+  test('records the flags that produced the list, so a check can replay them', () => {
+    const text = build('--list list.txt --hits ledger/ledger-hits.txt');
+    expect(text).toContain(
+      '! Derivation:      --list list.txt --hits ledger/ledger-hits.txt',
+    );
+    expect(parseHotListDerivation(text)).toEqual({
+      list: 'list.txt',
+      hits: 'ledger/ledger-hits.txt',
+    });
+  });
+
+  test('round-trips a share, which changes the selection and so has to survive', () => {
+    const text = build('--list list.txt --hits ledger/ledger-hits.txt --share 0.25');
+    expect(parseHotListDerivation(text)?.share).toBe(0.25);
+  });
+
+  test('round-trips the sessions input, which is legitimately plural', () => {
+    // A deployment-derived list records every export it merged, and `--check` has to replay all of
+    // them — a parser that kept only the last would re-derive from one session and call it a match.
+    const text = build(
+      '--list list.txt --sessions exports/a.json --sessions exports/b.json',
+    );
+    expect(parseHotListDerivation(text)).toEqual({
+      list: 'list.txt',
+      sessions: ['exports/a.json', 'exports/b.json'],
+    });
+  });
+
+  test('omits the line entirely when the caller names no inputs', () => {
+    const text = build();
+    expect(text).not.toContain('! Derivation:');
+    // A header without it predates the line, and has to fall back rather than be misread.
+    expect(parseHotListDerivation(text)).toBeNull();
+  });
+
+  test('a header naming neither a ledger nor a trace is refused', () => {
+    // `--list` alone says where the rules came from, not what was measured, so replaying it would
+    // silently substitute the trace fixture for evidence the file never claimed.
+    expect(parseHotListDerivation('! Derivation:      --list list.txt\n')).toBeNull();
+  });
+
+  test('an unknown flag does not cost the ones it sits beside', () => {
+    // A newer writer adding a flag must not break an older reader, or the check starts failing for
+    // a reason nobody can find in the change that caused it.
+    const parsed = parseHotListDerivation(
+      '! Derivation:      --list list.txt --hits ledger-hits.txt --min-days 3\n',
+    );
+    expect(parsed).toEqual({ list: 'list.txt', hits: 'ledger-hits.txt' });
+  });
+
+  test('reads only the header, and ignores a rule that looks like a flag', () => {
+    const text = build('--list list.txt --hits ledger/ledger-hits.txt');
+    const withDecoy = `${text}--list not-a-flag.example\n`;
+    expect(parseHotListDerivation(withDecoy)).toEqual({
+      list: 'list.txt',
+      hits: 'ledger/ledger-hits.txt',
+    });
   });
 });

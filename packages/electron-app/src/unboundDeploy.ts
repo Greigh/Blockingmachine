@@ -38,6 +38,11 @@ export interface UnboundTarget {
   configPath: string;
   /** The command that re-reads the drop-in file. */
   reloadCommand: string;
+  /**
+   * Where the `include:` line belongs on this flavour — the file that actually survives a
+   * config regeneration, not literally `unbound.conf`, which two of these rebuild from scratch.
+   */
+  includePlacement: string;
 }
 
 /** The Unbound flavours the Deploy Hub writes recipes for. */
@@ -47,18 +52,31 @@ export const UNBOUND_TARGETS: UnboundTarget[] = [
     name: 'OPNsense / pfSense',
     configPath: '/var/unbound/blockingmachine.conf',
     reloadCommand: 'configctl unbound restart',
+    // OPNsense regenerates unbound.conf from templates, so hand edits do not survive; its own
+    // drop-in directory is auto-included instead. On pfSense the equivalent is the DNS
+    // Resolver's Custom Options box.
+    includePlacement:
+      'put the include line in a `/usr/local/etc/unbound.opnsense.d/blockingmachine.conf` drop-in \u2014 the generated `unbound.conf` auto-includes it, and hand edits to that file do not survive (on pfSense, the DNS Resolver\u2019s Custom options box)',
   },
   {
     id: 'linux',
     name: 'Debian, Ubuntu, Raspberry Pi OS',
     configPath: '/etc/unbound/unbound.conf.d/blockingmachine.conf',
     reloadCommand: 'sudo unbound-control reload',
+    // Debian's shipped unbound.conf ends in include-toplevel for this directory — the drop-in
+    // is loaded without any edit, and a manual include would parse the file twice.
+    includePlacement:
+      'no include line is needed \u2014 the shipped `unbound.conf` already picks up `unbound.conf.d/*.conf` via `include-toplevel`, and adding one by hand would load the file twice',
   },
   {
     id: 'openwrt',
     name: 'OpenWrt (unbound)',
     configPath: '/etc/unbound/blockingmachine.conf',
     reloadCommand: '/etc/init.d/unbound reload',
+    // OpenWrt generates /var/lib/unbound/unbound.conf from UCI; unbound_ext.conf is the file it
+    // appends an include for at the end of the generated config — the place user clauses live.
+    includePlacement:
+      'put the include line in `/etc/unbound/unbound_ext.conf` \u2014 UCI rebuilds `unbound.conf`, and this is the file it includes at the end of what it generates',
   },
 ];
 
@@ -72,9 +90,51 @@ export function unboundIncludeDirective(configPath: string): string {
  *
  * A plain `curl` like this is what Unbound users actually run: the resolver has no remote-list
  * feature, so the scheduled fetch *is* the subscription.
+ *
+ * `report` appends the report-back tail: the command POSTs `ok`/`fail` to the hub after the
+ * reload, so a fetch that broke overnight is a recorded fact on the next launch rather than an
+ * absence the reachability card has to read around. Two details keep the report honest:
+ * the reporting curls are best-effort with a 5-second cap so a dead hub cannot stall the cron
+ * job, and the ok-report is swallowed (`|| true`) so its own failure cannot cascade into a
+ * `fail` report for a fetch that worked — `ok=0` only ever means the fetch or the reload failed.
  */
-export function unboundFetchCommand(feedUrl: string, configPath: string): string {
-  return `curl -fsSL "${feedUrl}" -o ${configPath} && ${reloadCommandFor(configPath)}`;
+/**
+ * One shell argument, single-quoted — the only quoting that cannot be broken from inside.
+ *
+ * Every value pasted into the command is quoted this way, the feed token most of all: inside
+ * double quotes `$(…)`, backticks and `$VAR` still evaluate, so a token copied from a hostile
+ * config would otherwise arrive at the user's shell as code rather than a string.
+ */
+function sq(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function unboundFetchCommand(
+  feedUrl: string,
+  configPath: string,
+  report?: { url: string; token?: string | null },
+): string {
+  // The fetch lands in a temp file and moves over the live drop-in only on success — a curl
+  // that dies mid-body must not leave a truncated zone file for unbound to load.
+  const tmp = `${configPath}.tmp`;
+  const base =
+    `curl -fsSL ${sq(feedUrl)} -o ${sq(tmp)} && mv ${sq(tmp)} ${sq(configPath)}` +
+    ` && ${reloadCommandFor(configPath)}`;
+  if (!report?.url) return base;
+  const auth = report.token ? ` -H ${sq(`Authorization: Bearer ${report.token}`)}` : '';
+  const post = (ok: 0 | 1) => `curl -fsS -m 5 -o /dev/null -X POST${auth} ${sq(`${report.url}&ok=${ok}`)}`;
+  return `${base} && (${post(1)} || true) || ${post(0)}`;
+}
+
+/**
+ * The endpoint the refresh command reports back to.
+ *
+ * Same base the feed URL is served from — the report is only meaningful to the hub that served
+ * the file, and a resolver that can reach the feed can reach the report.
+ */
+export function unboundReportUrl(lanUrl: string): string {
+  const base = (lanUrl || '').replace(/\/+$/, '') || 'http://<your-computer-ip>:9191';
+  return `${base}/v1/deploy-report?target=unbound`;
 }
 
 function reloadCommandFor(configPath: string): string {

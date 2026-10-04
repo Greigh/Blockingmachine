@@ -10,9 +10,10 @@
  *     an unlabelled record yields no case, however confident the model was. A pipeline that
  *     quietly adopted its own answers would grade perfectly, teach nothing, and look like
  *     the corpus growing.
- *  2. **Nothing harvested becomes graded.** The queue is a separate artifact, and this
- *     file checks that the corpus is exactly as long as it was and that no candidate
- *     carries a case without a person's decision behind it.
+ *  2. **Nothing harvested becomes graded on its own.** The queue is a separate artifact,
+ *     and promotion is a person's explicit act — `--promote` refuses an undecided
+ *     candidate, an unstated scope, an unnamed class — which this file pins at the
+ *     planner level and in the corpus's harvest-family provenance.
  *  3. **Selection is a queue, not a sample.** Repeats collapse, stale captures drop, one
  *     host cannot fill it, and the order does not depend on the order the records arrived
  *     in — the artifact is generated and diff-checked, so an unstable order would fail CI
@@ -24,9 +25,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   HARVEST_TEXT_LIMIT,
+  corpusCaseCoversHarvestProposal,
   formatHarvestReport,
   harvestCandidateId,
+  harvestLeadingIdentifier,
+  harvestProposalIsPromoted,
   parseHarvestFile,
+  planHarvestPromotion,
   proposeHarvestEvalCase,
   redactHarvestSnapshot,
   renderHarvestFile,
@@ -35,7 +40,13 @@ import {
   selectHarvestCandidates,
   type HarvestedElement,
 } from '../ai/elementCorpusHarvest.js';
-import { ELEMENT_EVAL_CORPUS } from '../ai/elementEvalCorpus.js';
+import {
+  ELEMENT_EVAL_CORPUS,
+  PROMOTED_CASES_MARKER,
+  insertPromotedCaseSource,
+  renderElementEvalCaseSource,
+  type ElementEvalCase,
+} from '../ai/elementEvalCorpus.js';
 
 const NOW = Date.parse('2026-09-30T12:00:00.000Z');
 const DAY = 24 * 60 * 60 * 1000;
@@ -93,6 +104,25 @@ describe('sanitizeHarvestedElement', () => {
     ).toBeNull();
     expect(sanitizeHarvestedElement({ ...record(), human: { action: 'maybe', at: NOW } })).toBeNull();
     expect(sanitizeHarvestedElement(null)).toBeNull();
+  });
+
+  it('accepts the two decision scopes and rejects any other, so a typo cannot widen a claim', () => {
+    // `scope` is where the element-vs-shape choice is recorded; a file hand-edited with
+    // `scope: 'forever'` must not read as shape scope, so anything outside the pair
+    // makes the record unusable rather than silently element-scoped.
+    const elementScoped = sanitizeHarvestedElement({
+      ...record(),
+      human: { action: 'hide', at: NOW, scope: 'element' },
+    });
+    expect(elementScoped?.human?.scope).toBe('element');
+    const shapeScoped = sanitizeHarvestedElement({
+      ...record(),
+      human: { action: 'hide', at: NOW, scope: 'shape' },
+    });
+    expect(shapeScoped?.human?.scope).toBe('shape');
+    expect(
+      sanitizeHarvestedElement({ ...record(), human: { action: 'hide', at: NOW, scope: 'forever' } }),
+    ).toBeNull();
   });
 
   it('counts the unusable records in a whole file rather than dropping them quietly', () => {
@@ -198,8 +228,8 @@ describe('selectHarvestCandidates', () => {
   });
 
   it('stops one site from filling the queue, and reports what it deferred', () => {
-    // Nine distinct shapes, not one shape seen nine times: the signature falls back to
-    // the first token of the leading class, so `slot-0` and `slot-1` would be one shape.
+    // Nine distinct modules, not one module seen nine times: the candidate key is the
+    // signature plus the leading class, so each of these is its own entry.
     const shapes = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel', 'india'];
     const records = shapes.map((shape) =>
       record({ host: 'noisy.example', snapshot: { tag: 'div', classes: [shape] }, human: { action: 'keep', at: NOW } }),
@@ -227,49 +257,368 @@ describe('selectHarvestCandidates', () => {
     expect(forward.candidates[forward.candidates.length - 1].human).toBeNull();
   });
 
-  it('names candidates by host and signature so a re-run names the same one', () => {
+  it('names candidates by host, signature and leading identifier so a re-run names the same one', () => {
     const selection = selectHarvestCandidates([record({ human: { action: 'keep', at: NOW } })], { now: NOW });
-    expect(selection.candidates[0].id).toBe(harvestCandidateId('example.com', 'div|adsbygoogle'));
+    expect(selection.candidates[0].id).toBe(harvestCandidateId('example.com', 'div|adsbygoogle', 'adsbygoogle'));
+    expect(selection.candidates[0].leadingIdentifier).toBe('adsbygoogle');
+  });
+
+  it('does not collapse two different modules that share a signature token', () => {
+    // Flag 6's live evidence: NYT's `g-promo-slim` strip and `live-updates-promo` rail are
+    // both `div|promo` to the classifier, but they are different elements with different
+    // decisions owed — a merged candidate would keep only the first snapshot and count
+    // the second click as a duplicate sighting of the first.
+    const selection = selectHarvestCandidates(
+      [
+        record({ snapshot: { tag: 'div', classes: ['g-promo-slim'] }, human: { action: 'keep', at: NOW } }),
+        record({ snapshot: { tag: 'div', classes: ['live-updates-promo'] }, human: { action: 'keep', at: NOW } }),
+      ],
+      { now: NOW },
+    );
+    expect(selection.candidates).toHaveLength(2);
+    expect(selection.duplicates).toBe(0);
+    // Same signature — the collapse the flag reported — but two separate entries now.
+    expect(selection.candidates.map((candidate) => candidate.signature)).toEqual(['div|promo', 'div|promo']);
+    expect(selection.candidates.map((candidate) => candidate.sightings)).toEqual([1, 1]);
+    expect(new Set(selection.candidates.map((candidate) => candidate.leadingIdentifier))).toEqual(
+      new Set(['g-promo-slim', 'live-updates-promo']),
+    );
+    // Each keeps its own decision and its own snapshot.
+    for (const candidate of selection.candidates) {
+      expect(candidate.human).toEqual({ action: 'keep', at: NOW });
+      expect(candidate.snapshot.classes?.[0]).toBe(candidate.leadingIdentifier);
+    }
   });
 });
 
 describe('proposeHarvestEvalCase', () => {
   const base = {
-    id: 'example.com/div|adsbygoogle',
+    id: 'example.com/div|adsbygoogle/adsbygoogle',
     host: 'example.com',
     signature: 'div|adsbygoogle',
+    leadingIdentifier: 'adsbygoogle' as string | null,
     firstSeen: NOW - DAY,
     lastSeen: NOW,
     sightings: 2,
     observed: { elementClass: 'Ad' as const, action: 'hide' as const, confidence: 98 },
-    human: null as HarvestedElement['human'] | null,
+    human: null,
     snapshot: { tag: 'div', classes: ['adsbygoogle'] },
   };
 
-  it('a "keep" is content that must survive, on both sides of the band', () => {
+  it('a "keep" on one element forbids hiding it, but does not pin the shape at leave', () => {
     const proposal = proposeHarvestEvalCase({ ...base, human: { action: 'keep', at: NOW } });
     expect(proposal).not.toBeNull();
     expect(proposal?.expected).toEqual(['Content']);
-    expect(proposal?.minAction).toBe('leave');
-    expect(proposal?.maxAction).toBe('leave');
+    // Element scope — the default a click gives — still makes hiding a defect, but one
+    // element's keep cannot forbid the product ever pointing at the shape elsewhere.
+    expect(proposal?.maxAction).toBe('suggest');
+    expect(proposal?.minAction).toBeUndefined();
+    expect(proposal?.harvestScope).toBe('element');
     expect(proposal?.family).toBe('harvest');
     // The note has to carry the provenance, or a promoted case loses where it came from.
     expect(proposal?.notes).toContain('example.com');
     expect(proposal?.notes).toContain('2 sighting(s)');
   });
 
+  it('a "keep" at recorded shape scope pins leave on both sides of the band', () => {
+    const proposal = proposeHarvestEvalCase({
+      ...base,
+      human: { action: 'keep', at: NOW, scope: 'shape' },
+    });
+    expect(proposal?.minAction).toBe('leave');
+    expect(proposal?.maxAction).toBe('leave');
+    expect(proposal?.harvestScope).toBe('shape');
+  });
+
   it('a "hide" fixes the action and leaves the class open, and says so', () => {
     const proposal = proposeHarvestEvalCase({ ...base, human: { action: 'hide', at: NOW } });
-    expect(proposal?.minAction).toBe('hide');
-    expect(proposal?.maxAction).toBe('hide');
     // A click says "remove this", never "this is an ad". The three removal classes keep
     // the class honest, and the note tells the reviewer `expected[0]` is a placeholder.
     expect(proposal?.expected).toEqual(['Ad', 'Tracker', 'Annoyance']);
-    expect(proposal?.notes).toContain('fixes the action and not the class');
+    expect(proposal?.maxAction).toBe('hide');
+    expect(proposal?.notes).toContain('the class');
+  });
+
+  it('a "hide" click on one element cannot raise the must-hide count on its own', () => {
+    // Flag 7's verify: a single element's hide is element-scope evidence, so the proposal
+    // floors at `suggest` — the element must be identified, not the shape removed.
+    const oneSighting = { ...base, sightings: 1, human: { action: 'hide' as const, at: NOW } };
+    const proposal = proposeHarvestEvalCase(oneSighting);
+    expect(proposal?.minAction).toBe('suggest');
+    expect(proposal?.maxAction).toBe('hide');
+    expect(proposal?.harvestScope).toBe('element');
+    // Promoting it explicitly — a reviewer records shape scope on the decision — is the
+    // only path that produces a must-hide floor.
+    const promoted = proposeHarvestEvalCase({
+      ...oneSighting,
+      human: { action: 'hide' as const, at: NOW, scope: 'shape' as const },
+    });
+    expect(promoted?.minAction).toBe('hide');
+    expect(promoted?.maxAction).toBe('hide');
+    expect(promoted?.harvestScope).toBe('shape');
   });
 
   it('proposes nothing for a shape nobody has ruled on', () => {
     expect(proposeHarvestEvalCase(base)).toBeNull();
+  });
+});
+
+describe('corpusCaseCoversHarvestProposal', () => {
+  // One candidate standing in for a real queue entry, and a shape-scoped `keep`
+  // proposal (leave–leave) to match written cases against.
+  const candidate = {
+    id: 'example.com/div|promo/g-promo-slim',
+    host: 'example.com',
+    signature: 'div|promo',
+    leadingIdentifier: 'g-promo-slim' as string | null,
+    firstSeen: NOW - DAY,
+    lastSeen: NOW,
+    sightings: 1,
+    observed: { elementClass: 'Content' as const, action: 'leave' as const, confidence: 84 },
+    human: { action: 'keep' as const, at: NOW, scope: 'shape' as const },
+    snapshot: { tag: 'div', classes: ['g-promo-slim'] },
+  };
+  const proposal = {
+    label: 'harvest-x',
+    family: 'harvest',
+    snapshot: candidate.snapshot,
+    expected: ['Content' as const],
+    maxAction: 'leave' as const,
+    minAction: 'leave' as const,
+  };
+  const corpusCase = (fields: Partial<ElementEvalCase>): ElementEvalCase => ({
+    label: 'case',
+    family: 'content',
+    snapshot: { tag: 'div', classes: ['g-promo-slim'] },
+    expected: ['Content'],
+    maxAction: 'leave',
+    minAction: 'leave',
+    ...fields,
+  });
+
+  it('matches a written case on signature and leading identifier together', () => {
+    expect(corpusCaseCoversHarvestProposal(corpusCase({}), candidate, proposal)).toBe(true);
+  });
+
+  it('does not let a case written for one module close a different module’s review', () => {
+    // Flag 6's cost, pinned: `event-promo-card` retired both NYT promo modules *and* the
+    // Guardian's, because matching stopped at `div|promo`. A case carrying a different
+    // leading identifier no longer covers this candidate.
+    const otherModule = corpusCase({ snapshot: { tag: 'div', classes: ['live-updates-promo'] } });
+    expect(corpusCaseCoversHarvestProposal(otherModule, candidate, proposal)).toBe(false);
+  });
+
+  it('falls back to the bare signature when the case names no identifier', () => {
+    // A case whose signature token comes from the *tag* itself (`amp-ad`, the corpus's
+    // `amp-ad-doubleclick` shape) carries no class or id — it generalises to every module
+    // under its signature, which is the flag's "a promoted case still covers the shapes
+    // it actually generalises to".
+    const tagTokenCase = corpusCase({ snapshot: { tag: 'amp-ad', width: 300, height: 250 } });
+    expect(harvestLeadingIdentifier(tagTokenCase.snapshot)).toBeNull();
+    const ampCandidate = {
+      ...candidate,
+      signature: 'amp-ad|ad',
+      leadingIdentifier: 'some-amp-wrapper',
+      snapshot: { tag: 'amp-ad', classes: ['some-amp-wrapper'] },
+    };
+    expect(corpusCaseCoversHarvestProposal(tagTokenCase, ampCandidate, proposal)).toBe(true);
+  });
+
+  it('does not cover a nameless candidate from a case that names a module', () => {
+    const bare = { ...candidate, leadingIdentifier: null, snapshot: { tag: 'div' } };
+    expect(corpusCaseCoversHarvestProposal(corpusCase({}), bare, proposal)).toBe(false);
+  });
+
+  it('matches the band by containment: a stronger written case drains a weaker claim', () => {
+    // Element-scoped keep proposes `leave`–`suggest`; the leave-only corpus case forbids
+    // more than the click claimed, so it covers.
+    const elementProposal = { ...proposal, minAction: undefined, maxAction: 'suggest' as const };
+    expect(corpusCaseCoversHarvestProposal(corpusCase({}), candidate, elementProposal)).toBe(true);
+    // The reverse direction does not: a `leave`–`suggest` corpus case cannot cover a
+    // leave-only claim — the corpus asserts less than the reviewer recorded.
+    const weakerCase = corpusCase({ minAction: undefined, maxAction: 'suggest' });
+    expect(corpusCaseCoversHarvestProposal(weakerCase, candidate, proposal)).toBe(false);
+  });
+
+  it('harvestProposalIsPromoted reports the queue flag against the real corpus', () => {
+    expect(harvestProposalIsPromoted(candidate, proposal, [])).toBe(false);
+    expect(harvestProposalIsPromoted(candidate, proposal, [corpusCase({})])).toBe(true);
+  });
+});
+
+describe('planHarvestPromotion', () => {
+  // A labelled candidate standing in for a reviewed queue entry — on a shape the real
+  // corpus does not cover, so the "already covered" refusal is tested on its own terms.
+  // The planner's job is to say no loudly: every refusal below is a promotion the script
+  // must not guess at.
+  const labelled = (fields: Partial<HarvestedElement> = {}) =>
+    selectHarvestCandidates(
+      [record({ snapshot: { tag: 'div', classes: ['harvest-review-target'] }, ...fields })],
+      { now: NOW },
+    ).candidates[0];
+  const hide = labelled({ human: { action: 'hide', at: NOW } });
+  const keep = labelled({ human: { action: 'keep', at: NOW, scope: 'element' } });
+
+  it('refuses a candidate nobody has ruled on', () => {
+    const unlabelled = selectHarvestCandidates([record()], { now: NOW }).candidates[0];
+    expect(() => planHarvestPromotion(unlabelled, ELEMENT_EVAL_CORPUS)).toThrow(/no human decision/);
+  });
+
+  it('needs an explicit scope when the record states none', () => {
+    expect(() => planHarvestPromotion(hide, ELEMENT_EVAL_CORPUS, { classes: ['Ad'] })).toThrow(/--scope/);
+    expect(() => planHarvestPromotion(hide, ELEMENT_EVAL_CORPUS, { scope: 'module', classes: ['Ad'] })).toThrow(
+      /--scope must be 'element' or 'shape'/,
+    );
+  });
+
+  it('uses the recorded scope, and refuses a flag that disagrees with it', () => {
+    const scoped = labelled({ human: { action: 'hide', at: NOW, scope: 'shape' } });
+    const plan = planHarvestPromotion(scoped, ELEMENT_EVAL_CORPUS, { classes: ['Ad'] });
+    expect(plan.scope).toBe('shape');
+    expect(plan.entry.minAction).toBe('hide');
+    expect(plan.entry.harvestScope).toBe('shape');
+    expect(() =>
+      planHarvestPromotion(scoped, ELEMENT_EVAL_CORPUS, { scope: 'element', classes: ['Ad'] }),
+    ).toThrow(/the record says scope 'shape'/);
+  });
+
+  it('floors an element-scoped hide at suggest — one click cannot pin the whole shape', () => {
+    const plan = planHarvestPromotion(hide, ELEMENT_EVAL_CORPUS, { scope: 'element', classes: ['Tracker'] });
+    expect(plan.scope).toBe('element');
+    expect(plan.entry).toMatchObject({
+      family: 'harvest',
+      expected: ['Tracker'],
+      minAction: 'suggest',
+      maxAction: 'hide',
+      harvestScope: 'element',
+    });
+  });
+
+  it('makes a hide name its class, and narrows expected to what was named', () => {
+    expect(() => planHarvestPromotion(hide, ELEMENT_EVAL_CORPUS, { scope: 'element' })).toThrow(/--class/);
+    expect(() =>
+      planHarvestPromotion(hide, ELEMENT_EVAL_CORPUS, { scope: 'element', classes: ['Content'] }),
+    ).toThrow(/removal classes/);
+    const plan = planHarvestPromotion(hide, ELEMENT_EVAL_CORPUS, {
+      scope: 'element',
+      classes: ['Ad', 'Annoyance'],
+    });
+    expect(plan.entry.expected).toEqual(['Ad', 'Annoyance']);
+  });
+
+  it('refuses --class on a keep — the decision already fixed the class to Content', () => {
+    expect(() => planHarvestPromotion(keep, ELEMENT_EVAL_CORPUS, { classes: ['Ad'] })).toThrow(/keep decision/);
+    const plan = planHarvestPromotion(keep, ELEMENT_EVAL_CORPUS);
+    expect(plan.entry.expected).toEqual(['Content']);
+    expect(plan.entry.maxAction).toBe('suggest');
+  });
+
+  it('refuses to promote what the corpus already covers', () => {
+    const covering: ElementEvalCase = {
+      label: 'already-there',
+      family: 'content',
+      snapshot: { tag: 'div', classes: ['harvest-review-target'] },
+      expected: ['Ad'],
+      maxAction: 'hide',
+      minAction: 'hide',
+    };
+    expect(() =>
+      planHarvestPromotion(hide, [covering], { scope: 'shape', classes: ['Ad'] }),
+    ).toThrow(/already covered by corpus case 'already-there'/);
+  });
+
+  it('checks the label is free and is a corpus slug', () => {
+    const taken = ELEMENT_EVAL_CORPUS[0].label;
+    expect(() =>
+      planHarvestPromotion(hide, ELEMENT_EVAL_CORPUS, { scope: 'element', classes: ['Ad'], label: taken }),
+    ).toThrow(/already exists/);
+    expect(() =>
+      planHarvestPromotion(hide, ELEMENT_EVAL_CORPUS, { scope: 'element', classes: ['Ad'], label: 'Not A Slug' }),
+    ).toThrow(/corpus slug/);
+    const plan = planHarvestPromotion(hide, ELEMENT_EVAL_CORPUS, {
+      scope: 'element',
+      classes: ['Ad'],
+      label: 'my-promoted-case',
+      note: 'checked against the live page',
+    });
+    expect(plan.entry.label).toBe('my-promoted-case');
+    expect(plan.entry.notes).toContain('checked against the live page');
+  });
+});
+
+describe('renderElementEvalCaseSource / insertPromotedCaseSource', () => {
+  const entry: ElementEvalCase = {
+    label: 'harvest-example-com-div',
+    family: 'harvest',
+    snapshot: {
+      tag: 'iframe',
+      id: '3pCheckIframeId',
+      src: "https://ad.example/it's-here.html",
+      width: 0,
+      height: 0,
+      inFrame: true,
+      crossOriginFrame: true,
+      visible: false,
+    },
+    expected: ['Tracker'],
+    maxAction: 'hide',
+    minAction: 'suggest',
+    harvestScope: 'element',
+    notes: "A person's decision",
+  };
+
+  it('renders the file’s own snap() literal style, escaping quotes', () => {
+    const rendered = renderElementEvalCaseSource(entry);
+    expect(rendered).toContain("label: 'harvest-example-com-div'");
+    expect(rendered).toContain("family: 'harvest'");
+    expect(rendered).toContain(
+      "snap('iframe', { id: '3pCheckIframeId', src: 'https://ad.example/it\\'s-here.html', width: 0, height: 0, inFrame: true, crossOriginFrame: true, visible: false })",
+    );
+    expect(rendered).toContain("expected: ['Tracker']");
+    expect(rendered).toContain("maxAction: 'hide'");
+    expect(rendered).toContain("minAction: 'suggest'");
+    expect(rendered).toContain("harvestScope: 'element'");
+    expect(rendered).toContain("notes: 'A person\\'s decision'");
+  });
+
+  it('omits the fields a case does not set', () => {
+    const minimal = renderElementEvalCaseSource({
+      label: 'x',
+      family: 'x',
+      snapshot: { tag: 'div' },
+      expected: ['Content'],
+      maxAction: 'leave',
+    });
+    expect(minimal).not.toMatch(/minAction|harvestScope|notes/);
+    expect(minimal).toContain("snap('div')");
+  });
+
+  it('carries a resolved CNAME through the rendered literal', () => {
+    // The feature's whole evidence would otherwise be silently dropped by the harvest write
+    // path — a promoted case re-read later would have lost the field its verdict relied on.
+    const rendered = renderElementEvalCaseSource({
+      label: 'x',
+      family: 'x',
+      snapshot: { tag: 'img', src: 'https://metrics.example.com/p.gif', resolvedCname: 'adroll.com' },
+      expected: ['Tracker'],
+      maxAction: 'suggest',
+    });
+    expect(rendered).toContain("resolvedCname: 'adroll.com'");
+  });
+
+  it('appends the case under the corpus marker, inside the array', () => {
+    const source = readFileSync(join(process.cwd(), 'src', 'ai', 'elementEvalCorpus.ts'), 'utf8');
+    const inserted = insertPromotedCaseSource(source, renderElementEvalCaseSource(entry));
+    const markerAt = inserted.indexOf(PROMOTED_CASES_MARKER);
+    const caseAt = inserted.indexOf("label: 'harvest-example-com-div'");
+    const arrayClose = inserted.indexOf('\n];', markerAt);
+    expect(markerAt).toBeGreaterThan(-1);
+    expect(caseAt).toBeGreaterThan(markerAt);
+    expect(caseAt).toBeLessThan(arrayClose);
+  });
+
+  it('refuses to insert where the marker is missing rather than guessing', () => {
+    expect(() => insertPromotedCaseSource('const a = [];\n', 'x')).toThrow(/marker/);
   });
 });
 
@@ -323,26 +672,48 @@ describe('the committed live-scan harvest', () => {
     const promoted = selection.candidates.filter((candidate) => {
       const proposal = proposeHarvestEvalCase(candidate);
       if (!proposal) return false;
-      return ELEMENT_EVAL_CORPUS.some(
-        (entry) => entry.label === candidate.signature || entry.maxAction === proposal.maxAction,
-      );
+      return harvestProposalIsPromoted(candidate, proposal, ELEMENT_EVAL_CORPUS);
     });
     expect(promoted.length).toBeGreaterThanOrEqual(6);
   });
+
+  it('queues NYT’s two `div|promo` modules as two candidates — flag 6’s verify', () => {
+    const selection = selectHarvestCandidates(records, { now: Date.parse('2026-09-30T12:00:00.000Z') });
+    const promos = selection.candidates.filter(
+      (candidate) => candidate.host === 'nytimes.com' && candidate.signature === 'div|promo',
+    );
+    // `.g-promo-slim` and `.live-updates-promo` are different modules that share the
+    // signature token. Before the key carried the leading identifier they were one
+    // candidate with two sightings and the second click read as a duplicate of the first.
+    expect(promos.map((candidate) => candidate.leadingIdentifier).sort()).toEqual([
+      'g-promo-slim',
+      'live-updates-promo',
+    ]);
+    expect(promos.map((candidate) => candidate.sightings)).toEqual([1, 1]);
+    // And neither is retired by `event-promo-card`, whose leading class is `event-promo`:
+    // a case written for one module does not close another module's review.
+    for (const promo of promos) {
+      const proposal = proposeHarvestEvalCase(promo);
+      expect(proposal).not.toBeNull();
+      expect(harvestProposalIsPromoted(promo, proposal!, ELEMENT_EVAL_CORPUS)).toBe(false);
+    }
+  });
 });
 
-describe('the graded corpus is untouched by any of this', () => {
-  it('is still free of harvested cases, and every case a harvest would propose is absent from it', () => {
-    // The count itself moved: the corpus grew from 117 to 162 while this pipeline was
-    // built (see the round-three section in `elementEvalCorpus.ts`), all of it written by
-    // hand from real page shapes rather than promoted from a queue. What has not moved is
-    // the invariant — nothing harvested is graded — which is why the assertion is about the
-    // family rather than about a number.
+describe('the graded corpus is untouched by the pipeline itself', () => {
+  it('carries no harvested case unless a person promoted it with a recorded scope', () => {
+    // The count itself moved: the corpus grew from 117 to 162 to 220 to 222 while this pipeline
+    // was built (see the round-three and round-four sections in `elementEvalCorpus.ts`).
+    // Promotion no longer happens by hand — `--promote` writes the case — but the write
+    // is still a review, not a pipeline: nothing harvested is graded unless a person ran
+    // that command, and the case it writes must carry the scope it asserted.
     expect(ELEMENT_EVAL_CORPUS.length).toBeGreaterThanOrEqual(117);
-    // The queue is a separate artifact precisely so this holds: nothing harvested has been
-    // promoted, and the labels in it are the six the live scan's own review made.
-    const promotedLabels = ELEMENT_EVAL_CORPUS.filter((entry) => entry.family === 'harvest');
-    expect(promotedLabels).toHaveLength(0);
+    const promoted = ELEMENT_EVAL_CORPUS.filter((entry) => entry.family === 'harvest');
+    for (const entry of promoted) {
+      // A promoted case without a recorded scope is a case that bypassed the review path —
+      // `harvestScope` is the provenance the planner insists on before it renders anything.
+      expect(entry.harvestScope).toBeDefined();
+    }
   });
 });
 

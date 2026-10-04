@@ -24,15 +24,23 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import { parseArgvOrExit } from './argv.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
-// 1. Parse and normalize version input
-const rawInput = process.argv.slice(2).join(' ').trim();
+// 1. Parse and normalize version input — refusing parse: a stray `--flag` used to join into the
+// version string and surface as a confusing SemVer error, and `bump 1.0.0 -x` swallowed the
+// dash word the same way. Flags are refused; bare words still join into the version (the
+// documented "1.0.0 rc3" form is two positionals).
+const { flags: argvFlags, positional } = parseArgvOrExit(process.argv.slice(2), {
+  flags: ['-h', '--help'],
+  positionals: Infinity, // joined below — SemVer is the whole-argument's referee, not the parser's
+});
+const rawInput = positional.join(' ').trim();
 
-if (!rawInput || rawInput === '-h' || rawInput === '--help') {
+if (argvFlags.has('-h') || argvFlags.has('--help') || !rawInput) {
   console.log(`
 Blockingmachine Monorepo Version Bump Tool
 

@@ -103,7 +103,13 @@ describe('ElementAiScanner', () => {
   it('drops a candidate nested inside an already-kept one of the same class', () => {
     page.destroy();
     page = installFakePage([
-      { tag: 'div', classes: ['ad-container'], width: 600, height: 400 },
+      // Both are at ad dimensions on purpose. This test is about the *dedup* rule — a
+      // candidate nested inside a kept one of the same class is noise — so the outer has
+      // to be kept in the first place, and the only thing that guarantees that is real ad
+      // evidence rather than a class word. It used to be 600x400, which had no ad size and
+      // therefore left the outer resting on `ad-container` alone; see the next test for
+      // what that now does.
+      { tag: 'div', classes: ['ad-container'], width: 970, height: 250 },
       { tag: 'div', classes: ['ad-slot'], width: 300, height: 250 },
     ]);
     const container = page.elements[0];
@@ -116,6 +122,41 @@ describe('ElementAiScanner', () => {
     // The outer container is the thing worth acting on; the slot inside it is noise.
     expect(adCandidates.length).toBe(1);
     expect(adCandidates[0].element).toBe(container);
+  });
+
+  it('leaves a wrapper whose only evidence is a class word, and hides the slot inside it', () => {
+    // The asymmetry is load-bearing and unintuitive enough to be worth its own test. A
+    // wrapper with `ad-container` and nothing else — no ad size, no delivery attribute, no
+    // network — is left alone, while a 300x250 child under it is hidden outright.
+    //
+    // This is the direct consequence of two corpus-driven rules, and it is the same rule
+    // that stopped an empty `<hr class="ad-break">` being removed from the page at 98%
+    // confidence. A bare ad token is no longer definitive on its own, and `ad-marker` plus
+    // `ad-weak-marker` arriving from one identifier counts as the single hint it is rather
+    // than as two independent ones. The wrapper has exactly one hint and no geometry, so it
+    // stays.
+    //
+    // Hiding the inner slot rather than the wrapper is the behaviour that follows from that,
+    // and it is the more conservative of the two: the wrapper may hold layout the page needs.
+    // The scanner's nested-dedup has nothing to dedup in this shape, which is why the test
+    // above uses an outer that is genuinely kept.
+    page.destroy();
+    page = installFakePage([
+      { tag: 'div', classes: ['ad-container'], width: 600, height: 400 },
+      { tag: 'div', classes: ['ad-slot'], width: 300, height: 250 },
+    ]);
+    const container = page.elements[0];
+    const child = page.elements[1];
+    container.appendChild(child);
+
+    const scanner = new ElementAiScanner();
+    const result = scanner.scan();
+
+    expect(scanner.classifyElement(container).action).toBe('leave');
+    expect(scanner.classifyElement(child).action).toBe('hide');
+
+    const proposed = result.candidates.filter((candidate) => candidate.prediction.action !== 'leave');
+    expect(proposed.map((candidate) => candidate.element)).toEqual([child]);
   });
 
   it('reports scanning statistics rather than pretending to be exhaustive', () => {

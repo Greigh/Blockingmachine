@@ -28,9 +28,16 @@ export type StaticTierId =
   | 'tier_ads'
   | 'tier_privacy'
   | 'tier_annoyances'
-  | 'tier_security';
+  | 'tier_security'
+  | 'tier_unclassified';
 
-export type StaticTierCategory = 'core' | 'ads' | 'privacy' | 'annoyances' | 'security';
+export type StaticTierCategory =
+  | 'core'
+  | 'ads'
+  | 'privacy'
+  | 'annoyances'
+  | 'security'
+  | 'unclassified';
 
 export interface StaticRuleTier {
   id: StaticTierId;
@@ -136,6 +143,29 @@ export const STATIC_RULE_TIERS: readonly StaticRuleTier[] = [
     // cannot see the reasoning for and cannot narrow.
     defaultEnabled: false,
     ruleCount: 0,
+    curatedSeed: false,
+  },
+  {
+    id: 'tier_unclassified',
+    label: 'Unclassified',
+    // The honest label is the whole point of this tier, so it says what the rules are rather than
+    // what somebody hoped they were. Every host here was in the input list, no publisher claimed it,
+    // no vocabulary matched it and no classifier could name it: it is listed, and nothing more is
+    // known about it.
+    description:
+      'Hosts that were on the input list and nothing else — no publisher claimed them and no classifier could name them, so nothing here is known to be an ad or a tracker. Off by default: switching it on means blocking what the lists did not explain.',
+    path: 'rules/tier_unclassified.json',
+    category: 'unclassified',
+    // Off, and for the same reason the tier is worth having separately. This is the largest bucket in
+    // any compiled cut by a wide margin — on this repository's real hub list it held 104,818 hosts
+    // against 3,641 in the ad tier — so switching it on means blocking almost everything the input
+    // listed. That is a legitimate choice, and not one to make for someone under a name that says
+    // "Ad networks".
+    defaultEnabled: false,
+    ruleCount: 0,
+    // Like `tier_security`, compiled rather than curated: there is no honest hand-picked subset of
+    // "hosts we could not classify", and inventing one would be a curated claim this label cannot
+    // support. A fresh checkout therefore ships the file empty, which is the correct state.
     curatedSeed: false,
   },
 ] as const;
@@ -905,6 +935,10 @@ export type TierBlockingVerdict =
    * off" is the wrong advice for a tier that has already proved nothing, and a tier that can never
    * be measured must not be able to hold a plan on the rule-count basis forever. `tier_security`
    * ships empty on a machine that has never run the classifier, which is the ordinary case.
+   *
+   * It is graded on both sources agreeing: the count says the tier carries nothing *and* the
+   * ledger says it fired nothing. A zero count with real hits behind it is a stale or absent
+   * count, not an empty tier — measurement outranks the field that was supposed to describe it.
    */
   | 'empty'
   /** Blocked something since it was switched on. */
@@ -1156,13 +1190,16 @@ export function buildTierBlocking(input: TierBlockingInput): TierBlockingSummary
     // A count of zero is a tier that cannot block, and is deliberately narrower than "no count".
     const noRules =
       typeof tier.ruleCount === 'number' && Number.isFinite(tier.ruleCount) && tier.ruleCount <= 0;
-    // A tier carrying no rules is `empty` first, whatever its switch says, because it is the only
-    // verdict here that names a fact about the ruleset rather than about traffic or about the
-    // switch: an empty ruleset is empty whether it is on or off, and "switch it on" and "give it
-    // more traffic" both promise a way forward that it cannot take. The rest of the order is
+    // A tier carrying no rules is `empty` — but only when the ledger agrees it has done nothing.
+    // The count is whatever the caller supplied (the catalogue, a generated count, a file length),
+    // and a stale or absent count cannot erase measured blocks: a tier the ledger watched fire
+    // is not empty regardless of what the count field claims. When both say nothing the verdict
+    // is the only one here that names a fact about the ruleset rather than about traffic or about
+    // the switch: an empty ruleset is empty whether it is on or off, and "switch it on" and "give
+    // it more traffic" both promise a way forward that it cannot take. The rest of the order is
     // unchanged — a disabled tier is never idle, and only once the ledger has a real sample does
     // silence count against a tier.
-    const verdict: TierBlockingVerdict = noRules
+    const verdict: TierBlockingVerdict = noRules && tierHits === 0
       ? 'empty'
       : !isEnabled
       ? 'disabled'

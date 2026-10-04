@@ -17,14 +17,29 @@
  * captured requests through the domain evaluator — so this file is pure arithmetic and can be
  * asserted directly.
  *
- * Coverage also has to be measured against the rules a *hostname* can decide. The browser export
- * carries three other kinds of blocking rule — initiator-scoped (`$domain=`), path-preserving (a
- * host anchor with a path suffix) and request-scoped (`$script`, `$replace=`) — and a hostname replay reads the
- * path-scoped ones as whole-zone blocks while silently dropping the rest. That mismatch is what
- * makes a naive hit rate an upper bound rather than a measurement. {@link blockingRuleScope}
- * splits a list into those buckets, and {@link countRuleScopes} counts them, so the headline rate
- * can be stated over the hostname-decidable set alone — where it is exact.
+ * Coverage also has to be measured against the rules the available trace can decide, and "can
+ * decide" is not the same as "is in the list". The browser export carries three kinds of blocking
+ * rule a *hostname* cannot settle: initiator-scoped (`$domain=`), request-scoped (`$script`,
+ * `$replace=`) and path-preserving (a host anchor with a path suffix). Read from a hostname a
+ * path-scoped rule is indistinguishable from a blanket block of its zone, so a hostname replay
+ * either credits it with the whole zone or writes it off as undecidable — both wrong, and the
+ * second one in the flattering direction, because a rule nobody can credit is a rule nobody can
+ * blame for being dead weight.
+ *
+ * A **full request URL** settles the path, so {@link requestUrlMatcher} decides that bucket and
+ * {@link isUrlDecidableRule} says which rules it will take. On the shipped list that is 6,230 of
+ * 7,628 path-scoped rules — the share {@link pathRuleDecidability} computes, gated at 80% by
+ * `check:path-decidability`. The rest are refused, because a URL genuinely does not contain the
+ * answer: mostly path rules that also name a request type (`$script`, `$image`…), `$replace=` /
+ * `$redirect=` response rewrites, and a residue of shapes no host anchor survives. A matcher that
+ * guessed at them would put the over-count straight back.
+ * What no URL settles is initiator- and request-scoped: whether a request was third-party is a
+ * fact about the page that made it. Those keep their bucket, {@link blockingRuleScope} splits a
+ * list into all four, and {@link countRuleScopes} counts them, so the headline rate stays stated
+ * over the hostname-decidable set alone — where it is exact.
  */
+
+import { refusedRegexReason } from './regexSafety.js';
 
 export interface RuleHitCount {
   /** The rule that matched, as it appears in the compiled list. */
@@ -145,8 +160,12 @@ function ruleParts(rule: string): RuleParts {
  * this way is an upper bound. Counting how many of the rules that fired are of this kind is what
  * keeps the headline number honest.
  *
- * This is the blunt two-way test. {@link blockingRuleScope} is the same judgement split into the
- * buckets the browser actually expresses, and is what a coverage report should count.
+ * This is the blunt two-way test, and it is now the *stricter* of the two: it counts anything
+ * that needs more than a hostname, including the path rules a URL replay can decide. For the
+ * narrower question — what still cannot be decided once the trace carries URLs — use
+ * {@link isUrlDecidableRule}, which excludes what it will take. {@link blockingRuleScope} is the
+ * same judgement split into the buckets the browser actually expresses, and is what a coverage
+ * report should count.
  */
 export function isContextScopedRule(rule: string): boolean {
   const trimmed = (rule || '').trim();
@@ -168,6 +187,254 @@ export function isContextScopedRule(rule: string): boolean {
  * remainder is a blanket block of a zone.
  */
 export type BlockingRuleScope = 'hostname' | 'initiator' | 'path' | 'request';
+
+/** Host and path of one request, as a replay sees it. */
+export interface RequestTarget {
+  /** Hostname, lower-cased, port stripped. */
+  host: string;
+  /**
+   * The request URL as captured, when the trace carried one.
+   *
+   * A path-scoped rule can only be *decided* with this. Without it the rule is reported as
+   * needing context rather than matched by accident.
+   */
+  url?: string;
+}
+
+/**
+ * Whether a blocking rule can be decided from a request's host and URL alone.
+ *
+ * Narrower than {@link blockingRuleScope}, and it is the distinction that matters for a replay.
+ * `blockingRuleScope('||cdn.example.com^<star>/ads.js')` is `path`, and
+ * `blockingRuleScope('||cdn.example.com^$third-party')` is `initiator` — but a full URL settles
+ * the first and settles nothing about the second, because whether a request was third-party is a
+ * fact about the page that made it and the capture does not carry one. Decidable-from-a-URL is
+ * therefore the `path` bucket and nothing else, and a rule outside it keeps its honest "a replay
+ * cannot decide this" label instead of being read as a zone block.
+ */
+export function isUrlDecidableRule(rule: string): boolean {
+  const trimmed = (rule || '').trim();
+  if (!isNetworkRule(trimmed)) return false;
+  if (trimmed.startsWith('@@')) return false;
+  if (blockingRuleScope(trimmed) !== 'path') return false;
+  return requestUrlMatcher(trimmed) !== null;
+}
+
+/**
+ * The ABP separator: one of `/`, `?`, `#`, or the end of the URL.
+ *
+ * Wrapped in a non-capturing group because it is spliced into a larger pattern, where a bare
+ * top-level alternation would bind to the whole rule instead of to the one character.
+ *
+ * It is deliberately strict. `||cdn.example.com^<star>/ads.js` matches `cdn.example.com/ads.js`?
+ * No: the separator consumes the `/`, the wildcard matches nothing, and the rule's own
+ * `/ads.js` then has no leading slash left to match. It matches `cdn.example.com/x/ads.js`.
+ * That is what Chrome's `urlFilter` does with the same string — this compiler hands
+ * path-preserving rules to Chrome verbatim — so being lenient here would count a block the
+ * browser never performs, which is the error the scoped bucket exists to prevent.
+ */
+// Chrome's urlFilter documents `^` as "anything except a letter, a digit, or `_ , - . %` — or
+// the end of the URL": a negated character class, not the small `[/?#]` set the name suggests.
+// `=`, `+`, `@`, `~`, `;`, `:` are separators too, so a path rule can be decided by a request
+// that carries them — crediting the rule where the browser would credit it is the matcher's
+// entire purpose.
+const SEPARATOR = String.raw`(?:[^A-Za-z0-9_,\-.%]|$)`;
+
+/**
+ * Compiles a blocking rule into a test against a full request URL, or `null` when the rule
+ * cannot be decided from one.
+ *
+ * Returns `null` rather than guessing for every form it does not implement, and that is the
+ * point: a matcher that silently treated an unknown pattern as "matches" would re-introduce
+ * exactly the error this function exists to remove, one level down. A rule it cannot decide
+ * keeps the scoped label the report already gives it.
+ *
+ * The forms it does decide:
+ *
+ *  - `||host^/path`, `||host/path` — host anchor plus a path, the overwhelmingly common shape.
+ *    `^` is the ABP separator and matches a slash, a query, a fragment, or the end of the URL.
+ *  - `|http://host/path|` — a URL-prefix anchor.
+ *  - `/pattern` — matched anywhere in the URL, with `*` as a wildcard.
+ *  - `/regex/` — matched against the whole URL, capped at {@link MAX_URL_PATTERN_LENGTH} to keep
+ *    a hostile list from stalling a replay.
+ *
+ * Only the *host* half is matched exactly — a subdomain counts, because `||example.com^` covers
+ * it in a real browser.
+ */
+const MAX_URL_PATTERN_LENGTH = 2000;
+
+export function requestUrlMatcher(rule: string): ((url: string) => boolean) | null {
+  // Repeated from `isUrlDecidableRule` on purpose: this is the exported primitive, so anyone
+  // calling it directly must get the same refusal the wrapper gives rather than a matcher for a
+  // rule they were told is not a blocking rule.
+  const trimmed = (rule || '').trim();
+  if (!isNetworkRule(trimmed) || trimmed.startsWith('@@')) return null;
+
+  const { body, modifiers, isRegex } = ruleParts(trimmed);
+  // Any modifier beyond `important` is about the request or the page, which a URL does not
+  // settle — `$third-party` most of all, which is exactly the misleading case.
+  if (modifiers.some((modifier) => modifier !== 'important' && !modifier.startsWith('denyallow='))) return null;
+
+  // A slashed regex applies to the whole URL. Bounded in length *and* in structure — a rule
+  // like `/(a+)+/` compiles cleanly and then spends unbounded backtracking time on every URL
+  // it sees, so the shapes that provably do that are refused rather than compiled.
+  if (isRegex) {
+    const pattern = trimmed.slice(1, -1);
+    if (pattern.length > MAX_URL_PATTERN_LENGTH) return null;
+    if (refusedRegexReason(pattern) !== null) return null;
+    try {
+      const expression = new RegExp(pattern, 'i');
+      return (url) => expression.test(url);
+    } catch {
+      return null;
+    }
+  }
+
+  // A body already carrying a scheme is a URL pattern rather than a host-and-path split.
+  const scheme = body.match(/^https?:\/\//i);
+  const rest = scheme ? body.slice(scheme[0].length) : body;
+  // `||` anchoring: the host is an anchor, and the pattern after it applies to the whole URL.
+  const hostAnchored = trimmed.startsWith('||');
+  // `|` anchoring: match the whole URL from its start.
+  const urlAnchored = !hostAnchored && trimmed.startsWith('|');
+
+  if (hostAnchored || scheme) {
+    // Everything up to the first separator character is the host. Splitting here rather than
+    // with one greedy pattern is deliberate: a single regex swallows the `^` as part of the
+    // path group, and then the separator never reaches the compiled pattern at all — the rule
+    // silently degrades into "any path on this host", which is the exact over-count this
+    // function exists to remove.
+    const boundary = rest.search(/[\^/]/);
+    if (boundary <= 0) return null;
+    const hostPart = rest.slice(0, boundary);
+    const tail = rest.slice(boundary);
+    const hostPattern = compileHostPattern(hostPart);
+    if (!hostPattern) return null;
+
+    // Nothing but a separator and a terminator after the host is a whole-zone rule, not a
+    // path rule: the caller has already established the scope, so this is only a guard.
+    if (tail.replace(/^\^/, '').replace(/\|+$/, '').length === 0) return null;
+
+    // The tail is what the path must look like, `^` included so the separator stays in the
+    // pattern; a trailing `|` is syntax, not something to match.
+    const pathPattern = tail.replace(/\|+$/, '');
+    if (pathPattern.length > MAX_URL_PATTERN_LENGTH) return null;
+    const path = new RegExp(compileGlobToRegex(pathPattern, SEPARATOR), 'i');
+    return (url) => {
+      const parsed = splitRequestUrl(url);
+      if (!parsed || !hostPattern(parsed.host)) return false;
+      return path.test(parsed.afterHost);
+    };
+  }
+
+  if (urlAnchored) {
+    const prefix = rest.replace(/\|+$/, '');
+    if (!prefix) return null;
+    return (url) => url.toLowerCase().startsWith(prefix.toLowerCase());
+  }
+
+  // A bare pattern is matched anywhere in the URL.
+  if (!body) return null;
+  if (body.length > MAX_URL_PATTERN_LENGTH) return null;
+  const anywhere = new RegExp(compileGlobToRegex(body, ''), 'i');
+  return (url) => anywhere.test(url);
+}
+
+/**
+ * The exception half of {@link requestUrlMatcher}: a matcher for `@@` rules whose pattern
+ * carries a path — `@@||host/path`, `@@||host^` + a path tail, `@@|http://host/x`, `@@/re/`.
+ *
+ * The split is deliberate. A zone exception (`@@||host^`) is decided by the hostname indexes
+ * and never reaches here; a path-carrying one cannot live in those indexes, because indexing
+ * it under the host alone would release every request to the host — the unsafe direction to
+ * widen an allowlist. So it is compiled against the full URL instead, exactly the way a path
+ * block is, and applied only to the requests that match.
+ *
+ * Returns `null` for anything that is not an exception describing a URL shape: a bare `@@word`
+ * stays an exact-host exception rather than being *widened* into a URL-substring allowlist,
+ * and `@@||host^` keeps its zone meaning instead of paying for a matcher it does not need.
+ */
+export function exceptionRequestUrlMatcher(rule: string): ((url: string) => boolean) | null {
+  const trimmed = (rule || '').trim();
+  if (!isNetworkRule(trimmed) || !trimmed.startsWith('@@')) return null;
+
+  const { body: pattern } = ruleParts(trimmed);
+  const carriesSlash = pattern.includes('/');
+  // A `^` with anything after it — `^*/x`, `^*.js`, `^|…` excluded — is a path constraint too.
+  const caretTail = (pattern.match(/\^([\s\S]*)$/)?.[1] ?? '').replace(/\|+$/, '');
+  if (!carriesSlash && caretTail.length === 0) return null;
+
+  // `@@` stripped: the matcher sees the same `||host/path` shape a blocking rule carries.
+  return requestUrlMatcher(trimmed.slice(2));
+}
+
+/**
+ * Host portion of a `||host^path` rule, as a predicate.
+ *
+ * `||example.com^` covers subdomains in a real browser, hence the `(?:.*\.)?` prefix. A `*`
+ * inside the host matches within one label only (`[^.]*`), so no wildcard in a list can carry
+ * a match across a dot and off into a different registrable domain.
+ */
+function compileHostPattern(hostPart: string): ((host: string) => boolean) | null {
+  const host = hostPart.toLowerCase();
+  if (!host) return null;
+  const inner = host.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^.]*');
+  try {
+    const compiled = new RegExp(`^(?:.*\\.)?${inner}$`, 'i');
+    return (candidate) => compiled.test(candidate);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Host and the remainder of a URL, so a host-and-path rule can test each half against the right
+ * one. Returns `null` for anything that is not an absolute URL.
+ */
+function splitRequestUrl(url: string): { host: string; afterHost: string } | null {
+  const trimmed = (url || '').trim();
+  const match = trimmed.match(/^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)([\s\S]*)$/i);
+  if (!match) return null;
+  const authority = match[1].split('@').pop() ?? '';
+  const host = authority.replace(/:\d+$/, '').toLowerCase();
+  if (!host) return null;
+  return { host, afterHost: match[2] };
+}
+
+/**
+ * ABP pattern text to a regular-expression source.
+ *
+ * `*` is the only wildcard ABP defines. `separator` is inserted where a `^` sits, and it is
+ * **consumed**, which is the part that looks like a bug and is not.
+ *
+ * These rules are not interpreted as ABP — they are handed to Chrome as a DNR `urlFilter`
+ * verbatim (`validatePathFilter` accepts `||host/path` and passes it through), so the replay has to
+ * model Chrome's urlFilter syntax rather than the ABP syntax the rule was written in. Chrome
+ * documents `^` as "a separator character… this also matches the end of the URL", which is a
+ * character that gets matched, not a zero-width assertion. So in `||host^ads.js` the `^` stands
+ * for the slash itself and `ads.js` continues after it, and a wildcard-then-slash tail needs one
+ * more path segment before its own slash — the browser really does decline to block `/ads.js` for
+ * a rule written that way. Being lenient here would credit the replay with a block the browser
+ * never performs, which is the over-count the matcher exists to remove.
+ *
+ * The character *class* follows Chrome's documented set: any character that is not a letter,
+ * digit, `_`, `,`, `-`, `.` or `%` — {@link SEPARATOR} — so `=`, `+`, `@`, `~`, `;` and `:` end a
+ * host or separate a path segment exactly as the browser reads them.
+ */
+function compileGlobToRegex(pattern: string, separator: string): string {
+  let out = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*') {
+      out += '.*';
+    } else if (char === '^') {
+      out += separator || SEPARATOR;
+    } else {
+      out += char.replace(/[.*+?${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return out;
+}
 
 /** Modifiers that make a verdict depend on the page that made the request. */
 const INITIATOR_MODIFIERS = new Set(['domain', 'from', 'to', 'third-party', 'first-party']);
@@ -228,6 +495,35 @@ export function countRuleScopes(lines: readonly string[]): RuleScopeCounts {
     counts.total += 1;
   }
   return counts;
+}
+
+/**
+ * How much of a list's path-scoped blocking a captured URL can actually decide.
+ *
+ * The path bucket is only *potentially* decidable: `||host/path$script` also names a request
+ * type, which no URL carries, and a mangled host anchor refuses outright. {@link share} is the
+ * number a gate wants — the residue is measured, not assumed, so a list update that floods the
+ * bucket with undecidable shapes shows up here rather than in a coverage run nobody read.
+ */
+export interface PathRuleDecidability {
+  /** Blocking rules whose verdict needs the request path or a whole-URL pattern. */
+  pathScoped: number;
+  /** Of those, the ones {@link isUrlDecidableRule} will decide given a request URL. */
+  urlDecidable: number;
+  /** `urlDecidable / pathScoped`; 0 when the list carries no path-scoped rules at all. */
+  share: number;
+}
+
+/** Measures {@link PathRuleDecidability} over a compiled list's lines. */
+export function pathRuleDecidability(lines: readonly string[]): PathRuleDecidability {
+  let pathScoped = 0;
+  let urlDecidable = 0;
+  for (const line of lines) {
+    if (blockingRuleScope(line) !== 'path') continue;
+    pathScoped += 1;
+    if (isUrlDecidableRule(line)) urlDecidable += 1;
+  }
+  return { pathScoped, urlDecidable, share: pathScoped === 0 ? 0 : urlDecidable / pathScoped };
 }
 
 /** Counts the network rules in a compiled list. */
@@ -466,7 +762,7 @@ export function selectHotList(input: SelectHotListInput): HotListSelection {
  */
 export function formatHotList(
   selection: HotListSelection,
-  meta: { source: string; measuredOn: string },
+  meta: { source: string; measuredOn: string; derivation?: string },
 ): string {
   const percentOf = (value: number) => `${(value * 100).toFixed(1)}%`;
   const percentOfSource = (count: number) =>
@@ -477,6 +773,11 @@ export function formatHotList(
     '!',
     `! Source:          ${meta.source} (${selection.sourceLines.toLocaleString()} lines)`,
     `! Measured on:     ${meta.measuredOn}`,
+    // The flags that produced this file, in the order the script writes them. It is what
+    // `build-hot-list.mjs --check` replays when the caller names no input, so a list derived from
+    // the accumulated browser ledger stays verifiable without the check being hard-wired to
+    // whichever fixture the list happened to start from.
+    ...(meta.derivation ? [`! Derivation:      ${meta.derivation}`] : []),
     `! Coverage:        ${selection.coveredRequests.toLocaleString()} of ${selection.totalRequests.toLocaleString()} measured blocks (${percentOf(selection.coverage)}) in ${selection.lines.length.toLocaleString()} rules (${percentOfSource(selection.lines.length)}% of the source list)`,
     `! Scopes kept:     ${selection.scopes.hostname.toLocaleString()} hostname-decidable · ${selection.scopes.initiator.toLocaleString()} initiator-scoped · ${selection.scopes.path.toLocaleString()} path-scoped · ${selection.scopes.request.toLocaleString()} request-scoped`,
     `! Exceptions kept: ${selection.keptExceptions.length.toLocaleString()}, so the list makes the same allow decisions the source made`,
@@ -495,6 +796,63 @@ export function formatHotList(
   ].join('\n');
 
   return `${header}${selection.lines.join('\n')}\n`;
+}
+
+/** What a hot list records about the inputs that produced it. */
+export interface HotListDerivation {
+  /** The rule list the selection was made from. */
+  list?: string;
+  /** A browser-reported rule-hit ledger, when that is what was measured. */
+  hits?: string;
+  /** A captured request trace, when that is what was replayed. */
+  trace?: string;
+  /**
+   * Session-export files (or directories of them) merged inline, when the measurement arrived as
+   * the extension's own exports rather than a pre-merged ledger. More than one is normal.
+   */
+  sessions?: string[];
+  /** Fraction of the measured set requested; 1 means "keep everything that fired". */
+  share?: number;
+}
+
+/**
+ * The inputs a generated hot list records, read back from its own header.
+ *
+ * This is the other half of `formatHotList`'s `derivation` line, and it lives beside it on purpose:
+ * one writes the line and the other reads it, so a change to the format that left the reader behind
+ * would be a change to this file rather than a silent difference between the writer in
+ * `scripts/build-hot-list.mjs` and whatever it has to agree with.
+ *
+ * It exists because `--check` has to re-derive the list from the inputs that produced it. The
+ * checked-in list was derived from one trace fixture for as long as that was true, and a check
+ * hard-wired to the fixture turns into a check that fails the moment the list is derived from the
+ * accumulated browser ledger instead — which would push whoever arrives there towards dropping the
+ * check, and the check is the only thing keeping a hand-edited hot list honest.
+ *
+ * Returns `null` for a list written before the line existed, so the caller can fall back rather
+ * than guess.
+ */
+export function parseHotListDerivation(text: string): HotListDerivation | null {
+  const line = /^!\s*Derivation:\s*(.+)$/m.exec(text ?? '');
+  if (!line) return null;
+  const tokens = line[1].trim().split(/\s+/);
+  const declared: HotListDerivation = {};
+  for (let i = 0; i < tokens.length; i += 1) {
+    const flag = tokens[i];
+    const value = tokens[i + 1];
+    if (value === undefined) continue;
+    if (flag === '--list') declared.list = value;
+    else if (flag === '--hits') declared.hits = value;
+    else if (flag === '--trace') declared.trace = value;
+    else if (flag === '--sessions')
+      declared.sessions = [...(declared.sessions ?? []), value];
+    else if (flag === '--share') declared.share = Number(value);
+    // Any other token is from a newer format than this reader; skipping it keeps the ones this
+    // reader does know usable, which is better than refusing the whole line.
+    i += 1;
+  }
+  if (!declared.hits && !declared.trace && !(declared.sessions?.length)) return null;
+  return declared;
 }
 
 function percent(value: number): string {

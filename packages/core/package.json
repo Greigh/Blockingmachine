@@ -32,17 +32,27 @@
       "require": "./dist/ai/elementCorpusHarvest.js"
     },
     "./package.json": "./package.json",
+    "./ruleHost": {
+      "types": "./dist/ruleHost.d.ts",
+      "import": "./dist/ruleHost.js",
+      "require": "./dist/ruleHost.js"
+    },
     "./tiers": {
       "types": "./dist/tiers.d.ts",
       "import": "./dist/tiers.js",
       "require": "./dist/tiers.js"
+    },
+    "./tier-plan": {
+      "types": "./dist/tierPlanInput.d.ts",
+      "import": "./dist/tierPlanInput.js",
+      "require": "./dist/tierPlanInput.js"
     }
   },
   "license": "BSD-3-Clause",
   "scripts": {
     "build": "tsc --skipLibCheck && node -e \"const fs=require('fs'),p=require('path');const src=p.join('src','ai','db'),dest=p.join('dist','ai','db');fs.mkdirSync(dest,{recursive:true});for(const f of ['manifest.json','remote-patch.json','patch-schema.json','db-schema.json']){fs.copyFileSync(p.join(src,f),p.join(dest,f));}\"",
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
-    "type-check": "tsc --noEmit",
+    "type-check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "format": "prettier --write .",
     "format-check": "prettier --check .",
     "lint": "eslint .",

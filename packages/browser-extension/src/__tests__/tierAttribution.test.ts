@@ -70,6 +70,7 @@ describe('buildTierBlocking — restraint', () => {
       'unobserved',
       'unobserved',
       'empty',
+      'empty',
     ]);
   });
 
@@ -117,6 +118,30 @@ describe('buildTierBlocking — restraint', () => {
     expect(summary.idle).toHaveLength(3);
   });
 
+  test('a tier the ledger watched fire is never empty, whatever the count field claims', () => {
+    // `empty` is a fact about the ruleset, but the count it reads is whatever the caller supplied —
+    // the curated catalogue, a generated count, a file length. When that count disagrees with the
+    // measurement, the measurement wins: `tier_unclassified` on the captured session carried six
+    // real blocks while its curated count read zero, and grading it `empty` dropped them from the
+    // weighting entirely.
+    const summary = buildTierBlocking({
+      tiers: [
+        { id: 'tier_core', label: 'Core shield', category: 'core', ruleCount: 24 },
+        { id: 'tier_unclassified', label: 'Unclassified', category: 'unclassified', ruleCount: 0 },
+      ],
+      enabledIds: ['tier_core', 'tier_unclassified'],
+      // A real sample beside it, so the benefit gate's evidence basis is reachable at all —
+      // below the minimum the plan falls back to coverage and `benefits` is null either way.
+      hits: { tier_core: 900, tier_unclassified: 6 },
+    });
+
+    const fired = summary.tiers.find((tier) => tier.id === 'tier_unclassified')!;
+    expect(fired.verdict).toBe('productive');
+    // And the hits reach the benefit gate rather than being filtered out with the verdict.
+    const basis = planTierBenefits(summary);
+    expect(basis.benefits?.tier_unclassified).toBe(6);
+  });
+
   test('grades a tier carrying no rules as empty, not as a silent one', () => {
     // The shipped `tier_security` on a machine that has never run the classifier: off, because
     // there is nothing in it to switch on, behind a ledger with a real sample. `idle` would call it
@@ -159,12 +184,13 @@ describe('buildTierBlocking — attribution', () => {
     });
 
     expect(summary.totalHits).toBe(100);
-    expect(summary.tiers.map((tier) => tier.hits)).toEqual([25, 60, 15, 0, 0]);
+    expect(summary.tiers.map((tier) => tier.hits)).toEqual([25, 60, 15, 0, 0, 0]);
     expect(summary.tiers.map((tier) => tier.verdict)).toEqual([
       'productive',
       'productive',
       'productive',
       'idle',
+      'empty',
       'empty',
     ]);
     expect(Math.round(summary.tiers[1].share * 100)).toBe(60);
@@ -195,7 +221,7 @@ describe('buildTierBlocking — attribution', () => {
     });
 
     expect(summary.totalHits).toBe(12);
-    expect(summary.tiers.map((tier) => tier.hits)).toEqual([0, 0, 0, 12, 0]);
+    expect(summary.tiers.map((tier) => tier.hits)).toEqual([0, 0, 0, 12, 0, 0]);
   });
 
   test('survives empty and malformed input', () => {

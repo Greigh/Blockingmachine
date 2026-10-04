@@ -17,6 +17,7 @@ import {
 import fs from "fs/promises";
 import path from "path";
 import chalk from "chalk";
+import { writeJson } from "../lib/logger.js";
 
 export interface CoverageOptions {
   rules?: string;
@@ -39,6 +40,15 @@ export interface CoverageOptions {
 
 interface TraceEntry {
   host: string;
+  /**
+   * The full request URL, when the trace line carried one.
+   *
+   * Aggregating by host instead of by URL is what makes a path-scoped rule undecidable: a trace
+   * of `https://cdn.example.com/x/ads.js` and `https://cdn.example.com/other.js` is two
+   * requests that one rule blocks and another does not, and collapsing them to one host entry
+   * destroys exactly the distinction the replay needs.
+   */
+  url?: string;
   count: number;
 }
 
@@ -91,9 +101,14 @@ function tallyCounts(tallies: ScopeTallies): Record<ScopedScope, number> {
  * Each line is a hostname or a full URL, optionally followed by a repeat count, so both a raw
  * list of requests and an aggregated `host<TAB>count` export are accepted. Lines starting with
  * `#` or `!` are comments.
+ *
+ * A line that carries a path keeps it, and entries are aggregated per URL rather than per host.
+ * That is what lets a path-scoped rule be decided against the request it actually describes
+ * instead of being reported as a rule no replay can evaluate. A hostname-only trace still
+ * parses; it just yields no URLs, and the replay falls back to the way it has always worked.
  */
 export function parseRequestTrace(text: string): TraceEntry[] {
-  const totals = new Map<string, number>();
+  const totals = new Map<string, TraceEntry>();
 
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -109,10 +124,30 @@ export function parseRequestTrace(text: string): TraceEntry[] {
 
     const host = hostOf(target);
     if (!host) continue;
-    totals.set(host, (totals.get(host) ?? 0) + count);
+    // Only a URL that survived `hostOf` intact, and that actually carries something after the
+    // host, is worth keeping: a bare hostname has no path to decide anything with.
+    const url = target.includes("/") ? normalizeTraceUrl(target) : undefined;
+    if (url) {
+      const existing = totals.get(url);
+      if (existing) existing.count += count;
+      else totals.set(url, { host, url, count });
+    } else {
+      const existing = totals.get(host);
+      if (existing) existing.count += count;
+      else totals.set(host, { host, count });
+    }
   }
 
-  return [...totals.entries()].map(([host, count]) => ({ host, count }));
+  return [...totals.values()];
+}
+
+/**
+ * Lower-cases a trace target and drops a trailing `#fragment`, which is never sent to a server
+ * and would make two identical requests look like two different ones.
+ */
+function normalizeTraceUrl(target: string): string | null {
+  const value = target.trim().toLowerCase().replace(/#.*$/, "");
+  return value.includes("/") ? value : null;
 }
 
 /**
@@ -207,6 +242,9 @@ export class CoverageCommand extends BaseCommand<CoverageOptions> {
       matchedHostRatePercent: number;
       scopedHosts: number;
       scopedRequests: number;
+      urlDecidedRequests: number;
+      urlDecidedRules: number;
+      urlsInTrace: number;
     } | null = null;
 
     if (hits) {
@@ -272,6 +310,9 @@ export class CoverageCommand extends BaseCommand<CoverageOptions> {
           entries.length > 0 ? (replay.blockedHosts / entries.length) * 100 : 0,
         scopedHosts: replay.scopedHosts,
         scopedRequests: replay.scopedRequests,
+        urlDecidedRequests: replay.urlDecidedRequests,
+        urlDecidedRules: replay.urlDecidedRules,
+        urlsInTrace: entries.filter((entry) => entry.url !== undefined).length,
       };
     }
 
@@ -301,6 +342,11 @@ export class CoverageCommand extends BaseCommand<CoverageOptions> {
         scopes,
         /** The bucket the hit rate is measured over, and the only one a replay can decide. */
         hostnameDecidableRules: scopes.hostname,
+        /**
+         * `/regex/` rules refused at compile time — provably backtracking structures the
+         * evaluator declined to run, each with its reason.
+         */
+        refusedRules: ruleSet.getRefusedRules(),
       },
       source: hits ? "hits" : "trace",
       trace: traceStats,
@@ -317,7 +363,7 @@ export class CoverageCommand extends BaseCommand<CoverageOptions> {
     };
 
     if (json) {
-      console.log(JSON.stringify(data, null, 2));
+      writeJson(data);
       return this.success(data, "Coverage analysis complete");
     }
 
@@ -395,6 +441,20 @@ export class CoverageCommand extends BaseCommand<CoverageOptions> {
         chalk.dim(" · ") +
         `${chalk.yellow(rules.scopes.request.toLocaleString())} request-scoped`,
     );
+    // A refused /regex/ is coverage the scan deliberately declined — named, with the reason,
+    // rather than silently absent from the denominator.
+    if (rules.refusedRules.length > 0) {
+      console.log(
+        `  Refused rules:     ${chalk.yellow(rules.refusedRules.length.toLocaleString())}` +
+          chalk.dim(" regex rules whose structure provably backtracks (not run):"),
+      );
+      for (const refused of rules.refusedRules.slice(0, 5)) {
+        console.log(chalk.dim(`    ${refused.rule} — ${refused.reason}`));
+      }
+      if (rules.refusedRules.length > 5) {
+        console.log(chalk.dim(`    … and ${rules.refusedRules.length - 5} more`));
+      }
+    }
     console.log("");
     console.log(
       `  Input:             ${chalk.dim(data.source === "hits" ? ledger.file : trace.file)}` +
@@ -413,6 +473,20 @@ export class CoverageCommand extends BaseCommand<CoverageOptions> {
         console.log(
           `  Allowlisted:       ${chalk.yellow(trace.allowlistedHosts.toLocaleString())} hosts matched ${trace.exceptionRulesFired.toLocaleString()} exception rule(s)` +
             chalk.dim(" (not counted as blocks)"),
+        );
+      }
+      if (trace.urlDecidedRequests > 0) {
+        console.log(
+          `  Path-decided:      ${chalk.green(trace.urlDecidedRequests.toLocaleString())} requests settled by matching ${trace.urlDecidedRules.toLocaleString()} path-scoped rule(s) against the request URL` +
+            chalk.dim(" (decided, not counted as undecidable)"),
+        );
+      } else if (trace.urlsInTrace === 0) {
+        // The state this report is in whenever the trace is hostname-only, which is the
+        // default capture. It is worth saying out loud rather than staying silent: a reader
+        // would otherwise conclude every path-scoped rule in the list fired.
+        console.log(
+          `  Path-decided:      ${chalk.yellow("0")}` +
+            chalk.dim(" — this trace records hostnames only, so no path-scoped rule could be decided"),
         );
       }
       if (trace.scopedHosts > 0) {

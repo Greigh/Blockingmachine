@@ -34,6 +34,7 @@
  */
 
 import { ELEMENT_FITTED_WEIGHTS } from './elementWeights.generated.js';
+import { KNOWN_CLOAKED_TARGETS } from './cloakTargets.js';
 import type { MiniAiFeatureContribution } from './types.js';
 
 /** What an element is, from the filtering engine's point of view. */
@@ -81,7 +82,9 @@ export type ElementEvidenceFamily =
   | 'overlay-shape'
   | 'pixel-shape'
   | 'third-party-frame'
-  | 'url-path';
+  | 'url-path'
+  | 'resource-path'
+  | 'cname-cloak';
 
 const DEFINITIVE_FAMILIES: ReadonlySet<ElementEvidenceFamily> = new Set<ElementEvidenceFamily>([
   'user-choice',
@@ -128,6 +131,14 @@ export interface ElementSnapshot {
   visible?: boolean;
   /** Verdict from {@link MiniAiClassifier} for the element's source host, when known. */
   sourceVerdict?: { category: string; verdict: string } | null;
+  /**
+   * The terminal host of the source host's DNS CNAME chain, when a caller that can see DNS
+   * supplies one (`resolveCnameChain` is the Node-side path — a content script has no DNS API).
+   * A first-party-looking host that aliases out to a known ad or measurement provider is the
+   * classic first-party-cloaking shape, and the resolved name is the only place that fact
+   * exists. Absent is the common case and means "not resolved", not "clean".
+   */
+  resolvedCname?: string | null;
 }
 
 /** Numeric feature vector, one entry per evidence dimension. */
@@ -147,6 +158,11 @@ export interface ElementFeatureVector {
   socialHostMatch: number;
   urlPathToken: number;
   thirdPartyFrame: number;
+  /**
+   * The source host's DNS answer is an alias for a known ad or measurement provider —
+   * first-party cloaking, the shape `resolvedCname` exists to name.
+   */
+  cnameCloak: number;
   passiveSource: number;
   pixelGeometry: number;
   adSizeGeometry: number;
@@ -203,6 +219,18 @@ export interface ElementEvidenceDetails {
   /** Share of the viewport the element occupies, 0–1. */
   viewportCoverage: number;
   urlPathTokens: string[];
+  /**
+   * The path token that earned the `resource-path` family — a vendor name or measurement
+   * noun — for display. Null when the family did not fire; `urlPathTokens[0]` would name
+   * an arbitrary segment instead of the token that is actually evidence.
+   */
+  pathEvidenceToken: string | null;
+  /**
+   * The resolved CNAME target when it was supplied and pointed off-domain at a known provider,
+   * for display. Null when nothing was resolved or the chain stayed inside the site's own
+   * infrastructure.
+   */
+  cnameTarget: string | null;
 }
 
 export interface ElementFeatureAnalysis {
@@ -615,6 +643,8 @@ export const ELEMENT_LURE_PHRASES: readonly string[] = [
   'continue reading',
   'become a member',
   'subscribe to continue',
+  'subscribe to keep reading',
+  'keep reading for free',
   'already a subscriber',
   'create a free account',
   'sign up to continue',
@@ -774,6 +804,12 @@ export const ELEMENT_URL_PATH_TOKENS: readonly string[] = [
   'collect',
   'beacon',
   'pixel',
+  // Measurement words that are not ordinary English in a *path*. A service does not serve
+  // `/telemetry/` or `/heatmap/` for a page; it serves them for a report about the page.
+  // Round four found these invisible because the tracking tables only reached identifiers,
+  // so a self-hosted `assets.example.com/telemetry/sentry.js` read as Content at 45%.
+  'telemetry',
+  'heatmap',
   // `track` was here and is deliberately not any more. In a *path* it is almost never
   // measurement: `/embed/track/<id>` is a song, `/track/<id>` is a parcel or a race result,
   // and `track` is a repository branch. It named an annoyance and hid an embedded music
@@ -802,7 +838,53 @@ export const ELEMENT_URL_PATH_VENDOR_PATH_TOKENS: readonly string[] = [
   'gtag',
   'fingerprintjs',
   'fpjs',
+  'fingerprintjs2',
+  'fingerprint2',
+  // The self-hosted measurement vendors, admitted on the same argument as `fingerprintjs`:
+  // a path atom that *is* a product name is evidence whatever host served the file, and
+  // first-party hosting is exactly where the host tables concede. Each entry is a name
+  // that is a product and not ordinary English in a path — `heap`, `segment` and `rum`
+  // fail that test and stay out.
+  'sentry',
+  'bugsnag',
+  'rollbar',
+  'newrelic',
+  'datadoghq',
+  'matomo',
+  'piwik',
+  'posthog',
+  'mixpanel',
+  'amplitude',
+  'hotjar',
+  'fullstory',
+  'logrocket',
+  'mouseflow',
+  'smartlook',
+  'statcounter',
+  'quantserve',
+  // Industry machinery nouns, specific on the same axis: nobody outside adtech writes
+  // `rtb` or `prebid` in a resource path, so `/ads/rtb/sync.js` on a first-party host is
+  // the cookie-sync endpoint it says it is.
+  'rtb',
+  'prebid',
+  'usersync',
 ] as const;
+
+/**
+ * The generic-path subset specific enough to *name* a class rather than corroborate.
+ *
+ * These are the nouns a service only serves for a report about the page — `telemetry`,
+ * `heatmap`, `tracking` were added to the path table on exactly that argument — so a
+ * single one can make the head's answer count (still one signal: suggest, never hide).
+ * `ads`, `collect`, `beacon`, `analytics` and friends stay in {@link URL_PATH_TOKEN_SET}'s
+ * supporting half: real words, in real paths, that need a second family before they mean
+ * anything.
+ */
+const MEASUREMENT_NOUN_PATH_SET: ReadonlySet<string> = new Set([
+  'telemetry',
+  'heatmap',
+  'tracking',
+]);
 
 /** Consent markers that are CMP vendor names rather than generic English words. */
 const CONSENT_VENDOR_MARKERS: ReadonlySet<string> = new Set([
@@ -839,6 +921,13 @@ const AD_ATTRIBUTE_NAMES: readonly string[] = [
   'data-ad-position',
   'data-ad-index',
   'data-sponsored',
+  // Affiliate commerce. `shoppable-product-row` is a real ad unit with an innocent class
+  // name, and the affiliate network it credits is an ad *delivery* fact — someone earns a
+  // commission from that row — so it belongs with the other delivery attributes rather than
+  // in the word tables.
+  'data-affiliate-network',
+  'data-affiliate',
+  'data-partner-id',
 ] as const;
 
 const AD_ATTRIBUTE_PREFIXES: readonly string[] = [
@@ -929,6 +1018,22 @@ const MAX_TEXT_SCAN = 4000;
 const MAX_TOKENS_PER_FIELD = 60;
 const MAX_ANCESTORS = 24;
 
+/**
+ * Disclosure vocabulary: words a page writes to say *this content is paid for* — not to
+ * name a slot or a delivery network. `sponsored` on a publisher's own story card and
+ * `advert` on its house-ads label are the same words a third-party placement carries,
+ * so the word alone is evidence worth pointing at, not evidence worth removing: it
+ * corroborates toward a hide only when something else says where the money comes from.
+ */
+const AD_DISCLOSURE_WORDS = new Set([
+  'sponsored',
+  'advert',
+  'adverts',
+  'advertisement',
+  'advertisements',
+  'advertising',
+]);
+
 // Precomputed lookup sets: matching runs per hover, so the tables are compiled once.
 const AD_STRONG_SET = new Set(ELEMENT_AD_STRONG_TOKENS);
 const AD_WEAK_SET = new Set(ELEMENT_AD_WEAK_TOKENS);
@@ -1005,6 +1110,15 @@ export function matchSourceHostKind(host: string): ElementSourceKind {
     if (clean === suffix || clean.endsWith(`.${suffix}`)) return kind;
   }
   return 'none';
+}
+
+/** Registrable-suffix match against the known cloak-destination table. */
+function matchCloakTarget(host: string): string | null {
+  const clean = host.toLowerCase().replace(/^www\./, '');
+  for (const suffix of Object.keys(KNOWN_CLOAKED_TARGETS)) {
+    if (clean === suffix || clean.endsWith(`.${suffix}`)) return suffix;
+  }
+  return null;
 }
 
 /** Host of a resource URL, or null when unparseable. */
@@ -1135,6 +1249,16 @@ export function normalizeElementSnapshot(snapshot: ElementSnapshot | null | unde
     crossOriginFrame: input.crossOriginFrame === true,
     visible: input.visible !== false,
     sourceVerdict: input.sourceVerdict ?? null,
+    // A hostname, sanitised like every other string the element carries: a 2KB blob of
+    // punctuation is not a DNS answer and should not reach the host tables as one.
+    // DNS answers habitually end in the root dot (`ads.example.com.`) — an answer in that
+    // canonical form would survive the shape check and then miss every host-table suffix it
+    // names, so it is folded away before either happens.
+    resolvedCname:
+      typeof input.resolvedCname === 'string' &&
+      /^[a-z0-9][a-z0-9.-]{1,252}$/.test(input.resolvedCname.toLowerCase().replace(/\.$/, ''))
+        ? input.resolvedCname.toLowerCase().replace(/\.$/, '')
+        : null,
   };
 }
 
@@ -1307,6 +1431,20 @@ export function analyzeElement(snapshot: ElementSnapshot): ElementFeatureAnalysi
   const measureHostMatch = sourceKind === 'measurement' || sourceVerdictCategory === 'Telemetry/Analytics' ? 1 : 0;
   const socialHostMatch = sourceKind === 'social' ? 1 : 0;
 
+  // First-party cloaking: `metrics.example.com` answering with an alias for a known ad or
+  // measurement provider is a fact about the DNS the site operator configured — it does not
+  // care how first-party the *request* host looks, which is what defeats every host rule on
+  // the request itself. The table match is the off-domain test: a CNAME to the site's own
+  // infrastructure resolves to a name the table does not list, and resolves to `none` here.
+  // Two tables answer it: the host-kind table names *kinds* of provider, and
+  // KNOWN_CLOAKED_TARGETS names cloak destinations the host table has no kind for — an
+  // answer ending in `adroll.com` is AdRoll whether or not the kind table lists it.
+  const cnameHost = typeof el.resolvedCname === 'string' && el.resolvedCname ? el.resolvedCname : null;
+  const cnameKind = cnameHost ? matchSourceHostKind(cnameHost) : 'none';
+  const cnameCloakTarget = cnameHost !== null && matchCloakTarget(cnameHost) !== null;
+  const cnameTarget =
+    cnameKind === 'ad-network' || cnameKind === 'measurement' || cnameCloakTarget ? cnameHost : null;
+
   // `data-track-*` and `data-analytics-*` are the page labelling its *own* element for
   // analytics, and every modern page puts one on nearly every link and button. Read as
   // evidence on its own, the attribute says "the page measures clicks here" — not "this
@@ -1339,6 +1477,7 @@ export function analyzeElement(snapshot: ElementSnapshot): ElementFeatureAnalysi
     socialHostMatch,
     urlPathToken: urlPathTokens.length > 0 ? Math.min(1, urlPathTokens.length / 2) : 0,
     thirdPartyFrame: thirdPartyFrame ? 1 : 0,
+    cnameCloak: cnameTarget ? 1 : 0,
     passiveSource: passiveSource ? 1 : 0,
     pixelGeometry: isPixel ? 1 : 0,
     adSizeGeometry: adSize ? 1 : 0,
@@ -1380,15 +1519,33 @@ export function analyzeElement(snapshot: ElementSnapshot): ElementFeatureAnalysi
   // Two different questions about a resource path, kept apart because they have different
   // answers. An *ordinary* word in a path is evidence only when the host leaves the path
   // meaningful (`sourceKind === 'none'`); a *vendor* name in a path is evidence whatever
-  // the host, because the name is the product. Both are still one non-shape signal, so
-  // either can suggest and neither can hide.
+  // the host, because the name is the product. And the two land in different *families*:
+  // `url-path` is shape-only corroboration — a path word alone never names a class — while
+  // `resource-path` carries vocabulary specific enough to say what the element *is* (a
+  // product name, or a noun a service only serves for a report about the page). Both are
+  // still one non-shape signal, so either can suggest and neither can hide.
   const genericPathToken = firstMatchingToken(urlPathTokens, URL_PATH_TOKEN_SET);
   const vendorPathToken = firstMatchingToken(urlPathTokens, URL_PATH_VENDOR_SET);
-  const pathSaysSomething =
-    genericPathToken !== null
-      ? sourceKind === 'none' && !adStrong && !adAttribute
-      : vendorPathToken !== null;
-  if (pathSaysSomething && sourceVerdictCategory === '') add('url-path');
+  // When the URL model already judged this source its verdict consumed the same path these
+  // families would read — firing them anyway would count one opinion twice.
+  if (sourceVerdictCategory === '') {
+    if (
+      vendorPathToken !== null ||
+      (genericPathToken !== null &&
+        MEASUREMENT_NOUN_PATH_SET.has(genericPathToken) &&
+        sourceKind === 'none' &&
+        !adStrong &&
+        !adAttribute)
+    ) {
+      add('resource-path');
+    } else if (genericPathToken !== null && sourceKind === 'none' && !adStrong && !adAttribute) {
+      add('url-path');
+    }
+  }
+  // DNS evidence the element itself does not carry: the request host's CNAME chain ending at a
+  // known ad or measurement provider is first-party cloaking, and it counts as its own family —
+  // one signal, so it can suggest but never hide on its own.
+  if (cnameTarget) add('cname-cloak');
 
   return {
     features,
@@ -1417,6 +1574,8 @@ export function analyzeElement(snapshot: ElementSnapshot): ElementFeatureAnalysi
       textLength,
       viewportCoverage: Math.round(viewportCoverage * 1000) / 1000,
       urlPathTokens,
+      pathEvidenceToken: vendorPathToken ?? (genericPathToken !== null && MEASUREMENT_NOUN_PATH_SET.has(genericPathToken) ? genericPathToken : null),
+      cnameTarget,
     },
   };
 }
@@ -1437,6 +1596,42 @@ function isConsentVendorMarker(marker: string | null): boolean {
  * Decides how much the evidence can justify — the gate that keeps a guess from
  * reading as a fact, and keeps one weak signal from hiding a hero banner.
  */
+const INTRINSIC_RESOURCE_FAMILIES: ReadonlySet<ElementEvidenceFamily> = new Set<ElementEvidenceFamily>([
+  'ad-attribute',
+  'ad-network',
+]);
+
+/** True when the evidence includes something about where the element came from. */
+function intrinsicResourceFamily(families: readonly ElementEvidenceFamily[]): boolean {
+  return families.some((family) => INTRINSIC_RESOURCE_FAMILIES.has(family));
+}
+
+/**
+ * How many *independent* supporting hints there are.
+ *
+ * `ad-marker` and `ad-weak-marker` can both fire on one identifier: `class="ad-break"`
+ * names an ad by the compound-leading-`ad` rule and also carries the weak token `ad`, so
+ * the same four characters arrived twice and satisfied "two independent hints" — which
+ * removed a `<hr>` with no children, no links and no geometry from the page.
+ *
+ * A word is a word however many tables agree about it. So when both ad families are
+ * present they count once, and the corroboration bar is read against the number of
+ * *different* kinds of hint rather than the number of tables that fired.
+ *
+ * A disclosure word unaccompanied by provenance counts zero: `sponsored` says the
+ * content is paid, not who paid — a publisher writes the same word on its own copy —
+ * so it cannot be one of the two hints a corroborated hide is built on. It stays in
+ * `supporting` so the model can still point.
+ */
+function independentSupporting(
+  families: readonly ElementEvidenceFamily[],
+  supporting: readonly ElementEvidenceFamily[],
+  disclosureMarkerUncorroborated = false,
+): number {
+  const bothAdWords = families.includes('ad-marker') && families.includes('ad-weak-marker');
+  return supporting.length - (bothAdWords ? 1 : 0) - (disclosureMarkerUncorroborated ? 1 : 0);
+}
+
 export function assessElementEvidence(analysis: EvidenceAssessmentInput): ElementEvidenceAssessment {
   const { families, details, features } = analysis;
 
@@ -1449,6 +1644,57 @@ export function assessElementEvidence(analysis: EvidenceAssessmentInput): Elemen
     (features.consentStrongMarker === 1 && shaped);
   const nagDefinitive = families.includes('nag-marker') && shaped;
 
+  // **An ad word needs something for the ad to be in.** The prose shield below already
+  // stops long copy being hidden by vocabulary; this is its twin for the empty case, and
+  // it closes the same failure from the other end.
+  //
+  // `ad-marker` is a definitive family because `adsbygoogle` on a sized box is a fact. But
+  // a *word* is not a container: `<hr class="ad-break">` is a typographic divider in a
+  // stylesheet that predates the ad team, and `<span class="advert-label">` is a link to
+  // the publisher's own "how we make money" page. Both were hidden at 98% on a class token
+  // alone — no geometry, no children, no links, nothing an ad could be delivered into. This
+  // is the `advertising-policy` defect wearing a different hat, and it was reached by the
+  // opposite route: not prose carrying an ad word, but an *empty* element carrying one.
+  //
+  // So a token alone is definitive only when it is **specific**, or when the element could
+  // physically be a slot. An intrinsic resource (an ad delivery attribute, an ad-network
+  // frame) is exempt for the same reason it is exempt from the prose shield: it is a fact
+  // about where the element came from rather than a word someone chose.
+  //
+  // *Specific* is the distinction that makes this work without costing anything real. A
+  // publisher's naming convention for its own layout (`ad-break`, `advert-label`) reaches
+  // the ad vocabulary only through the compound-leading-`ad` rule, and `ad` is a generic
+  // word — it is why a stylesheet that predates the ad team says it. A vendor's or the
+  // industry's own name for the machinery (`adchoices`, `adunit`, `dfp`, `taboola`) is
+  // specific: nobody outside advertising writes those. The disclosure words are the
+  // exception carved out just below — `sponsored` and `advert` are specific enough to
+  // mean *something*, but not who paid for it, so they need provenance before they hide.
+  //
+  // Geometry is the other half, because a slot is the thing an ad is *poured into* and a
+  // measured rectangle is the only evidence the element has room. The cost is that an ad
+  // container measured at zero size — `display:none` at scan time, or a lazy slot that had
+  // not reserved its box — drops from hide to support unless its token is specific. That is
+  // the right way round: nothing is on screen to remove.
+  const adTokenIsSpecific = details.adMatchedOn !== null && AD_STRONG_SET.has(details.adMatchedOn);
+  const adTokenDefinitive =
+    adTokenIsSpecific || features.adSizeGeometry === 1 || features.pixelGeometry === 1;
+
+  // A disclosure word is the flag-14 hole: `sponsored` on a publisher's own story card
+  // and `sponsored` on an outbrain-style placement are the same four characters, and
+  // both were hidden at 98% because the specificity test could not tell them apart.
+  // What tells them apart is provenance — evidence the money is a third party's: an ad
+  // delivery attribute, a resource from an ad network, a vendor name in the resource
+  // path, or a cross-origin frame. Without one of those the word demotes out of
+  // `definitive` *and* out of the corroboration count, so `sponsored` plus a 300×250
+  // rectangle is a suggestion, not a removal.
+  const adProvenance =
+    intrinsicResourceFamily(families) ||
+    families.includes('url-path') ||
+    families.includes('resource-path') ||
+    families.includes('third-party-frame');
+  const disclosureMarkerUncorroborated =
+    details.adMatchedOn !== null && AD_DISCLOSURE_WORDS.has(details.adMatchedOn) && !adProvenance;
+
   const definitive: ElementEvidenceFamily[] = [];
   const supporting: ElementEvidenceFamily[] = [];
 
@@ -1457,6 +1703,12 @@ export function assessElementEvidence(analysis: EvidenceAssessmentInput): Elemen
       (consentDefinitive ? definitive : supporting).push(family);
     } else if (family === 'nag-marker') {
       (nagDefinitive ? definitive : supporting).push(family);
+    } else if (
+      family === 'ad-marker' &&
+      (!adTokenDefinitive || disclosureMarkerUncorroborated) &&
+      !intrinsicResourceFamily(families)
+    ) {
+      supporting.push(family);
     } else if (DEFINITIVE_FAMILIES.has(family)) {
       definitive.push(family);
     } else {
@@ -1467,6 +1719,13 @@ export function assessElementEvidence(analysis: EvidenceAssessmentInput): Elemen
   // Substantial copy with no definitive evidence is content, whatever shape it has.
   const contentShield = features.contentText >= 0.5 && definitive.length === 0;
 
+  // An ad delivery attribute or an ad-network frame is a fact about *where this element
+  // came from*, not a word someone chose for it, so it stands on its own.
+  const intrinsicResource =
+    definitive.some(
+      (family) => family === 'ad-attribute' || family === 'ad-network',
+    ) || intrinsicResourceFamily(families);
+
   // An element this long is the page itself, not a unit inside it. Two things overrule that.
   //
   // A *pinned overlay* is not the page — it sits on top of it — so a modal carrying pages of
@@ -1476,9 +1735,6 @@ export function assessElementEvidence(analysis: EvidenceAssessmentInput): Elemen
   // an ad network. Vocabulary cannot, and treating it as if it could was destructive — a policy
   // page about advertising carries the same class word as an ad slot, so `#advertising-policy`
   // and a `sponsored-article-body` were both hidden outright, prose and all.
-  const intrinsicResource = definitive.some(
-    (family) => family === 'ad-attribute' || family === 'ad-network',
-  );
   const proseShield =
     details.textLength >= ARTICLE_LENGTH_TEXT &&
     !intrinsicResource &&
@@ -1488,18 +1744,26 @@ export function assessElementEvidence(analysis: EvidenceAssessmentInput): Elemen
   let maxAction: ElementAction;
   let maxConfidence: number;
 
+  const countable = independentSupporting(families, supporting, disclosureMarkerUncorroborated);
+  // A marker/weak pair on one generic word is one word heard twice — no hint at all once
+  // the echo is discounted, which is why a bare `ad-break` stays a leave rather than a
+  // suggestion about a typographic divider.
+  const sameWordEcho = supporting.length === 2 && countable === 1;
+
   if (definitive.length > 0) {
     tier = 'corroborated';
     maxAction = 'hide';
     maxConfidence = 98;
-  } else if (supporting.length >= 2) {
+  } else if (countable >= 2) {
     // Two independent hints are a finding: an ad-shaped class *and* an ad-sized
     // rectangle, or a sticky bar *and* promo markup. One hint alone is not — that is
     // the line that keeps `class="banner"` from hiding a hero image.
     tier = 'corroborated';
     maxAction = 'hide';
     maxConfidence = 84;
-  } else if (supporting.length === 1) {
+  } else if ((countable === 1 && !sameWordEcho) || disclosureMarkerUncorroborated) {
+    // One real hint — or a disclosure word with nothing behind it — can point at the
+    // element and no more.
     tier = 'single-signal';
     maxAction = 'suggest';
     maxConfidence = isShapeOnlyFamily(supporting[0]) ? 52 : 58;
@@ -1604,6 +1868,7 @@ export const ELEMENT_HAND_TUNED_WEIGHTS: ElementWeightSet = {
     socialHostMatch: -2,
     urlPathToken: 2.5,
     thirdPartyFrame: 2,
+    cnameCloak: 3,
     passiveSource: 0.5,
     pixelGeometry: -2,
     adSizeGeometry: 4,
@@ -1638,6 +1903,7 @@ export const ELEMENT_HAND_TUNED_WEIGHTS: ElementWeightSet = {
     socialHostMatch: -2,
     urlPathToken: 2.5,
     thirdPartyFrame: 3,
+    cnameCloak: 4,
     passiveSource: 1.5,
     pixelGeometry: 7,
     adSizeGeometry: -3,
@@ -1666,6 +1932,7 @@ export const ELEMENT_HAND_TUNED_WEIGHTS: ElementWeightSet = {
     socialHostMatch: 8,
     urlPathToken: 2,
     thirdPartyFrame: 1.5,
+    cnameCloak: -1,
     passiveSource: 0,
     pixelGeometry: -4,
     adSizeGeometry: -2,
@@ -1694,6 +1961,7 @@ export const ELEMENT_HAND_TUNED_WEIGHTS: ElementWeightSet = {
     socialHostMatch: -6,
     urlPathToken: -2,
     thirdPartyFrame: -1.5,
+    cnameCloak: -3,
     passiveSource: -0.5,
     pixelGeometry: -3,
     adSizeGeometry: -3,
@@ -1734,6 +2002,7 @@ const FEATURE_LABELS: Record<ElementFeatureName, string> = {
   measureHostMatch: 'Measurement network source',
   socialHostMatch: 'Social embed source',
   urlPathToken: 'Ad-shaped resource path',
+  cnameCloak: 'DNS alias for a known provider',
   thirdPartyFrame: 'Third-party frame',
   passiveSource: 'Remote passive resource',
   pixelGeometry: 'Pixel geometry',
@@ -1872,6 +2141,8 @@ type ReasonKind =
   | 'overlay'
   | 'lure'
   | 'frame'
+  | 'cname'
+  | 'path'
   | 'copy'
   | 'no-evidence'
   | 'user'
@@ -1883,8 +2154,8 @@ type ReasonKind =
  * class name, which is only corroborating detail.
  */
 const REASON_PRIORITY: Record<ElementClass, readonly ReasonKind[]> = {
-  Ad: ['user', 'ad-attribute', 'ad-network', 'ad-marker', 'ancestor', 'ad-weak', 'ad-size', 'layout', 'frame', 'tier'],
-  Tracker: ['user', 'measurement-host', 'pixel', 'tracker-token', 'frame', 'ad-marker', 'tier'],
+  Ad: ['user', 'ad-attribute', 'ad-network', 'cname', 'ad-marker', 'ancestor', 'ad-weak', 'ad-size', 'layout', 'path', 'frame', 'tier'],
+  Tracker: ['user', 'measurement-host', 'cname', 'pixel', 'tracker-token', 'path', 'frame', 'ad-marker', 'tier'],
   Annoyance: ['user', 'anti-adblock', 'consent', 'nag', 'social', 'overlay', 'lure', 'ad-weak', 'frame', 'tier'],
   Content: ['user', 'copy', 'ad-size', 'layout', 'no-evidence', 'ad-weak', 'frame', 'tier'],
 };
@@ -1948,6 +2219,14 @@ function buildReasons(
         ? 'Cross-origin frame with no readable content.'
         : `Third-party frame from ${host}.`,
     );
+  }
+  if (has('cname-cloak') && details.cnameTarget) {
+    push('cname', `DNS aliases the source host to a known provider (${details.cnameTarget}).`);
+  }
+  if (has('resource-path') && details.pathEvidenceToken) {
+    // The token is a vendor or measurement noun — naming it as "tracking" would be wrong on
+    // an Ad verdict, where the same family corroborates.
+    push('path', `Resource path names a vendor or measurement term ("${details.pathEvidenceToken}").`);
   }
   if (features.overlayGeometry === 1) {
     push(
@@ -2039,7 +2318,22 @@ export function elementSignature(snapshot: ElementSnapshot): { exact: string; to
   // Nothing recognisable matched: key on the first identifier instead of the bare
   // tag, so a decision on one `<aside>` never generalizes to every `<aside>`.
   const structural = (el.classes ?? [])[0] ?? el.id ?? '';
-  return { exact: structural ? `${tag}|${tokenizeElementIdentifier(structural)[0] ?? structural}` : tag, token: null };
+  if (structural) {
+    return { exact: `${tag}|${tokenizeElementIdentifier(structural)[0] ?? structural}`, token: null };
+  }
+  // No identifier either: the resource the element *is* still distinguishes it —
+  // `script|doubleclick.net` records a decision about that script without turning every
+  // `<script>` the user ever sees into the same stored bias.
+  const resourceHost = hostOfUrl(el.src ?? '') ?? hostOfUrl(el.href ?? '');
+  if (resourceHost) return { exact: `${tag}|${resourceHost}`, token: null };
+  // The last identity left is the element's own text — `a|privacy-policy` is a poorer
+  // key than a host but still narrower than `a`.
+  const textToken = tokenizeElementIdentifier(el.text ?? '')[0];
+  if (textToken) return { exact: `${tag}|${textToken}`, token: null };
+  // A bare tag only remains for an element carrying no vocabulary, no identifier, no
+  // resource and no text — an empty `<div>`. Even then the stored bias scopes to
+  // elements that featureless, which is the honest limit of what a signature can say.
+  return { exact: tag, token: null };
 }
 
 // ─── Classifier ───────────────────────────────────────────────────────────────
@@ -2087,6 +2381,7 @@ function cacheKeyFor(el: ElementSnapshot): string {
     (el.ancestors ?? []).slice(0, 6).join('>'),
     el.sourceVerdict?.verdict ?? '',
     el.sourceVerdict?.category ?? '',
+    el.resolvedCname ?? '',
   ]);
 }
 
@@ -2113,6 +2408,8 @@ function emptyDetails(): ElementEvidenceDetails {
     textLength: 0,
     viewportCoverage: 0,
     urlPathTokens: [],
+    pathEvidenceToken: null,
+    cnameTarget: null,
   };
 }
 

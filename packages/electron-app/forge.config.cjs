@@ -1,4 +1,17 @@
 /** @type {import('@electron-forge/shared-types').ForgeConfig} */
+// The renderer webpack dev server binds 3000 by default — a port dev machines
+// often already have claimed (Rails, Next.js, Grafana). FORGE_RENDERER_PORT
+// moves it; the spawned Electron process inherits the same env so the
+// loadURL fallback in src/index.ts stays consistent without a second knob.
+const rendererPort = process.env.FORGE_RENDERER_PORT === undefined
+  ? 3000
+  : Number(process.env.FORGE_RENDERER_PORT);
+if (!Number.isInteger(rendererPort) || rendererPort < 1 || rendererPort > 65535) {
+  throw new Error(
+    `FORGE_RENDERER_PORT must be an integer between 1 and 65535, got ${JSON.stringify(process.env.FORGE_RENDERER_PORT)}`
+  );
+}
+
 const config = {
   packagerConfig: {
     name: 'Blockingmachine',
@@ -128,10 +141,13 @@ const config = {
                 js: './src/preload.ts'
               }
             }
-          ],
-          port: 3000,
-          loggerPort: 9000
+          ]
         },
+        // plugin-webpack reads port/loggerPort from the top level of this
+        // config object — nesting them under `renderer` leaves the defaults
+        // (3000/9000) in force.
+        port: rendererPort,
+        loggerPort: 9000,
         devContentSecurityPolicy: "default-src 'self' 'unsafe-inline' data:; script-src 'self' 'unsafe-eval' 'unsafe-inline' data:"
       }
     }

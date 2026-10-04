@@ -113,10 +113,19 @@
  * Usage:
  *   node scripts/compile-tier-rulesets.mjs
  *   node scripts/compile-tier-rulesets.mjs --input filters/output/hosts.txt --budget 20000
+ *   node scripts/compile-tier-rulesets.mjs --shares core=40,ads=24
  *   node scripts/compile-tier-rulesets.mjs --hits ledger-hits.txt
  *   node scripts/compile-tier-rulesets.mjs --attribution path/to/categories
  *   node scripts/compile-tier-rulesets.mjs --check
  *   node scripts/compile-tier-rulesets.mjs --json
+ *
+ * `--shares` moves the boundary between tiers without editing `DEFAULT_SHARES` below: each
+ * pair is a tier and a whole number of points, and the points are scaled to whatever total the
+ * given tiers add up to, so `core=40,ads=24` is a two-way split and not a two-tier budget. A
+ * tier named with or without its `tier_` prefix is the same tier, a tier the repository does
+ * not have is refused with the list of ones it does, and so is a value that is not a whole
+ * number — the whole flag is refused rather than the valid half of it applied, because a split
+ * that quietly reverted to the defaults is exactly the answer nobody can see past.
  *
  * Where the evidence comes from:
  *   npm run ledger:merge -- --in export-1.json --in export-2.json --out ledger-hits.txt
@@ -129,6 +138,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, relative, basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeJson } from './stdout.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, '..');
@@ -150,22 +160,49 @@ export const TIER_IDS = [
   'tier_privacy',
   'tier_annoyances',
   'tier_security',
+  'tier_unclassified',
 ];
 
 /**
  * Tiers the repository ships no hand-curated content for.
  *
  * `tier_security` holds the embedded classifier's own malware and phishing verdicts, and those
- * exist only where a machine has run the classifier over a real blocklist. A fresh checkout
- * therefore ships it **empty**, and that is the correct state rather than a lost baseline — which
- * is why the three places that assert "a tier is non-empty" (the ruleset validator, `--check`
- * here, and the extension's tier/model agreement suite) have to be able to tell this tier apart
- * from the other four instead of being loosened for all of them.
+ * exist only where a machine has run the classifier over a real blocklist. `tier_unclassified` holds
+ * the hosts that are on the input list and that nothing claimed — there is no honest hand-picked
+ * subset of "hosts we could not place", and curating one would assert a classification this tier
+ * exists to stop asserting. A fresh checkout therefore ships both **empty**, and that is the correct
+ * state rather than a lost baseline — which is why the three places that assert "a tier is non-empty"
+ * (the ruleset validator, `--check` here, and the extension's tier/model agreement suite) have to be
+ * able to tell these tiers apart from the other four instead of being loosened for all of them.
  *
  * A tier in this list is still compiled additively like any other: it has no curated seed to
  * preserve, so everything it ships comes from the classifier input.
  */
-export const COMPILED_ONLY_TIERS = ['tier_security'];
+export const COMPILED_ONLY_TIERS = ['tier_security', 'tier_unclassified'];
+
+/**
+ * Tiers whose share is a ceiling, not a target: redistribution never tops them up.
+ *
+ * Every other tier is bounded by evidence — a classifier verdict, a vocabulary match, a publisher
+ * category — so its candidate pool is a function of what was actually found, and pass two of
+ * `allocateBudget` can hand it more than its share when another category is thin. That is the
+ * behaviour the shares are *for*: capacity a thin tier cannot use should not go unused.
+ *
+ * The unclassified tier is bounded by nothing but the input list itself, and it holds 89% of it.
+ * Proportional redistribution therefore hands it nearly every freed slot at *any* share, which
+ * turns the operator's share into a floor: `--shares tier_unclassified=0` shipped 19,933 rules
+ * (measured on the real hub list), and the per-tier omission line — the only place the share's
+ * failure to bind was visible — read as ordinary overflow. It is the only tier where "turn this
+ * off" and "ship twenty thousand rules" are the same command.
+ *
+ * **What it costs.** With this tier capped, the shipped list is smaller than the budget whenever the
+ * five categorised tiers cannot absorb the rest. On the real list at 30,000 that is the difference
+ * between 30,000 rules and roughly 25,000 — capacity that no tier is entitled to. That is the right
+ * trade for a bucket whose only claim is that it could not be placed: `tier_unclassified` is opt-in
+ * (`defaultEnabled: false`), so the rules are in the bundle and the user decides, and the omission
+ * line names every host that did not fit.
+ */
+export const HARD_CAPPED_TIERS = ['tier_unclassified'];
 
 /**
  * Share of the budget each tier may claim before redistribution, out of 100.
@@ -185,6 +222,16 @@ export const COMPILED_ONLY_TIERS = ['tier_security'];
  * previous shares (40:27:20:13 scaled by the remaining 88), which is why the numbers are not round.
  * An operator who disagrees can move the boundary without editing this file — the shares are a
  * starting point, and the per-tier omission line is what tells them whether it bound.
+ *
+ * The unclassified share is the one share that is a **ceiling** rather than a target, because that
+ * tier holds **104,818 of the 117,313** hosts on this repository's real hub list. Pass two of
+ * `allocateBudget` hands capacity out in proportion to what each tier is still holding back, and a
+ * tier holding nine tenths of the input holds essentially all of it — so its share behaved as a
+ * floor: across shares of 0, 5, 12, 20, 30 and 50 the tier shipped between 19,933 and 21,699 of
+ * the 30,000 rules, and `--shares tier_unclassified=0` meant "still ship twenty thousand". That is
+ * the one tier for which that is the wrong reading: it is the bucket of hosts no classifier, no
+ * vocabulary and no publisher category could place, so an operator who sets it to zero means it.
+ * See `HARD_CAPPED_TIERS` for the rule and what it costs.
  */
 export const DEFAULT_SHARES = {
   tier_core: 35,
@@ -192,6 +239,7 @@ export const DEFAULT_SHARES = {
   tier_privacy: 18,
   tier_annoyances: 11,
   tier_security: 12,
+  tier_unclassified: 12,
 };
 
 /**
@@ -485,6 +533,30 @@ export function readAttribution(dir) {
 }
 
 /**
+ * The manifest's source records, reduced to the fields a reader can act on.
+ *
+ * Kept defensive because the manifest is a file: a hand-edited field should degrade to
+ * absence rather than to a value of the wrong shape. A source that fetched nothing is still
+ * a source — it arrives with `error` set, so the report can say "attempted" instead of
+ * letting it vanish between the configured list and the produced one.
+ */
+export function manifestSources(manifest) {
+  if (!Array.isArray(manifest?.sources)) return [];
+  return manifest.sources
+    .filter((source) => source && typeof source === 'object')
+    .map((source) => ({
+      ...(typeof source.name === 'string' && source.name ? { name: source.name } : {}),
+      ...(typeof source.url === 'string' && source.url ? { url: source.url } : {}),
+      categories: Array.isArray(source.categories)
+        ? source.categories.filter((category) => typeof category === 'string')
+        : [],
+      rules: typeof source.rules === 'number' ? source.rules : 0,
+      hosts: typeof source.hosts === 'number' ? source.hosts : 0,
+      ...(typeof source.error === 'string' && source.error ? { error: source.error } : {}),
+    }));
+}
+
+/**
  * Chooses the tier for one host.
  *
  * Precedence, highest first:
@@ -650,8 +722,14 @@ export function allocateBudget(availableByTier, { budget, shares, order = TIER_I
   // would pour every freed slot into the first tier: with the hub's real list that turned
   // a 12,000 core cap into 19,900 rules and starved the other three tiers, which defeats
   // the point of having tiers at all.
+//
+// `HARD_CAPPED_TIERS` are excluded here, which is the whole point of the list: their share is a
+// ceiling, so a tier holding most of the input cannot have its share read back to it as a floor.
+// Their unused capacity still goes to everyone else; only they are refused the top-up.
   while (remaining > 0) {
-    const pending = order.filter((tier) => (leftover.get(tier) || []).length > 0);
+    const pending = order.filter(
+      (tier) => !HARD_CAPPED_TIERS.includes(tier) && (leftover.get(tier) || []).length > 0,
+    );
     if (pending.length === 0) break;
     const pendingTotal = pending.reduce((sum, tier) => sum + leftover.get(tier).length, 0);
     let progressed = false;
@@ -713,7 +791,7 @@ export const GENERATED_TIER_COUNTS: Record<string, number> | null = ${
   };
 
 /** Provenance for the last compilation, or null for the checked-in baseline. */
-export const GENERATED_TIER_SOURCE: { source: string; generatedAt: string; budget: number; omitted: number } | null = ${
+export const GENERATED_TIER_SOURCE: { source: string; generatedAt: string; budget: number; omitted: number; sources?: Array<{ name?: string; url?: string; error?: string }> } | null = ${
     meta
       ? JSON.stringify(
           {
@@ -721,6 +799,12 @@ export const GENERATED_TIER_SOURCE: { source: string; generatedAt: string; budge
             generatedAt: meta.generatedAt,
             budget: meta.budget,
             omitted: meta.omitted,
+            // The lists the build was compiled from, so "what was this built from" is
+            // answerable from the packaged bundle and not only on the hub that ran it.
+            // Failed fetches keep their `error`, so a thin tier reads as attempted.
+            ...(Array.isArray(meta.sources) && meta.sources.length > 0
+              ? { sources: meta.sources }
+              : {}),
           },
           null,
           2,
@@ -813,12 +897,15 @@ export function parseArgs(argv) {
     inputs: [],
     budget: GUARANTEED_STATIC_RULES,
     shares: { ...DEFAULT_SHARES },
-    // Defaults to an *opt-in* tier on purpose. Most of a large merged blocklist matches no
-    // vocabulary at all, and since `tier_core` is enabled on a fresh install, parking
-    // unclassified hosts there would silently make every user block thousands of hosts the
-    // classifier could not justify. Operators who want maximum default blocking set
-    // `--residual tier_core` deliberately.
-    residual: 'tier_ads',
+    // Defaults to the tier whose name is the truth about these hosts, and is an *opt-in* tier like
+    // it always was. Most of a large merged blocklist matches no vocabulary at all — 104,818 of the
+    // 117,313 hosts on this repository's real list — and since `tier_core` is enabled on a fresh
+    // install, parking them there would silently make every user block thousands of hosts the
+    // classifier could not justify. They used to land in `tier_ads`, which meant **96.6%** of a tier
+    // the popup labels "Ad networks" was a host nothing had ever called an ad: a user enabling that
+    // row was told they were getting ad blocking and was getting a catch-all. Operators who want
+    // maximum default blocking still set `--residual tier_core` deliberately.
+    residual: 'tier_unclassified',
     check: false,
     json: false,
     quiet: false,
@@ -841,27 +928,94 @@ export function parseArgs(argv) {
     countsPath: GENERATED_COUNTS_PATH,
     cataloguePath: CATALOGUE_PATH,
   };
+  // Every value flag also accepts the `--name=value` form, like the shared parser's scripts do.
+  // The split happens here rather than inside the loop so a `--flag=` with nothing after it is a
+  // bare `=` — an empty value, refused like any other missing one — and a flag nobody knows keeps
+  // its `=` so the unknown-argument refusal names the whole token.
+  const VALUE_FLAGS = new Set([
+    '--input', '-i', '--budget', '--hits', '--attribution', '--security',
+    '--residual', '--shares', '--rules-dir', '--counts-path', '--catalogue-path',
+  ]);
+  argv = argv.flatMap((token) => {
+    const separator = token.indexOf('=');
+    if (separator < 0 || !VALUE_FLAGS.has(token.slice(0, separator))) return [token];
+    const name = token.slice(0, separator);
+    const inline = token.slice(separator + 1);
+    if (inline === '') {
+      throw new Error(`${name} needs a value — a bare ${name}= is not one.`);
+    }
+    return [name, inline];
+  });
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = () => argv[++i];
+    /**
+     * A flag that names a file must be given one. `--hits` at end of argv used to leave the
+     * option `undefined` — which reads identically to "never passed", so a missing value silently
+     * compiled the unmeasured plan the flag exists to ask for — and `--hits --check` consumed the
+     * next *flag* as the path, losing both. A flag-shaped value is a missing value — and a
+     * `-x`-shaped one is too, since no path these flags take legitimately starts with a dash.
+     */
+    const requiredValue = (flag, what) => {
+      const requested = next();
+      if (requested === undefined || (requested !== '-' && requested.startsWith('-'))) {
+        throw new Error(`${flag} needs ${what}.`);
+      }
+      return requested;
+    };
     if (arg === '--input' || arg === '-i') {
       // `--input tier_ads=list.txt` attributes an entire list to one tier and is exact;
       // a bare path is classified by vocabulary because a merged blocklist has lost its
       // source attribution.
-      const spec = String(next());
+      const spec = String(requiredValue(arg, 'a list file or a tier=list pair'));
       const separator = spec.indexOf('=');
-      const tier = separator > 0 ? normalizeTierName(spec.slice(0, separator)) : null;
+      // A `name=path` spec whose name does not map to a tier is refused rather than read as a
+      // path: `--input tier_adz=list.txt` was silently compiling `tier_adz=list.txt` as a file —
+      // or crashing on it — instead of saying `tier_adz` is not a tier. A name is tier-shaped
+      // when it contains nothing a path would (no separators or dots); a genuine file with an `=`
+      // in its name still parses, via a path that carries one: `./file=name.txt`.
+      const name = separator > 0 ? spec.slice(0, separator) : null;
+      const tier = name !== null && /^[a-zA-Z0-9_-]+$/.test(name) ? normalizeTierName(name) : null;
+      if (name !== null && /^[a-zA-Z0-9_-]+$/.test(name) && !tier) {
+        throw new Error(
+          `--input is not a tier: ${JSON.stringify(name)}. ` +
+            `Name one of ${TIER_IDS.join(', ')} (the tier_ prefix is optional), ` +
+            `or pass a path — a filename can carry a separator to disambiguate.`,
+        );
+      }
       options.inputs.push({
         path: resolve(tier ? spec.slice(separator + 1) : spec),
         tier,
       });
-    } else if (arg === '--budget') options.budget = Number.parseInt(next(), 10);
-    else if (arg === '--hits') options.hits = next();
-    else if (arg === '--attribution') options.attribution = next();
+    } else if (arg === '--budget') {
+      // Refused rather than defaulted, for the same reason `--residual` and `--shares` refuse a
+      // value they cannot honour: the budget is the number every plan is measured against, so a
+      // typo answered with Chrome's guaranteed floor is a silent answer that still produces a
+      // plan — a 30,000-rule one, to a request for something else. `parseInt` made that worse
+      // than a plain typo, because it answers a *readable* number to an unreadable one: `1e6`
+      // became 1, and `0`, `-5` and a missing value all became 30,000. A whole number of rules,
+      // or a refusal.
+      const requested = next();
+      const text = requested === undefined ? '' : String(requested).trim();
+      if (!/^\d+$/.test(text) || Number(text) <= 0) {
+        throw new Error(
+          requested === undefined
+            ? `--budget needs a whole number of rules: the total across all tiers. ` +
+              `Chrome guarantees ${GUARANTEED_STATIC_RULES}.`
+            : `--budget is not a whole number of rules: ${JSON.stringify(String(requested))}. ` +
+              `Chrome guarantees ${GUARANTEED_STATIC_RULES} across all tiers.`,
+        );
+      }
+      options.budget = Number(text);
+    }
+    else if (arg === '--hits') options.hits = requiredValue('--hits', 'a hit-ledger export to rank against');
+    else if (arg === '--attribution')
+      options.attribution = requiredValue('--attribution', 'a category-attribution directory');
     // The classifier's verdicts, for `tier_security`. A named file that does not exist is an
     // error rather than a silent fall back to an empty tier, for the same reason a mistyped
     // `--hits` path is: the operator named it, so shipping without it has to be loud.
-    else if (arg === '--security') options.security = next();
+    else if (arg === '--security')
+      options.security = requiredValue('--security', 'a verdict file for tier_security');
     else if (arg === '--no-security') options.security = false;
     else if (arg === '--residual') {
       // Refused rather than defaulted, for the same reason `--hits` and `--security` refuse a
@@ -884,19 +1038,78 @@ export function parseArgs(argv) {
       options.residual = residual;
     }
     else if (arg === '--shares') {
-      for (const part of String(next()).split(',')) {
-        const [tier, share] = part.split(':');
-        if (TIER_IDS.includes(tier)) options.shares[tier] = Number.parseInt(share, 10) || 0;
+      // Refused rather than defaulted, for the same reason `--residual` refuses a name it cannot
+      // honour: shares decide how the budget is split, so a typo answered with the default split
+      // is a silent answer to a question the operator asked — and the answer looks like a plan.
+      // Every part is validated before any of them is applied, because a half-applied split is
+      // harder to notice than a rejected one.
+      //
+      // `tier_ads:24` is accepted beside `tier_ads=24`. The colon is what this parser used to
+      // split on and `=` is what every example (and `--input`) is written with, so both are real
+      // spellings; the previous version split on the colon only, which made the documented `=`
+      // form silently do nothing, and matched the tier against `TIER_IDS` directly, which made
+      // the prefix-less form do nothing too.
+      const requested = next();
+      if (requested === undefined) {
+        throw new Error(
+          `--shares needs at least one tier=share pair: ${TIER_IDS.join(', ')}.`,
+        );
       }
-    } else if (arg === '--rules-dir') options.rulesDir = resolve(next());
-    else if (arg === '--counts-path') options.countsPath = resolve(next());
-    else if (arg === '--catalogue-path') options.cataloguePath = resolve(next());
+      const shares = { ...options.shares };
+      for (const part of String(requested).split(',')) {
+        const text = part.trim();
+        const pair = /^([^=:]+)\s*[=:]\s*(.*)$/.exec(text);
+        if (!pair) {
+          throw new Error(
+            `--shares takes comma-separated tier=share pairs — one of ${TIER_IDS.join(', ')} ` +
+              `(the tier_ prefix is optional), as in ${TIER_IDS[0]}=40. ` +
+              `Got ${JSON.stringify(text)}.`,
+          );
+        }
+        const tier = normalizeTierName(pair[1]);
+        if (!tier) {
+          throw new Error(
+            `--shares is not a tier: ${JSON.stringify(pair[1].trim())}. ` +
+              `Name one of ${TIER_IDS.join(', ')} (the tier_ prefix is optional).`,
+          );
+        }
+        // A share is a whole number of points out of a hundred, scaled to whatever total the
+        // tiers were given. `parseInt(share) || 0` used to answer `12abc`, `-4` and `` alike
+        // with 0 — a share of nothing, which is the opposite of what a typo usually meant.
+        if (!/^\d+$/.test(pair[2].trim())) {
+          throw new Error(
+            `--shares needs a whole number of points for ${tier}, not ${JSON.stringify(pair[2].trim())}.`,
+          );
+        }
+        shares[tier] = Number.parseInt(pair[2].trim(), 10);
+      }
+      options.shares = shares;
+    } else if (arg === '--rules-dir')
+      options.rulesDir = resolve(requiredValue('--rules-dir', 'a tier ruleset directory'));
+    else if (arg === '--counts-path')
+      options.countsPath = resolve(requiredValue('--counts-path', 'a generated tier-counts file'));
+    else if (arg === '--catalogue-path')
+      options.cataloguePath = resolve(requiredValue('--catalogue-path', 'a tier catalogue module'));
     else if (arg === '--check') options.check = true;
     else if (arg === '--json') options.json = true;
     else if (arg === '--quiet') options.quiet = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
+    else {
+      // The last line of the refusal contract: an argument nothing matched is a typo'd flag or a
+      // stray positional, and either way it was silently doing nothing. `--residul tier_ads` used
+      // to compile a plan with the default residual and print it as if that were the plan asked
+      // for.
+      throw new Error(
+        `Unknown argument: ${JSON.stringify(arg)}. ` +
+          `Flags: --input, --budget, --hits, --attribution, --security, --no-security, ` +
+          `--residual, --shares, --rules-dir, --counts-path, --catalogue-path, ` +
+          `--check, --json, --quiet, --help.`,
+      );
+    }
   }
-  if (!Number.isFinite(options.budget) || options.budget <= 0) options.budget = GUARANTEED_STATIC_RULES;
+  // `budget` is the guaranteed floor or a value `--budget` already refused, so there is no
+  // post-hoc repair left to do here — which is the point. Every other flag that can be given a
+  // value it cannot honour says so itself.
   return options;
 }
 
@@ -984,6 +1197,7 @@ export function compile(options) {
 
     attribution = {
       source: displayPath(dir),
+      sources: manifestSources(read.manifest),
       categories: read.manifest.categories ?? [],
       hosts: read.hostCategories.size,
       tiered: hostTierByHost.size,
@@ -1190,6 +1404,7 @@ export function compile(options) {
       attribution: attribution
         ? {
             source: attribution.source,
+            sources: attribution.sources,
             categories: attribution.categories,
             hosts: attribution.hosts,
             tiered: attribution.tiered,
@@ -1279,14 +1494,14 @@ export function readCatalogueRuleCounts(path = CATALOGUE_PATH) {
  * printable `urlFilter`) belongs to `verify:mv3`, which runs the same validator the runtime uses,
  * rather than being duplicated.
  */
-export function checkCuratedBaseline({ rulesDir = RULES_DIR, quiet = false, cataloguePath = CATALOGUE_PATH } = {}) {
-  let problem = false;
+export function checkCuratedBaseline({ rulesDir = RULES_DIR, quiet = false, cataloguePath = CATALOGUE_PATH, json = false } = {}) {
+  const problems = [];
   const declared = readCatalogueRuleCounts(cataloguePath);
   for (const tier of TIER_IDS) {
     const file = resolve(rulesDir, `${tier}.json`);
     if (!existsSync(file)) {
       console.error(`❌ [Tiers] ${basename(file)} is missing`);
-      problem = true;
+      problems.push({ tier, problem: 'missing' });
       continue;
     }
     let rules;
@@ -1294,7 +1509,7 @@ export function checkCuratedBaseline({ rulesDir = RULES_DIR, quiet = false, cata
       rules = JSON.parse(readFileSync(file, 'utf8'));
     } catch (err) {
       console.error(`❌ [Tiers] ${basename(file)} is not valid JSON: ${err?.message || err}`);
-      problem = true;
+      problems.push({ tier, problem: 'not valid JSON' });
       continue;
     }
     // A compiled-only tier is legitimately empty on a checkout where the classifier has never
@@ -1304,17 +1519,23 @@ export function checkCuratedBaseline({ rulesDir = RULES_DIR, quiet = false, cata
     const compiledOnly = COMPILED_ONLY_TIERS.includes(tier);
     if (!Array.isArray(rules) || (rules.length === 0 && !compiledOnly)) {
       console.error(`❌ [Tiers] ${basename(file)} is not a non-empty ruleset array`);
-      problem = true;
+      problems.push({ tier, problem: 'not a non-empty ruleset array' });
       continue;
     }
     if (declared && !compiledOnly && declared[tier] !== rules.length) {
       console.error(
         `❌ [Tiers] ${basename(file)} holds ${rules.length} rule(s) but the catalogue declares ${declared[tier]}`,
       );
-      problem = true;
+      problems.push({ tier, problem: 'count differs from the catalogue', rules: rules.length, declared: declared[tier] });
     }
   }
-  if (problem) return 1;
+  if (json) {
+    // A `--check` verdict is a payload like any other: one document through the shared writer,
+    // diagnostics on stderr where they always were.
+    writeJson({ check: 'curated-baseline', ok: problems.length === 0, problems, declared });
+    return problems.length ? 1 : 0;
+  }
+  if (problems.length) return 1;
   if (!quiet) {
     const detail = declared
       ? TIER_IDS.map((tier) => `${tier}:${declared[tier]}`).join(', ')
@@ -1369,19 +1590,33 @@ function main() {
         rulesDir: options.rulesDir,
         quiet: options.quiet,
         cataloguePath: options.cataloguePath,
+        json: options.json,
       });
     }
-    let stale = false;
+    const staleTiers = [];
     for (const tier of TIER_IDS) {
       const file = resolve(options.rulesDir, `${tier}.json`);
       const expected = serializeRuleset(result.tiers.get(tier) || []);
       const actual = existsSync(file) ? readFileSync(file, 'utf8') : '';
       if (actual !== expected) {
-        stale = true;
+        staleTiers.push(tier);
         console.error(`❌ [Tiers] ${tier} is stale (${basename(file)} differs from the compiled plan)`);
       }
     }
-    if (stale) {
+    if (options.json) {
+      // `--check --json` used to run the check and print the human line, so the flag that asked
+      // for a document was silently answered with prose. The verdict is a payload: fresh or not,
+      // which tiers are stale, and the totals the plan was compared against.
+      writeJson({
+        check: 'compiled-plan',
+        ok: staleTiers.length === 0,
+        staleTiers,
+        total: report.total,
+        budget: report.budget,
+      });
+      return staleTiers.length ? 1 : 0;
+    }
+    if (staleTiers.length) {
       console.error('   Run: npm run compile:tiers');
       return 1;
     }
@@ -1399,12 +1634,22 @@ function main() {
       generatedAt: new Date().toISOString(),
       budget: report.budget,
       omitted: report.omittedTotal,
+      sources: report.attribution?.sources
+        ?.filter((s) => s.name || s.url)
+        .map((s) => ({
+          ...(s.name ? { name: s.name } : {}),
+          ...(s.url ? { url: s.url } : {}),
+          ...(s.error ? { error: s.error } : {}),
+        })),
     }),
     'utf8',
   );
 
   if (options.json) {
-    console.log(JSON.stringify(report, null, 2));
+    // One writer for every machine-readable payload: stdout is the document and nothing else.
+    // `console.log` here would still emit the same bytes today — which is exactly how the first
+    // divergent writer always looks — so the route is the shared one.
+    writeJson(report);
     return 0;
   }
 
@@ -1493,6 +1738,17 @@ function main() {
       if (a.unmapped.length > 0) {
         console.log(
           `            no tier for: ${a.unmapped.join(', ')} (counted, left to the residual)`,
+        );
+      }
+      if (a.sources.length > 0) {
+        const producing = a.sources.filter((s) => !s.error);
+        const failed = a.sources.filter((s) => s.error);
+        const label = (s) => s.name || s.url || 'an unnamed source';
+        console.log(
+          `            built from ${producing.map(label).join(', ') || 'nothing that produced'}` +
+            (failed.length > 0
+              ? ` · ${failed.length} attempted and failed: ${failed.map(label).join(', ')}`
+              : ''),
         );
       }
     } else {

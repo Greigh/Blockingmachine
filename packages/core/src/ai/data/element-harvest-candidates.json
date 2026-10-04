@@ -5,7 +5,10 @@
     "calibrates: the graded corpus is packages/core/src/ai/elementEvalCorpus.ts, and a candidate",
     "enters it only when a person promotes it. `human: null` means nobody has ruled on this shape,",
     "so no case may be written for it; `observed` is what the model said at capture time and is",
-    "provenance, not a label. Text is truncated to what the classifier can use and no URL is kept."
+    "provenance, not a label. `human.scope` records how far a decision is claimed to reach:",
+    "absent means the click ruled on one element, and only a reviewer-set `shape` scope lets a",
+    "proposal pin the whole shape at hide or leave. Text is truncated to what the classifier",
+    "can use and no URL is kept."
   ],
   "sources": [
     "packages/core/src/ai/data/element-harvest.jsonl"
@@ -14,24 +17,25 @@
   "generatedFrom": "2026-09-29T09:30:40.000Z",
   "graded": {
     "corpus": "packages/core/src/ai/elementEvalCorpus.ts",
-    "cases": 162,
+    "cases": 230,
     "note": "Unchanged by this run. Nothing here feeds the weight fit, the harness or the calibration metric."
   },
   "stats": {
     "hosts": 5,
-    "queued": 10,
-    "labelled": 10,
+    "queued": 11,
+    "labelled": 11,
     "unlabelled": 0,
-    "duplicates": 6,
+    "duplicates": 5,
     "stale": 0,
     "rejected": 0,
     "capped": 0
   },
   "candidates": [
     {
-      "id": "theguardian.com/img|dcr",
+      "id": "theguardian.com/img|dcr/dcr-11wzo8p",
       "host": "theguardian.com",
       "signature": "img|dcr",
+      "leadingIdentifier": "dcr-11wzo8p",
       "firstSeen": 1790673360000,
       "lastSeen": 1790673480000,
       "sightings": 3,
@@ -54,7 +58,7 @@
         "height": 0
       },
       "case": {
-        "label": "harvest-theguardian-com-img-dcr",
+        "label": "harvest-theguardian-com-img-dcr-dcr-11wzo8p",
         "family": "harvest",
         "snapshot": {
           "tag": "img",
@@ -68,56 +72,17 @@
         "expected": [
           "Content"
         ],
-        "maxAction": "leave",
-        "minAction": "leave",
-        "notes": "Harvested from theguardian.com · img|dcr · 3 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "maxAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from theguardian.com · img|dcr · 3 sighting(s); a person marked this element \"keep\" — element scope, so hiding it is a defect but the shape is not pinned at leave. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape is always content.",
         "promoted": true
       }
     },
     {
-      "id": "nytimes.com/div|promo",
-      "host": "nytimes.com",
-      "signature": "div|promo",
-      "firstSeen": 1790674200000,
-      "lastSeen": 1790674220000,
-      "sightings": 2,
-      "observed": {
-        "elementClass": "Content",
-        "action": "leave",
-        "confidence": 84
-      },
-      "human": {
-        "action": "keep",
-        "at": 1790676300000
-      },
-      "snapshot": {
-        "tag": "div",
-        "classes": [
-          "g-promo-slim"
-        ]
-      },
-      "case": {
-        "label": "harvest-nytimes-com-div-promo",
-        "family": "harvest",
-        "snapshot": {
-          "tag": "div",
-          "classes": [
-            "g-promo-slim"
-          ]
-        },
-        "expected": [
-          "Content"
-        ],
-        "maxAction": "leave",
-        "minAction": "leave",
-        "notes": "Harvested from nytimes.com · div|promo · 2 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
-        "promoted": true
-      }
-    },
-    {
-      "id": "github.com/a|social",
+      "id": "github.com/a|social/SocialLinks-module__iconLink",
       "host": "github.com",
       "signature": "a|social",
+      "leadingIdentifier": "SocialLinks-module__iconLink",
       "firstSeen": 1790673840000,
       "lastSeen": 1790673841000,
       "sightings": 2,
@@ -145,7 +110,7 @@
         "text": ""
       },
       "case": {
-        "label": "harvest-github-com-a-social",
+        "label": "harvest-github-com-a-social-sociallinks-module-iconlink",
         "family": "harvest",
         "snapshot": {
           "tag": "a",
@@ -164,16 +129,17 @@
         "expected": [
           "Content"
         ],
-        "maxAction": "leave",
-        "minAction": "leave",
-        "notes": "Harvested from github.com · a|social · 2 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "maxAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from github.com · a|social · 2 sighting(s); a person marked this element \"keep\" — element scope, so hiding it is a defect but the shape is not pinned at leave. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape is always content.",
         "promoted": true
       }
     },
     {
-      "id": "github.com/script",
+      "id": "github.com/script|github.githubassets.com",
       "host": "github.com",
-      "signature": "script",
+      "signature": "script|github.githubassets.com",
+      "leadingIdentifier": null,
       "firstSeen": 1790673600000,
       "lastSeen": 1790673605000,
       "sightings": 2,
@@ -193,7 +159,7 @@
         "height": 0
       },
       "case": {
-        "label": "harvest-github-com-script",
+        "label": "harvest-github-com-script-github-githubassets-com",
         "family": "harvest",
         "snapshot": {
           "tag": "script",
@@ -204,9 +170,9 @@
         "expected": [
           "Content"
         ],
-        "maxAction": "leave",
-        "minAction": "leave",
-        "notes": "Harvested from github.com · script · 2 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "maxAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from github.com · script|github.githubassets.com · 2 sighting(s); a person marked this element \"keep\" — element scope, so hiding it is a defect but the shape is not pinned at leave. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape is always content.",
         "promoted": true
       }
     },
@@ -214,6 +180,7 @@
       "id": "developer.mozilla.org/script",
       "host": "developer.mozilla.org",
       "signature": "script",
+      "leadingIdentifier": null,
       "firstSeen": 1790673120000,
       "lastSeen": 1790673124000,
       "sightings": 2,
@@ -244,16 +211,17 @@
         "expected": [
           "Content"
         ],
-        "maxAction": "leave",
-        "minAction": "leave",
-        "notes": "Harvested from developer.mozilla.org · script · 2 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "maxAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from developer.mozilla.org · script · 2 sighting(s); a person marked this element \"keep\" — element scope, so hiding it is a defect but the shape is not pinned at leave. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape is always content.",
         "promoted": true
       }
     },
     {
-      "id": "nytimes.com/iframe|3pcheckiframeid",
+      "id": "nytimes.com/iframe|3pcheckiframeid/3pCheckIframeId",
       "host": "nytimes.com",
       "signature": "iframe|3pcheckiframeid",
+      "leadingIdentifier": "3pCheckIframeId",
       "firstSeen": 1790674240000,
       "lastSeen": 1790674240000,
       "sightings": 1,
@@ -277,7 +245,7 @@
         "visible": false
       },
       "case": {
-        "label": "harvest-nytimes-com-iframe-3pcheckiframeid",
+        "label": "harvest-nytimes-com-iframe-3pcheckiframeid-3pcheckiframeid",
         "family": "harvest",
         "snapshot": {
           "tag": "iframe",
@@ -295,15 +263,99 @@
           "Annoyance"
         ],
         "maxAction": "hide",
-        "minAction": "hide",
-        "notes": "Harvested from nytimes.com · iframe|3pcheckiframeid · 1 sighting(s); a person marked this element \"hide\", which fixes the action and not the class. Name the class before promoting — `expected[0]` is canonical and is currently a placeholder.",
+        "minAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from nytimes.com · iframe|3pcheckiframeid · 1 sighting(s); a person marked this element \"hide\" — element scope, so the case requires identification, not removal. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape generalises, and name the class before promoting — `expected[0]` is canonical and is currently a placeholder.",
         "promoted": false
       }
     },
     {
-      "id": "theguardian.com/div|ad",
+      "id": "nytimes.com/div|promo/live-updates-promo",
+      "host": "nytimes.com",
+      "signature": "div|promo",
+      "leadingIdentifier": "live-updates-promo",
+      "firstSeen": 1790674220000,
+      "lastSeen": 1790674220000,
+      "sightings": 1,
+      "observed": {
+        "elementClass": "Content",
+        "action": "leave",
+        "confidence": 84
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "div",
+        "classes": [
+          "live-updates-promo"
+        ]
+      },
+      "case": {
+        "label": "harvest-nytimes-com-div-promo-live-updates-promo",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "div",
+          "classes": [
+            "live-updates-promo"
+          ]
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from nytimes.com · div|promo · 1 sighting(s); a person marked this element \"keep\" — element scope, so hiding it is a defect but the shape is not pinned at leave. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape is always content.",
+        "promoted": false
+      }
+    },
+    {
+      "id": "nytimes.com/div|promo/g-promo-slim",
+      "host": "nytimes.com",
+      "signature": "div|promo",
+      "leadingIdentifier": "g-promo-slim",
+      "firstSeen": 1790674200000,
+      "lastSeen": 1790674200000,
+      "sightings": 1,
+      "observed": {
+        "elementClass": "Content",
+        "action": "leave",
+        "confidence": 84
+      },
+      "human": {
+        "action": "keep",
+        "at": 1790676300000
+      },
+      "snapshot": {
+        "tag": "div",
+        "classes": [
+          "g-promo-slim"
+        ]
+      },
+      "case": {
+        "label": "harvest-nytimes-com-div-promo-g-promo-slim",
+        "family": "harvest",
+        "snapshot": {
+          "tag": "div",
+          "classes": [
+            "g-promo-slim"
+          ]
+        },
+        "expected": [
+          "Content"
+        ],
+        "maxAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from nytimes.com · div|promo · 1 sighting(s); a person marked this element \"keep\" — element scope, so hiding it is a defect but the shape is not pinned at leave. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape is always content.",
+        "promoted": false
+      }
+    },
+    {
+      "id": "theguardian.com/div|ad/top-fronts-banner-ad-container",
       "host": "theguardian.com",
       "signature": "div|ad",
+      "leadingIdentifier": "top-fronts-banner-ad-container",
       "firstSeen": 1790674000000,
       "lastSeen": 1790674000000,
       "sightings": 1,
@@ -323,7 +375,7 @@
         ]
       },
       "case": {
-        "label": "harvest-theguardian-com-div-ad",
+        "label": "harvest-theguardian-com-div-ad-top-fronts-banner-ad-container",
         "family": "harvest",
         "snapshot": {
           "tag": "div",
@@ -334,16 +386,17 @@
         "expected": [
           "Content"
         ],
-        "maxAction": "leave",
-        "minAction": "leave",
-        "notes": "Harvested from theguardian.com · div|ad · 1 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "maxAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from theguardian.com · div|ad · 1 sighting(s); a person marked this element \"keep\" — element scope, so hiding it is a defect but the shape is not pinned at leave. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape is always content.",
         "promoted": false
       }
     },
     {
-      "id": "theguardian.com/div|promo",
+      "id": "theguardian.com/div|promo/g-promo-slim",
       "host": "theguardian.com",
       "signature": "div|promo",
+      "leadingIdentifier": "g-promo-slim",
       "firstSeen": 1790673960000,
       "lastSeen": 1790673960000,
       "sightings": 1,
@@ -363,7 +416,7 @@
         ]
       },
       "case": {
-        "label": "harvest-theguardian-com-div-promo",
+        "label": "harvest-theguardian-com-div-promo-g-promo-slim",
         "family": "harvest",
         "snapshot": {
           "tag": "div",
@@ -374,16 +427,17 @@
         "expected": [
           "Content"
         ],
-        "maxAction": "leave",
-        "minAction": "leave",
-        "notes": "Harvested from theguardian.com · div|promo · 1 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
-        "promoted": true
+        "maxAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from theguardian.com · div|promo · 1 sighting(s); a person marked this element \"keep\" — element scope, so hiding it is a defect but the shape is not pinned at leave. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape is always content.",
+        "promoted": false
       }
     },
     {
-      "id": "github.com/div|primer",
+      "id": "github.com/div|primer/Primer_Brand__ActionMenu-module__ActionMenu",
       "host": "github.com",
       "signature": "div|primer",
+      "leadingIdentifier": "Primer_Brand__ActionMenu-module__ActionMenu",
       "firstSeen": 1790673720000,
       "lastSeen": 1790673720000,
       "sightings": 1,
@@ -411,7 +465,7 @@
         "text": "Star"
       },
       "case": {
-        "label": "harvest-github-com-div-primer",
+        "label": "harvest-github-com-div-primer-primer-brand-actionmenu-module-actionmenu",
         "family": "harvest",
         "snapshot": {
           "tag": "div",
@@ -430,16 +484,17 @@
         "expected": [
           "Content"
         ],
-        "maxAction": "leave",
-        "minAction": "leave",
-        "notes": "Harvested from github.com · div|primer · 1 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "maxAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from github.com · div|primer · 1 sighting(s); a person marked this element \"keep\" — element scope, so hiding it is a defect but the shape is not pinned at leave. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape is always content.",
         "promoted": true
       }
     },
     {
-      "id": "en.wikipedia.org/img|mw",
+      "id": "en.wikipedia.org/img|mw/mw-logo-icon",
       "host": "en.wikipedia.org",
       "signature": "img|mw",
+      "leadingIdentifier": "mw-logo-icon",
       "firstSeen": 1790673243000,
       "lastSeen": 1790673243000,
       "sightings": 1,
@@ -462,7 +517,7 @@
         "height": 0
       },
       "case": {
-        "label": "harvest-en-wikipedia-org-img-mw",
+        "label": "harvest-en-wikipedia-org-img-mw-mw-logo-icon",
         "family": "harvest",
         "snapshot": {
           "tag": "img",
@@ -476,9 +531,9 @@
         "expected": [
           "Content"
         ],
-        "maxAction": "leave",
-        "minAction": "leave",
-        "notes": "Harvested from en.wikipedia.org · img|mw · 1 sighting(s); a person marked this element \"keep\". Promotion is a review, not a merge.",
+        "maxAction": "suggest",
+        "harvestScope": "element",
+        "notes": "Harvested from en.wikipedia.org · img|mw · 1 sighting(s); a person marked this element \"keep\" — element scope, so hiding it is a defect but the shape is not pinned at leave. Set `scope: 'shape'` on the decision only if a reviewer has checked the shape is always content.",
         "promoted": true
       }
     }

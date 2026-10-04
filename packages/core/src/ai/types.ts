@@ -14,6 +14,7 @@
 export const THREAT_CATEGORIES = [
   'Advertising',
   'Telemetry/Analytics',
+  'Consent/Annoyance',
   'CNAME Cloaking',
   'Malware/Phishing',
   'Clean',
@@ -46,6 +47,7 @@ export const AI_VERDICTS = [
   'ad_server',
   'tracker',
   'malicious',
+  'annoyance',
   'clean',
   'suspicious',
 ] as const;
@@ -245,6 +247,8 @@ export interface AiProviderConfig {
   ollamaUrl?: string; // Default http://127.0.0.1:11434
   ollamaModel?: string; // Default llama3.2
   apiKey?: string;
+  /** Electron-side sealed form of `apiKey` — set at rest, resolved to `apiKey` on read. */
+  apiKeyEncrypted?: string;
   apiEndpoint?: string;
   modelName?: string;
   allowlist?: string[];
@@ -390,6 +394,7 @@ export interface ReputationFeatures {
   knownSafeInfra: number;
   adKeywordWeight: number;
   trackerKeywordWeight: number;
+  consentKeywordWeight?: number;
   trigramPerplexity: number;
   entropySld: number;
   entropySubdomain?: number;
@@ -436,6 +441,7 @@ export interface DomainFeatureVector {
   trigramPerplexity: number;
   adKeywordWeight: number;
   trackerKeywordWeight: number;
+  consentKeywordWeight: number;
   cnameKnownTracker: number;
   cnameExternal: number;
   cnameDepth: number;
@@ -736,6 +742,14 @@ export function normalizeVerdict(
       return 'tracker';
     if (lower === 'malware' || lower === 'malicious' || lower === 'phishing')
       return 'malicious';
+    if (
+      lower === 'annoyance' ||
+      lower === 'annoyances' ||
+      lower === 'consent' ||
+      lower === 'consent_management' ||
+      lower === 'cmp'
+    )
+      return 'annoyance';
     if (lower === 'suspicious' || lower === 'unknown') return 'suspicious';
   }
   return fallback;
@@ -758,6 +772,10 @@ export function normalizeThreatCategory(
       return 'Advertising';
     if (/\b(?:telemetry|analytics?|tracker|tracking)\b/.test(lower))
       return 'Telemetry/Analytics';
+    if (
+      /\b(?:consent|annoyance|annoyances|cmp|gdpr|ccpa|cookie.?consent)\b/.test(lower)
+    )
+      return 'Consent/Annoyance';
     if (/\b(?:clean|safe|benign)\b/.test(lower)) return 'Clean';
   }
   return fallback;
@@ -823,6 +841,7 @@ export function createDefaultMiniAiPrediction(
       Clean: 1.0,
       Advertising: 0,
       'Telemetry/Analytics': 0,
+      'Consent/Annoyance': 0,
       'CNAME Cloaking': 0,
       'Malware/Phishing': 0,
       Unknown: 0,

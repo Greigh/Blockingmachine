@@ -5,6 +5,8 @@
  *   - The ingress dashboard UI (Home Assistant sidebar)
  *   - Segregated DNS / Browser rule feeds for AdGuard Home & Pi-hole
  *   - An Unbound local-zone feed for resolvers that cannot read an ABP list
+ *   - A Privoxy action file and a BIND RPZ zone rendered from the same DNS feed,
+ *     for the deploy targets whose artifact is a file copied onto the host
  *   - A local REST API: status, compile, rule browser, protection toggle,
  *     diagnostics, and Server-Sent Events for live Home Assistant automations
  *
@@ -18,13 +20,81 @@
 import { createServer } from 'node:http';
 import { promises as fs, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import { renderUnboundFeed, rulesToUnboundZones } from './unboundFeed.js';
+import { renderShadowrocketFeed, shadowrocketHostCount } from './shadowrocketFeed.js';
+import { renderPrivoxyFeed, privoxyPatternCount } from './privoxyFeed.js';
+import { renderBindRpzFeed, bindRpzRecordCount } from './bindFeed.js';
 
 const PORT = parseInt(process.env.FEED_PORT || '9191', 10);
 const DATA_DIR = process.env.DATA_DIR || '/data/blockingmachine';
 const AUTO_COMPILE = process.env.AUTO_COMPILE || '24h';
 const ENABLE_AI = process.env.ENABLE_AI !== 'false';
 const STARTED_AT = Date.now();
+
+// ─── Feed authentication ──────────────────────────────────────────────────────
+
+/**
+ * The optional token that locks every endpoint when set.
+ *
+ * The feeds are served on a published port, which on a not-fully-trusted network is readable by
+ * anyone who can reach it — and `/v1/protection` would let one of them pause blocking outright.
+ * When `feed_token` is configured the whole surface requires it; when empty, nothing changes and
+ * the LAN-open behaviour is preserved.
+ *
+ * Three credential shapes are accepted because consumers differ in what they can send:
+ * `?token=` for subscription URLs where no header is possible (Shadowrocket, some adlist
+ * fetchers), `Authorization: Bearer` for scripts, and `Authorization: Basic` — which is also what
+ * a client sends for a `http://user:token@host/` userinfo URL, so AdGuard Home, Pi-hole and curl
+ * all work without special-casing.
+ */
+const FEED_TOKEN = (process.env.FEED_TOKEN || '').trim();
+
+/** Constant-time comparison — the token is a credential, not a label. */
+function tokenMatches(candidate) {
+  if (!candidate || !FEED_TOKEN) return false;
+  const a = Buffer.from(String(candidate));
+  const b = Buffer.from(FEED_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function isAuthorized(req, url) {
+  if (!FEED_TOKEN) return true;
+  if (tokenMatches(url.searchParams.get('token'))) return true;
+
+  const header = req.headers.authorization || '';
+  const bearer = /^Bearer\s+(.+)$/i.exec(header);
+  if (bearer && tokenMatches(bearer[1].trim())) return true;
+
+  const basic = /^Basic\s+([A-Za-z0-9+/=]+)$/i.exec(header);
+  if (basic) {
+    const decoded = Buffer.from(basic[1], 'base64').toString('utf8');
+    // `user:token` is the standard shape; a bare `token` or `token:` is accepted because some
+    // fetchers hand the credential over without a username.
+    const password = decoded.includes(':') ? decoded.slice(decoded.indexOf(':') + 1) : decoded;
+    if (tokenMatches(password) || tokenMatches(decoded)) return true;
+  }
+  return false;
+}
+
+/** Rejects with a Basic challenge so browsers, curl and feed fetchers can answer it. */
+function rejectUnauthorized(res) {
+  res.writeHead(401, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'WWW-Authenticate': 'Basic realm="Blockingmachine feeds", charset="UTF-8"',
+  });
+  res.end(JSON.stringify({ error: 'Unauthorized — a feed token is configured on this add-on' }));
+}
+
+/**
+ * The URL the dashboard should print for a feed path, token included when one is configured.
+ * The page itself is behind the same check, so anyone who can read the rendered URL already knows
+ * the token — and a copied URL that lacks it would simply fail to fetch.
+ */
+function feedUrl(path) {
+  const base = `http://homeassistant.local:${PORT}${path}`;
+  return FEED_TOKEN ? `${base}?token=${encodeURIComponent(FEED_TOKEN)}` : base;
+}
 
 // ─── Baseline fallback protection ─────────────────────────────────────────────
 
@@ -237,6 +307,9 @@ function renderDashboard(dns, browser) {
     : 'Never (compile now to stamp the ledger)';
 
   const unboundZoneCount = rulesToUnboundZones(dns.rules).length;
+  const shadowrocketCount = shadowrocketHostCount(dns.rules);
+  const privoxyCount = privoxyPatternCount(dns.rules);
+  const rpzCount = bindRpzRecordCount(dns.rules);
   const dnsRulesPreview = dns.rules.slice(0, 60).map((r) => escapeHtml(r));
   const browserRulesPreview = browser.rules.slice(0, 60).map((r) => escapeHtml(r));
 
@@ -337,6 +410,9 @@ function renderDashboard(dns, browser) {
     <div class="card stat-card"><span class="stat-val" id="stat-dns">${compileStats.dnsRules}</span><span class="stat-label">DNS-Level Rules</span></div>
     <div class="card stat-card"><span class="stat-val" id="stat-browser">${compileStats.browserRules}</span><span class="stat-label">Browser Rules</span></div>
     <div class="card stat-card"><span class="stat-val" id="stat-unbound">${unboundZoneCount}</span><span class="stat-label">Unbound Zones</span></div>
+    <div class="card stat-card"><span class="stat-val" id="stat-shadowrocket">${shadowrocketCount}</span><span class="stat-label">Shadowrocket Rules</span></div>
+    <div class="card stat-card"><span class="stat-val" id="stat-privoxy">${privoxyCount}</span><span class="stat-label">Privoxy Patterns</span></div>
+    <div class="card stat-card"><span class="stat-val" id="stat-rpz">${rpzCount}</span><span class="stat-label">BIND RPZ Records</span></div>
     <div class="card stat-card"><span class="stat-val" id="stat-threats">${compileStats.quarantinedThreats}</span><span class="stat-label">AI Threats Quarantined</span></div>
   </div>
 
@@ -373,12 +449,15 @@ function renderDashboard(dns, browser) {
 
   <div class="card">
     <h2>📡 Local Feed Endpoints</h2>
-    <p class="muted">Wire these into Home Assistant's AdGuard Home or Pi-hole add-on, or into an Unbound resolver:</p>
-    <div class="feed"><span class="tag">DNS Feed</span><code>http://homeassistant.local:${PORT}/dns.txt</code><button data-copy="http://homeassistant.local:${PORT}/dns.txt">Copy</button></div>
-    <div class="feed"><span class="tag">Browser Feed</span><code>http://homeassistant.local:${PORT}/browser.txt</code><button data-copy="http://homeassistant.local:${PORT}/browser.txt">Copy</button></div>
-    <div class="feed"><span class="tag">Unbound Feed</span><code>http://homeassistant.local:${PORT}/unbound.conf</code><button data-copy="http://homeassistant.local:${PORT}/unbound.conf">Copy</button></div>
-    <div class="feed"><span class="tag">REST Status</span><code>http://homeassistant.local:${PORT}/v1/status</code><button data-copy="http://homeassistant.local:${PORT}/v1/status">Copy</button></div>
-    <div class="feed"><span class="tag">Live Events</span><code>http://homeassistant.local:${PORT}/v1/events</code><button data-copy="http://homeassistant.local:${PORT}/v1/events">Copy</button></div>
+    <p class="muted">Wire these into Home Assistant's AdGuard Home or Pi-hole add-on, into an Unbound resolver, or into a phone on this LAN:</p>
+    <div class="feed"><span class="tag">DNS Feed</span><code>${feedUrl('/dns.txt')}</code><button data-copy="${feedUrl('/dns.txt')}">Copy</button></div>
+    <div class="feed"><span class="tag">Browser Feed</span><code>${feedUrl('/browser.txt')}</code><button data-copy="${feedUrl('/browser.txt')}">Copy</button></div>
+    <div class="feed"><span class="tag">Unbound Feed</span><code>${feedUrl('/unbound.conf')}</code><button data-copy="${feedUrl('/unbound.conf')}">Copy</button></div>
+    <div class="feed"><span class="tag">Shadowrocket Feed</span><code>${feedUrl('/shadowrocket.conf')}</code><button data-copy="${feedUrl('/shadowrocket.conf')}">Copy</button></div>
+    <div class="feed"><span class="tag">Privoxy Feed</span><code>${feedUrl('/privoxy.action')}</code><button data-copy="${feedUrl('/privoxy.action')}">Copy</button></div>
+    <div class="feed"><span class="tag">BIND RPZ Feed</span><code>${feedUrl('/db.blockingmachine.rpz')}</code><button data-copy="${feedUrl('/db.blockingmachine.rpz')}">Copy</button></div>
+    <div class="feed"><span class="tag">REST Status</span><code>${feedUrl('/v1/status')}</code><button data-copy="${feedUrl('/v1/status')}">Copy</button></div>
+    <div class="feed"><span class="tag">Live Events</span><code>${feedUrl('/v1/events')}</code><button data-copy="${feedUrl('/v1/events')}">Copy</button></div>${FEED_TOKEN ? '\n    <p class="muted">A feed token is configured — the URLs above carry it, so they work as pasted. Keep them out of places you would not put a password.</p>' : ''}
   </div>
 
   <div class="card">
@@ -404,10 +483,14 @@ function renderDashboard(dns, browser) {
       <span class="k">Service</span><span>Blockingmachine Home Assistant Add-on</span>
       <span class="k">Version</span><span>1.1.0</span>
       <span class="k">Port</span><span>${PORT}</span>
+      <span class="k">Feed auth</span><span>${FEED_TOKEN ? 'token required on every endpoint' : 'open (LAN trust)'}</span>
       <span class="k">Data directory</span><span>${escapeHtml(DATA_DIR)}</span>
       <span class="k">DNS feed</span><span>${dns.source === 'file' ? 'published dns.txt' : 'baseline fallback'}</span>
       <span class="k">Browser feed</span><span>${browser.source === 'file' ? 'published browser.txt' : 'baseline fallback'}</span>
       <span class="k">Unbound feed</span><span>${unboundZoneCount} local-zone rules rendered from the ${dns.source === 'file' ? 'published dns.txt' : 'baseline fallback'}</span>
+      <span class="k">Shadowrocket feed</span><span>${shadowrocketCount} DOMAIN-SUFFIX rules for a phone on this LAN, from the same ${dns.source === 'file' ? 'published dns.txt' : 'baseline fallback'}</span>
+      <span class="k">Privoxy feed</span><span>${privoxyCount} action-file patterns rendered from the same ${dns.source === 'file' ? 'published dns.txt' : 'baseline fallback'}</span>
+      <span class="k">BIND RPZ feed</span><span>${rpzCount} policy records rendered from the same ${dns.source === 'file' ? 'published dns.txt' : 'baseline fallback'}</span>
     </div>
     <div class="meta-line"><a class="btn secondary" href="/v1/status" target="_blank" rel="noopener">Open raw status JSON</a></div>
   </div>
@@ -536,12 +619,23 @@ const server = createServer(async (req, res) => {
   }
 
   let pathname;
+  let reqUrl;
   try {
-    const reqUrl = new URL(req.url || '/', 'http://localhost');
+    reqUrl = new URL(req.url || '/', 'http://localhost');
     pathname = decodeURIComponent(reqUrl.pathname).toLowerCase();
   } catch {
     res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: 'Bad Request: Malformed URI' }));
+    return;
+  }
+
+  // Everything is gated when a feed token is configured — feeds, API and the dashboard alike,
+  // because the dashboard embeds rule previews and the feed URLs. The token is deliberately the
+  // only credential: an `X-Ingress-Path` header marks a request that came through Home
+  // Assistant's ingress proxy, but the same header is trivially set by anything that can reach
+  // this port directly, so it cannot be the trust boundary on a network that is not trusted.
+  if (!isAuthorized(req, reqUrl)) {
+    rejectUnauthorized(res);
     return;
   }
 
@@ -575,10 +669,14 @@ const server = createServer(async (req, res) => {
       aiRadar: { enabled: ENABLE_AI },
       feedServer: {
         port: PORT,
-        dnsFeedUrl: `http://homeassistant.local:${PORT}/dns.txt`,
-        browserFeedUrl: `http://homeassistant.local:${PORT}/browser.txt`,
-        unboundFeedUrl: `http://homeassistant.local:${PORT}/unbound.conf`,
-        eventsUrl: `http://homeassistant.local:${PORT}/v1/events`,
+        requiresAuth: Boolean(FEED_TOKEN),
+        dnsFeedUrl: feedUrl('/dns.txt'),
+        browserFeedUrl: feedUrl('/browser.txt'),
+        unboundFeedUrl: feedUrl('/unbound.conf'),
+        shadowrocketFeedUrl: feedUrl('/shadowrocket.conf'),
+        privoxyFeedUrl: feedUrl('/privoxy.action'),
+        bindRpzFeedUrl: feedUrl('/db.blockingmachine.rpz'),
+        eventsUrl: feedUrl('/v1/events'),
       },
       protection: {
         enabled: protection.enabled && !paused,
@@ -720,6 +818,56 @@ const server = createServer(async (req, res) => {
     const { dns } = await recomputeStats();
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(renderUnboundFeed(dns.rules));
+    return;
+  }
+
+  // 10. Shadowrocket Feed: /shadowrocket.conf
+  //
+  // A phone cannot read a DNS or hosts feed, and the desktop hub's feed only answers while that
+  // process is running. The add-on is already a long-lived service on the same LAN, so the rule set
+  // is served from here and a phone subscribes to the add-on rather than to a laptop.
+  if (
+    pathname === '/shadowrocket.conf' ||
+    pathname === '/shadowrocket.txt' ||
+    pathname === '/ruleset.conf'
+  ) {
+    const { dns } = await recomputeStats();
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(renderShadowrocketFeed(dns.rules));
+    return;
+  }
+
+  // 11. Privoxy Feed: /privoxy.action
+  //
+  // Privoxy reads a local action file, never a URL — the `actionsfile` directive takes a path — so
+  // this feed is transport for the copy step, the way the desktop feed is. The difference is which
+  // host answers: the add-on renders the action file from the DNS feed itself, so it serves a real
+  // artifact whatever export format the desktop is set to, and it answers while the desktop is off.
+  if (
+    pathname === '/privoxy.action' ||
+    pathname === '/privoxy.txt' ||
+    pathname === '/blockingmachine.action'
+  ) {
+    const { dns } = await recomputeStats();
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(renderPrivoxyFeed(dns.rules));
+    return;
+  }
+
+  // 12. BIND RPZ Feed: /db.blockingmachine.rpz
+  //
+  // BIND has no remote blocklist feature either — the zone file is a local artifact that has to be
+  // copied and `rndc reload`ed. Same transport role as the Privoxy feed: the add-on renders the
+  // policy records (with the SOA a zone cannot load without, and the wildcard pair a bare trigger
+  // needs) from the DNS feed, so the resolver's cron fetches from a host that stays up.
+  if (
+    pathname === '/db.blockingmachine.rpz' ||
+    pathname === '/bind.rpz' ||
+    pathname === '/rpz.blockingmachine'
+  ) {
+    const { dns } = await recomputeStats();
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(renderBindRpzFeed(dns.rules));
     return;
   }
 

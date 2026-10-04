@@ -16,6 +16,7 @@ import {
   normalizeLedgerRule,
   parseHitLedgerText,
   readBrowserLedgerSessions,
+  readLedgerTierTally,
   summarizeBrowserLedger,
   toHitLedgerText,
   type BrowserLedgerSession,
@@ -282,5 +283,207 @@ describe('hit-ledger text', () => {
         mergeBrowserLedger([session({ hits: [{ rule: '||a.example^', count: 1 }] })]),
       ),
     ).toContain('1 session across 1 day');
+  });
+});
+
+/**
+ * The per-tier axis through the merge. This is the export's reason for existing: the tier plan is
+ * weighted by how much each ruleset blocked, and a merge that could not report that left the
+ * measurement stuck in the popup that took it. The properties worth pinning are the ones that would
+ * make the number look better than it is — inheriting `minDays`, implying coverage it does not have,
+ * and writing tiers as rule lines.
+ */
+describe('the per-tier axis', () => {
+  const tiered = (overrides: Partial<BrowserLedgerSession> = {}): BrowserLedgerSession =>
+    session({
+      hits: [{ rule: '||ads.example^', count: 10 }],
+      tiers: [{ tier: 'tier_ads', count: 10 }],
+      ...overrides,
+    });
+
+  it('merges per-tier counts with the same days and sessions a rule gets', () => {
+    const aggregate = mergeBrowserLedger([
+      tiered({ startedAt: '2026-09-01T09:00:00.000Z' }),
+      tiered({ startedAt: '2026-09-02T09:00:00.000Z', tiers: [{ tier: 'tier_ads', count: 3 }] }),
+    ]);
+
+    expect(aggregate.tiers).toEqual([
+      { tier: 'tier_ads', count: 13, sessions: 2, days: ['2026-09-01', '2026-09-02'] },
+    ]);
+    expect(aggregate.tierSessions).toBe(2);
+    expect(aggregate.tierUnattributed).toBe(0);
+  });
+
+  it('accepts a session with no split and reports the coverage rather than filling it in', () => {
+    // Three exports written before the axis existed and one after. A table built from the four would
+    // describe a quarter of the evidence, and nothing in the totals would show it.
+    const aggregate = mergeBrowserLedger([
+      session({ startedAt: '2026-09-01T09:00:00.000Z', hits: [{ rule: '||a.example^', count: 5 }] }),
+      session({ startedAt: '2026-09-02T09:00:00.000Z', hits: [{ rule: '||a.example^', count: 5 }] }),
+      session({ startedAt: '2026-09-03T09:00:00.000Z', hits: [{ rule: '||a.example^', count: 5 }] }),
+      tiered({ startedAt: '2026-09-04T09:00:00.000Z' }),
+    ]);
+
+    expect(aggregate.tiers).toHaveLength(1);
+    expect(aggregate.tierSessions).toBe(1);
+    expect(aggregate.sessions).toBe(4);
+    // The block axis is untouched: a missing tier measurement is not a missing session, and the
+    // three untiered sessions still contribute their rules.
+    expect(aggregate.rules.map((rule) => rule.rule)).toEqual(['||a.example^', '||ads.example^']);
+  });
+
+  it('is not filtered by minDays, which is a statement about rules', () => {
+    // `--min-days` asks which *rules* are durable enough to ship. A tier is the evidence that judged
+    // that filter, so dropping a tier from the table deletes the measurement of the decision itself.
+    const aggregate = mergeBrowserLedger(
+      [tiered({ startedAt: '2026-09-01T09:00:00.000Z' })],
+      { minDays: 7 },
+    );
+
+    expect(aggregate.rules).toEqual([]);
+    expect(aggregate.tiers).toEqual([
+      { tier: 'tier_ads', count: 10, sessions: 1, days: ['2026-09-01'] },
+    ]);
+  });
+
+  it('counts blocks that named no tier, so the split adds up to the blocks', () => {
+    const aggregate = mergeBrowserLedger([
+      // 10 blocks, all attributed to a tier. A second session of 7 blocks from the synced list,
+      // which is not a ruleset at all and so names no tier.
+      tiered(),
+      session({
+        startedAt: '2026-09-02T09:00:00.000Z',
+        hits: [{ rule: '||synced.example^', count: 7 }],
+        tierUnattributed: 7,
+      }),
+    ]);
+
+    expect(aggregate.tierUnattributed).toBe(7);
+    const tierTotal = aggregate.tiers.reduce((sum, tier) => sum + tier.count, 0);
+    const blockTotal = aggregate.rules.reduce((sum, rule) => sum + rule.count, 0);
+    // The check a reader can make without trusting anything above it: every block is either on a tier
+    // or counted as one that was not, and nothing is quietly in neither column.
+    expect(tierTotal + aggregate.tierUnattributed).toBe(blockTotal);
+    expect(blockTotal).toBe(17);
+  });
+
+  it('refuses a tier id the catalogue does not know, and counts the refusal', () => {
+    // These ids are what a plan's weightings are keyed on, so one nobody recognises could not be
+    // weighed — and storing it would put a row in the table that looks measured.
+    const read = readBrowserLedgerSessions([
+      session({
+        tiers: [
+          { tier: 'tier_ads', count: 4 },
+          { tier: 'tier_invented', count: 100 },
+          { tier: 'CORE', count: 50 },
+        ] as never,
+      }),
+    ]);
+
+    expect(read.sessions[0]?.tiers).toEqual([{ tier: 'tier_ads', count: 4 }]);
+    expect(read.tierRejected).toBe(2);
+  });
+
+  it('counts a refused tier id even when the input skipped the reader', () => {
+    // The merge is a public boundary too: a caller can hand it parsed exports that never went
+    // through `readBrowserLedgerSessions`, and the refusal then has to happen — and be counted —
+    // where the entry is actually dropped, or an entry naming `tier_invented` merges as though
+    // it was never there.
+    const aggregate = mergeBrowserLedger([
+      session({
+        hits: [{ rule: '||a.example^', count: 1 }],
+        tiers: [
+          { tier: 'tier_ads', count: 4 },
+          { tier: 'tier_invented', count: 100 },
+          { tier: 'CORE', count: 50 },
+        ] as never,
+      }),
+    ]);
+
+    expect(aggregate.tiers).toEqual([
+      { tier: 'tier_ads', count: 4, sessions: 1, days: ['2026-09-01'] },
+    ]);
+    expect(aggregate.tierRejected).toBe(2);
+  });
+
+  it('does not double-count the rejections on the shipped read-then-merge path', () => {
+    // The reader drops and counts what it refuses, so the merge sees none of them — the script's
+    // sum of the two counts is disjoint by construction, not by convention.
+    const read = readBrowserLedgerSessions([
+      session({ tiers: [{ tier: 'tier_invented', count: 9 }] as never }),
+    ]);
+    const aggregate = mergeBrowserLedger(read.sessions);
+
+    expect(read.tierRejected).toBe(1);
+    expect(aggregate.tierRejected).toBe(0);
+  });
+
+  it('writes the tally into the header rather than as rule lines', () => {
+    const text = toHitLedgerText(mergeBrowserLedger([tiered({ tierUnattributed: 4 })]));
+    const parsed = parseHitLedgerText(text);
+
+    expect(parsed.header.tiers).toBe('tier_ads 10');
+    expect(parsed.header['tier sessions']).toBe('1 of 1');
+    expect(parsed.header['tier unattributed']).toBe('4');
+    // A `tier_core 543` line would be 543 rules *named* `tier_core` — a ruleset id masquerading as a
+    // host — and the hot list would inherit it.
+    expect(parsed.hits).toEqual([{ rule: '||ads.example^', count: 10 }]);
+  });
+
+  it('leaves the header alone when no session carried a split', () => {
+    const text = toHitLedgerText(mergeBrowserLedger([session()]));
+    expect(parseHitLedgerText(text).header.tiers).toBeUndefined();
+  });
+
+  it('says the coverage in the summary, before the total', () => {
+    const line = summarizeBrowserLedger(
+      mergeBrowserLedger([
+        tiered({ startedAt: '2026-09-01T09:00:00.000Z' }),
+        session({ startedAt: '2026-09-02T09:00:00.000Z' }),
+      ]),
+    );
+
+    expect(line).toContain('1 tiers over 1 of 2 sessions');
+    expect(line).not.toMatch(/\b1 tiers\b(?![^·]*over)/);
+  });
+});
+
+describe('readLedgerTierTally', () => {
+  it('parses the tally and its coverage from a merged ledger header', () => {
+    const tally = readLedgerTierTally({
+      tiers: 'tier_privacy 60, tier_ads 25, tier_unclassified 6',
+      'tier sessions': '1 of 4',
+      sessions: '4',
+    });
+
+    expect(tally).toEqual({
+      hits: { tier_privacy: 60, tier_ads: 25, tier_unclassified: 6 },
+      tierSessions: 1,
+      sessions: 4,
+      rejected: 0,
+    });
+  });
+
+  it('is null when the header carries no tally at all', () => {
+    // Absent is "no measurement", not "a measurement of zero": a ledger written before the axis
+    // exists must not be read as a tally that credits nobody.
+    expect(readLedgerTierTally({ sessions: '4' })).toBeNull();
+    expect(readLedgerTierTally({})).toBeNull();
+  });
+
+  it('refuses entries that name no known tier, and counts them', () => {
+    const tally = readLedgerTierTally({
+      tiers: 'tier_ads 40, tier_invented 900, bogus 3, tier_ads 10',
+      'tier sessions': '2 of 2',
+    });
+
+    expect(tally?.hits).toEqual({ tier_ads: 50 });
+    expect(tally?.rejected).toBe(2);
+  });
+
+  it('takes the coverage denominator from Sessions when "of N" is absent', () => {
+    const tally = readLedgerTierTally({ tiers: 'tier_ads 4', 'tier sessions': '2', sessions: '2' });
+    expect(tally?.tierSessions).toBe(2);
+    expect(tally?.sessions).toBe(2);
   });
 });

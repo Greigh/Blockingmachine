@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { lastValue, parseArgvOrExit } from './argv.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,7 +18,14 @@ if (fs.existsSync(envPath) && process.loadEnvFile) {
   }
 }
 
-const isDryRun = process.argv.includes('--dry-run');
+// Refusing parse: `--dry-rnu` used to publish for real, and `--tag` with no value fell through
+// to the version-inference guess — a named flag silently answered by a different question.
+const { flags: argvFlags, values: argvValues } = parseArgvOrExit(process.argv.slice(2), {
+  values: ['--tag'],
+  flags: ['--dry-run'],
+});
+const isDryRun = argvFlags.has('--dry-run');
+const explicitTag = lastValue(argvValues, '--tag') ?? null;
 const token = process.env.NPMJS_TOKEN || process.env.NODE_AUTH_TOKEN;
 const registryUrl = 'https://registry.npmjs.org/';
 
@@ -33,16 +41,9 @@ const packages = [
   path.join(rootDir, 'packages', 'cli')
 ];
 
-function resolveDistTag(version) {
-  // 1. Explicit --tag argument
-  const tagIdx = process.argv.indexOf('--tag');
-  if (tagIdx !== -1 && process.argv[tagIdx + 1] && !process.argv[tagIdx + 1].startsWith('-')) {
-    return process.argv[tagIdx + 1];
-  }
-  const tagArg = process.argv.find((a) => a.startsWith('--tag='));
-  if (tagArg) {
-    return tagArg.split('=')[1];
-  }
+function resolveDistTag(version, explicitTag) {
+  // 1. Explicit --tag argument — already refused at parse time if it carried no value.
+  if (explicitTag) return explicitTag;
 
   // 2. Explicit environment variable
   if (process.env.NPM_TAG) return process.env.NPM_TAG;
@@ -67,7 +68,7 @@ for (const pkgDir of packages) {
   const originalRaw = fs.readFileSync(pkgJsonPath, 'utf8');
   const pkgData = JSON.parse(originalRaw);
 
-  const distTag = resolveDistTag(pkgData.version);
+  const distTag = resolveDistTag(pkgData.version, explicitTag);
 
   console.log(`\n[publish-npmjs] Publishing ${pkgData.name}@${pkgData.version} to npmjs.com with tag "${distTag}"...`);
 

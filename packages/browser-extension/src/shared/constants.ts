@@ -35,6 +35,8 @@ export const STORAGE_KEY_STATIC_TIERS = 'bm_static_tiers';
  * not zero.
  */
 export const STORAGE_KEY_LAST_SYNC_AT = 'bm_last_sync_at';
+/** Which list source the last successful rule application installed (full export or measured hot set). */
+export const STORAGE_KEY_RULE_SOURCE = 'bm_rule_source';
 /** Per-rule match counts gathered from real browsing, for coverage analysis. */
 export const STORAGE_KEY_RULE_HITS = 'bm_rule_hits';
 /** Which shipped static tier produced each block, so a tier can be judged on real traffic. */
