@@ -17,9 +17,9 @@ const config = {
     name: 'Blockingmachine',
     executableName: 'blockingmachine',
     asar: {
-      // classifierWorker.cjs is spawned with `new Worker()` — worker bootstrap
-      // is more reliable reading a real file than through the asar patch.
-      unpack: "{**/node_modules/electron-store/**/*,**/.webpack/main/classifierWorker.cjs}"
+      // {classifier,output}Worker.cjs are spawned with `new Worker()` — worker
+      // bootstrap is more reliable reading a real file than through the asar patch.
+      unpack: "{**/node_modules/electron-store/**/*,**/.webpack/main/classifierWorker.cjs,**/.webpack/main/outputWorker.cjs}"
     },
     extraResource: ['./assets', './filters'],
     afterPrune: [

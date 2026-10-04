@@ -41,11 +41,17 @@ describe('the compile pipeline', () => {
     expect(body.indexOf('yieldToEventLoop()', dedupLoop)).toBeLessThan(
       body.indexOf('Deduplication complete', dedupLoop),
     );
-    // host extraction iterates every unique rule (~360k)
-    const extractLoop = body.indexOf('extractHostFromRule');
-    expect(body.lastIndexOf('yieldToEventLoop()', extractLoop)).toBeGreaterThanOrEqual(0);
+    // host extraction (~360k) moved into the output worker, with the same yielded
+    // walk kept in the inline fallback for when the worker cannot start
+    expect(body).toContain('outputs.candidates');
+    const fallback = main.slice(
+      main.indexOf('async function generateOutputsInline'),
+      main.indexOf('// Browser extension package download'),
+    );
+    expect(fallback).toContain('extractHostFromRule');
+    expect(fallback).toContain('yieldToEventLoop()');
     // the classify pass iterates every candidate host (~190k, ~0.7ms each)
-    const classifyLoop = body.indexOf('for (const host of candidates)');
+    const classifyLoop = body.indexOf('for (const host of candidateList)');
     expect(classifyLoop).toBeGreaterThanOrEqual(0);
     expect(body.indexOf('yieldToEventLoop()', classifyLoop)).toBeLessThan(
       body.indexOf('Malware verdicts saved', classifyLoop),
@@ -113,6 +119,32 @@ describe('the compile pipeline', () => {
     expect(tail).toContain('const classifyProgress');
     expect(tail).toContain('runClassifyWorker(candidateList, priorVerdicts, classifyProgress)');
     expect(tail).toContain('classifyProgress(classifiedCount)');
+  });
+
+  test('the generation pass runs in the output worker with an inline fallback', () => {
+    const body = compileBody();
+    // The worker carries the ~3s of synchronous generation that used to spin at
+    // 90% — spawned on the joined raws, never the ~160MB rule-object clone.
+    expect(body).toContain('runOutputWorker(workerInput, onOutputStage)');
+    expect(body.indexOf('runOutputWorker(workerInput, onOutputStage)')).toBeLessThan(
+      body.indexOf("status: 'Saving to disk...'"),
+    );
+    expect(body).toContain("map((rule) => rule.raw).join('\\n')");
+    // The same pass inline is the resilience path when the worker cannot start.
+    expect(body).toContain('generateOutputsInline(workerInput, onOutputStage)');
+    expect(body).toContain('Output worker unavailable');
+    // Worker progress stages reach the tray so the 90–95% window keeps naming
+    // what is running instead of sitting on one label.
+    expect(body).toContain('outputStagePercent');
+    expect(main).toContain("new Worker(join(__dirname, 'outputWorker.cjs')");
+  });
+
+  test('the packaged app unpacks both worker bundles from the asar', () => {
+    const webpackMain = readFileSync(join(appRoot, 'webpack.main.config.cjs'), 'utf8');
+    expect(webpackMain).toContain("outputWorker: './src/outputWorker.ts'");
+    expect(webpackMain).toContain("classifierWorker: './src/classifyWorker.ts'");
+    expect(forgeConfig).toContain('classifierWorker.cjs');
+    expect(forgeConfig).toContain('outputWorker.cjs');
   });
 
   test("the tray's updated stamp lands at completion, not mid-run", () => {

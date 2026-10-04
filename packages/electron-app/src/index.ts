@@ -696,6 +696,157 @@ function runClassifyWorker(
   });
 }
 
+interface OutputWorkerResult {
+  generatedList: string;
+  additionalContents: Array<{ format: string; content: string }>;
+  dnsContent: string;
+  browserContent: string;
+  dnsCount: number;
+  browserCount: number;
+  candidates: string[];
+  hotlistContent: string | null;
+}
+
+interface OutputWorkerInput {
+  ruleLines: string;
+  format: FilterFormat;
+  additionalFormats: FilterFormat[];
+  metadata: FilterListMetadata;
+  hotlist: {
+    hits: Array<{ rule: string; count: number }>;
+    exceptions: string[];
+    source: string;
+    measuredOn: string;
+  } | null;
+}
+
+/**
+ * Run the post-dedup generation pass in `outputWorker.cjs` instead of on the
+ * event loop. The worker re-parses the joined raw lines (a ~13MB string is a
+ * cheap clone; the rule objects would be a ~160MB one), then generates every
+ * output list, segregates the endpoints, extracts the classify pass's host
+ * candidates and derives the hot set — ~3s of CPU that used to block the main
+ * thread across the 90–95% window. Stage strings are forwarded so the compile
+ * UI names what is actually running.
+ */
+function runOutputWorker(
+  input: OutputWorkerInput,
+  onStage: (stage: string) => void
+): Promise<OutputWorkerResult> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const worker = new Worker(join(__dirname, 'outputWorker.cjs'), { workerData: input });
+    let settled = false;
+    worker.on('message', (msg: { type?: string; stage?: string } & Partial<OutputWorkerResult>) => {
+      if (msg?.type === 'progress' && typeof msg.stage === 'string') {
+        onStage(msg.stage);
+      } else if (msg?.type === 'result' && typeof msg.generatedList === 'string') {
+        settled = true;
+        resolvePromise(msg as OutputWorkerResult);
+      }
+    });
+    worker.once('error', rejectPromise);
+    worker.once('exit', (code) => {
+      if (!settled) {
+        rejectPromise(new Error(`output worker exited with code ${code}`));
+      }
+    });
+  });
+}
+
+/**
+ * The same generation pass the output worker runs, on the main thread, for the
+ * case where the worker cannot start. Identical semantics to
+ * `outputWorker.ts` — the duplicated body is the resilience path, and the
+ * yields between stages are what keep a fallback compile merely slow instead
+ * of frozen.
+ */
+async function generateOutputsInline(
+  input: OutputWorkerInput,
+  onStage: (stage: string) => void
+): Promise<OutputWorkerResult> {
+  onStage('Re-parsing compiled rules');
+  const rules = parseFilterList(input.ruleLines, 'compiled');
+  await yieldToEventLoop();
+
+  onStage(`Generating ${input.format} filter list`);
+  const generatedList = generateFilterList(rules, input.metadata, input.format);
+
+  const additionalContents: Array<{ format: string; content: string }> = [];
+  for (const addFormat of input.additionalFormats) {
+    await yieldToEventLoop();
+    onStage(`Generating ${addFormat} export`);
+    additionalContents.push({
+      format: addFormat,
+      content: generateFilterList(rules, input.metadata, addFormat),
+    });
+  }
+
+  await yieldToEventLoop();
+  onStage('Generating DNS endpoint list');
+  const dnsRules = filterDNSRules(rules);
+  const dnsContent = generateFilterList(
+    dnsRules,
+    {
+      ...input.metadata,
+      stats: {
+        ...input.metadata.stats,
+        totalRules: dnsRules.length,
+        uniqueRules: dnsRules.length,
+      },
+    },
+    'adguard'
+  );
+
+  await yieldToEventLoop();
+  onStage('Generating browser endpoint list');
+  const browserRules = filterBrowserRules(rules);
+  const browserContent = generateFilterList(
+    browserRules,
+    {
+      ...input.metadata,
+      stats: {
+        ...input.metadata.stats,
+        totalRules: browserRules.length,
+        uniqueRules: browserRules.length,
+      },
+    },
+    'adguard'
+  );
+
+  await yieldToEventLoop();
+  onStage('Extracting host candidates');
+  const candidateSet = new Set<string>();
+  for (let i = 0; i < rules.length; i++) {
+    if (i !== 0 && i % 20000 === 0) await yieldToEventLoop();
+    const host = extractHostFromRule(rules[i].raw);
+    if (host) candidateSet.add(host);
+  }
+
+  let hotlistContent: string | null = null;
+  if (input.hotlist && input.hotlist.hits.length > 0) {
+    onStage('Deriving the measured hot set');
+    hotlistContent = formatHotList(
+      selectHotList({
+        lines: browserRules.map((rule) => rule.raw),
+        hits: input.hotlist.hits,
+        exceptions: input.hotlist.exceptions,
+      }),
+      { source: input.hotlist.source, measuredOn: input.hotlist.measuredOn }
+    );
+  }
+
+  return {
+    generatedList,
+    additionalContents,
+    dnsContent,
+    browserContent,
+    dnsCount: dnsRules.length,
+    browserCount: browserRules.length,
+    candidates: [...candidateSet],
+    hotlistContent,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Browser extension package download (GitHub release assets)
 // ---------------------------------------------------------------------------
@@ -3164,12 +3315,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           generatorVersion: app.getVersion(),
         };
 
-        const generatedList = generateFilterList(uniqueRules, metadata, format);
-
-        sendProgress({
-          status: 'Saving to disk...',
-          percent: 95,
-        });
+        // Resolve the write target before generation starts — the hot set's
+        // provenance header names the file it travels beside.
         let savePath = store.get('savePath');
         if (!savePath || typeof savePath !== 'string' || !isAbsolute(savePath)) {
           savePath = join(
@@ -3178,16 +3325,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             'processed_rules.txt'
           );
         }
-        await fs.mkdir(dirname(savePath), { recursive: true });
-        await fs.writeFile(savePath, generatedList, 'utf8');
-        console.log(`[IPC Main] Filter list saved to: ${savePath}`);
+        const outputDir = dirname(savePath);
 
         // Simultaneous Multi-Format Export
         const additionalFormats = (store.get('additionalFormats') || []) as FilterFormat[];
         const validAdditional = additionalFormats.filter(
           (f) => f !== format && isValidFormat(f)
         );
-        const outputDir = dirname(savePath);
         // The extension has to match what the file is: a `.txt` holding an RPZ zone or a Privoxy
         // action file reads as a plain list to every tool that opens it, including the user.
         const additionalFormatExtensions: Partial<Record<FilterFormat, string>> = {
@@ -3197,15 +3341,93 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           privoxy: '.action',
           bind: '.rpz',
         };
-        for (const addFormat of validAdditional) {
+
+        // The measured hot set travels beside the list it was measured on: the extension
+        // fetches `hotlist.txt` from the feed so a browser installs the rules its own ledger
+        // says fire before the full sync lands. The ledger read stays here — it is a small
+        // file — so the worker receives plain data rather than a path to trust. Written only
+        // when a ledger is configured and carries hits; an absent file is the honest answer
+        // for "no measurement here".
+        const hotlistPath = join(outputDir, 'hotlist.txt');
+        const wantedHotlistLedger =
+          typeof store.get('tierLedgerPath') === 'string' && store.get('tierLedgerPath')
+            ? (store.get('tierLedgerPath') as string)
+            : null;
+        let hotlistInput: OutputWorkerInput['hotlist'] = null;
+        if (wantedHotlistLedger) {
           try {
-            const addContent = generateFilterList(uniqueRules, metadata, addFormat);
-            const ext = additionalFormatExtensions[addFormat] ?? '.txt';
-            const addPath = join(outputDir, `processed_${addFormat}${ext}`);
-            await fs.writeFile(addPath, addContent, 'utf8');
+            const parsed = parseHitLedgerText(await fs.readFile(wantedHotlistLedger, 'utf8'));
+            if (parsed.hits.length > 0) {
+              hotlistInput = {
+                hits: parsed.hits,
+                exceptions: parsed.exceptions,
+                source: basename(savePath),
+                measuredOn: `${basename(wantedHotlistLedger)} (browser rule-hit ledger)`,
+              };
+            }
+          } catch (hotErr) {
+            console.error('[IPC Main] Failed to read the picked ledger for the hot set:', hotErr);
+          }
+        }
+
+        // The generation pass is ~3s of synchronous CPU across three
+        // `generateFilterList` calls plus both segregations — off the main
+        // thread it goes. The joined raw lines are a ~13MB string (~20ms to
+        // build); the rule objects would be a ~160MB structured clone, so the
+        // worker re-parses — byte-identical output on every shipped format.
+        const ruleLines = uniqueRules.map((rule) => rule.raw).join('\n');
+        const workerInput: OutputWorkerInput = {
+          ruleLines,
+          format,
+          additionalFormats: validAdditional,
+          metadata,
+          hotlist: hotlistInput,
+        };
+        const outputStagePercent = (stage: string): number =>
+          stage.startsWith('Re-parsing')
+            ? 90
+            : stage.startsWith('Generating DNS')
+              ? 93
+              : stage.startsWith('Generating browser')
+                ? 94
+                : stage.startsWith('Extracting host')
+                  ? 94
+                  : stage.startsWith('Deriving')
+                    ? 95
+                    : 92;
+        const onOutputStage = (stage: string) =>
+          sendProgress({ status: stage, percent: outputStagePercent(stage) });
+        let outputs: OutputWorkerResult;
+        try {
+          outputs = await runOutputWorker(workerInput, onOutputStage);
+        } catch (outputWorkerErr) {
+          console.warn(
+            '[IPC Main] Output worker unavailable, generating inline:',
+            outputWorkerErr
+          );
+          outputs = await generateOutputsInline(workerInput, onOutputStage);
+        }
+
+        sendProgress({
+          status: 'Saving to disk...',
+          percent: 95,
+        });
+        await fs.mkdir(dirname(savePath), { recursive: true });
+        await fs.writeFile(savePath, outputs.generatedList, 'utf8');
+        console.log(`[IPC Main] Filter list saved to: ${savePath}`);
+
+        for (const addContent of outputs.additionalContents) {
+          try {
+            const ext =
+              additionalFormatExtensions[addContent.format as FilterFormat] ?? '.txt';
+            const addPath = join(outputDir, `processed_${addContent.format}${ext}`);
+            await fs.writeFile(addPath, addContent.content, 'utf8');
             console.log(`[IPC Main] Additional export saved: ${addPath}`);
           } catch (addError) {
-            console.error(`[IPC Main] Failed to write additional format ${addFormat}:`, addError);
+            console.error(
+              `[IPC Main] Failed to write additional format ${addContent.format}:`,
+              addError
+            );
           }
         }
 
@@ -3214,77 +3436,27 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // Automatically write segregated endpoint files for System Daemon (dns.txt) and Browser Extension (browser.txt)
         sendProgress({ status: 'Writing segregated endpoint lists...', percent: 96 });
         try {
-          await yieldToEventLoop();
-          const dnsRules = filterDNSRules(uniqueRules);
-          const dnsMeta: FilterListMetadata = {
-            ...metadata,
-            stats: {
-              ...metadata.stats,
-              totalRules: dnsRules.length,
-              uniqueRules: dnsRules.length,
-            },
-          };
-          const dnsContent = generateFilterList(dnsRules, dnsMeta, 'adguard');
-          await fs.writeFile(join(outputDir, 'dns.txt'), dnsContent, 'utf8');
-          await fs.writeFile(join(outputDir, 'adguardDns.txt'), dnsContent, 'utf8');
-          console.log(`[IPC Main] Segregated DNS endpoints saved: dns.txt (${dnsRules.length} rules)`);
+          await fs.writeFile(join(outputDir, 'dns.txt'), outputs.dnsContent, 'utf8');
+          await fs.writeFile(join(outputDir, 'adguardDns.txt'), outputs.dnsContent, 'utf8');
+          console.log(
+            `[IPC Main] Segregated DNS endpoints saved: dns.txt (${outputs.dnsCount} rules)`
+          );
 
           // Automatically hot-reload System DNS Daemon if running
           daemonManager.reloadRules().catch(() => {});
 
-          await yieldToEventLoop();
-          const browserRules = filterBrowserRules(uniqueRules);
-          const browserMeta: FilterListMetadata = {
-            ...metadata,
-            stats: {
-              ...metadata.stats,
-              totalRules: browserRules.length,
-              uniqueRules: browserRules.length,
-            },
-          };
-          const browserContent = generateFilterList(browserRules, browserMeta, 'adguard');
-          await fs.writeFile(join(outputDir, 'browser.txt'), browserContent, 'utf8');
-          await fs.writeFile(join(outputDir, 'adguardBrowser.txt'), browserContent, 'utf8');
-          console.log(`[IPC Main] Segregated Browser endpoints saved: browser.txt (${browserRules.length} rules)`);
+          await fs.writeFile(join(outputDir, 'browser.txt'), outputs.browserContent, 'utf8');
+          await fs.writeFile(join(outputDir, 'adguardBrowser.txt'), outputs.browserContent, 'utf8');
+          console.log(
+            `[IPC Main] Segregated Browser endpoints saved: browser.txt (${outputs.browserCount} rules)`
+          );
 
-          // The measured hot set travels beside the list it was measured on: the extension
-          // fetches `hotlist.txt` from the feed so a browser installs the rules its own ledger
-          // says fire before the full sync lands. Written only when a ledger is configured —
-          // an absent file is the honest answer for "no measurement here", and the sync
-          // client already reads missing or empty exactly that way, so a ledger that stops
-          // being picked stops the set rather than leaving a stale one served.
-          const hotlistPath = join(outputDir, 'hotlist.txt');
-          const wantedHotlistLedger =
-            typeof store.get('tierLedgerPath') === 'string' && store.get('tierLedgerPath')
-              ? (store.get('tierLedgerPath') as string)
-              : null;
-          if (wantedHotlistLedger) {
-            try {
-              const parsed = parseHitLedgerText(await fs.readFile(wantedHotlistLedger, 'utf8'));
-              if (parsed.hits.length > 0) {
-                const hot = formatHotList(
-                  selectHotList({
-                    lines: browserRules.map((rule) => rule.raw),
-                    hits: parsed.hits,
-                    exceptions: parsed.exceptions,
-                  }),
-                  {
-                    source: basename(savePath),
-                    measuredOn: `${basename(wantedHotlistLedger)} (browser rule-hit ledger)`,
-                  },
-                );
-                await fs.writeFile(hotlistPath, hot, 'utf8');
-                console.log(`[IPC Main] Hot set saved: hotlist.txt`);
-              } else if (existsSync(hotlistPath)) {
-                await fs.unlink(hotlistPath);
-              }
-            } catch (hotErr) {
-              console.error('[IPC Main] Failed to derive the hot set from the picked ledger:', hotErr);
-              // An unreadable ledger is "no measurement" too — a stale file would keep
-              // serving the set the dead ledger produced.
-              if (existsSync(hotlistPath)) await fs.unlink(hotlistPath);
-            }
+          if (outputs.hotlistContent) {
+            await fs.writeFile(hotlistPath, outputs.hotlistContent, 'utf8');
+            console.log(`[IPC Main] Hot set saved: hotlist.txt`);
           } else if (existsSync(hotlistPath)) {
+            // No ledger picked, none readable, or none with hits — a stale file
+            // would keep serving the set the dead ledger produced.
             await fs.unlink(hotlistPath);
           }
 
@@ -3293,14 +3465,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             timestamp: timestampStr,
             uniqueRuleCount,
             processedRuleCount: totalProcessedCount,
-            dnsRuleCount: dnsRules.length,
-            browserRuleCount: browserRules.length,
+            dnsRuleCount: outputs.dnsCount,
+            browserRuleCount: outputs.browserCount,
           });
           broadcastSseEvent('rules_updated', {
             timestamp: timestampStr,
             ruleCount: uniqueRuleCount,
-            dnsRuleCount: dnsRules.length,
-            browserRuleCount: browserRules.length,
+            dnsRuleCount: outputs.dnsCount,
+            browserRuleCount: outputs.browserCount,
           });
         } catch (segErr) {
           console.error('[IPC Main] Failed to write segregated dns/browser endpoints:', segErr);
@@ -3417,15 +3589,12 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // between runs invalidates on its own) and the user's feedback tunings — a verdict is
         // only reused when the classifier that would answer today is the one that answered then.
         try {
-          const candidates = new Set<string>();
-          for (let i = 0; i < uniqueRules.length; i++) {
-            if (i !== 0 && i % 10000 === 0) await yieldToEventLoop();
-            // `extractHostFromRule` refuses `@@` exceptions, cosmetic filters and scoped rules, so
-            // an allow rule can never become a block rule here — the same refusal the tier
-            // compiler and the ledger reader rely on.
-            const host = extractHostFromRule(uniqueRules[i]?.raw);
-            if (host) candidates.add(host);
-          }
+          // The host candidates travel back from the generation worker — the same
+          // `extractHostFromRule` walk over the same deduplicated list, run off-thread.
+          // `extractHostFromRule` refuses `@@` exceptions, cosmetic filters and scoped
+          // rules, so an allow rule can never become a block rule here — the same refusal
+          // the tier compiler and the ledger reader rely on.
+          const candidateList = outputs.candidates;
 
           const classifyStartedAt = Date.now();
           const fingerprint = classifierInputFingerprint(globalMiniAiClassifier.exportFeedback(), BM_BUILD_ID);
@@ -3449,7 +3618,6 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           // accumulate in the file run over run.
           const measured: Record<string, ThreatCategory> = Object.create(null);
           let servedFromCache = 0;
-          const candidateList = [...candidates];
           // The pass is ~130s of synchronous CPU on a cold cache — too long to keep on the
           // event loop even with yields, so the worker bundle does it when it can. The
           // inline path below stays for the case where the worker cannot start.
@@ -3474,7 +3642,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             servedFromCache = workerResult.servedFromCache;
           } else {
             let classifiedCount = 0;
-            for (const host of candidates) {
+            for (const host of candidateList) {
               if (++classifiedCount % 250 === 0) await yieldToEventLoop();
               // The inline path is the fallback when the worker cannot start — it must keep
               // reporting progress or a cold compile reads as a hang at a frozen percent.
@@ -3505,7 +3673,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               '! Description: Hosts the embedded on-device classifier labelled Malware/Phishing.',
               '! Source: model verdict, not a publisher list — see the tier/model agreement suite.',
               `! Generated: ${new Date().toISOString()}`,
-              `! Hosts classified: ${candidates.size.toLocaleString()}`,
+              `! Hosts classified: ${candidateList.length.toLocaleString()}`,
               '',
               ...verdicts.map((host) => `||${host}^`),
               '',
@@ -3514,9 +3682,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           );
           console.log(
             `[IPC Main] Malware verdicts saved: ${verdicts.length.toLocaleString()} of ` +
-              `${candidates.size.toLocaleString()} hosts ` +
+              `${candidateList.length.toLocaleString()} hosts ` +
               `(${servedFromCache.toLocaleString()} served from the ${cacheState} verdict cache, ` +
-              `${(candidates.size - servedFromCache).toLocaleString()} classified ` +
+              `${(candidateList.length - servedFromCache).toLocaleString()} classified ` +
               `in ${(elapsed / 1000).toFixed(1)}s) -> ${malwarePath}`,
           );
 
