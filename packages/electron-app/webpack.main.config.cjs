@@ -46,6 +46,13 @@ module.exports = {
   },
   resolve: {
     extensions: ['.js', '.ts', '.jsx', '.tsx', '.json'],
+    // Sources that carry the `.js` specifier ESM requires (`./deployRefresh.js` written against
+    // `deployRefresh.ts`) resolve through this alias — the same convention the reachability
+    // harness relies on when it compiles these files straight to Node-run ESM.
+    extensionAlias: {
+      '.js': ['.ts', '.tsx', '.js'],
+      '.jsx': ['.tsx', '.jsx'],
+    },
     alias: {
       '@': path.resolve(__dirname, 'src')
     }
