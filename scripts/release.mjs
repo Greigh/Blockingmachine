@@ -303,6 +303,22 @@ if (isDryRun) {
   process.exit(0);
 }
 
+// The packaging tier compile rewrites rules/tier_*.json and tierCounts.generated.ts in
+// the working tree — package-time artifacts, not repo state. The archives already hold
+// them; restoring the curated baseline before staging keeps the commit honest, which is
+// what check:tiers, check:vocabulary and the derivation suite are provenance-checked
+// against.
+runExec(
+  'git',
+  [
+    'checkout',
+    '--',
+    'packages/browser-extension/rules/',
+    'packages/browser-extension/src/shared/tierCounts.generated.ts',
+  ],
+  'Restoring the curated tier baseline (packaged artifacts are already built)'
+);
+
 runExec(
   'git',
   ['add', '.gitignore', 'README.md', 'SECURITY.md', 'CHANGELOG.md', 'package.json', 'package-lock.json', 'packages/', 'scripts/'],

@@ -1,12 +1,17 @@
 import { describe, expect, test } from '@jest/globals';
 import { parseFilterRule, mergeScopedVariants, dropSubsumedBlocks } from '../background/dnrManager';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
-const feed = readFileSync('/tmp/browser-feed.txt', 'utf8')
-  .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('!') && !l.startsWith('['));
+// A manual diagnostic, not an assertion suite: dump a compiled browser feed to
+// /tmp/browser-feed.txt to inspect the priority histogram and the 28,500-rule cut boundary.
+// It skips in CI, where no such fixture exists — asserting on nothing would be noise.
+const FEED_PATH = '/tmp/browser-feed.txt';
+const hasFeed = existsSync(FEED_PATH);
 
-describe('priority histogram', () => {
+(hasFeed ? describe : describe.skip)('priority histogram', () => {
   test('what the sort produces', () => {
+    const feed = readFileSync(FEED_PATH, 'utf8')
+      .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('!') && !l.startsWith('['));
     const seen = new Set<string>();
     const candidates: ReturnType<typeof parseFilterRule>[] = [];
     for (const line of feed) {
