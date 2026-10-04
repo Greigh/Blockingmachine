@@ -44,6 +44,7 @@ import {
   type SinkholeEndpoint,
 } from './sinkholeNet';
 import { sinkholeFetch } from './sinkholeFetch';
+import { piholeGravityUpdate, piholeVersionProbe } from './piholeApi.js';
 import { feedTokenAuthorised } from './feedAuth';
 import { isServableFeedFile } from './feedServing';
 import {
@@ -1472,20 +1473,14 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
       if (!piholeUrl.startsWith('http://') && !piholeUrl.startsWith('https://')) {
         piholeUrl = `http://${piholeUrl}`;
       }
-      const url = new URL(piholeUrl);
-      if (piholeApiKey) {
-        url.searchParams.set('auth', piholeApiKey.trim());
-      }
-      url.searchParams.set('action', 'updategravity');
-      const target = url.toString();
-      const res = await sinkholeFetch(target, {
+      const res = await piholeGravityUpdate(piholeUrl, piholeApiKey, sinkholeFetch, {
         timeoutMs: 6000,
         allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
       });
       if (res.ok) {
         results.push({ service: 'Pi-hole', status: 'success', message: 'Gravity update triggered successfully' });
       } else {
-        results.push({ service: 'Pi-hole', status: 'error', message: `HTTP status ${res.status}` });
+        results.push({ service: 'Pi-hole', status: 'error', message: `HTTP status ${res.status}${res.detail ? ` — ${res.detail}` : ''}` });
       }
     } catch (err: any) {
       const attempted = rawPihole.trim().startsWith('http') ? rawPihole.trim() : `http://${rawPihole.trim()}`;
@@ -3801,27 +3796,23 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               details: 'ha_port_warning',
             };
           }
-          const u = new URL(urlStr);
-          if (apiKey) u.searchParams.set('auth', apiKey.trim());
-          u.searchParams.set('type', 'version');
-          const target = u.toString();
           try {
-            const res = await sinkholeFetch(target, {
+            const res = await piholeVersionProbe(urlStr, apiKey, sinkholeFetch, {
               timeoutMs: 6000,
               allowInsecureLocalTls: sinkholeTlsAllowed(store),
             });
             const latencyMs = Date.now() - startTime;
             if (res.ok) {
-              return { service: 'pihole', success: true, statusCode: res.status, latencyMs, message: `Connected to Pi-hole (${latencyMs}ms, HTTP ${res.status})` };
+              return { service: 'pihole', success: true, statusCode: res.status, latencyMs, message: `Connected to Pi-hole ${res.flavor} (${latencyMs}ms, HTTP ${res.status})` };
             } else {
-              return { service: 'pihole', success: false, statusCode: res.status, latencyMs, message: `Pi-hole returned HTTP ${res.status}: ${res.statusText}` };
+              return { service: 'pihole', success: false, statusCode: res.status, latencyMs, message: `Pi-hole ${res.flavor} check failed${res.status ? ` (HTTP ${res.status})` : ''}${res.detail ? `: ${res.detail}` : ''}` };
             }
           } catch (err: any) {
             return {
               service: 'pihole',
               success: false,
               latencyMs: Date.now() - startTime,
-              message: explainSinkholeFailure(store, err, target),
+              message: explainSinkholeFailure(store, err, urlStr),
             };
           }
         } else if (service === 'webhook') {
@@ -4838,7 +4829,7 @@ const createWindow = async () => {
   const preloadPath =
     typeof MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY !== 'undefined'
       ? MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY
-      : join(__dirname, 'preload.js');
+      : join(__dirname, 'preload.cjs');
 
   const isMac = process.platform === 'darwin';
   const appIcon = getAppIcon();

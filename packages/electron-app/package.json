@@ -3,7 +3,7 @@
   "version": "1.0.0-rc.7",
   "description": "Cross-platform desktop application for high-performance adblock compilation, unified rule & AI inspection, sinkhole synchronization, and AI threat hunting.",
   "license": "BSD-3-Clause",
-  "main": ".webpack/main",
+  "main": ".webpack/main/index.cjs",
   "icon": "assets/Blockingmachine.icns",
   "engines": {
     "node": ">=24.0.0"
@@ -28,14 +28,14 @@
     "url": "https://greighstudios.com"
   },
   "devDependencies": {
-    "@electron-forge/cli": "^7.11.2",
-    "@electron-forge/maker-deb": "^7.11.2",
-    "@electron-forge/maker-dmg": "^7.11.2",
-    "@electron-forge/maker-rpm": "^7.11.2",
-    "@electron-forge/maker-squirrel": "^7.11.2",
-    "@electron-forge/maker-zip": "^7.11.2",
-    "@electron-forge/plugin-webpack": "^7.11.2",
-    "@electron-forge/shared-types": "^7.11.2",
+    "@electron-forge/cli": "^8.0.1",
+    "@electron-forge/maker-deb": "^8.0.1",
+    "@electron-forge/maker-dmg": "^8.0.1",
+    "@electron-forge/maker-rpm": "^8.0.1",
+    "@electron-forge/maker-squirrel": "^8.0.1",
+    "@electron-forge/maker-zip": "^8.0.1",
+    "@electron-forge/plugin-webpack": "^8.0.1",
+    "@electron-forge/shared-types": "^8.0.1",
     "@electron/rebuild": "^4.2.0",
     "@types/node": "^26.6.2",
     "@types/react": "^19.3.0",

@@ -17,8 +17,17 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
   under-scoped. Git pushes authenticate over SSH, a different credential. Needs a
   fresh token with package write scope — flag 53 tracks it.
 - **`npm audit`**: one unpatched advisory remains — `braces` (GHSA-vfj7-8cjw-p6xm,
-  all versions, dev-toolchain only via Electron Forge webpack). `audit fix --force`
-  proposes a breaking Forge downgrade; do not take it — flag 52 tracks it.
+  all versions, no patched release). Forge 8.0.1 took it 9 → 6; the residual chain is
+  `webpack-dev-server` → `chokidar`/`http-proxy-middleware` → `micromatch` → `braces`,
+  dev-toolchain only. `audit fix --force` proposes a breaking Forge downgrade; do not
+  take it — flag 52 tracks it.
+- **Electron Forge 8 sharp edges**: `main` must be `.webpack/main/index.cjs` (the
+  plugin emits `.cjs` and refuses bare `.webpack/main`); `afterPrune` hooks take one
+  `{buildPath, electronVersion, platform, arch}` object, not positional args; the
+  root `junk` override must stay absent — `@electron/packager@20` needs `junk@^4`
+  ESM, forcing `^3` breaks `isJunk` import. `forge package` stages per-arch under
+  `.webpack/<arch>/` then restores the arch into the staged app; a stray `index.cjs`
+  at the package root is stale output, not the convention.
 
 ## Release pipeline (`scripts/release.mjs`)
 
@@ -75,7 +84,17 @@ Known sharp edges:
   `ERR_MODULE_NOT_FOUND`, not on a resolver verdict.
 - `dnsmasqDeployLive.test.ts` needs a `dnsmasq` binary (`brew install dnsmasq`) and
   `dig`; skips cleanly without them. Same convention for `bind-mechanisms.test.ts`
-  (named + named-checkzone).
+  (named + named-checkzone) and `privoxyDeployLive.test.ts` (`brew install privoxy`).
+- Docker-gated suites (`image inspect` gate, never pull): `piholeLive.test.ts`
+  (`pihole/pihole`), `adguardHomeLive.test.ts` (`adguard/adguardhome`),
+  `technitiumDeployLive.test.ts` (`technitium/dns-server`). Each runs a container,
+  drives the daemon's own API and checks the observable effect; skips when the
+  image is absent so CI and contributors stay green.
+- Pi-hole supports v5 (`?auth=`) and v6 (`/api/auth` sid + `X-FTL-SID`) via
+  `piholeApi.ts`; `sinkholeFetch` uses fresh single-use sockets +
+  `insecureHTTPParser` because FTL/CivetWeb emits bytes after the chunk terminator
+  that poison strict-parser socket reuse. Colima/docker-on-mac still flakes
+  occasionally — the live suite tolerates transport errors, never semantic ones.
 - BIND null-zone: `exportFormat` delegates allowed children per parent
   (`db.bm.null.<parent>`, child `IN NS` to resolved authority); the sync
   `generateFilterList` stays NOT HONOURED — inject `resolveNs` in tests rather
@@ -83,8 +102,9 @@ Known sharp edges:
 
 ## Verified suite counts (rc.7)
 
-Core 47/1315, CLI 89, browser-extension 55/792, electron-app 47/579 (1 skipped,
-pre-existing), homeassistant-integration 14. `tsc --noEmit` clean everywhere; eslint
+Core 47/1322, CLI 89, browser-extension 55/793, electron-app 53/602 (54 suites,
+10 skipped incl. docker-gated live suites when images are absent),
+homeassistant-integration 14. `tsc --noEmit` clean everywhere; eslint
 zero warnings. Extension tests need `--experimental-vm-modules` (the `npm test` script
 sets it — bare `npx jest` fails to load 15 suites).
 
