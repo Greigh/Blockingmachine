@@ -1,4 +1,7 @@
 import { describe, test, expect } from '@jest/globals';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   buildTrayMenu,
   buildTrayTooltip,
@@ -8,6 +11,8 @@ import {
   type TrayMenuRow,
   type TraySharedState,
 } from '../trayMenu';
+
+const appRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 function state(overrides: Partial<TraySharedState> = {}): TraySharedState {
   return { ...emptyTrayState(), ...overrides };
@@ -274,5 +279,20 @@ describe('TrayEpoch', () => {
     expect(epoch.bump()).toBe(1);
     expect(epoch.bump()).toBe(2);
     expect(epoch.bump()).toBe(3);
+  });
+});
+
+describe('the Electron menu boundary in trayManager', () => {
+  // `&` is Electron's mnemonic marker and is stripped from rendered labels on
+  // every platform — "Compile & Update Rules Now" drew as "Compile  Update
+  // Rules Now" in the field. The manager must escape it before handing labels
+  // to Menu.buildFromTemplate.
+  test('ampersands are escaped to && at the Electron boundary', () => {
+    const manager = readFileSync(join(appRoot, 'src/trayManager.ts'), 'utf8');
+    const mapping = manager.slice(
+      manager.indexOf('buildTrayMenu('),
+      manager.indexOf('setContextMenu'),
+    );
+    expect(mapping).toContain('replace(/&/g, "&&")');
   });
 });
