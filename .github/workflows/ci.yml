@@ -31,6 +31,12 @@ jobs:
       - name: Run lint
         run: npm run lint
 
+      # The build has to precede the type check: workspace packages resolve each other's types
+      # through `dist/*.d.ts`, so `tsc` on a consumer cannot find @blockingmachine/core until the
+      # dependency's own build has emitted it.
+      - name: Build packages
+        run: npm run build
+
       # Workspace builds use transpile-only loaders, so a type error can pass the
       # build and only surface at runtime. Check types across every workspace.
       - name: Type check
@@ -38,9 +44,6 @@ jobs:
 
       - name: Run unit tests
         run: npm test
-
-      - name: Build packages
-        run: npm run build
 
       # Generated artifacts are only trustworthy if something re-derives them. The units above
       # re-fit the element weights; these checks cover what a unit test cannot reach without
