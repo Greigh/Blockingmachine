@@ -29,3 +29,18 @@ Eighth release candidate for Blockingmachine 1.0. The spine of this release is *
 | [`blockingmachine-chrome-mv3-v1.0.0.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.8/blockingmachine-chrome-mv3-v1.0.0.zip) | Chrome Manifest V3 extension |
 | [`blockingmachine-firefox-mv3-v1.0.0.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.8/blockingmachine-firefox-mv3-v1.0.0.zip) | Firefox Manifest V3 extension |
 | [`SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.8/SHA256SUMS.txt) | SHA-256 verification checksums |
+
+### Verification Checksums (SHA-256)
+
+```text
+6c5f7d29e7540066c6b17c2e9286e7977576dabfce245e1165563de8c1d1e5b8  Blockingmachine-1.0.0-rc.7-arm64.dmg
+ed36c215a6e7e4934b063c28a5b69192d5776a74e249e9256288a999af00238c  Blockingmachine-1.0.0-rc.8-arm64.dmg
+22a45cc569904f469148a46c6d66281c0aec0b389e15e1e467c16b1e63faa82f  Blockingmachine-darwin-arm64-1.0.0-rc.7.zip
+cfb8cc276447c4eec7f837a01dab931d5130cdd51678f81234a714a0bc18d6c7  Blockingmachine-darwin-arm64-1.0.0-rc.8.zip
+06f179048f8f57acdfccfb1570e644a2419e5e42a20b032c5a564325849563b9  blockingmachine-chrome-mv3-v1.0.0.zip
+35b9c42eb651f6c781ee6793179cfe014214a2d78c773927ca9bdf07a3b4f988  blockingmachine-cli-1.0.0-rc.7.tgz
+209f668d0b4b4bf0343b06d6fd38d5e283477b0b95d986b33d6e889e529844c9  blockingmachine-cli-1.0.0-rc.8.tgz
+fa82a296e10ab742bf35b9732f595fbfbd02c825bd71add18709061413a69bd6  blockingmachine-core-1.0.0-rc.7.tgz
+eb1f525b54563014efd7191f1efeb6b51abf5be246b17f3993d2be3ce2b0e158  blockingmachine-core-1.0.0-rc.8.tgz
+c7323a1ede3b482c8d8175ca021fe9c862d7281eb17128918c63b04362032448  blockingmachine-firefox-mv3-v1.0.0.zip
+```
