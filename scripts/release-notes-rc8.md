@@ -35,8 +35,14 @@ Eighth release candidate for Blockingmachine 1.0. The spine of this release is *
 ```text
 ed36c215a6e7e4934b063c28a5b69192d5776a74e249e9256288a999af00238c  Blockingmachine-1.0.0-rc.8-arm64.dmg
 cfb8cc276447c4eec7f837a01dab931d5130cdd51678f81234a714a0bc18d6c7  Blockingmachine-darwin-arm64-1.0.0-rc.8.zip
+df4d0e546b813aee169700562f3e7e58cbfbaa05b97ec9d5c465269646440722  Blockingmachine-linux-x64-1.0.0-rc.8.zip
+e6788f15fa265238ed66dae036e7cda851db3a765e3b3afaa57754447f8b5698  Blockingmachine-win32-x64-1.0.0-rc.8.zip
+7d5b45113246c89dca811ee5d053b63d41d4010a93b2695d34e90bbf963808d4  Blockingmachine.dmg
+233379857e44aac88a451cd48d3e8e8f40a880b3d5b504ff109095e39c1317f0  BlockingmachineSetup.exe
+e64afdc1d4097f80aab1358aa16ac7eddaf0ec71b5736523fc7a381b2fec65f9  blockingmachine-1.0.0.rc.8-1.x86_64.rpm
 06f179048f8f57acdfccfb1570e644a2419e5e42a20b032c5a564325849563b9  blockingmachine-chrome-mv3-v1.0.0.zip
-c7323a1ede3b482c8d8175ca021fe9c862d7281eb17128918c63b04362032448  blockingmachine-firefox-mv3-v1.0.0.zip
 209f668d0b4b4bf0343b06d6fd38d5e283477b0b95d986b33d6e889e529844c9  blockingmachine-cli-1.0.0-rc.8.tgz
 eb1f525b54563014efd7191f1efeb6b51abf5be246b17f3993d2be3ce2b0e158  blockingmachine-core-1.0.0-rc.8.tgz
+c7323a1ede3b482c8d8175ca021fe9c862d7281eb17128918c63b04362032448  blockingmachine-firefox-mv3-v1.0.0.zip
+cb1d591f3b42f43861908f985d56cfd602a49eec87f9274f74e9eb5518a1dcd5  blockingmachine_1.0.0.rc.8_amd64.deb
 ```
