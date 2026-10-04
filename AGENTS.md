@@ -13,8 +13,12 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
 - **npmjs.com**: `@blockingmachine/core` and `@blockingmachine/cli` `1.0.0-rc.7` under
   dist-tag `rc`.
 - **Forgejo npm registry**: publish fails `401 Unauthorized` — `FORGEJO_TOKEN` in `.env`
-  lacks package-write scope. Needs a fresh token before the next release can publish
-  there.
+  is invalid outright ("access token does not exist" per the API), not merely
+  under-scoped. Git pushes authenticate over SSH, a different credential. Needs a
+  fresh token with package write scope — flag 53 tracks it.
+- **`npm audit`**: one unpatched advisory remains — `braces` (GHSA-vfj7-8cjw-p6xm,
+  all versions, dev-toolchain only via Electron Forge webpack). `audit fix --force`
+  proposes a breaking Forge downgrade; do not take it — flag 52 tracks it.
 
 ## Release pipeline (`scripts/release.mjs`)
 
@@ -50,8 +54,32 @@ Known sharp edges:
   consumers resolve `@blockingmachine/core` types through `dist/*.d.ts`, so type-check
   without a build collapses those imports to `any` and cascades strict errors out of
   `packages/cli`. Keep that order.
+- `.forgejo/workflows/ci.yml` now mirrors the same ordering (lint → build → test);
+  run 312 is the first green Forgejo CI on it. Forgejo's build step catches things
+  `tsc --noEmit` cannot — webpack `extensionAlias` is what lets `.js` specifiers in
+  `.ts` sources resolve in the bundles (added for the reachability-harness
+  convention: plain `tsc` emits extension-preserved ESM that Node runs directly).
 - `publish.yml` triggers on tag push (`v*`) and `workflow_dispatch`; it builds all
   platforms and uploads onto the release, creating it if absent.
+- `.forgejo/workflows/weekly-tier-compile.yml` mirrors the GitHub weekly ledger cut
+  (Monday 04:17 UTC + dispatch), PR'ing via the pulls API with the injected
+  `GITHUB_TOKEN` — no new actions or secrets. First real run not yet observed
+  (flag 26).
+
+## Live-daemon rehearsals (flag 42)
+
+- `scripts/unbound-reachability-live.sh --native` runs four real resolvers on this
+  host (Unbound 1.26.1) — `MODULES` in that script must stay in step with
+  `unboundReachability.ts`'s runtime imports, and `argv.mjs` is copied into the
+  harness dir beside `harness.mjs`. Both were stale once; the rig fails on
+  `ERR_MODULE_NOT_FOUND`, not on a resolver verdict.
+- `dnsmasqDeployLive.test.ts` needs a `dnsmasq` binary (`brew install dnsmasq`) and
+  `dig`; skips cleanly without them. Same convention for `bind-mechanisms.test.ts`
+  (named + named-checkzone).
+- BIND null-zone: `exportFormat` delegates allowed children per parent
+  (`db.bm.null.<parent>`, child `IN NS` to resolved authority); the sync
+  `generateFilterList` stays NOT HONOURED — inject `resolveNs` in tests rather
+  than hitting DNS.
 
 ## Verified suite counts (rc.7)
 
