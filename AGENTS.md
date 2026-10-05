@@ -6,17 +6,18 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
 
 ## Current release state
 
-- **`v1.0.0-rc.8` shipped 2026-10-04** — tag on `origin` (GitHub `Greigh/Blockingmachine`)
+- **`v1.0.0-rc.9` shipped 2026-10-04** — tag on `origin` (GitHub `Greigh/Blockingmachine`)
   and `forgejo` (`git.greighstudios.com`). GitHub pre-release holds the full asset set:
-  local darwin-arm64 dmg/zip + extension zips + npm tarballs + `SHA256SUMS.txt`
-  (all 12 payloads hashed post-upload), plus `publish.yml`'s CI-built win32/linux/
-  macos installers attached automatically on the tag push.
-- **`make/` must be emptied before `package-all.mjs`** — `gh release create … make/*`
-  sweeps the whole directory, so rc.7 artifacts rode onto the rc.8 release once and
-  had to be deleted after the fact. Clean the dir (or hand the script a fresh
-  checkout) before any release run.
-- **npmjs.com**: `@blockingmachine/core` and `@blockingmachine/cli` `1.0.0-rc.8` under
-  dist-tag `rc`.
+  local darwin-arm64 dmg/zip + extension zips + npm tarballs + `SHA256SUMS.txt`,
+  plus `publish.yml`'s CI-built win32/linux/macos installers attached on the tag push.
+- **`package-all.mjs` empties `make/` itself now** — `gh release create … make/*`
+  sweeps the whole directory, so rc.7/rc.8 leftovers rode onto the rc.9 release and
+  polluted `SHA256SUMS.txt` until deleted post-hoc. The script now `rmSync`s the dir
+  before collecting; the manual-clean advice is moot.
+- **npmjs.com**: `@blockingmachine/core` and `@blockingmachine/cli` `1.0.0-rc.9` under
+  dist-tag `rc`. A publish may sit in npm's internal "staged" state for minutes —
+  `npm view` 404s while the packument finalizes and a republish 409s
+  ("previously staged version"). It resolves on its own; poll the packument.
 - **Forgejo npm registry**: publish fails `401 Unauthorized` — `FORGEJO_TOKEN` in `.env`
   is invalid outright ("access token does not exist" per the API), not merely
   under-scoped. Git pushes authenticate over SSH, a different credential. Needs a
