@@ -9,6 +9,11 @@ DEFAULT_SCAN_INTERVAL = 30
 CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_SCAN_INTERVAL = "scan_interval"
+# The optional bearer token both servers accept on their guarded endpoints — the add-on
+# gates its whole surface behind `feed_token` when one is configured, and the desktop
+# app's `feedToken` gates its mutations, so a hub that asks for a token cannot even be
+# validated without a field to put it in.
+CONF_TOKEN = "token"
 
 ATTR_TOTAL_RULES = "total_rules"
 ATTR_DNS_RULES = "dns_rules"

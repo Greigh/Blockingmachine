@@ -144,10 +144,11 @@ Known sharp edges:
 
 ## Verified suite counts (rc.7)
 
-Core 47/1322, CLI 89, browser-extension 55/793, electron-app 55/614 (56 suites,
+Core 47/1322, CLI 89, browser-extension 55/793, electron-app 55/619 (56 suites,
 10 skipped incl. docker-gated live suites when images are absent),
-homeassistant-integration 14. `tsc --noEmit` clean everywhere; eslint
-zero warnings. Extension tests need `--experimental-vm-modules` (the `npm test` script
+homeassistant-addon 51 (`node --test`), homeassistant-integration 13 (`unittest`).
+`tsc --noEmit` clean everywhere; eslint zero warnings. Extension tests need
+`--experimental-vm-modules` (the `npm test` script
 sets it — bare `npx jest` fails to load 15 suites).
 
 ## Testing the LAN feed server
@@ -156,3 +157,21 @@ sets it — bare `npx jest` fails to load 15 suites).
 feed. Routes are guarded by
 `feedAuth.ts` (origin allowlist + optional `feedToken` bearer, unset = documented
 LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
+
+## Home Assistant surface
+
+- The HACS integration lives at repo-root `custom_components/blockingmachine/`;
+  `packages/homeassistant-integration/custom_components` is a **symlink** to it
+  (so `find` without `-L` sees nothing). `hacs.json` belongs at the package/repo
+  root — never inside the domain dir.
+- The `blockingmachine` integration talks the `/v1/*` REST API that **both** the
+  electron app's feed server and the HA add-on implement — the shapes must agree:
+  `/v1/status` (`rules`, `protection`, `aiRadar`, `browserTelemetry`),
+  `/v1/compile`, `/v1/protection` (POST `{enabled}`, 503 when the daemon is down),
+  `/v1/check?domain=` (flat `blocked` boolean + matcher detail, longest-match
+  semantics), `/v1/control/*`. A token field rides every request as
+  `Authorization: Bearer` — the add-on gates its whole surface when `feed_token`
+  is set, the app gates mutations on `feedToken`.
+- The integration's Python tests mock the `homeassistant` package — new HA
+  imports in the component need matching `sys.modules` mocks in
+  `tests/test_coordinator_logic.py`.

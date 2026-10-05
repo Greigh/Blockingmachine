@@ -38,6 +38,7 @@ const ALL_PATHS = [
   '/v1/status',
   '/v1/rules',
   '/v1/events',
+  '/v1/check?domain=doubleclick.net',
 ];
 
 test('a configured feed token gates every endpoint, by every accepted credential shape', async (t) => {
@@ -144,4 +145,56 @@ test('a configured feed token gates every endpoint, by every accepted credential
   const status = await (await fetch(`${base}/v1/status?token=${TOKEN}`)).json();
   assert.equal(status.feedServer.requiresAuth, true);
   assert.ok(status.feedServer.dnsFeedUrl.includes(`?token=${TOKEN}`));
+  assert.deepEqual(status.browserTelemetry, { trackersBlocked: 0, elementsHidden: 0, threatsDetected: 0 });
+});
+
+test('v1/check resolves a domain the way the DNS consumers would', async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'bm-check-'));
+  await writeFile(
+    join(dataDir, 'dns.txt'),
+    // The allow is a child of the blocked parent on purpose — longest match wins.
+    '||doubleclick.net^\n@@||excepted.doubleclick.net^\n',
+    'utf8',
+  );
+
+  const port = 44000 + Math.floor(Math.random() * 5000);
+  const serverPath = fileURLToPath(new URL('../server.js', import.meta.url));
+  const child = spawn(process.execPath, [serverPath], {
+    env: {
+      ...process.env,
+      DATA_DIR: dataDir,
+      FEED_PORT: String(port),
+      AUTO_COMPILE: 'disabled',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(async () => {
+    child.kill('SIGTERM');
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  const base = `http://127.0.0.1:${port}`;
+  let up = false;
+  for (let attempt = 0; attempt < 40 && !up; attempt += 1) {
+    await delay(100);
+    try {
+      up = (await fetch(`${base}/v1/status`)).ok;
+    } catch { /* not up yet */ }
+  }
+  assert.ok(up, 'the add-on server did not come up');
+
+  const blocked = await (await fetch(`${base}/v1/check?domain=ads.doubleclick.net`)).json();
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.matchedHost, 'doubleclick.net');
+
+  const allowed = await (await fetch(`${base}/v1/check?domain=excepted.doubleclick.net`)).json();
+  assert.equal(allowed.blocked, false);
+  assert.equal(allowed.matchedHost, 'excepted.doubleclick.net');
+
+  const unknown = await (await fetch(`${base}/v1/check?domain=example.org`)).json();
+  assert.equal(unknown.blocked, false);
+  assert.equal(unknown.matchedHost, null);
+
+  const invalid = await fetch(`${base}/v1/check?domain=not_a_domain`);
+  assert.equal(invalid.status, 400);
 });

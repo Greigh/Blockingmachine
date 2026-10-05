@@ -42,6 +42,13 @@ if "homeassistant" not in sys.modules:
     ha_config.ConfigEntry = MagicMock()
     sys.modules["homeassistant.config_entries"] = ha_config
 
+    class MockConfigEntryAuthFailed(Exception):
+        pass
+
+    ha_exceptions = types.ModuleType("homeassistant.exceptions")
+    ha_exceptions.ConfigEntryAuthFailed = MockConfigEntryAuthFailed
+    sys.modules["homeassistant.exceptions"] = ha_exceptions
+
     ha_flow = types.ModuleType("homeassistant.data_entry_flow")
     sys.modules["homeassistant.data_entry_flow"] = ha_flow
 
@@ -175,6 +182,90 @@ class TestCoordinatorLogic(unittest.TestCase):
 
             res = await self.coordinator.async_reload_browser_rules()
             self.assertTrue(res)
+
+        asyncio.run(run_test())
+
+    def test_bearer_token_is_sent_on_every_request(self):
+        """A configured feed token must ride every call — the add-on gates even /v1/status."""
+        async def run_test():
+            coordinator = BlockingmachineDataUpdateCoordinator(
+                self.mock_hass, host="10.0.0.5", port=9191, token="secret-token"
+            )
+            mock_response = AsyncMock()
+            mock_response.status = 200
+            mock_response.json = AsyncMock(return_value={"status": "online"})
+
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__.return_value = mock_response
+
+            coordinator.session = MagicMock()
+            coordinator.session.get.return_value = mock_cm
+            coordinator.session.post.return_value = mock_cm
+
+            await coordinator._async_update_data()
+            get_headers = coordinator.session.get.call_args.kwargs["headers"]
+            self.assertEqual(get_headers["Authorization"], "Bearer secret-token")
+
+            await coordinator.async_compile_rules()
+            post_headers = coordinator.session.post.call_args.kwargs["headers"]
+            self.assertEqual(post_headers["Authorization"], "Bearer secret-token")
+
+        asyncio.run(run_test())
+
+    def test_no_token_sends_no_auth_header(self):
+        self.assertEqual(self.coordinator._headers, {})
+
+    def test_check_domain_urlencodes_the_name(self):
+        async def run_test():
+            mock_response = AsyncMock()
+            mock_response.status = 200
+            mock_response.json = AsyncMock(return_value={"blocked": False})
+
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__.return_value = mock_response
+
+            self.coordinator.session = MagicMock()
+            self.coordinator.session.get.return_value = mock_cm
+
+            await self.coordinator.async_check_domain("bad&name=.evil")
+            url = self.coordinator.session.get.call_args.args[0]
+            self.assertIn("domain=bad%26name%3D.evil", url)
+
+        asyncio.run(run_test())
+
+    def test_async_set_protection_posts_enabled(self):
+        async def run_test():
+            mock_response = AsyncMock()
+            mock_response.status = 200
+
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__.return_value = mock_response
+
+            self.coordinator.session = MagicMock()
+            self.coordinator.session.post.return_value = mock_cm
+
+            res = await self.coordinator.async_set_protection(False)
+            self.assertTrue(res)
+            call = self.coordinator.session.post.call_args
+            self.assertIn("/v1/protection", call.args[0])
+            self.assertEqual(call.kwargs["json"], {"enabled": False})
+
+        asyncio.run(run_test())
+
+    def test_async_set_protection_false_on_failure(self):
+        async def run_test():
+            mock_response = AsyncMock()
+            mock_response.status = 503
+            mock_response.text = AsyncMock(return_value="daemon not running")
+
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__.return_value = mock_response
+
+            self.coordinator.session = MagicMock()
+            self.coordinator.session.post.return_value = mock_cm
+
+            res = await self.coordinator.async_set_protection(True)
+            self.assertFalse(res)
 
         asyncio.run(run_test())
 

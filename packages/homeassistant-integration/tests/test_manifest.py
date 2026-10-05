@@ -9,9 +9,9 @@ class TestManifestCompliance(unittest.TestCase):
         self.manifest_path = os.path.join(
             self.base_dir, "custom_components", "blockingmachine", "manifest.json"
         )
-        self.hacs_path = os.path.join(
-            self.base_dir, "custom_components", "blockingmachine", "hacs.json"
-        )
+        # HACS reads hacs.json at the repository root, never inside the domain
+        # directory — a copy there was dead weight hassfest could reject.
+        self.hacs_path = os.path.join(self.base_dir, "hacs.json")
 
     def test_manifest_structure(self):
         self.assertTrue(os.path.exists(self.manifest_path), "manifest.json must exist")

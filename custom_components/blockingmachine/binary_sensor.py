@@ -31,6 +31,14 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[BinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.PROBLEM,
         icon="mdi:shield-alert",
     ),
+    # Read-only rather than a switch: neither server exposes a runtime AI-radar toggle
+    # (the add-on's is a boot-time option, the desktop app's lives behind IPC), so a
+    # switch could only pretend to control it.
+    BinarySensorEntityDescription(
+        key="ai_radar_enabled",
+        name="AI Radar Sentinel",
+        icon="mdi:radar",
+    ),
 )
 
 
@@ -84,5 +92,7 @@ class BlockingmachineBinarySensor(CoordinatorEntity[BlockingmachineDataUpdateCoo
         if self.entity_description.key == "browser_threat_detected":
             threats = data.get("browserTelemetry", {}).get("threatsDetected", 0)
             return threats > 0
+        if self.entity_description.key == "ai_radar_enabled":
+            return bool(data.get("aiRadar", {}).get("enabled"))
 
         return False
