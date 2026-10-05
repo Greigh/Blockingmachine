@@ -1,0 +1,16 @@
+{
+  // Same role as cli's: the base `exclude`s `src/__tests__` to keep the build's emit out of
+  // `dist`, which leaves `tsc --noEmit` blind to tests — and leaves the IDE assigning test
+  // files to an inferred project where the ambient `src/types/dns-packet.d.ts` declaration
+  // never loads. `typeRoots` points at the monorepo root's `@types` because dependencies
+  // hoist there and this package has no local node_modules/@types.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "noEmit": true,
+    "typeRoots": ["../../node_modules/@types"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
