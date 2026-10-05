@@ -11,7 +11,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "npm run build --workspace=@blockingmachine/core && npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=@blockingmachine/core --workspace=@blockingmachine/system-daemon && npm run build --workspaces --if-present",
     "clean": "npm run clean --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "type-check": "npm run type-check --workspaces --if-present",
