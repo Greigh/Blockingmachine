@@ -33,6 +33,9 @@ parseArgvOrExit(process.argv.slice(2), {});
 console.log(`\n🚀 [Package All] Building and collecting release artifacts for v${version}`);
 console.log(`📁 Target directory: ${MAKE_DIR}\n`);
 
+// A release uploads `make/*` wholesale — stale artifacts from a previous version's
+// local build ride along (rc.9 shipped rc.7/rc.8 leftovers until this). Start clean.
+rmSync(MAKE_DIR, { recursive: true, force: true });
 mkdirSync(MAKE_DIR, { recursive: true });
 
 // 1. Build and package browser extensions
