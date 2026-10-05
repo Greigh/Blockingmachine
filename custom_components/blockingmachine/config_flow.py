@@ -17,6 +17,7 @@ from .const import (
     CONF_HOST,
     CONF_PORT,
     CONF_SCAN_INTERVAL,
+    CONF_TOKEN,
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
@@ -25,22 +26,44 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+class InvalidAuth(Exception):
+    """The hub answered, but rejected the credential — a different failure than no answer."""
+
+
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate user input by attempting to reach the Blockingmachine hub."""
     host = data[CONF_HOST]
     port = data[CONF_PORT]
+    token = (data.get(CONF_TOKEN) or "").strip() or None
     session = async_get_clientsession(hass)
     url = f"http://{host}:{port}/v1/status"
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
 
     try:
-        async with session.get(url, timeout=ClientTimeout(total=5)) as response:
+        async with session.get(url, headers=headers, timeout=ClientTimeout(total=5)) as response:
+            if response.status == 401:
+                raise InvalidAuth("invalid_auth")
             if response.status != 200:
                 raise ValueError("cannot_connect")
             json_data = await response.json()
             return {"title": f"Blockingmachine ({host})", "info": json_data}
-    except (ClientError, TimeoutError, Exception) as err:
+    except InvalidAuth:
+        raise
+    except Exception as err:
         _LOGGER.warning("Connection test failed for %s: %s", url, err)
         raise ValueError("cannot_connect") from err
+
+
+def _user_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    """The connection form — token optional because an untokenized LAN hub is the default."""
+    defaults = defaults or {}
+    return vol.Schema(
+        {
+            vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, DEFAULT_HOST)): str,
+            vol.Required(CONF_PORT, default=defaults.get(CONF_PORT, DEFAULT_PORT)): int,
+            vol.Optional(CONF_TOKEN, default=defaults.get(CONF_TOKEN, "")): str,
+        }
+    )
 
 
 class BlockingmachineConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -60,20 +83,43 @@ class BlockingmachineConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(f"{user_input[CONF_HOST]}:{user_input[CONF_PORT]}")
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(title=info["title"], data=user_input)
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
             except ValueError:
                 errors["base"] = "cannot_connect"
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_HOST, default=DEFAULT_HOST): str,
-                vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
-            }
+        return self.async_show_form(
+            step_id="user", data_schema=_user_schema(user_input), errors=errors
         )
 
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
+        """A 401 during polling means the token stopped being accepted — ask for a new one."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Collect a replacement token and validate it against the same hub."""
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            candidate = {**entry.data, CONF_TOKEN: user_input.get(CONF_TOKEN, "")}
+            try:
+                await validate_input(self.hass, candidate)
+                return self.async_update_reload_and_abort(entry, data=candidate)
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except Exception:
+                errors["base"] = "cannot_connect"
+
+        schema = vol.Schema({vol.Required(CONF_TOKEN): str})
+        return self.async_show_form(
+            step_id="reauth_confirm", data_schema=schema, errors=errors
+        )
 
     @staticmethod
     @callback
@@ -100,6 +146,14 @@ class BlockingmachineOptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_SCAN_INTERVAL,
                     default=self.config_entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
                 ): int,
+                # Options-level token so a hub that gains a feed_token later does not
+                # require deleting and re-adding the entry.
+                vol.Optional(
+                    CONF_TOKEN,
+                    default=self.config_entry.options.get(
+                        CONF_TOKEN, self.config_entry.data.get(CONF_TOKEN, "")
+                    ),
+                ): str,
             }
         )
 

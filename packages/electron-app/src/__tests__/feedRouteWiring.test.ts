@@ -66,6 +66,47 @@ describe('the /v1/compile route', () => {
   });
 });
 
+describe('the /v1/protection route', () => {
+  // The Home Assistant integration's Network Protection switch hangs off this — a
+  // route that 404s or lies about the daemon state is a dead switch in HA.
+  const protection = blockFrom("lowerPath === '/v1/protection'");
+
+  test('POST is a gated mutation wired to the daemon toggle', () => {
+    expect(protection).toContain('rejectUnauthorisedMutation');
+    expect(protection).toContain('daemonManager.toggleProtection');
+    expect(protection).toContain('refreshTrayProtection');
+  });
+
+  test('refuses honestly when no daemon is running', () => {
+    expect(protection).toContain("status === 'stopped'");
+    expect(protection).toContain('503');
+    expect(protection).toContain('DNS daemon is not running');
+  });
+});
+
+describe('the /v1/check route', () => {
+  // It serialized the RuleCoverageResult object under `blocked` — `{"isCovered":false}`
+  // — which every consumer reads as truthy. The add-on serves the same endpoint with a
+  // flat boolean; the two must agree.
+  const check = blockFrom("lowerPath === '/v1/check'");
+
+  test('answers a flat boolean blocked flag, not the coverage object', () => {
+    expect(check).toContain('blocked: coverage.isCovered === true');
+    expect(check).not.toContain('blocked: isCovered');
+  });
+});
+
+describe('the /v1/status protection block', () => {
+  // It hardcoded `enabled: true` — the API claimed protection while the tray said
+  // the daemon was not running. The block must come from the daemon's own answer.
+  const status = blockFrom("lowerPath === '/v1/status'");
+
+  test('reports the live daemon state rather than a fixed enabled flag', () => {
+    expect(status).toContain('daemonManager.getStatus()');
+    expect(status).toContain('daemonStatus.status');
+  });
+});
+
 describe('the hotlist.txt write inside the compile handler', () => {
   // The extension's sync client fetches `hotlist.txt` so a browser can install the rules its
   // own ledger says fire first — the file must come from the picked ledger, never from rule

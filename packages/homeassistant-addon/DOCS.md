@@ -27,6 +27,7 @@ AI-powered adblock compiler, segregated DNS/Browser feed server, and local netwo
 | `/v1/status` | GET | Full hub status: rule counts, compile ledger, protection state, feed URLs |
 | `/v1/compile` | POST | Refresh statistics from the feed files, stamp the compile ledger, broadcast `compile_completed` |
 | `/v1/protection` | POST | `{"enabled": true\|false}` or `{"pauseMinutes": 30}` — pause/resume blocking state |
+| `/v1/check` | GET | `?domain=<host>` — the verdict a DNS consumer would get: longest-match against the live feed, so a child allow survives a blocked parent |
 | `/v1/rules` | GET | Rule browser: `?q=<substring>&limit=1..500&offset=N` |
 | `/v1/events` | GET | Server-Sent Events: `connected`, `compile_completed`, `protection_changed` |
 | `/dns.txt` | GET | DNS-level feed (AdGuard Home / Pi-hole compatible) |

@@ -11,6 +11,7 @@ from .const import (
     CONF_HOST,
     CONF_PORT,
     CONF_SCAN_INTERVAL,
+    CONF_TOKEN,
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
@@ -36,9 +37,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     host = entry.data.get(CONF_HOST, DEFAULT_HOST)
     port = entry.data.get(CONF_PORT, DEFAULT_PORT)
     scan_interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    # An options-level token wins over the one captured at setup, so a token can be
+    # rotated without re-adding the entry.
+    token = (entry.options.get(CONF_TOKEN) or entry.data.get(CONF_TOKEN) or "").strip() or None
 
     coordinator = BlockingmachineDataUpdateCoordinator(
-        hass, host=host, port=port, scan_interval=scan_interval
+        hass, host=host, port=port, scan_interval=scan_interval, token=token
     )
 
     await coordinator.async_config_entry_first_refresh()

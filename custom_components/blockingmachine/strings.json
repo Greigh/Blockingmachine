@@ -3,19 +3,29 @@
     "step": {
       "user": {
         "title": "Connect to Blockingmachine Hub",
-        "description": "Enter the host and port of your Blockingmachine on-computer desktop app or Add-on.",
+        "description": "Enter the host and port of the machine running the Blockingmachine desktop app or Add-on — not localhost, unless Home Assistant runs on that same machine.",
         "data": {
           "host": "Host / IP Address",
-          "port": "Port (default 9191)"
+          "port": "Port (default 9191)",
+          "token": "Feed token (only if one is configured on the hub)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Blockingmachine feed token rejected",
+        "description": "The hub answered but rejected the configured feed token. Enter the current token.",
+        "data": {
+          "token": "Feed token"
         }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to Blockingmachine hub. Ensure the feed server is running.",
+      "invalid_auth": "The hub rejected the feed token.",
       "unknown": "Unexpected error occurred."
     },
     "abort": {
-      "already_configured": "This Blockingmachine instance is already configured."
+      "already_configured": "This Blockingmachine instance is already configured.",
+      "reauth_successful": "Feed token updated."
     }
   },
   "options": {
@@ -23,7 +33,8 @@
       "init": {
         "title": "Blockingmachine Options",
         "data": {
-          "scan_interval": "Status polling interval in seconds"
+          "scan_interval": "Status polling interval in seconds",
+          "token": "Feed token (leave empty when the hub does not require one)"
         }
       }
     }

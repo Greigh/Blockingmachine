@@ -25,6 +25,7 @@ import { renderUnboundFeed, rulesToUnboundZones } from './unboundFeed.js';
 import { renderShadowrocketFeed, shadowrocketHostCount } from './shadowrocketFeed.js';
 import { renderPrivoxyFeed, privoxyPatternCount } from './privoxyFeed.js';
 import { renderBindRpzFeed, bindRpzRecordCount } from './bindFeed.js';
+import { hostFromRule, normalizeHost } from './hostRules.js';
 
 const PORT = parseInt(process.env.FEED_PORT || '9191', 10);
 const DATA_DIR = process.env.DATA_DIR || '/data/blockingmachine';
@@ -682,6 +683,10 @@ const server = createServer(async (req, res) => {
         enabled: protection.enabled && !paused,
         pausedUntil: paused ? protection.pausedUntil : null,
       },
+      // The add-on has no browser clients reporting to it — the counters are honestly
+      // zero here rather than absent, so the integration's telemetry sensors stay
+      // meaningful instead of silently reading an undefined object.
+      browserTelemetry: { trackersBlocked: 0, elementsHidden: 0, threatsDetected: 0 },
     }, null, 2));
     return;
   }
@@ -749,7 +754,42 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // 5. Rule browser API (bounded, supports search)
+  // 5. Domain check — the same verdict a DNS consumer would get, resolved against the
+  // live feed with the resolver's own semantics: longest matching host wins, so a
+  // child allow survives a blocked parent just as it does in Unbound/Shadowrocket.
+  if (pathname === '/v1/check' || pathname === '/api/check') {
+    const domain = normalizeHost(reqUrl.searchParams.get('domain') || '');
+    if (!domain) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'Missing or invalid ?domain= parameter' }));
+      return;
+    }
+    const dns = await loadFeed('dns.txt', defaultDnsRules);
+    const verdicts = new Map();
+    for (const line of dns.rules) {
+      const parsed = hostFromRule(line);
+      if (parsed) verdicts.set(parsed.host, parsed.allowed);
+    }
+    let host = domain;
+    let matched = null;
+    while (!matched && host.includes('.')) {
+      if (verdicts.has(host)) {
+        matched = { host, allowed: verdicts.get(host) };
+        break;
+      }
+      host = host.slice(host.indexOf('.') + 1);
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      domain,
+      blocked: matched ? !matched.allowed : false,
+      matchedHost: matched ? matched.host : null,
+      source: dns.source,
+    }));
+    return;
+  }
+
+  // 6. Rule browser API (bounded, supports search)
   if (pathname === '/v1/rules') {
     const url = new URL(req.url || '/', 'http://localhost');
     const query = (url.searchParams.get('q') || '').toLowerCase().slice(0, 100);

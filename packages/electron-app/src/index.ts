@@ -2401,6 +2401,10 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
             // fallback
           }
 
+          // The protection block reports the DNS daemon's real state, not a fixed
+          // "enabled" — a stopped daemon is protecting nothing, and claiming otherwise
+          // made the tray's own "Daemon not running" disagree with the API.
+          const daemonStatus = await daemonManager.getStatus();
           const statusPayload = {
             status: 'online',
             service: 'Blockingmachine Hub',
@@ -2422,8 +2426,9 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
               abpThreatsFeedUrl: `http://${getLocalLanIp()}:${feedServerPort}/threats.txt`,
             },
             protection: {
-              enabled: true,
+              enabled: daemonStatus.status !== 'stopped' && Boolean(daemonStatus.protectionEnabled),
               pausedUntil: null,
+              daemonStatus: daemonStatus.status,
             },
             aiRadar: {
               enabled: storeRef.get('aiWatchdogConfig')?.enabled ?? false,
@@ -2679,6 +2684,68 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           return;
         }
 
+        if (lowerPath === '/v1/protection' || lowerPath === '/api/protection') {
+          // Mirrors the add-on's own /v1/protection: GET reports the daemon's real
+          // state, POST toggles it through the daemon control API. A stopped daemon
+          // answers 503 — protecting nothing is not a pause, and pretending the toggle
+          // worked is worse than refusing it.
+          if (req.method === 'GET') {
+            if (rejectCrossOrigin('Cross-origin control forbidden')) return;
+            const daemonStatus = await daemonManager.getStatus();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              enabled: daemonStatus.status !== 'stopped' && Boolean(daemonStatus.protectionEnabled),
+              daemonStatus: daemonStatus.status,
+            }));
+            return;
+          }
+
+          if (rejectUnauthorisedMutation('Cross-origin control forbidden')) return;
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed' }));
+            return;
+          }
+
+          let protectionBody = '';
+          req.on('data', (chunk) => {
+            protectionBody += chunk;
+            if (protectionBody.length > 1e6) {
+              req.destroy();
+            }
+          });
+          req.on('end', async () => {
+            try {
+              const data = JSON.parse(protectionBody || '{}');
+              if (typeof data.enabled !== 'boolean') {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ success: false, error: 'Invalid payload — provide {"enabled": true|false}' }));
+                return;
+              }
+              const daemonStatus = await daemonManager.getStatus();
+              if (daemonStatus.status === 'stopped') {
+                res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ success: false, error: 'DNS daemon is not running — start it before toggling protection' }));
+                return;
+              }
+              const result = await daemonManager.toggleProtection(data.enabled);
+              if (!result.success) {
+                res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ success: false, error: 'Daemon refused the protection toggle' }));
+                return;
+              }
+              // Keep the tray's cached state in step with what the LAN client just set.
+              await refreshTrayProtection();
+              res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: true, enabled: result.protectionEnabled }));
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
+            }
+          });
+          return;
+        }
+
         if (lowerPath === '/v1/compile' || lowerPath === '/api/compile') {
           if (rejectUnauthorisedMutation('Cross-origin compilation forbidden')) return;
           if (req.method !== 'POST') {
@@ -2711,9 +2778,20 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
             res.end(JSON.stringify({ error: 'Domain exceeds maximum length of 253 characters' }));
             return;
           }
-          const isCovered = clean ? isDomainCoveredByRules(clean, latestCompiledRules.map((r) => r.raw)) : false;
+          // Route through the lazy loader — `latestCompiledRules` is empty between an
+          // app restart and the first compile, and answering "not covered" against an
+          // empty set reads as a verdict rather than the "no rules loaded" it is.
+          const checkRules = await getOrLoadCompiledRules(storeRef);
+          const coverage = clean && checkRules.length > 0
+            ? isDomainCoveredByRules(clean, checkRules.map((r) => r.raw))
+            : { isCovered: false };
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ domain: clean, blocked: isCovered, timestamp: new Date().toISOString() }));
+          res.end(JSON.stringify({
+            domain: clean,
+            blocked: coverage.isCovered === true,
+            coveringRule: coverage.coveringRule ?? null,
+            timestamp: new Date().toISOString(),
+          }));
           return;
         }
 

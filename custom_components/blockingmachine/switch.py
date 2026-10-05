@@ -18,11 +18,6 @@ SWITCH_DESCRIPTIONS: tuple[SwitchEntityDescription, ...] = (
         icon="mdi:shield-check",
     ),
     SwitchEntityDescription(
-        key="ai_radar_enabled",
-        name="AI Radar Sentinel",
-        icon="mdi:radar",
-    ),
-    SwitchEntityDescription(
         key="browser_cosmetics",
         name="Browser Cosmetic Shield",
         icon="mdi:eye-off-outline",
@@ -64,6 +59,11 @@ class BlockingmachineSwitch(CoordinatorEntity[BlockingmachineDataUpdateCoordinat
             "model": "Blockingmachine Defense Hub",
             "sw_version": "1.0.0",
         }
+        # Cosmetic state lives in the connected browser extensions, not on the hub — the
+        # POST broadcasts the intent over SSE and nothing reports the result back. The
+        # honest HA model for "commanded but unverifiable" is assumed_state.
+        if description.key == "browser_cosmetics":
+            self._attr_assumed_state = True
         self._is_on = True
 
     @property
@@ -74,24 +74,27 @@ class BlockingmachineSwitch(CoordinatorEntity[BlockingmachineDataUpdateCoordinat
             return self._is_on
 
         if self.entity_description.key == "protection_enabled":
-            return data.get("protection", {}).get("enabled", True)
-        if self.entity_description.key == "ai_radar_enabled":
-            return data.get("aiRadar", {}).get("enabled", False)
-        if self.entity_description.key == "browser_cosmetics":
-            return self._is_on
+            enabled = data.get("protection", {}).get("enabled")
+            return bool(enabled) if enabled is not None else self._is_on
 
         return self._is_on
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn switch on."""
-        self._is_on = True
-        if self.entity_description.key == "browser_cosmetics":
-            await self.coordinator.async_set_browser_cosmetics(True)
+        if self.entity_description.key == "protection_enabled":
+            if await self.coordinator.async_set_protection(True):
+                self._is_on = True
+        elif self.entity_description.key == "browser_cosmetics":
+            if await self.coordinator.async_set_browser_cosmetics(True):
+                self._is_on = True
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn switch off."""
-        self._is_on = False
-        if self.entity_description.key == "browser_cosmetics":
-            await self.coordinator.async_set_browser_cosmetics(False)
+        if self.entity_description.key == "protection_enabled":
+            if await self.coordinator.async_set_protection(False):
+                self._is_on = False
+        elif self.entity_description.key == "browser_cosmetics":
+            if await self.coordinator.async_set_browser_cosmetics(False):
+                self._is_on = False
         self.async_write_ha_state()
