@@ -227,3 +227,132 @@ export async function piholeGravityUpdate(
     }),
   );
 }
+
+export interface PiholeQueryEntry {
+  domain: string;
+  client?: string;
+  timestamp?: string;
+}
+
+export interface PiholeQueryLogResult {
+  ok: boolean;
+  flavor: PiholeApiFlavor;
+  status?: number;
+  detail?: string;
+  queries: PiholeQueryEntry[];
+}
+
+/** v5 positional status codes meaning "answered, not blocked": 2 forwarded, 3 cache. */
+const V5_PERMITTED_STATUSES = new Set(['2', '3']);
+/** v6 status names for a query the resolver answered rather than blocked. */
+const V6_PERMITTED_STATUSES = new Set(['FORWARDED', 'CACHE', 'RETRY', 'CACHE_STALE']);
+
+function piholeEpochSecondsToIso(value: unknown): string | undefined {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toISOString() : undefined;
+}
+
+/**
+ * The query-log pull the AI radar scans — both flavors, normalized to one shape.
+ * v5: `?getAllQueries=N` returns positional arrays (`[time, type, domain, client, status]`).
+ * v6: `GET /api/queries?length=N` under a session returns objects with named fields and
+ * wordy status enums; the sid is released in `finally` so a scan cannot leak sessions.
+ * The unblocked-only filter matches the call sites' contract: AI radar scans what the
+ * resolver answered, not what it already blocked.
+ */
+export async function fetchPiholeQueryLog(
+  rawUrl: string,
+  apiKey: string | undefined,
+  limit: number,
+  fetchImpl: PiholeFetch,
+  init: Pick<SinkholeFetchInit, 'timeoutMs' | 'allowInsecureLocalTls'>,
+): Promise<PiholeQueryLogResult> {
+  const flavor = piholeApiFlavor(rawUrl);
+
+  if (flavor === 'v5') {
+    return withRetry(async () => {
+      const url = new URL(rawUrl);
+      if (apiKey?.trim()) url.searchParams.set('auth', apiKey.trim());
+      url.searchParams.set('getAllQueries', String(limit));
+      const res = await fetchImpl(url.toString(), init);
+      const body = (await res.text()).trimStart();
+      if (!res.ok) {
+        return { ok: false, flavor, status: res.status, detail: `HTTP ${res.status}`, queries: [] };
+      }
+      // A v5 URL pointed at v6 gets the admin SPA — HTML where JSON was asked for.
+      if (body.startsWith('<')) {
+        return {
+          ok: false,
+          flavor,
+          status: res.status,
+          detail:
+            'answered with the admin web page, not the API — on Pi-hole v6 the endpoint is /admin, not api.php. Point the URL at /admin and keep a v6 password.',
+          queries: [],
+        };
+      }
+      let data: unknown[] = [];
+      try {
+        const json = JSON.parse(body) as { data?: unknown };
+        data = Array.isArray(json?.data) ? (json.data as unknown[]) : [];
+      } catch {
+        return { ok: false, flavor, status: res.status, detail: 'query log body was not valid JSON', queries: [] };
+      }
+      const queries: PiholeQueryEntry[] = [];
+      for (const item of data) {
+        if (!Array.isArray(item)) continue;
+        const [epoch, , name, client, status] = item;
+        if (typeof name === 'string' && name && V5_PERMITTED_STATUSES.has(String(status))) {
+          queries.push({
+            domain: name,
+            client: typeof client === 'string' ? client : undefined,
+            timestamp: piholeEpochSecondsToIso(epoch),
+          });
+        }
+      }
+      return { ok: true, flavor, status: res.status, queries };
+    });
+  }
+
+  const origin = piholeApiOrigin(rawUrl);
+  if (!apiKey?.trim()) {
+    return {
+      ok: false,
+      flavor,
+      detail: 'Pi-hole v6 needs the web/app password to open a session — the API key field is empty.',
+      queries: [],
+    };
+  }
+  return withRetry(async () => {
+    const { sid } = await v6Session(origin, apiKey.trim(), fetchImpl, init);
+    try {
+      const url = new URL(`${origin}/api/queries`);
+      url.searchParams.set('length', String(limit));
+      const res = await fetchImpl(url.toString(), {
+        ...init,
+        headers: { 'X-FTL-SID': sid },
+      });
+      if (!res.ok) {
+        return { ok: false, flavor, status: res.status, detail: `HTTP ${res.status}`, queries: [] };
+      }
+      const json = (await res.json()) as { queries?: unknown };
+      const rows = Array.isArray(json?.queries) ? (json.queries as unknown[]) : [];
+      const queries: PiholeQueryEntry[] = [];
+      for (const row of rows) {
+        const q = row as { domain?: unknown; client?: unknown; status?: unknown; time?: unknown };
+        const domain = typeof q.domain === 'string' ? q.domain : '';
+        const statusName = typeof q.status === 'string' ? q.status : '';
+        if (!domain || !V6_PERMITTED_STATUSES.has(statusName)) continue;
+        const client =
+          typeof q.client === 'string'
+            ? q.client
+            : typeof (q.client as { ip?: unknown })?.ip === 'string'
+              ? (q.client as { ip: string }).ip
+              : undefined;
+        queries.push({ domain, client, timestamp: piholeEpochSecondsToIso(q.time) });
+      }
+      return { ok: true, flavor, status: res.status, queries };
+    } finally {
+      await v6Logout(origin, sid, fetchImpl, init);
+    }
+  });
+}

@@ -210,7 +210,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   const [showAdguardPass, setShowAdguardPass] = useState(false);
   const [showPiholeKey, setShowPiholeKey] = useState(false);
   const [autoStartFeedServer, setAutoStartFeedServer] = useState(false);
-  const [feedToken, setFeedToken] = useState('');
+  const [feedTokenConfigured, setFeedTokenConfigured] = useState(false);
   const [secretStorageAvailable, setSecretStorageAvailable] = useState<boolean | null>(null);
   const [launchOnStartup, setLaunchOnStartup] = useState(false);
   const [unboundReachability, setUnboundReachability] = useState<UnboundReachability | null>(null);
@@ -369,11 +369,11 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
       });
     }
 
-    // The recipe commands a pane writes may need the mutation token in a header — the Unbound
-    // refresh's report-back POST is refused without it when one is configured.
+    // Presence flag only — recipes emit $FEED_TOKEN for the shell to expand at run time;
+    // the token value itself never enters the renderer (console errors forward to the log).
     if (window.electron?.getFeedToken) {
       window.electron.getFeedToken().then((res) => {
-        if (isMountedRef.current) setFeedToken(res?.token || '');
+        if (isMountedRef.current) setFeedTokenConfigured(Boolean(res?.configured));
       });
     }
 
@@ -763,7 +763,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     savePath,
     exportFormat,
     serverStatus,
-    feedToken,
+    feedTokenConfigured,
     secretStorageAvailable,
 
     handleCopy,

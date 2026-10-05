@@ -1,6 +1,8 @@
 import React from 'react';
 import { AdGuardDirectWarning } from '../../components/AdGuardDirectWarning';
+import { SecretClearButton } from '../../components/SecretClearButton';
 import { ServiceMismatchBanner } from '../../components/ServiceMismatchBanner';
+import { secretConfigured, secretCleared, secretPlaceholder, toggleSecretCleared, updateSecretField } from '../../secretFields';
 import { resolveLanFeedUrl } from '../feedUrls';
 import { isServiceMismatch } from '../../sinkholeIdentity';
 import {
@@ -219,10 +221,17 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
                   <input
                     type={showHaToken ? 'text' : 'password'}
                     className="deploy-field-input"
-                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+                    placeholder={secretPlaceholder(sinkholeConfig, 'haToken', 'eyJhbGciOiJIUzI1NiIsInR5cCI6...')}
                     value={sinkholeConfig.haToken || ''}
-                    onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haToken: e.target.value })}
+                    onChange={(e) => setSinkholeConfig(updateSecretField(sinkholeConfig, 'haToken', e.target.value))}
                   />
+                  {secretConfigured(sinkholeConfig, 'haToken') && (
+                    <SecretClearButton
+                      deployStyle
+                      cleared={secretCleared(sinkholeConfig, 'haToken')}
+                      onToggle={() => setSinkholeConfig(toggleSecretCleared(sinkholeConfig, 'haToken'))}
+                    />
+                  )}
                   <button
                     type="button"
                     className="deploy-eye-btn"
@@ -249,10 +258,17 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
                     <input
                       type={showAdguardPass ? 'text' : 'password'}
                       className="deploy-field-input"
-                      placeholder="••••••••"
+                      placeholder={secretPlaceholder(sinkholeConfig, 'adguardHomePassword', '••••••••')}
                       value={sinkholeConfig.adguardHomePassword || ''}
-                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
+                      onChange={(e) => setSinkholeConfig(updateSecretField(sinkholeConfig, 'adguardHomePassword', e.target.value))}
                     />
+                    {secretConfigured(sinkholeConfig, 'adguardHomePassword') && (
+                      <SecretClearButton
+                        deployStyle
+                        cleared={secretCleared(sinkholeConfig, 'adguardHomePassword')}
+                        onToggle={() => setSinkholeConfig(toggleSecretCleared(sinkholeConfig, 'adguardHomePassword'))}
+                      />
+                    )}
                     <button
                       type="button"
                       className="deploy-eye-btn"

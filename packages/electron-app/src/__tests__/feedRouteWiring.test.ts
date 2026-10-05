@@ -91,8 +91,12 @@ describe('the /v1/check route', () => {
   const check = blockFrom("lowerPath === '/v1/check'");
 
   test('answers a flat boolean blocked flag, not the coverage object', () => {
-    expect(check).toContain('blocked: coverage.isCovered === true');
+    // The evaluator is cached on the rules array's identity (H2) — per-request
+    // `compileRuleSet` over ~361k rules held the event loop ~150ms per GET.
+    expect(check).toContain("blocked: evaluation?.verdict === 'blocked'");
+    expect(check).toContain('getCompiledEvaluator(checkRules)');
     expect(check).not.toContain('blocked: isCovered');
+    expect(check).not.toContain('isDomainCoveredByRules');
   });
 });
 

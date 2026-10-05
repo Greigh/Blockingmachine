@@ -48,6 +48,9 @@ function App() {
     }
   });
   const [autoTriggerCompile, setAutoTriggerCompile] = useState<boolean>(false);
+  // Bumped on every 'trigger-compile' IPC and cleared when DashboardView consumes it —
+  // a pending trigger survives view switches but a consumed one cannot re-fire on remount.
+  const [compileNonce, setCompileNonce] = useState<number>(0);
   const [inspectorInitialDomain, setInspectorInitialDomain] = useState<string>('');
   const [liveRadarSession, setLiveRadarSession] = useState<LiveRadarSession | null>(null);
 
@@ -323,6 +326,7 @@ function App() {
 
     if (window.electron?.onTriggerCompile) {
       cleanupCompile = window.electron.onTriggerCompile(() => {
+        setCompileNonce((n) => n + 1);
         setCurrentView('process');
       });
     }
@@ -344,6 +348,10 @@ function App() {
         setUpdateAvailable(true);
       });
     }
+
+    // Subscriptions are live — tell the main process it can flush any messages
+    // queued while the window was closed or mid-reload.
+    window.electron?.rendererReady?.();
 
     return () => {
       cleanupSettings?.();
@@ -419,6 +427,8 @@ function App() {
               <DashboardView
                 savePath={savePath}
                 autoTriggerCompile={autoTriggerCompile}
+                compileNonce={compileNonce}
+                onCompileConsumed={() => setCompileNonce(0)}
                 onNavigate={(view) => setCurrentView(view)}
               />
             )}

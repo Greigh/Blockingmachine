@@ -99,7 +99,7 @@ function bundle(overrides: Partial<HubPaneProps> = {}): HubPaneProps {
     savePath: SAVE_PATH,
     exportFormat: 'adguard',
     serverStatus: SERVER_STATUS,
-    feedToken: '',
+    feedTokenConfigured: false,
     secretStorageAvailable: null,
     handleCopy: noop,
     copiedKey: null,

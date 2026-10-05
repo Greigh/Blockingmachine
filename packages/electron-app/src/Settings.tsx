@@ -16,6 +16,8 @@ import {
   type AccentColorOption,
 } from './theme';
 import { AdGuardDirectWarning } from './components/AdGuardDirectWarning';
+import { SecretClearButton } from './components/SecretClearButton';
+import { secretConfigured, secretCleared, secretPlaceholder, toggleSecretCleared, updateSecretField } from './secretFields';
 import { ServiceMismatchBanner } from './components/ServiceMismatchBanner';
 import { isServiceMismatch } from './sinkholeIdentity';
 import { separateAdguardUrls } from './queryLogScout';
@@ -260,10 +262,8 @@ const Settings: React.FC<SettingsProps> = ({
 
     if (window.electron?.getFeedToken) {
       window.electron.getFeedToken().then((res) => {
-        if (isMounted && res) {
-          setFeedTokenConfigured(res.configured);
-          setFeedToken(res.token);
-        }
+        // Write-only like the sinkhole secrets — presence flag, never the value.
+        if (isMounted && res) setFeedTokenConfigured(res.configured);
       }).catch(console.error);
     }
 
@@ -311,14 +311,13 @@ const Settings: React.FC<SettingsProps> = ({
     try {
       const res = await window.electron.setFeedToken(feedToken);
       if (res?.success) {
-        const configured = feedToken.trim().length > 0;
-        setFeedTokenConfigured(configured);
-        setFeedTokenMessage({
-          text: configured
-            ? 'Feed token saved — mutations now require Authorization: Bearer'
-            : 'Feed token cleared — mutations are guarded by origin only',
-          type: 'success',
-        });
+        if (res.unchanged) {
+          setFeedTokenMessage({ text: 'Feed token unchanged — the saved token is still in effect', type: 'success' });
+        } else {
+          setFeedTokenConfigured(true);
+          setFeedToken('');
+          setFeedTokenMessage({ text: 'Feed token saved — mutations now require Authorization: Bearer', type: 'success' });
+        }
       } else {
         setFeedTokenMessage({ text: res?.error || 'Failed to save feed token', type: 'error' });
       }
@@ -326,6 +325,23 @@ const Settings: React.FC<SettingsProps> = ({
     } catch (err) {
       console.error('Failed to save feed token:', err);
       setFeedTokenMessage({ text: 'Failed to save feed token', type: 'error' });
+    }
+  };
+
+  const handleClearFeedToken = async () => {
+    if (!window.electron?.clearFeedToken) return;
+    try {
+      const res = await window.electron.clearFeedToken();
+      if (res?.success) {
+        setFeedTokenConfigured(false);
+        setFeedToken('');
+        setFeedTokenMessage({ text: 'Feed token cleared — mutations are guarded by origin only', type: 'success' });
+      } else {
+        setFeedTokenMessage({ text: res?.error || 'Failed to clear feed token', type: 'error' });
+      }
+      safeSetTimeout(() => setFeedTokenMessage(null), 4000);
+    } catch {
+      setFeedTokenMessage({ text: 'Failed to clear feed token', type: 'error' });
     }
   };
 
@@ -986,6 +1002,11 @@ const Settings: React.FC<SettingsProps> = ({
                 <button type="button" className="browse-button secondary" onClick={() => void handleSaveFeedToken()}>
                   Save
                 </button>
+                {feedTokenConfigured && (
+                  <button type="button" className="browse-button secondary" onClick={() => void handleClearFeedToken()}>
+                    Clear
+                  </button>
+                )}
               </div>
               {feedTokenMessage && (
                 <p className={`setting-message ${feedTokenMessage.type}`} style={{ marginTop: '2px' }}>
@@ -1093,21 +1114,29 @@ const Settings: React.FC<SettingsProps> = ({
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                   <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Auth API Token</label>
-                  <button
-                    type="button"
-                    style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
-                    onClick={() => setShowPiholeKey(!showPiholeKey)}
-                  >
-                    {showPiholeKey ? 'Hide' : 'Show'}
-                  </button>
+                  <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    {secretConfigured(sinkholeConfig, 'piholeApiKey') && (
+                      <SecretClearButton
+                        cleared={secretCleared(sinkholeConfig, 'piholeApiKey')}
+                        onToggle={() => setSinkholeConfig(toggleSecretCleared(sinkholeConfig, 'piholeApiKey'))}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                      onClick={() => setShowPiholeKey(!showPiholeKey)}
+                    >
+                      {showPiholeKey ? 'Hide' : 'Show'}
+                    </button>
+                  </span>
                 </div>
                 <input
                   type={showPiholeKey ? 'text' : 'password'}
                   className="path-input"
 
-                  placeholder="Pi-hole web password hash"
+                  placeholder={secretPlaceholder(sinkholeConfig, 'piholeApiKey', 'Pi-hole web password hash')}
                   value={sinkholeConfig.piholeApiKey}
-                  onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, piholeApiKey: e.target.value })}
+                  onChange={(e) => setSinkholeConfig(updateSecretField(sinkholeConfig, 'piholeApiKey', e.target.value))}
                 />
               </div>
 
@@ -1293,21 +1322,29 @@ const Settings: React.FC<SettingsProps> = ({
                     <div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                         <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Password</label>
-                        <button
-                          type="button"
-                          style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
-                          onClick={() => setShowAdguardPass(!showAdguardPass)}
-                        >
-                          {showAdguardPass ? 'Hide' : 'Show'}
-                        </button>
+                        <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                          {secretConfigured(sinkholeConfig, 'adguardHomePassword') && (
+                            <SecretClearButton
+                              cleared={secretCleared(sinkholeConfig, 'adguardHomePassword')}
+                              onToggle={() => setSinkholeConfig(toggleSecretCleared(sinkholeConfig, 'adguardHomePassword'))}
+                            />
+                          )}
+                          <button
+                            type="button"
+                            style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                            onClick={() => setShowAdguardPass(!showAdguardPass)}
+                          >
+                            {showAdguardPass ? 'Hide' : 'Show'}
+                          </button>
+                        </span>
                       </div>
                       <input
                         type={showAdguardPass ? 'text' : 'password'}
                         className="path-input"
 
-                        placeholder="••••••••"
+                        placeholder={secretPlaceholder(sinkholeConfig, 'adguardHomePassword', '••••••••')}
                         value={sinkholeConfig.adguardHomePassword}
-                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
+                        onChange={(e) => setSinkholeConfig(updateSecretField(sinkholeConfig, 'adguardHomePassword', e.target.value))}
                       />
                     </div>
                   </div>
@@ -1331,21 +1368,29 @@ const Settings: React.FC<SettingsProps> = ({
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                       <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Long-Lived Access Token</label>
-                      <button
-                        type="button"
-                        style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
-                        onClick={() => setShowHaToken(!showHaToken)}
-                      >
-                        {showHaToken ? 'Hide' : 'Show'}
-                      </button>
+                      <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        {secretConfigured(sinkholeConfig, 'haToken') && (
+                          <SecretClearButton
+                            cleared={secretCleared(sinkholeConfig, 'haToken')}
+                            onToggle={() => setSinkholeConfig(toggleSecretCleared(sinkholeConfig, 'haToken'))}
+                          />
+                        )}
+                        <button
+                          type="button"
+                          style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                          onClick={() => setShowHaToken(!showHaToken)}
+                        >
+                          {showHaToken ? 'Hide' : 'Show'}
+                        </button>
+                      </span>
                     </div>
                     <input
                       type={showHaToken ? 'text' : 'password'}
                       className="path-input"
 
-                      placeholder="eyJhbGciOi..."
+                      placeholder={secretPlaceholder(sinkholeConfig, 'haToken', 'eyJhbGciOi...')}
                       value={sinkholeConfig.haToken || ''}
-                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haToken: e.target.value })}
+                      onChange={(e) => setSinkholeConfig(updateSecretField(sinkholeConfig, 'haToken', e.target.value))}
                     />
                     <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
                       Generate in HA: Profile, then Security, then Long-Lived Access Tokens. Reloads call <code>adguard.refresh</code> on the Home Assistant URL, often port 8123 or Nabu Casa.
@@ -1377,10 +1422,16 @@ const Settings: React.FC<SettingsProps> = ({
                         type={showAdguardPass ? 'text' : 'password'}
                         className="path-input"
                         style={{ flex: 1 }}
-                        placeholder="AdGuard password"
+                        placeholder={secretPlaceholder(sinkholeConfig, 'adguardHomePassword', 'AdGuard password')}
                         value={sinkholeConfig.adguardHomePassword}
-                        onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
+                        onChange={(e) => setSinkholeConfig(updateSecretField(sinkholeConfig, 'adguardHomePassword', e.target.value))}
                       />
+                      {secretConfigured(sinkholeConfig, 'adguardHomePassword') && (
+                        <SecretClearButton
+                          cleared={secretCleared(sinkholeConfig, 'adguardHomePassword')}
+                          onToggle={() => setSinkholeConfig(toggleSecretCleared(sinkholeConfig, 'adguardHomePassword'))}
+                        />
+                      )}
                     </div>
                   </div>
                 </>
@@ -1428,10 +1479,16 @@ const Settings: React.FC<SettingsProps> = ({
                       type={showAdguardPass ? 'text' : 'password'}
                       className="path-input"
                       style={{ flex: 1 }}
-                      placeholder="AdGuard password"
+                      placeholder={secretPlaceholder(sinkholeConfig, 'adguardHomePassword', 'AdGuard password')}
                       value={sinkholeConfig.adguardHomePassword}
-                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomePassword: e.target.value })}
+                      onChange={(e) => setSinkholeConfig(updateSecretField(sinkholeConfig, 'adguardHomePassword', e.target.value))}
                     />
+                    {secretConfigured(sinkholeConfig, 'adguardHomePassword') && (
+                      <SecretClearButton
+                        cleared={secretCleared(sinkholeConfig, 'adguardHomePassword')}
+                        onToggle={() => setSinkholeConfig(toggleSecretCleared(sinkholeConfig, 'adguardHomePassword'))}
+                      />
+                    )}
                   </div>
                 </div>
               )}

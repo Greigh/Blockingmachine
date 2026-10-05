@@ -2,6 +2,7 @@ import React from 'react';
 import { UnboundReachabilityCard } from '../../components/UnboundReachabilityCard';
 import { DeployCommandBlock } from '../DeployCommandBlock';
 import {
+  FEED_TOKEN_ENV_PLACEHOLDER,
   UNBOUND_TARGETS,
   unboundFeedUrl,
   unboundFetchCommand,
@@ -35,7 +36,7 @@ export const unboundPaneKeys = [
   'copiedKey',
   'savePath',
   'serverStatus',
-  'feedToken',
+  'feedTokenConfigured',
   'exportFormat',
   'unboundReachability',
   'unboundSnapshot',
@@ -57,7 +58,7 @@ export const UnboundPane: React.FC<UnboundPaneProps> = ({
   copiedKey,
   savePath,
   serverStatus,
-  feedToken,
+  feedTokenConfigured,
   exportFormat,
   unboundReachability,
   unboundSnapshot,
@@ -75,9 +76,12 @@ export const UnboundPane: React.FC<UnboundPaneProps> = ({
   const unboundFormatNotice = unboundFormatWarning(exportFormat);
   // The report-back tail is what makes the cron's result a fact rather than an absence: the
   // command POSTs ok/fail after the reload, so a fetch that broke overnight is named on the
-  // card instead of invisible. The token goes in the header when one is configured — without
-  // it the report is refused and the command silently reverts to fire-and-forget.
-  const refreshReport = { url: unboundReportUrl(serverStatus?.lanUrl || ''), token: feedToken || null };
+  // card instead of invisible. When a token is configured the command expands $FEED_TOKEN on
+  // the target host — the plaintext never enters the renderer or the copied command.
+  const refreshReport = {
+    url: unboundReportUrl(serverStatus?.lanUrl || ''),
+    token: feedTokenConfigured ? FEED_TOKEN_ENV_PLACEHOLDER : null,
+  };
   return (
     <div className="deploy-single-platform-wrap">
       <div className="deploy-info-card">
@@ -143,6 +147,14 @@ export const UnboundPane: React.FC<UnboundPaneProps> = ({
             <span>{copiedKey === 'unbound-refresh' ? '✓ Copied' : 'Copy refresh command'}</span>
           </button>
         </div>
+
+        {feedTokenConfigured && (
+          <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
+            This hub requires a feed token for report-backs. The command reads it from the
+            environment — set <code>export FEED_TOKEN=…</code> in the target host's crontab or
+            profile (the value lives in this app's Settings, never inside the copied command).
+          </p>
+        )}
       </div>
 
       <UnboundReachabilityCard

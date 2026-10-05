@@ -58,11 +58,11 @@ export interface HubPaneProps {
   /** Live state of the LAN feed server, or null before the Hub has read it. */
   serverStatus: FeedServerStatus | null;
   /**
-   * The configured feed token, when one is set — the recipe commands that POST back
-   * (`/v1/deploy-report`) need it in an `Authorization` header or their reports are refused,
-   * so a pane that writes a report-back command has to embed it. Empty when unset.
+   * Whether a feed token is configured — never the value. Recipe commands that POST back
+   * (`/v1/deploy-report`) emit `$FEED_TOKEN` in the Authorization header so the shell on the
+   * target host expands it at run time; plaintext credentials never cross into the renderer.
    */
-  feedToken: string;
+  feedTokenConfigured: boolean;
 
   /* -- Copying, which every pane with a URL or a command needs ------------------------- */
 

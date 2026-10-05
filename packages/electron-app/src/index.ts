@@ -46,7 +46,7 @@ import {
   type SinkholeEndpoint,
 } from './sinkholeNet';
 import { sinkholeFetch } from './sinkholeFetch';
-import { piholeGravityUpdate, piholeVersionProbe } from './piholeApi.js';
+import { fetchPiholeQueryLog, piholeGravityUpdate, piholeVersionProbe } from './piholeApi.js';
 import { feedTokenAuthorised } from './feedAuth';
 import { isServableFeedFile } from './feedServing';
 import {
@@ -118,7 +118,7 @@ import {
   setDbCacheDirectory,
   checkRuleConflict,
   synthesizeRules,
-  evaluateDomainRules,
+  compileRuleSet,
   filterDNSRules,
   filterBrowserRules,
   LEARNED_SHADOW_SAMPLE_RATE,
@@ -291,11 +291,7 @@ const template: Electron.MenuItemConstructorOptions[] = [
               label: 'Preferences...',
               accelerator: 'Cmd+,',
               click: () => {
-                if (mainWindow) {
-                  mainWindow.show();
-                  mainWindow.focus();
-                  mainWindow.webContents.send('open-settings');
-                }
+                void sendToWindow('open-settings');
               },
             },
             { type: 'separator' as const },
@@ -317,11 +313,7 @@ const template: Electron.MenuItemConstructorOptions[] = [
         label: 'Compile Rules Now',
         accelerator: 'Cmd+R',
         click: () => {
-          if (mainWindow) {
-            mainWindow.show();
-            mainWindow.focus();
-            mainWindow.webContents.send('trigger-compile');
-          }
+          void sendToWindow('trigger-compile');
         },
       },
       {
@@ -361,63 +353,63 @@ const template: Electron.MenuItemConstructorOptions[] = [
         label: 'Filter Processor',
         accelerator: 'Cmd+1',
         click: () => {
-          mainWindow?.webContents.send('navigate-view', 'process');
+          void sendToWindow('navigate-view', 'process');
         },
       },
       {
         label: 'Filter Sources',
         accelerator: 'Cmd+2',
         click: () => {
-          mainWindow?.webContents.send('navigate-view', 'sources');
+          void sendToWindow('navigate-view', 'sources');
         },
       },
       {
         label: 'Defense Modules',
         accelerator: 'Cmd+3',
         click: () => {
-          mainWindow?.webContents.send('navigate-view', 'modules');
+          void sendToWindow('navigate-view', 'modules');
         },
       },
       {
         label: 'Custom Rules',
         accelerator: 'Cmd+4',
         click: () => {
-          mainWindow?.webContents.send('navigate-view', 'custom');
+          void sendToWindow('navigate-view', 'custom');
         },
       },
       {
         label: 'Rule & AI Inspector',
         accelerator: 'Cmd+5',
         click: () => {
-          mainWindow?.webContents.send('navigate-view', 'inspector');
+          void sendToWindow('navigate-view', 'inspector');
         },
       },
       {
         label: 'Rule Browser',
         accelerator: 'Cmd+6',
         click: () => {
-          mainWindow?.webContents.send('navigate-view', 'browser');
+          void sendToWindow('navigate-view', 'browser');
         },
       },
       {
         label: 'Bulk Import',
         accelerator: 'Cmd+7',
         click: () => {
-          mainWindow?.webContents.send('navigate-view', 'bulkImport');
+          void sendToWindow('navigate-view', 'bulkImport');
         },
       },
       {
         label: 'Deploy & Sync',
         accelerator: 'Cmd+8',
         click: () => {
-          mainWindow?.webContents.send('navigate-view', 'deploy');
+          void sendToWindow('navigate-view', 'deploy');
         },
       },
       {
         label: 'AI Radar Hub',
         accelerator: 'Cmd+9',
         click: () => {
-          mainWindow?.webContents.send('navigate-view', 'ai-radar');
+          void sendToWindow('navigate-view', 'ai-radar');
         },
       },
       { type: 'separator' as const },
@@ -453,7 +445,7 @@ const template: Electron.MenuItemConstructorOptions[] = [
       {
         label: 'Quick Tour / Onboarding...',
         click: () => {
-          mainWindow?.webContents.send('launch-onboarding');
+          void sendToWindow('launch-onboarding');
         },
       },
       { type: 'separator' as const },
@@ -601,6 +593,27 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 /**
+ * Feed files are read by LAN clients while a compile can be mid-write — a torn
+ * 13MB list is worse than a stale one. Write to a sibling temp file and rename:
+ * the swap is atomic on POSIX and on Windows (libuv uses MOVEFILE_REPLACE_EXISTING).
+ */
+async function writeFileAtomic(filePath: string, data: string | Buffer): Promise<void> {
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    await fs.writeFile(tmpPath, data);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+  try {
+    await fs.rename(tmpPath, filePath);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+}
+
+/**
  * A source saved as `./filters/...` is app-relative, not cwd-relative: dev
  * resolves beside the package manifest; the packaged app resolves under
  * `Resources/` where `filters/` ships as an extraResource. Anything already
@@ -676,22 +689,29 @@ function runClassifyWorker(
       },
     });
     let settled = false;
+    // Settle once, then terminate — the worker is pure compute and should exit on its
+    // own, but a future import that pins a handle would otherwise hold the app open.
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+      void worker.terminate();
+    };
     worker.on('message', (msg: { type?: string; done?: number } & Partial<ClassifyWorkerResult>) => {
       if (msg?.type === 'progress' && typeof msg.done === 'number') {
         onProgress(msg.done);
       } else if (msg?.type === 'result' && msg.measured) {
-        settled = true;
-        resolvePromise({
-          measured: msg.measured,
-          servedFromCache: typeof msg.servedFromCache === 'number' ? msg.servedFromCache : 0,
-        });
+        settle(() =>
+          resolvePromise({
+            measured: msg.measured!,
+            servedFromCache: typeof msg.servedFromCache === 'number' ? msg.servedFromCache : 0,
+          }),
+        );
       }
     });
-    worker.once('error', rejectPromise);
+    worker.once('error', (err) => settle(() => rejectPromise(err)));
     worker.once('exit', (code) => {
-      if (!settled) {
-        rejectPromise(new Error(`classifier worker exited with code ${code}`));
-      }
+      settle(() => rejectPromise(new Error(`classifier worker exited with code ${code} before producing a result`)));
     });
   });
 }
@@ -736,19 +756,22 @@ function runOutputWorker(
   return new Promise((resolvePromise, rejectPromise) => {
     const worker = new Worker(join(__dirname, 'outputWorker.cjs'), { workerData: input });
     let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+      void worker.terminate();
+    };
     worker.on('message', (msg: { type?: string; stage?: string } & Partial<OutputWorkerResult>) => {
       if (msg?.type === 'progress' && typeof msg.stage === 'string') {
         onStage(msg.stage);
       } else if (msg?.type === 'result' && typeof msg.generatedList === 'string') {
-        settled = true;
-        resolvePromise(msg as OutputWorkerResult);
+        settle(() => resolvePromise(msg as OutputWorkerResult));
       }
     });
-    worker.once('error', rejectPromise);
+    worker.once('error', (err) => settle(() => rejectPromise(err)));
     worker.once('exit', (code) => {
-      if (!settled) {
-        rejectPromise(new Error(`output worker exited with code ${code}`));
-      }
+      settle(() => rejectPromise(new Error(`output worker exited with code ${code} before producing a result`)));
     });
   });
 }
@@ -907,6 +930,26 @@ async function findExtensionRelease(): Promise<GitHubRelease | null> {
 
 // Global cache of latest compiled rules for real-time inspection
 let latestCompiledRules: StoredRule[] = [];
+
+/**
+ * Compiled-evaluator cache keyed on the rules array's identity. `evaluateDomainRules` and
+ * `isDomainCoveredByRules` construct a fresh `CompiledDomainRuleSet` per call — ~150ms of
+ * synchronous work plus a full index rebuild over ~361k rules — which `/v1/check` and
+ * `inspect-domain` were paying per request on the main thread. The compiled index is what
+ * must be cached, and identity does the invalidation for free: a compile or lazy reload
+ * swaps `latestCompiledRules` to a new array, and the WeakMap lets the stale entry collect
+ * rather than pinning the old index alive.
+ */
+const compiledEvaluatorCache = new WeakMap<object, ReturnType<typeof compileRuleSet>>();
+
+function getCompiledEvaluator(rules: StoredRule[]): ReturnType<typeof compileRuleSet> {
+  let compiled = compiledEvaluatorCache.get(rules);
+  if (!compiled) {
+    compiled = compileRuleSet(rules);
+    compiledEvaluatorCache.set(rules, compiled);
+  }
+  return compiled;
+}
 
 /**
  * The compile pipeline, exposed once `initialize()` wires its IPC handler, so
@@ -1070,21 +1113,18 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
       } else if (config.service === 'pihole') {
         const baseUrl = storeRef.get('piholeUrl') || 'http://127.0.0.1';
         const token = readSecret(storeRef, safeStorage, 'piholeApiKey');
-        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
-          signal: AbortSignal.timeout(6000),
+        const logResult = await fetchPiholeQueryLog(baseUrl, token || undefined, limit, sinkholeFetch, {
+          timeoutMs: 6000,
+          allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
         });
-        if (!res.ok) {
-          console.error(`[AI Watchdog] Pi-hole query log returned HTTP ${res.status}. This was not treated as an empty log.`);
+        if (!logResult.ok) {
+          console.error(
+            `[AI Watchdog] Pi-hole query log failed (${logResult.flavor}): ${logResult.detail ?? `HTTP ${logResult.status}`}. This was not treated as an empty log.`,
+          );
         } else {
-          const json: any = await res.json();
-          const data = Array.isArray(json?.data) ? json.data : [];
-          for (const item of data) {
-            const name = item?.[2];
-            const status = item?.[4];
-            if (name && (status === '2' || status === '3')) {
-              queries.push({ domain: name, client: item?.[3], timestamp: piholeEpochToIso(item?.[0]), blocked: false });
-            }
-          }
+          queries.push(
+            ...logResult.queries.map((q) => ({ domain: q.domain, client: q.client, timestamp: q.timestamp, blocked: false })),
+          );
           if (queries.length === 0) {
             console.log(`[AI Watchdog] ${emptyUnblockedNotice(limit)}`);
           }
@@ -1237,9 +1277,16 @@ function broadcastLiveRadarUpdate(): void {
   }
 }
 
+/** True while a live-radar poll tick is running — the 3s interval floor is shorter than a
+ * 60-domain AI scan, so overlapping ticks would double-scan the same query window. */
+let liveRadarPollInFlight = false;
+
 async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promise<void> {
   if (!currentLiveRadarSession.active) return;
+  if (liveRadarPollInFlight) return;
+  liveRadarPollInFlight = true;
 
+  try {
   // Check if session duration expired
   if (currentLiveRadarSession.endTime > 0 && Date.now() >= currentLiveRadarSession.endTime) {
     console.log('[Live Radar] Session duration reached.');
@@ -1274,23 +1321,19 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
     } else if (currentLiveRadarSession.service === 'pihole') {
       const baseUrl = storeRef.get('piholeUrl') || 'http://127.0.0.1';
       const token = readSecret(storeRef, safeStorage, 'piholeApiKey');
-      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
-        signal: AbortSignal.timeout(6000),
+      const logResult = await fetchPiholeQueryLog(baseUrl, token || undefined, limit, sinkholeFetch, {
+        timeoutMs: 6000,
+        allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
       });
-      if (!res.ok) {
-        currentLiveRadarSession.lastError = `Pi-hole query log returned HTTP ${res.status}`;
+      if (!logResult.ok) {
+        currentLiveRadarSession.lastError =
+          `Pi-hole query log failed (${logResult.flavor}): ${logResult.detail ?? `HTTP ${logResult.status}`}`;
         broadcastLiveRadarUpdate();
         return;
       }
-      const json: any = await res.json();
-      const data = Array.isArray(json?.data) ? json.data : [];
-      for (const item of data) {
-        const name = item?.[2];
-        const status = item?.[4];
-        if (name && (status === '2' || status === '3')) {
-          queries.push({ domain: name, client: item?.[3], timestamp: piholeEpochToIso(item?.[0]), blocked: false });
-        }
-      }
+      queries.push(
+        ...logResult.queries.map((q) => ({ domain: q.domain, client: q.client, timestamp: q.timestamp, blocked: false })),
+      );
     }
 
     currentLiveRadarSession.lastError = undefined;
@@ -1384,6 +1427,9 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
     console.error('[Live Radar] Poll error:', err);
     currentLiveRadarSession.lastError = err?.message || String(err);
     broadcastLiveRadarUpdate();
+  }
+  } finally {
+    liveRadarPollInFlight = false;
   }
 }
 
@@ -1611,11 +1657,7 @@ function createTray() {
         }
       },
       triggerCompile: () => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.show();
-          mainWindow.focus();
-          mainWindow.webContents.send('trigger-compile');
-        }
+        void sendToWindow('trigger-compile');
       },
       isCompiling: () => compileInFlight,
       setProtection: async (enabled: boolean) => {
@@ -1744,21 +1786,6 @@ async function readSinkholeProbe(
     allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
   });
   return { ok: res.ok, status: res.status, statusText: res.statusText, body: await res.text() };
-}
-
-/**
- * Converts a Pi-hole query-log epoch-seconds timestamp (row field 0) to ISO 8601.
- * Behavioral cadence analysis needs query timestamps; returns undefined for
- * missing or malformed values rather than fabricating a time.
- */
-function piholeEpochToIso(raw: unknown): string | undefined {
-  const seconds = typeof raw === 'number' ? raw : Number.parseInt(String(raw ?? ''), 10);
-  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
-  try {
-    return new Date(seconds * 1000).toISOString();
-  } catch {
-    return undefined;
-  }
 }
 
 async function loadStoredAdguardQueries(storeRef: ElectronStore<StoreSchema>, limit: number) {
@@ -2277,7 +2304,9 @@ async function runUnboundWatchTick(storeRef: ElectronStore<StoreSchema>): Promis
     // The pane is only listening while it is mounted, and it renders snapshots it was given at
     // mount time — so without this the check runs on schedule and the screen keeps showing the
     // verdict from whenever the tab was opened.
-    mainWindow?.webContents.send('unbound-reachability-updated', toReachabilitySnapshot(reachability));
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('unbound-reachability-updated', toReachabilitySnapshot(reachability));
+    }
 
     // The alert decision is pure, so it cannot remember that it spoke. A `stale` finding is held for
     // a grace period because a copy that has been behind the compile for five minutes may be
@@ -2464,7 +2493,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         // The optional second gate on mutations, resolved once per request — the semantics live
         // in `feedAuth.ts`. Returns true after writing the rejection, so a guarded endpoint is
         // one line; read-only queries keep the origin-only guard via `rejectCrossOrigin`.
-        const configuredToken = (storeRef.get('feedToken') || '').trim();
+        const configuredToken = readSecret(storeRef, safeStorage, 'feedToken').trim();
         const rejectCrossOrigin = (crossOriginError: string): boolean => {
           if (!isSafeClientOrigin()) {
             res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -2622,7 +2651,9 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
             const snap = storeRef.get('unboundReachability');
             if (snap) {
               storeRef.set('unboundReachability', { ...snap, refreshReport: reports[parsed.target] });
-              mainWindow?.webContents.send('unbound-reachability-updated', storeRef.get('unboundReachability'));
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('unbound-reachability-updated', storeRef.get('unboundReachability'));
+              }
             }
           }
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -2762,9 +2793,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
             res.end(JSON.stringify({ success: true, alreadyRunning: true, message: 'Compilation already in progress' }));
             return;
           }
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('trigger-compile');
-          }
+          void sendToWindow('trigger-compile');
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ success: true, message: 'Compilation triggered in Blockingmachine hub' }));
           return;
@@ -2782,14 +2811,19 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           // app restart and the first compile, and answering "not covered" against an
           // empty set reads as a verdict rather than the "no rules loaded" it is.
           const checkRules = await getOrLoadCompiledRules(storeRef);
-          const coverage = clean && checkRules.length > 0
-            ? isDomainCoveredByRules(clean, checkRules.map((r) => r.raw))
-            : { isCovered: false };
+          // The evaluator is cached on the rules array's identity — a per-request
+          // compile of ~361k rules stalls the event loop ~150ms and an unauthenticated
+          // LAN GET could hold it there continuously.
+          const sanitized = clean ? sanitizeDomain(clean) : '';
+          const evaluation = sanitized && checkRules.length > 0
+            ? getCompiledEvaluator(checkRules).evaluate(sanitized)
+            : null;
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({
             domain: clean,
-            blocked: coverage.isCovered === true,
-            coveringRule: coverage.coveringRule ?? null,
+            blocked: evaluation?.verdict === 'blocked',
+            verdict: evaluation?.verdict ?? 'not_blocked',
+            coveringRule: evaluation?.matchingRule ?? null,
             timestamp: new Date().toISOString(),
           }));
           return;
@@ -3498,7 +3532,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           percent: 95,
         });
         await fs.mkdir(dirname(savePath), { recursive: true });
-        await fs.writeFile(savePath, outputs.generatedList, 'utf8');
+        await writeFileAtomic(savePath, outputs.generatedList);
         console.log(`[IPC Main] Filter list saved to: ${savePath}`);
 
         for (const addContent of outputs.additionalContents) {
@@ -3506,7 +3540,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             const ext =
               additionalFormatExtensions[addContent.format as FilterFormat] ?? '.txt';
             const addPath = join(outputDir, `processed_${addContent.format}${ext}`);
-            await fs.writeFile(addPath, addContent.content, 'utf8');
+            await writeFileAtomic(addPath, addContent.content);
             console.log(`[IPC Main] Additional export saved: ${addPath}`);
           } catch (addError) {
             console.error(
@@ -3521,8 +3555,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // Automatically write segregated endpoint files for System Daemon (dns.txt) and Browser Extension (browser.txt)
         sendProgress({ status: 'Writing segregated endpoint lists...', percent: 96 });
         try {
-          await fs.writeFile(join(outputDir, 'dns.txt'), outputs.dnsContent, 'utf8');
-          await fs.writeFile(join(outputDir, 'adguardDns.txt'), outputs.dnsContent, 'utf8');
+          await writeFileAtomic(join(outputDir, 'dns.txt'), outputs.dnsContent);
+          await writeFileAtomic(join(outputDir, 'adguardDns.txt'), outputs.dnsContent);
           console.log(
             `[IPC Main] Segregated DNS endpoints saved: dns.txt (${outputs.dnsCount} rules)`
           );
@@ -3530,14 +3564,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           // Automatically hot-reload System DNS Daemon if running
           daemonManager.reloadRules().catch(() => {});
 
-          await fs.writeFile(join(outputDir, 'browser.txt'), outputs.browserContent, 'utf8');
-          await fs.writeFile(join(outputDir, 'adguardBrowser.txt'), outputs.browserContent, 'utf8');
+          await writeFileAtomic(join(outputDir, 'browser.txt'), outputs.browserContent);
+          await writeFileAtomic(join(outputDir, 'adguardBrowser.txt'), outputs.browserContent);
           console.log(
             `[IPC Main] Segregated Browser endpoints saved: browser.txt (${outputs.browserCount} rules)`
           );
 
           if (outputs.hotlistContent) {
-            await fs.writeFile(hotlistPath, outputs.hotlistContent, 'utf8');
+            await writeFileAtomic(hotlistPath, outputs.hotlistContent);
             console.log(`[IPC Main] Hot set saved: hotlist.txt`);
           } else if (existsSync(hotlistPath)) {
             // No ledger picked, none readable, or none with hits — a stale file
@@ -3624,19 +3658,17 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           for (const category of attribution.categories) {
             const hosts = attribution.byCategory.get(category);
             if (!hosts || hosts.size === 0) continue;
-            await fs.writeFile(
+            await writeFileAtomic(
               join(categoriesDir, `${category}.txt`),
               toCategoryBlocklist(hosts),
-              'utf8',
             );
           }
           const manifest = toAttributionManifest(attribution, {
             generatedAt: new Date().toISOString(),
           });
-          await fs.writeFile(
+          await writeFileAtomic(
             join(categoriesDir, 'manifest.json'),
             `${JSON.stringify(manifest, null, 2)}\n`,
-            'utf8',
           );
           console.log(
             `[IPC Main] Category attribution saved: ${manifest.hosts} hosts across ` +
@@ -3751,7 +3783,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           // because a tier that ships a model's opinion should say whose opinion it was and when.
           verdicts.sort();
           const malwarePath = join(outputDir, 'malware.txt');
-          await fs.writeFile(
+          await writeFileAtomic(
             malwarePath,
             [
               '! Title: Mini-AI Malware & Phishing Verdicts',
@@ -3763,7 +3795,6 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               ...verdicts.map((host) => `||${host}^`),
               '',
             ].join('\n'),
-            'utf8',
           );
           console.log(
             `[IPC Main] Malware verdicts saved: ${verdicts.length.toLocaleString()} of ` +
@@ -3907,7 +3938,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
 
       const rulesToSearch = await getOrLoadCompiledRules(store);
-      const evalResult = evaluateDomainRules(cleanDomain, rulesToSearch);
+      const evalResult = getCompiledEvaluator(rulesToSearch).evaluate(cleanDomain);
 
       if (evalResult.verdict === 'exception') {
         const matchingRuleObj = rulesToSearch.find((r) => r.raw === evalResult.matchingRule);
@@ -4048,13 +4079,16 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle('get-sinkhole-config', async () => {
       return {
         piholeUrl: store.get('piholeUrl') || '',
-        piholeApiKey: readSecret(store, safeStorage, 'piholeApiKey'),
+        // Secrets never leave the main process — the renderer gets presence flags and the
+        // fields stay write-only (blank = unchanged). Decrypted credentials in renderer
+        // memory could end up in the main log via the console-message forwarder.
+        piholeApiKeyConfigured: Boolean(readSecret(store, safeStorage, 'piholeApiKey')),
         adguardHomeUrl: store.get('adguardHomeUrl') || '',
         adguardHomeUser: store.get('adguardHomeUser') || '',
-        adguardHomePassword: readSecret(store, safeStorage, 'adguardHomePassword'),
+        adguardHomePasswordConfigured: Boolean(readSecret(store, safeStorage, 'adguardHomePassword')),
         syncOnCompile: Boolean(store.get('syncOnCompile')),
         adguardMode: (store.get('adguardMode') as 'direct' | 'ha-api' | 'webhook') || 'direct',
-        haToken: readSecret(store, safeStorage, 'haToken'),
+        haTokenConfigured: Boolean(readSecret(store, safeStorage, 'haToken')),
         haWebhookUrl: store.get('haWebhookUrl') || '',
         customWebhookUrl: store.get('customWebhookUrl') || '',
         adguardDirectPort: normalizeAdguardDirectPort(store.get('adguardDirectPort')),
@@ -4075,13 +4109,23 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         adguardDirectPort: config.adguardDirectPort,
       });
       if (config.piholeUrl !== undefined) store.set('piholeUrl', config.piholeUrl);
-      if (config.piholeApiKey !== undefined) writeSecret(store, safeStorage, 'piholeApiKey', config.piholeApiKey);
+      // Write-only secret fields: a non-empty string writes, an empty string does nothing
+      // (blank form fields mean "unchanged"), and clearing is explicit via `clearSecrets`.
+      const clearSecrets = new Set(
+        Array.isArray(config.clearSecrets) ? config.clearSecrets.filter((s: unknown) => typeof s === 'string') : [],
+      );
+      for (const key of ['piholeApiKey', 'adguardHomePassword', 'haToken'] as const) {
+        const val = config[key];
+        if (typeof val === 'string' && val.trim().length > 0) {
+          writeSecret(store, safeStorage, key, val);
+        } else if (val === '' && clearSecrets.has(key)) {
+          writeSecret(store, safeStorage, key, '');
+        }
+      }
       if (config.adguardHomeUrl !== undefined) store.set('adguardHomeUrl', config.adguardHomeUrl);
       if (config.adguardHomeUser !== undefined) store.set('adguardHomeUser', config.adguardHomeUser);
-      if (config.adguardHomePassword !== undefined) writeSecret(store, safeStorage, 'adguardHomePassword', config.adguardHomePassword);
       if (config.syncOnCompile !== undefined) store.set('syncOnCompile', Boolean(config.syncOnCompile));
       if (config.adguardMode !== undefined) store.set('adguardMode', config.adguardMode);
-      if (config.haToken !== undefined) writeSecret(store, safeStorage, 'haToken', config.haToken);
       if (config.haWebhookUrl !== undefined) store.set('haWebhookUrl', config.haWebhookUrl);
       if (config.customWebhookUrl !== undefined) store.set('customWebhookUrl', config.customWebhookUrl);
       if (config.adguardDirectPort !== undefined) store.set('adguardDirectPort', normalizeAdguardDirectPort(config.adguardDirectPort));
@@ -4098,7 +4142,24 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('start-feed-server', async (_event, port?: number) => {
-      return await startFeedServer(port || 9191, store);
+      // Renderer-supplied — a malformed port (0, negative, >65535, NaN, "abc") must be a
+      // caller error, not a silent fall back to 9191 or a listen() exception. Privileged
+      // ports (<1024) are refused too: the feed is a LAN convenience, not a system service.
+      if (port !== undefined) {
+        const invalid = (msg: string) => ({
+          isRunning: false,
+          port: 0,
+          localUrl: '',
+          error: msg,
+        });
+        if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
+          return invalid(`Invalid feed port ${JSON.stringify(port)} — expected an integer 1024–65535`);
+        }
+        if (port < 1024) {
+          return invalid(`Refusing privileged feed port ${port} — use 1024–65535`);
+        }
+      }
+      return await startFeedServer(port ?? 9191, store);
     });
 
     ipcMain.handle('stop-feed-server', async () => {
@@ -4179,8 +4240,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     // Whether a token is configured is returned alongside — the settings card needs to render
     // "required" or "optional" before the user types anything, and a blank read cannot show that.
     ipcMain.handle('get-feed-token', async () => {
-      const token = (store.get('feedToken') || '').trim();
-      return { configured: token.length > 0, token };
+      const token = readSecret(store, safeStorage, 'feedToken').trim();
+      // Presence only — the token is write-only like the sinkhole credentials.
+      return { configured: token.length > 0 };
     });
 
     ipcMain.handle('set-feed-token', async (_event, token: unknown) => {
@@ -4190,10 +4252,25 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         if (typeof token !== 'string') return { success: false, error: 'Token must be a string' };
         const val = token.trim();
         if (val.length > 256) return { success: false, error: 'Token exceeds the 256-character limit' };
-        store.set('feedToken', val);
+        // Blank means "unchanged" — the settings field is write-only now, so a user who
+        // saves the form with the field left empty must not wipe the token. Clearing is
+        // the explicit `clear-feed-token` channel.
+        if (val.length === 0) return { success: true, unchanged: true };
+        // Same sealed-at-rest path as the sinkhole credentials — the LAN mutation token is a
+        // credential, and plaintext `feedToken` entries migrate on the first sealed read.
+        writeSecret(store, safeStorage, 'feedToken', val);
         return { success: true };
       } catch (err: any) {
         console.error('Failed to set feed token:', err);
+        return { success: false, error: err?.message || String(err) };
+      }
+    });
+
+    ipcMain.handle('clear-feed-token', async () => {
+      try {
+        writeSecret(store, safeStorage, 'feedToken', '');
+        return { success: true };
+      } catch (err: any) {
         return { success: false, error: err?.message || String(err) };
       }
     });
@@ -4772,33 +4849,78 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         { assetName: /^blockingmachine-chrome-mv3-.+\.zip$/, dirName: 'blockingmachine-extension' },
         { assetName: /^blockingmachine-firefox-mv3-.+\.zip$/, dirName: 'blockingmachine-extension-firefox' },
       ];
+
+      // Integrity: releases ship SHA256SUMS.txt — fetch it once and verify each archive
+      // before anything on disk is replaced. A sums file that names no zip means the
+      // release was built without integrity metadata; we proceed but say so in the result.
+      let checksums: Map<string, string> | null = null;
+      const sumsAsset = (release.assets ?? []).find(
+        (a) => a?.name === 'SHA256SUMS.txt' && typeof a.browser_download_url === 'string',
+      );
+      if (sumsAsset?.browser_download_url) {
+        try {
+          const sumsRes = await fetch(sumsAsset.browser_download_url, {
+            headers: { 'User-Agent': 'Blockingmachine-App' },
+            redirect: 'follow',
+          });
+          if (sumsRes.ok) {
+            checksums = new Map();
+            for (const line of (await sumsRes.text()).split('\n')) {
+              const m = /^([0-9a-f]{64})\s+\*?(\S+)\s*$/i.exec(line.trim());
+              if (m) checksums.set(m[2], m[1].toLowerCase());
+            }
+          }
+        } catch (sumsErr) {
+          console.warn('[IPC Main] SHA256SUMS.txt fetch failed — archives will install unverified:', sumsErr);
+        }
+      }
+
       const written: Record<string, string> = {};
       const failures: string[] = [];
+      let integrityChecked = false;
       for (const target of targets) {
         const asset = (release.assets ?? []).find(
           (a) => typeof a.name === 'string' && target.assetName.test(a.name) && typeof a.browser_download_url === 'string',
         );
         if (!asset?.browser_download_url || !asset.name) continue;
         const destination = join(destinationRoot, target.dirName);
+        const staging = `${destination}.staging-${process.pid}`;
         try {
           const res = await fetch(asset.browser_download_url, {
             headers: { 'User-Agent': 'Blockingmachine-App' },
             redirect: 'follow',
           });
           if (!res.ok) throw new Error(`download failed with HTTP ${res.status}`);
-          const zip = await JSZip.loadAsync(await res.arrayBuffer());
-          await fs.rm(destination, { recursive: true, force: true });
-          await fs.mkdir(destination, { recursive: true });
+          const zipBytes = Buffer.from(await res.arrayBuffer());
+          if (checksums) {
+            const expected = checksums.get(asset.name);
+            if (!expected) {
+              throw new Error(`SHA256SUMS.txt has no entry for ${asset.name} — refusing an unverified archive`);
+            }
+            const actual = createHash('sha256').update(zipBytes).digest('hex');
+            if (actual !== expected) {
+              throw new Error(`checksum mismatch for ${asset.name} — the download does not match the release manifest`);
+            }
+            integrityChecked = true;
+          }
+          const zip = await JSZip.loadAsync(zipBytes);
+          // Extract into a sibling staging dir, then swap — a failed extract no longer
+          // leaves a half-written extension where the old one used to be.
+          await fs.rm(staging, { recursive: true, force: true });
+          await fs.mkdir(staging, { recursive: true });
           for (const [name, entry] of Object.entries(zip.files)) {
             if (entry.dir) continue;
-            const destPath = pathResolve(destination, name);
-            if (!destPath.startsWith(destination + sep)) continue; // zip-slip guard
+            const destPath = pathResolve(staging, name);
+            if (!destPath.startsWith(staging + sep)) continue; // zip-slip guard
             await fs.mkdir(dirname(destPath), { recursive: true });
             await fs.writeFile(destPath, await entry.async('nodebuffer'));
           }
+          await fs.rm(destination, { recursive: true, force: true });
+          await fs.rename(staging, destination);
           written[target.dirName === 'blockingmachine-extension' ? 'path' : 'firefoxPath'] = destination;
           console.log(`[IPC Main] Extension package ${asset.name} unpacked to ${destination}`);
         } catch (err) {
+          await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
           console.error(`[IPC Main] Failed to fetch extension asset ${asset.name}:`, err);
           failures.push(`${asset.name}: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -4817,6 +4939,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         success: true,
         ...written,
         release: release.tag_name,
+        // Honesty surface: when the release carried no sums file, archives installed on
+        // zip-slip checks alone — say so rather than letting callers assume verification.
+        integrityVerified: checksums ? integrityChecked : false,
         error: failures.length > 0 ? `Partial download — ${failures.join('; ')}` : undefined,
       };
     });
@@ -4842,6 +4967,17 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.on('notify-resize', (_event, width: number, height: number) => {
       if (isDev) {
         console.log(`Window resized to ${width}x${height}`);
+      }
+    });
+
+    // The renderer announces when its subscriptions are mounted; messages queued while no
+    // ready window existed (menu/tray click on a closed window, mid-reload send) flush here.
+    ipcMain.on('renderer-ready', () => {
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+      if (!win) return;
+      rendererReady = true;
+      for (const m of pendingWindowMessages.splice(0)) {
+        win.webContents.send(m.channel, ...m.args);
       }
     });
 
@@ -4979,12 +5115,20 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('ai-scan-querylog', async (_event, options: { service: 'adguard' | 'pihole'; limit?: number }, overrideConfig?: Partial<AiProviderConfig>) => {
+      if (!options || (options.service !== 'adguard' && options.service !== 'pihole')) {
+        throw new Error(`ai-scan-querylog: unknown service ${JSON.stringify(options?.service)} — expected 'adguard' or 'pihole'`);
+      }
       const savedConfig = loadAiConfig(store);
       const activeConfig = { ...savedConfig, ...overrideConfig };
       const service = getSharedAiDetectorService(activeConfig);
 
       const queries: RawDnsQuery[] = [];
-      const limit = options.limit || 50;
+      // Renderer-supplied: absent means 50; anything else must be a sane finite count.
+      // An unbounded limit would have the sinkhole stream its whole log through the AI scan.
+      if (options.limit !== undefined && (typeof options.limit !== 'number' || !Number.isFinite(options.limit) || options.limit < 1)) {
+        throw new Error(`ai-scan-querylog: limit ${JSON.stringify(options.limit)} is not a positive number`);
+      }
+      const limit = Math.min(Math.floor(options.limit ?? 50), 500);
 
       if (options.service === 'adguard') {
         const loaded = await loadStoredAdguardQueries(store, limit);
@@ -5004,26 +5148,18 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       if (options.service === 'pihole') {
         const baseUrl = store.get('piholeUrl') || 'http://127.0.0.1';
         const token = readSecret(store, safeStorage, 'piholeApiKey');
-        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/admin/api.php?getAllQueries=${limit}&auth=${token}`, {
-          signal: AbortSignal.timeout(6000),
+        const logResult = await fetchPiholeQueryLog(baseUrl, token || undefined, limit, sinkholeFetch, {
+          timeoutMs: 6000,
+          allowInsecureLocalTls: sinkholeTlsAllowed(store),
         });
-        if (!res.ok) {
-          throw new Error(`Could not fetch the Pi-hole query log (HTTP ${res.status}). This was not treated as an empty log.`);
+        if (!logResult.ok) {
+          throw new Error(
+            `Could not fetch the Pi-hole query log (${logResult.flavor}: ${logResult.detail ?? `HTTP ${logResult.status}`}). This was not treated as an empty log.`,
+          );
         }
-        const json: any = await res.json();
-        const data = Array.isArray(json?.data) ? json.data : [];
-        for (const item of data) {
-          const name = item?.[2];
-          const status = item?.[4];
-          if (name && (status === '2' || status === '3')) {
-            queries.push({
-              domain: name,
-              client: item?.[3],
-              timestamp: piholeEpochToIso(item?.[0]),
-              blocked: false,
-            });
-          }
-        }
+        queries.push(
+          ...logResult.queries.map((q) => ({ domain: q.domain, client: q.client, timestamp: q.timestamp, blocked: false })),
+        );
         const scan = await service.scanQueryLog(queries, activeConfig);
         applyAdaptiveCadence(store, recordRadarHeat(store, scan.results.filter((r) => r.verdict !== 'clean')));
         return {
@@ -5032,7 +5168,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         };
       }
 
-      return await service.scanQueryLog(queries, activeConfig);
+      throw new Error(`ai-scan-querylog: unknown service ${JSON.stringify(options.service)}`);
     });
 
     ipcMain.handle('ai-crawl-url', async (_event, url: string, overrideConfig?: Partial<AiProviderConfig>) => {
@@ -5346,6 +5482,43 @@ function setupDefaultFilterSources(): void {
 
 let mainWindow: BrowserWindow | null = null;
 
+/**
+ * Messages queued while no main window exists, flushed once a fresh renderer reports it is
+ * mounted. macOS keeps the app alive after the last window closes — the menu and tray are the
+ * primary surface — so a menu click on a closed window's behalf must reopen the window, not
+ * silently no-op or throw `Object has been destroyed` on the stale BrowserWindow.
+ */
+const pendingWindowMessages: Array<{ channel: string; args: unknown[] }> = [];
+
+/**
+ * Delivers an IPC message to the main window, recreating it when it has been closed.
+ * With no live window the message is queued and `createWindow()` runs; the queued message is
+ * delivered by the `renderer-ready` flush once the new renderer's subscriptions exist.
+ */
+/** True only after the current window's renderer has mounted its IPC subscriptions. */
+let rendererReady = false;
+
+async function sendToWindow(channel: string, ...args: unknown[]): Promise<void> {
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  if (win && rendererReady) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    win.webContents.send(channel, ...args);
+    return;
+  }
+  pendingWindowMessages.push({ channel, args });
+  if (!win) {
+    try {
+      await createWindow();
+    } catch (err) {
+      console.error('[IPC Main] Failed to recreate window for queued message:', err);
+    }
+  }
+  // A live window that is not ready is mid-reload — the queue flushes when its
+  // renderer mounts again and sends 'renderer-ready'.
+}
+
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 // Stamped by webpack DefinePlugin from `git rev-parse --short HEAD` at build time — the value
@@ -5392,6 +5565,20 @@ const createWindow = async () => {
       backgroundThrottling: false,
     },
     show: false,
+  });
+
+  // A closed window must not leave a stale BrowserWindow behind: menu and tray clicks check
+  // `mainWindow` for truthiness, and `mainWindow.webContents` on a destroyed window throws.
+  // `rendererReady` resets so a send during the next mount queues instead of dropping.
+  // The identity guard matters: if a replacement window is already live, an older window's
+  // late `closed` must not null the reference to it.
+  rendererReady = false;
+  const thisWindow = mainWindow;
+  thisWindow.on('closed', () => {
+    if (mainWindow === thisWindow) mainWindow = null;
+  });
+  thisWindow.webContents.on('did-start-loading', () => {
+    rendererReady = false;
   });
 
   // Open external links in user's default browser safely

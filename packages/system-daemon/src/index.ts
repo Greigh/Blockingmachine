@@ -23,7 +23,8 @@ export async function loadRulesFromFeeds(trie: DomainTrie, config: DaemonConfig)
     if (rulesLoaded) break;
     try {
       console.log(`[Daemon] Fetching filter rules from ${url}...`);
-      const res = await fetch(url);
+      // A hung local feed must not park startup (or a /v1/reload) forever — answer after 8s.
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
       if (res.ok) {
         const text = await res.text();
         const lines = text.split('\n');
@@ -42,15 +43,15 @@ export async function loadRulesFromFeeds(trie: DomainTrie, config: DaemonConfig)
 
   if (!rulesLoaded) {
     console.warn(`[Daemon] Local hub feeds unreachable. Starting with baseline protection and DoH fallback.`);
-    // Add default baseline telemetry blocks
+    // Baseline covers only a name that is unambiguously a tracker — an invented-looking
+    // hostname would silently sinkhole a real site someone could own.
     trie.addRule('||doubleclick.net^');
-    trie.addRule('||telemetry.tracker.io^');
     count = trie.getRuleCount();
   }
 
   // Ingest live AI Threat Quarantine feed if available
   try {
-    const threatRes = await fetch('http://127.0.0.1:9191/threats.txt');
+    const threatRes = await fetch('http://127.0.0.1:9191/threats.txt', { signal: AbortSignal.timeout(8000) });
     if (threatRes.ok) {
       const threatText = await threatRes.text();
       let threatCount = 0;
@@ -71,6 +72,16 @@ export async function loadRulesFromFeeds(trie: DomainTrie, config: DaemonConfig)
   }
 
   return count;
+}
+
+// Quarantine names become literal DNS rules (`||name^`); reject anything that isn't a
+// dotted public hostname so rule syntax or loopback names can't be smuggled in.
+const QUARANTINE_DOMAIN_RE = /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/;
+export function isQuarantinableDomain(d: string): boolean {
+  return d.length <= 253
+    && QUARANTINE_DOMAIN_RE.test(d)
+    && !d.endsWith('.localhost') && !d.endsWith('.local') && !d.endsWith('.internal')
+    && !d.endsWith('.invalid') && !d.endsWith('.example') && !d.endsWith('.test');
 }
 
 export async function startDaemon(config: DaemonConfig = defaultConfig) {
@@ -217,12 +228,21 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
             ? payload.domains
             : (domain ? [domain] : []);
           let injected = 0;
+          const rejected: string[] = [];
           for (const d of domains) {
-            if (typeof d === 'string' && d.trim()) {
-              const cleanD = d.trim().toLowerCase();
-              trie.addRule(`||${cleanD}^`);
-              injected++;
+            if (typeof d !== 'string' || !d.trim()) continue;
+            const cleanD = d.trim().toLowerCase();
+            // The body is a rule string spliced into `||...^` — an unvalidated name could
+            // carry rule syntax (`^$important`) or sinkhole loopback names like localhost.
+            if (!isQuarantinableDomain(cleanD)) {
+              rejected.push(d);
+              continue;
             }
+            trie.addRule(`||${cleanD}^`);
+            injected++;
+          }
+          if (rejected.length > 0) {
+            console.warn(`[Daemon] Refused ${rejected.length} invalid quarantine domain(s): ${rejected.slice(0, 5).join(', ')}`);
           }
           console.log(`[Daemon] Injected ${injected} quarantined threat domain(s) into active DNS trie memory.`);
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -239,6 +259,12 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
     res.end(JSON.stringify({ error: 'Not Found' }));
   });
 
+  // An unhandled 'error' (EADDRINUSE on the control port) would throw and kill the
+  // process after DNS was already live — log and exit so supervision can restart cleanly.
+  controlServer.on('error', (err) => {
+    console.error('[Daemon] Control API failed:', err);
+    process.exit(1);
+  });
   controlServer.listen(config.controlPort, config.bindHost, () => {
     console.log(`[Daemon] Control API listening on http://${config.bindHost}:${config.controlPort}`);
   });
