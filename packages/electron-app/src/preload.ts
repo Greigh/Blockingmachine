@@ -102,8 +102,9 @@ contextBridge.exposeInMainWorld('electron', {
   getAppVersion: () => ipcRenderer.invoke('get-app-version') as Promise<string>,
   getAutoStartFeedServer: () => ipcRenderer.invoke('get-auto-start-feed-server'),
   setAutoStartFeedServer: (enabled: boolean) => ipcRenderer.invoke('set-auto-start-feed-server', enabled),
-  getFeedToken: () => ipcRenderer.invoke('get-feed-token') as Promise<{ configured: boolean; token: string }>,
-  setFeedToken: (token: string) => ipcRenderer.invoke('set-feed-token', token) as Promise<{ success: boolean; error?: string }>,
+  getFeedToken: () => ipcRenderer.invoke('get-feed-token') as Promise<{ configured: boolean }>,
+  setFeedToken: (token: string) => ipcRenderer.invoke('set-feed-token', token) as Promise<{ success: boolean; unchanged?: boolean; error?: string }>,
+  clearFeedToken: () => ipcRenderer.invoke('clear-feed-token') as Promise<{ success: boolean; error?: string }>,
   getLaunchOnStartup: () => ipcRenderer.invoke('get-launch-on-startup'),
   setLaunchOnStartup: (enabled: boolean) => ipcRenderer.invoke('set-launch-on-startup', enabled),
   getModuleContent: (moduleName: string) => ipcRenderer.invoke('get-module-content', moduleName) as Promise<string | null>,
@@ -270,4 +271,6 @@ contextBridge.exposeInMainWorld('electron', {
     }
   },
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
+  /** Signals subscriptions are mounted so queued window messages can flush. */
+  rendererReady: () => ipcRenderer.send('renderer-ready'),
 } as ElectronAPI);

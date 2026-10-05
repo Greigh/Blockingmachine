@@ -1,5 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import {
+  FEED_TOKEN_ENV_PLACEHOLDER,
   UNBOUND_TARGETS,
   unboundFeedFileName,
   unboundFeedUrl,
@@ -114,6 +115,17 @@ describe('Unbound deploy helpers', () => {
       });
       expect(cmd).toContain("-H 'Authorization: Bearer s3cret' 'http://hub/v1/deploy-report?target=unbound&ok=1'");
       expect(cmd).toContain("-H 'Authorization: Bearer s3cret' 'http://hub/v1/deploy-report?target=unbound&ok=0'");
+    });
+
+    test('the env placeholder emits a double-quoted $FEED_TOKEN the target shell expands', () => {
+      // The renderer never holds the plaintext token — recipes embed the env var so the
+      // credential lives in the cron host's environment, not in a copyable command line.
+      const cmd = unboundFetchCommand('http://hub/unbound.conf', '/tmp/custom.conf', {
+        url: 'http://hub/v1/deploy-report?target=unbound',
+        token: FEED_TOKEN_ENV_PLACEHOLDER,
+      });
+      expect(cmd).toContain('-H "Authorization: Bearer $FEED_TOKEN"');
+      expect(cmd).not.toContain("Bearer $FEED_TOKEN'");
     });
 
     test('a token with shell metacharacters stays a string, not a command', () => {

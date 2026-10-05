@@ -69,9 +69,13 @@ export class DnsServer {
   }
 
   start(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      let started = false;
       this.socket.on('error', (err) => {
         console.error('[DnsServer] Socket error:', err);
+        // A bind-time failure (EADDRINUSE) must fail startup — the promise hanging leaves
+        // the daemon alive but never answering its control API or a single DNS query.
+        if (!started) reject(err);
       });
 
       this.socket.on('message', async (msg, rinfo) => {
@@ -88,38 +92,57 @@ export class DnsServer {
           this.recordQuery(question.name, evaluation.verdict, rinfo.address, evaluation.matchingRule);
 
           if (evaluation.verdict === 'BLOCKED') {
-            // Sinkhole response (0.0.0.0 for A, :: for AAAA)
+            // Sinkhole only the address-record types — answering an A record to an MX/TXT/ANY
+            // query is a type-confused response some resolvers treat as bogus. Non-address
+            // queries on a blocked name get NXDOMAIN: same outcome, honest shape.
             const isAaaa = question.type === 'AAAA';
-            const answer = isAaaa
-              ? {
-                  name: question.name,
-                  type: 'AAAA' as const,
-                  class: 'IN' as const,
-                  ttl: 60,
-                  data: this.config.sinkholeIpv6
-                }
-              : {
-                  name: question.name,
-                  type: 'A' as const,
-                  class: 'IN' as const,
-                  ttl: 60,
-                  data: this.config.sinkholeIpv4
-                };
-
-            const responseBuffer = dnsPacket.encode({
-              type: 'response',
-              id: decoded.id,
-              flags: dnsPacket.AUTHORITATIVE_ANSWER,
-              questions: decoded.questions,
-              answers: [answer]
-            });
+            const isA = question.type === 'A';
+            // dns-packet encodes only the `flags` field — the response code is its low
+            // nibble, so NXDOMAIN/SERVFAIL go in as their IANA numbers, not names.
+            const responseBuffer = isAaaa || isA
+              ? dnsPacket.encode({
+                  type: 'response',
+                  id: decoded.id,
+                  flags: dnsPacket.AUTHORITATIVE_ANSWER,
+                  questions: decoded.questions,
+                  answers: [
+                    {
+                      name: question.name,
+                      type: isAaaa ? ('AAAA' as const) : ('A' as const),
+                      class: 'IN' as const,
+                      ttl: 60,
+                      data: isAaaa ? this.config.sinkholeIpv6 : this.config.sinkholeIpv4,
+                    },
+                  ],
+                })
+              : dnsPacket.encode({
+                  type: 'response',
+                  id: decoded.id,
+                  flags: dnsPacket.AUTHORITATIVE_ANSWER | 3, // 3 = NXDOMAIN
+                  questions: decoded.questions,
+                  answers: [],
+                });
 
             this.socket.send(responseBuffer, rinfo.port, rinfo.address);
           } else {
-            // Forward to upstream DoH resolver
+            // Forward to upstream DoH resolver — a failed upstream answers SERVFAIL rather
+            // than leaving the client to time out and retry-storm a dead resolver.
             const upstreamAnswer = await this.forwarder.resolvePacket(msg);
             if (upstreamAnswer) {
               this.socket.send(upstreamAnswer, rinfo.port, rinfo.address);
+            } else {
+              try {
+                const servfail = dnsPacket.encode({
+                  type: 'response',
+                  id: decoded.id,
+                  flags: dnsPacket.RECURSION_AVAILABLE | 2, // 2 = SERVFAIL
+                  questions: decoded.questions,
+                  answers: [],
+                });
+                this.socket.send(servfail, rinfo.port, rinfo.address);
+              } catch {
+                // Response encoding of a malformed inbound packet can itself fail — drop it.
+              }
             }
           }
         } catch (err) {
@@ -128,6 +151,7 @@ export class DnsServer {
       });
 
       this.socket.bind(this.config.dnsPort, this.config.bindHost, () => {
+        started = true;
         console.log(`[DnsServer] Listening on ${this.config.bindHost}:${this.config.dnsPort} (UDP)`);
         resolve();
       });

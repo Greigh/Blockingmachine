@@ -12,6 +12,14 @@ Nothing here is scheduled. The list exists so nothing is *relied on* silently.
 
 ## Open
 
+### 71. The app-quit daemon keeps running on a dead feed URL — deliberate persistence or stranded rules, currently undocumented either way
+
+- **Where:** `packages/electron-app/src/daemonManager.ts` (spawn is `detached` + `unref`); `packages/electron-app/src/index.ts` `before-quit` (clears every timer but never `daemonManager.stop()`); `packages/system-daemon/src/index.ts` (`FEED_URL` defaults to `http://127.0.0.1:9191/dns.txt` — the app's own feed server).
+- **What:** Quitting the app leaves the DNS daemon serving the rule set it loaded — arguably the feature (protection persists). But its only upstream for `/v1/reload` is the app's feed server, which just exited, so the orphan can never refresh rules until someone starts the app again or restarts the daemon. Nothing tells the user this, and nothing records whether the persistence is intentional.
+- **Why left:** It's a product decision, not a bug fix — killing the daemon on quit removes protection the user may rely on; leaving it strands rule updates silently. The daemon's system installers (port-53 LaunchDaemon path) already offer a more honest always-on shape.
+- **Fix shape:** Either `daemonManager.stop()` in `before-quit` behind a "keep protection after quit" pref, or document the stranded-reload behaviour where the tray's daemon actions live.
+- **Verify:** Quit the app with the daemon running; `dig @127.0.0.1 -p 5353` still resolves, and `curl localhost:9292/v1/reload` fails or succeeds — whichever behaviour the decision lands on, with UI/docs naming it.
+
 ### 54. The macOS build is signed but not notarized — Gatekeeper blocks a fresh download until Apple credentials reach `osxNotarize`
 
 - **Where:** `packages/electron-app/forge.config.cjs` `packagerConfig.osxNotarize` (wired for `notarytool` with two auth paths: `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` for CI, `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` for local runs); `packagerConfig.osxSign` (Developer ID + hardened runtime, already active).
@@ -79,6 +87,90 @@ Nothing here is scheduled. The list exists so nothing is *relied on* silently.
 - **Verify:** `blockingmachine coverage --trace .playwright-mcp/trace-pages/browsing-trace-urls.txt` reports the non-zero Path-decided line (done: 17 requests, 9 rules), and `check:hotlist` is still byte-identical (done). What remains is the adoption decision itself.
 
 ## Closed
+
+### 70. Every Pi-hole query-log caller spoke only v5 `?auth=` — closed by a shared v5/v6 query-log fetch, a clamped limit, and a validated service
+
+- **Where:** `packages/electron-app/src/index.ts` (`pollLiveRadarQueries`, the AI watchdog, `ai-scan-querylog` — three copies of the same v5-only `admin/api.php` fetch); `src/piholeApi.ts` (`fetchPiholeQueryLog`, new); `piholeQueryLog.test.ts`.
+- **What it was:** Three call sites fetched `admin/api.php?getAllQueries&auth=<token>` inline — dead against a v6 daemon (token-in-URL auth is gone in v6, and a 308→HTML read as an empty query log). `ai-scan-querylog` also took an unclamped `limit` (a renderer-supplied `limit || 50` could pull the whole log) and a transport failure fell through to "no queries."
+- **What closed it:** `piholeApi.fetchPiholeQueryLog` runs the v5 path unchanged but detects v6 and drives `POST /api/auth` → `X-FTL-SID` → `GET /api/queries` with session teardown — the same session machinery gravity already used. All three sites call it. `ai-scan-querylog` validates `service` against an allowlist, clamps limit to 500, and propagates HTTP/transport failures as errors rather than empty logs.
+- **Verify:** `piholeQueryLog.test.ts` rehearses both dialects against a mocked fetch (v5 query-string auth, v6 sid handshake + delete) and the failure-as-error contract; `piholeApi.test.ts` still green.
+
+### 69. Downloaded extension zips were extracted unverified — closed by `SHA256SUMS.txt` verification and staged-atomic extraction
+
+- **Where:** `packages/electron-app/src/index.ts` `download-extension` handler.
+- **What it was:** Flag 56 made the button pull the release's own zips, but any bytes that answered 200 were unpacked straight over the destination directory — a corrupt partial or a tampered mirror artifact installed silently, and a mid-extract failure left the previous install half-overwritten.
+- **What closed it:** The handler fetches `SHA256SUMS.txt` from the same release; an archive listed there with a mismatched or absent checksum is refused, and the result reports whether verification ran. Extraction lands in a `*.staging` sibling, keeps the zip-slip guard per entry path, and only replaces the destination after the whole archive unpacks — a failed extract removes the staging dir and leaves the old install intact.
+- **Verify:** live rehearsal unpacks both flavors against rc.8 sums; the checksum-mismatch and missing-checksum branches refuse; zip-slip entries still die inside staging.
+
+### 68. The production renderer carried no Content-Security-Policy — closed by a meta tag matching the dev server's header policy
+
+- **Where:** `packages/electron-app/src/index.html`.
+- **What it was:** CSP was only ever delivered by the dev server's `onHeadersReceived` response headers — the packaged app loads `index.html` over `file://`, which has no response headers at all, so production ran with no policy.
+- **What closed it:** A CSP `<meta>` with the same directive set as the header policy, split dev/prod by the existing `IS_DEV` template branch: `default-src 'self'`, `connect-src` admits `http://127.0.0.1:*`/`ws://127.0.0.1:*` (the daemon + feed fetch + HMR socket) and dev adds `script-src 'unsafe-eval'` for webpack eval-source maps.
+- **Verify:** packaged `index.html` parses its own meta; a renderer `fetch` to the feed URL on loopback still lands; no `eval`/`new Function` exists in source to be broken.
+
+### 67. `start-feed-server` bound whatever port the renderer sent — closed by integer/range/privileged validation
+
+- **Where:** `packages/electron-app/src/index.ts` `start-feed-server` IPC.
+- **What it was:** A renderer-supplied port went straight to `server.listen` — non-integers, 0, and privileged ports silently attempted, and malformed values fell through to the default 9191 with no complaint.
+- **What closed it:** The handler rejects non-integer, out-of-range, and <1024 values with an honest `error` on the existing `FeedServerStatus` shape (no invented `success` field — the first draft broke the contract the panes read).
+- **Verify:** invalid/overflow/privileged inputs return the error path; the wiring pin in `feedHotPaths.test.ts` covers it.
+
+### 66. Served feed files were written in place — a mid-write fetch served a torn list — closed by sibling-temp + rename
+
+- **Where:** `packages/electron-app/src/index.ts` (`writeFileAtomic` helper; the compile output writes for the main list, additional exports, `dns.txt`, `adguardDns.txt`, `browser.txt`, `adguardBrowser.txt`, `hotlist.txt`, category files, the attribution manifest, and `malware.txt`).
+- **What it was:** `fs.writeFile` directly onto served paths — a daemon or client fetching during the write window could ingest half a 13MB list, and the truncated file persisted until the next compile.
+- **What closed it:** `writeFileAtomic` writes `<name>.tmp` beside the target then `rename`s — the rename is atomic on every supported filesystem — accepts `string | Buffer`, and unlinks the temp if either step throws. Every served artifact goes through it; the verdict cache stays a plain write deliberately (internal state, not a served file).
+- **Verify:** `verdictCacheWiring.test.ts` re-pinned to the atomic write; feed route rehearsal serves a complete list during a compile.
+
+### 65. The daemon installed quarantine and baseline rules without validating them — closed by a host validator and an honest empty baseline
+
+- **Where:** `packages/system-daemon/src/index.ts` (`isQuarantinableDomain`, exported; the `/v1/quarantine` route; the baseline rules constant).
+- **What it was:** `/v1/quarantine` wrapped any POSTed string in `||…^` and injected it into the live rule set — `localhost`, strings carrying `^`/`$` (which parse as rule modifiers), and reserved TLDs all became live DNS rules. The unreachable-feed baseline also hard-blocked `telemetry.tracker.io` — an invented name that could sinkhole a real domain someone owns.
+- **What closed it:** `isQuarantinableDomain` requires a real hostname — no rule-syntax chars, no localhost/private/sinkhole-shaped names, no reserved TLDs — and the route reports accepted/rejected counts instead of a bare success. The invented baseline domain is gone; an unreachable feed now starts with the quarantine rules alone and says so.
+- **Verify:** `daemonHardening.test.ts` — validator accepts `ads.example.com`/punycode, rejects `localhost`, `x^$important`, reserved `.example`; the route's response carries both counts.
+
+### 64. The DNS daemon lied to clients on failure and could hang its own startup — closed by honest SERVFAIL/NXDOMAIN, a DoH timeout+cap, and bind-error settle
+
+- **Where:** `packages/system-daemon/src/server/dohForwarder.ts` (timeout, `MAX_IN_FLIGHT`, null-on-failure), `src/server/dnsServer.ts` (rcode via `flags` low nibble, bind `reject`), `src/index.ts` (feed-fetch timeout, control-server `error` listener, `catch` → `exit(1)`).
+- **What it was:** (a) Forwarded queries had no timeout — a wedged upstream left every outstanding fetch alive indefinitely, and `null` was answered with silence so clients retry-stormed. (b) A blocked MX/TXT query got a synthetic empty NOERROR instead of an honest answer. (c) `start()`'s promise only resolved in the bind callback — `EADDRINUSE` left it pending forever, a zombie daemon that never answered DNS or the control API. (d) The control `http.Server` had no `error` listener — an unhandled `error` event crashes the process. (e) `loadRulesFromFeeds` could hang startup forever on a wedged feed. (f) `dns-packet`'s encoder reads the rcode from `flags` low nibble — a `rcode:` field on the object is decode-only and silently encodes NOERROR.
+- **What closed it:** DoH fetches carry `AbortSignal.timeout`, a concurrency cap drops over-limit queries rather than queueing on a saturated upstream, and the in-flight counter decrements in `finally` on every path. DNS answers SERVFAIL on upstream failure and NXDOMAIN for blocked non-A/AAAA — both encoded through `flags`. `start()` rejects on bind error, the control server logs its error instead of throwing, the feed fetch times out, and the entry point's `catch` exits 1 on a fatal.
+- **Verify:** `daemonHardening.test.ts` — live UDP server answers SERVFAIL against a dead upstream, NXDOMAIN for a blocked MX, `start()` rejects on a held port, the cap drops the Nth+1 query; the suite runs real sockets, no mocks. Daemon suite 21/21.
+
+### 63. Live Radar could run overlapping AI scans on a 3s interval — closed by an in-flight guard cleared in `finally`
+
+- **Where:** `packages/electron-app/src/index.ts` `pollLiveRadarQueries` + `liveRadarPollInFlight`.
+- **What it was:** The poll interval floors at 3s while a 60-domain AI scan takes longer — overlapping ticks double-scanned the same query window, duplicated quarantine writes, and miscounted `totalQueriesAnalyzed`. `runUnboundWatchTick` already carried the guard pattern; the radar poll didn't.
+- **What closed it:** A module-level `liveRadarPollInFlight` flips on entry, returns early when already set, and clears in `finally` so errors and early returns can't wedge it permanently.
+- **Verify:** the flag is set/cleared across every exit path (the try/finally straddles the whole poll body).
+
+### 62. Decrypted credentials crossed the IPC bridge into the renderer — closed by write-only secret fields and presence flags
+
+- **Where:** `packages/electron-app/src/index.ts` (`get-sinkhole-config`, `set-sinkhole-config`, `get-feed-token`, new `clear-feed-token`, `set-feed-token`), `src/secretFields.ts` (new), `src/components/SecretClearButton.tsx` (new), `src/Settings.tsx` + `src/deploy/panes/AdGuardHomePane.tsx` (7 input sites), `src/preload.ts`, `src/types/index.d.ts`.
+- **What it was:** `get-sinkhole-config` returned live `piholeApiKey`/`adguardHomePassword`/`haToken` to the renderer, and `get-feed-token` returned the LAN mutation token in plaintext — any `console.error(config)` in a view then wrote the keys to `main.log` because console errors forward to the main log. Two individually defensible choices composed into a leak path. `feedToken` was also stored plaintext while every sibling secret used `safeStorage`.
+- **What closed it:** The config returns `…Configured` booleans; secret inputs are write-only (blank means *unchanged* — explicitly signalled by `unchanged: true` — never "clear"); clearing is a deliberate `clearSecrets` entry / `clear-feed-token` channel with a visible Clear/Undo button at every field. `feedToken` reads and writes through `readSecret`/`writeSecret` (plaintext migrates on first sealed read), and the Unbound recipe embeds `$FEED_TOKEN` for the shell to expand instead of shipping the value in the command string.
+- **Verify:** `credentialSealing.test.ts` pins all of it — presence-only getters, sealed writes, the explicit-clear channel, and zero `store.get('feedToken')`/`store.set('feedToken'` remaining.
+
+### 61. `/v1/check` rebuilt a ~361k-rule index per request — ~150ms of main-thread CPU per GET, on an unauthenticated route — closed by an identity-keyed evaluator cache
+
+- **Where:** `packages/electron-app/src/index.ts` (`getCompiledEvaluator` WeakMap; `/v1/check`, `inspect-domain`), `packages/cli/src/commands/ServeCommand.ts` (same fix).
+- **What it was:** Every check call `.map`ed the stored rules to a 13MB raw array and ran `compileRuleSet` (~147ms measured) on the main loop. The route is a GET with no auth and wildcard CORS, so any page the user visited — or an eager HA automation — could hold the app's event loop at ~1.7s of blocked time per second of sustained requests.
+- **What closed it:** `getCompiledEvaluator` caches one `CompiledDomainRuleSet` in a `WeakMap` keyed on the rules-array identity — a compile that swaps the array invalidates automatically, no version bookkeeping to drift. `inspect-domain` uses the same cache; `is-domain-covered-by-rules` and `check-rule-conflict` stay per-call because they only ever see the small user-edited set. `ServeCommand` gets the identical cache plus a catch-all that now logs instead of swallowing.
+- **Verify:** `feedHotPaths.test.ts` pins the cached evaluator on the route; the flat-`blocked` contract pin updated for the `DomainEvaluationResult` shape.
+
+### 60. "Compile &amp; Update" has been a navigation-only dead trigger — menu, tray, and `/v1/compile` opened the process view without compiling
+
+- **Where:** `packages/electron-app/src/index.ts` (`trigger-compile` sends), `src/App.tsx` (`onTriggerCompile` → `compileNonce`), `src/views/DashboardView.tsx`.
+- **What it was:** `onTriggerCompile` only navigated to the process view — the `autoTriggerCompile` flag that actually runs `runImportProcess` was never set on this path, so Cmd+R, the tray item, and the HTTP compile route all silently did nothing but change tabs. Found while fixing the window lifecycle: the send was correct, the renderer-side effect was a stub.
+- **What closed it:** The send carries a nonce (`Date.now()`); App tracks the last-consumed nonce so each distinct trigger fires once and only once — remounting `DashboardView` on plain navigation can never re-fire a stale one, and repeated menu presses genuinely recompile.
+- **Verify:** `windowLifecycle.test.ts` pins `sendToWindow('trigger-compile'` on the menu path; the nonce-consumption invariant is in App (which never unmounts) not the view.
+
+### 59. Closing the window on macOS left every menu/tray action crashing on a destroyed `BrowserWindow` — closed by a nulled reference, a queueing sender, and a renderer-ready handshake
+
+- **Where:** `packages/electron-app/src/index.ts` (`mainWindow` `closed` handler, `sendToWindow`, `pendingWindowMessages`, `renderer-ready` listener, `did-start-loading`), `src/preload.ts` (`rendererReady`), `src/App.tsx` (fires it post-subscribe), `windowLifecycle.test.ts`.
+- **What it was:** `mainWindow` was never nulled — no `closed` handler existed — and macOS keeps the menu-bar app alive after the last window closes. `mainWindow?.webContents.send` compiles fine on a destroyed window and throws at runtime, so every tray action and menu shortcut after Cmd+W was dead and spammed the crash log. `broadcastLiveRadarUpdate`/`sendProgress` already checked `isDestroyed()` — the menu template didn't. Two stragglers (`unbound-reachability-updated` ×2) had the same `?.` shape.
+- **What closed it:** `mainWindow.on('closed')` nulls the reference. Commands route through `sendToWindow`, which queues the message, recreates the window when none is live, and waits for the renderer to announce `renderer-ready` after subscribing (the flag resets on `did-start-loading`, so a reload re-queues rather than drops). Broadcasts that shouldn't resurrect a window keep the `isDestroyed()` guard — a test now walks every `mainWindow.webContents.send` in the file and requires a guard within its preceding lines.
+- **Verify:** `windowLifecycle.test.ts` pins the `closed` handler, the queue, the readiness handshake, and the send-guard invariant — electron suite 59/59.
 
 ### 58. The Home Assistant integration could not authenticate and shipped dead controls — closed with token support, real protection wiring, and matching server endpoints
 

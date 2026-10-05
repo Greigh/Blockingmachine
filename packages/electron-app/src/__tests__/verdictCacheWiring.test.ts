@@ -56,7 +56,9 @@ describe('the incremental classifier pass', () => {
     const main = readFileSync(join(appRoot, 'src/index.ts'), 'utf8');
     const readAt = main.indexOf("fs.readFile(cachePath");
     const loopAt = main.indexOf('for (const host of candidateList)');
-    const verdictWrite = main.indexOf("fs.writeFile(\n            malwarePath");
+    // `malware.txt` is a served artifact — it goes through writeFileAtomic (L9) so a
+    // subscriber mid-fetch can never read a torn list.
+    const verdictWrite = main.indexOf('writeFileAtomic(\n            malwarePath');
     const cacheWrite = main.indexOf('serializeVerdictCache(fingerprint, measured)');
 
     expect(readAt).toBeGreaterThan(-1);

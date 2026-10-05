@@ -109,6 +109,13 @@ function sq(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/**
+ * What a pane passes as `report.token` to emit `"Authorization: Bearer $FEED_TOKEN"` —
+ * double-quoted so the shell on the target host expands it at run time. The renderer never
+ * holds the plaintext token: it knows only that one is configured.
+ */
+export const FEED_TOKEN_ENV_PLACEHOLDER = '$FEED_TOKEN';
+
 export function unboundFetchCommand(
   feedUrl: string,
   configPath: string,
@@ -121,7 +128,13 @@ export function unboundFetchCommand(
     `curl -fsSL ${sq(feedUrl)} -o ${sq(tmp)} && mv ${sq(tmp)} ${sq(configPath)}` +
     ` && ${reloadCommandFor(configPath)}`;
   if (!report?.url) return base;
-  const auth = report.token ? ` -H ${sq(`Authorization: Bearer ${report.token}`)}` : '';
+  // Literal tokens are single-quoted through sq(); the env placeholder is double-quoted so
+  // the copyable command carries `$FEED_TOKEN` rather than a credential in the crontab.
+  const auth = report.token === FEED_TOKEN_ENV_PLACEHOLDER
+    ? ` -H "Authorization: Bearer ${FEED_TOKEN_ENV_PLACEHOLDER}"`
+    : report.token
+      ? ` -H ${sq(`Authorization: Bearer ${report.token}`)}`
+      : '';
   const post = (ok: 0 | 1) => `curl -fsS -m 5 -o /dev/null -X POST${auth} ${sq(`${report.url}&ok=${ok}`)}`;
   return `${base} && (${post(1)} || true) || ${post(0)}`;
 }

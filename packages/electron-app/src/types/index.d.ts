@@ -148,6 +148,12 @@ export interface SinkholeConfig {
   customWebhookUrl?: string;
   /** `get-sinkhole-config` only: whether safeStorage can seal the secrets at rest. */
   encryptionAvailable?: boolean;
+  /** `get-sinkhole-config` only: a secret exists at rest — the value itself never crosses IPC. */
+  piholeApiKeyConfigured?: boolean;
+  adguardHomePasswordConfigured?: boolean;
+  haTokenConfigured?: boolean;
+  /** `set-sinkhole-config` only: secret keys the user explicitly cleared (blank field alone is "unchanged"). */
+  clearSecrets?: string[];
 }
 
 export interface SinkholeSyncResult {
@@ -590,6 +596,8 @@ export interface ElectronAPI {
 
   notifyResize: (width: number, height: number) => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+  /** Tells the main process this renderer's IPC subscriptions are mounted. */
+  rendererReady?: () => void;
   showItemInFolder: (path: string) => void;
   onProcessProgress: (callback: (data: ProcessProgress) => void) => () => void;
   removeProcessProgressListener: () => void;
@@ -607,8 +615,9 @@ export interface ElectronAPI {
   getAppVersion?: () => Promise<string>;
   getAutoStartFeedServer?: () => Promise<boolean>;
   setAutoStartFeedServer?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
-  getFeedToken?: () => Promise<{ configured: boolean; token: string }>;
-  setFeedToken?: (token: string) => Promise<{ success: boolean; error?: string }>;
+  getFeedToken?: () => Promise<{ configured: boolean }>;
+  setFeedToken?: (token: string) => Promise<{ success: boolean; unchanged?: boolean; error?: string }>;
+  clearFeedToken?: () => Promise<{ success: boolean; error?: string }>;
   getLaunchOnStartup?: () => Promise<boolean>;
   setLaunchOnStartup?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
 

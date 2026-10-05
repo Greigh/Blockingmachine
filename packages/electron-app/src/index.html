@@ -2,6 +2,17 @@
 <html>
   <head>
     <meta charset="UTF-8" />
+    <!--
+      The onHeadersReceived CSP never reaches the packaged app — file:// responses
+      carry no headers — so this meta is the only policy prod actually enforces.
+      script-src keeps 'unsafe-eval' for webpack's devtool runtime; the real teeth are
+      connect-src, which pins renderer network access to loopback (the daemon control
+      API + local feed) so injected markup can't exfiltrate anywhere else.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*;"
+    />
     <title>Blockingmachine</title>
     <link rel="icon" type="image/png" href="assets/Blockingmachine.png" />
   </head>

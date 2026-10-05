@@ -31,7 +31,7 @@ export const browserExtensionPaneKeys = [
   'handleCopy',
   'copiedKey',
   'serverStatus',
-  'feedToken',
+  'feedTokenConfigured',
 ] as const satisfies readonly (keyof HubPaneProps)[];
 
 export type BrowserExtensionPaneProps = Pick<
@@ -49,7 +49,7 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
   handleCopy,
   copiedKey,
   serverStatus,
-  feedToken,
+  feedTokenConfigured,
 }) => {
   // Same machine, so the loopback feed — the LAN URL is for devices that are not this one.
   const feedUrl = serverStatus?.localUrl
@@ -166,7 +166,7 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
               <p>
                 In the popup's <strong>Hub &amp; Home Assistant</strong> section, set the feed URL
                 to <code>{feedUrl}</code>
-                {feedToken
+                {feedTokenConfigured
                   ? ' and paste the feed token you configured — the hub refuses mutations without it.'
                   : '.'}{' '}
                 The extension then syncs this hub's compiled rules and reports what it actually

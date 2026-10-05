@@ -18,12 +18,18 @@ import { BrandLogo } from '../components/BrandLogo';
 interface DashboardViewProps {
   savePath: string;
   autoTriggerCompile?: boolean;
+  /** Non-zero while a 'trigger-compile' IPC is pending consumption. */
+  compileNonce?: number;
+  /** Clears the pending trigger so a view remount cannot re-fire it. */
+  onCompileConsumed?: () => void;
   onNavigate?: (view: string) => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   savePath,
   autoTriggerCompile,
+  compileNonce,
+  onCompileConsumed,
   onNavigate,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
@@ -147,11 +153,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     };
   }, []);
 
+  // `autoTriggerCompile` covers the mount-once onboarding/modules path; `compileNonce`
+  // covers every 'trigger-compile' IPC (menu Cmd+R, tray, LAN /v1/compile). Consumption
+  // is reported back to App — the pending flag must clear or a view remount would
+  // silently start a compile nobody asked for.
   useEffect(() => {
-    if (autoTriggerCompile && !isLoading) {
+    const pending = (compileNonce ?? 0) > 0;
+    if (pending) onCompileConsumed?.();
+    if ((autoTriggerCompile || pending) && !isLoading) {
       handleRunProcess();
     }
-  }, [autoTriggerCompile]);
+  }, [autoTriggerCompile, compileNonce]);
 
   // Keyboard shortcut Cmd+R to compile
   useEffect(() => {

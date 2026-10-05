@@ -8,7 +8,7 @@ import { URL } from "url";
 import fs from "fs/promises";
 import path from "path";
 import chalk from "chalk";
-import { createPaths, evaluateDomainRules } from "@blockingmachine/core";
+import { createPaths, compileRuleSet } from "@blockingmachine/core";
 
 export interface ServeOptions {
   port?: number;
@@ -75,6 +75,11 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("!") && !l.startsWith("#"));
 
+    // The evaluator is compiled once at startup — building a CompiledDomainRuleSet per
+    // /v1/check request costs ~150ms of synchronous CPU over a full-size list and turns
+    // a read endpoint into an unauthenticated CPU sink.
+    const compiledRules = compileRuleSet(lines);
+
     const server = http.createServer(async (req, res) => {
       try {
         res.setHeader("Access-Control-Allow-Origin", "*");
@@ -136,7 +141,7 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
           }
 
           const target = domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split(/[/?#:]/)[0];
-          const evaluation = evaluateDomainRules(target, lines);
+          const evaluation = compiledRules.evaluate(target);
           const isBlocked = evaluation.verdict === "blocked";
           const matchedRuleStrings = evaluation.matchingRules.map((m) => m.rule);
           const verdictString =
@@ -210,7 +215,8 @@ export class ServeCommand extends BaseCommand<ServeOptions> {
             ],
           }),
         );
-      } catch {
+      } catch (err) {
+        console.error("[Serve] Request handler failed:", err);
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");
         res.end(
