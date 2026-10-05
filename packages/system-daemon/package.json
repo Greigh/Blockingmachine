@@ -18,6 +18,7 @@
     "dev": "tsc -w",
     "start": "node dist/index.js",
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
+    "type-check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "clean": "rimraf dist"
   },
   "dependencies": {
