@@ -11,6 +11,8 @@ export interface ElectronStore<T extends Record<string, any>> {
   clear(): void;
   delete(key: keyof T): void;
   has(key: keyof T): boolean;
+  /** Conf's change hook — fires on `set`, returns an unsubscribe. */
+  onDidChange<K extends keyof T>(key: K, callback: (newValue: T[K], oldValue: T[K]) => void): () => void;
   // Add other store methods if needed
 }
 

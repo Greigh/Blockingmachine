@@ -83,8 +83,12 @@ export class DaemonManager {
 
   /**
    * Spawns a background process running the system-daemon if not already active.
+   * `feedFilePath`/`threatsFilePath` point at the persisted copies of the artifacts the
+   * feed server publishes — the daemon keeps them as its reload fallback, so a daemon
+   * that outlives the app (it is spawned detached deliberately) can still refresh from
+   * the last compiled snapshot on disk instead of degrading to the baseline.
    */
-  async start(): Promise<{ success: boolean; message: string }> {
+  async start(options?: { feedFilePath?: string; threatsFilePath?: string }): Promise<{ success: boolean; message: string }> {
     const current = await this.getStatus();
     if (current.status !== 'stopped') {
       return { success: true, message: `System daemon is already active on port ${current.port}` };
@@ -121,6 +125,8 @@ export class DaemonManager {
       DNS_PORT: String(this.dnsPort),
       CONTROL_PORT: String(this.controlPort),
       FEED_URL: 'http://127.0.0.1:9191/dns.txt',
+      ...(options?.feedFilePath ? { FEED_FILE: options.feedFilePath } : {}),
+      ...(options?.threatsFilePath ? { THREATS_FILE: options.threatsFilePath } : {}),
     };
 
     try {
@@ -342,9 +348,27 @@ export class DaemonManager {
   }
 
   /**
-   * Generates formatted installation commands and scripts for macOS launchd and Linux systemd
+   * Generates formatted installation commands and scripts for macOS launchd and Linux systemd.
+   * `feedFiles` are the persisted snapshots beside the compiled list — a service-installed
+   * daemon runs without the app entirely, so the file fallback is what keeps its reloads on
+   * real rules rather than the baseline. Optional so tests can render the stock shape.
    */
-  getServiceInstallInstructions(): { mac: string; linux: string } {
+  getServiceInstallInstructions(feedFiles?: { feedFilePath?: string; threatsFilePath?: string }): { mac: string; linux: string } {
+    // Plist values are XML text — an '&' or '<' in a save path would corrupt the document.
+    const xml = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const macFeedFileEnv = feedFiles?.feedFilePath
+      ? `        <key>FEED_FILE</key>\n        <string>${xml(feedFiles.feedFilePath)}</string>\n`
+      : '';
+    const macThreatsEnv = feedFiles?.threatsFilePath
+      ? `        <key>THREATS_FILE</key>\n        <string>${xml(feedFiles.threatsFilePath)}</string>\n`
+      : '';
+    const linuxFeedFileEnv = feedFiles?.feedFilePath
+      ? `Environment="FEED_FILE=${feedFiles.feedFilePath}"\n`
+      : '';
+    const linuxThreatsEnv = feedFiles?.threatsFilePath
+      ? `Environment="THREATS_FILE=${feedFiles.threatsFilePath}"\n`
+      : '';
     const macPlist = `sudo tee /Library/LaunchDaemons/com.blockingmachine.daemon.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -368,7 +392,7 @@ export class DaemonManager {
         <string>9292</string>
         <key>FEED_URL</key>
         <string>http://127.0.0.1:9191/dns.txt</string>
-    </dict>
+${macFeedFileEnv}${macThreatsEnv}    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -394,7 +418,7 @@ Environment="ELECTRON_RUN_AS_NODE=1"
 Environment="DNS_PORT=53"
 Environment="CONTROL_PORT=9292"
 Environment="FEED_URL=http://127.0.0.1:9191/dns.txt"
-
+${linuxFeedFileEnv}${linuxThreatsEnv}
 [Install]
 WantedBy=multi-user.target
 EOF

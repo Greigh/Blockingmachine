@@ -614,6 +614,56 @@ async function writeFileAtomic(filePath: string, data: string | Buffer): Promise
 }
 
 /**
+ * The ABP threats feed — one renderer shared by the `/threats.txt` route and the
+ * persisted snapshot (`threats.txt` beside the compiled list). The daemon reads the
+ * file when the feed server is gone, so a daemon that outlives the app reloads real
+ * quarantine rules instead of losing them with the process.
+ */
+function renderThreatsFeed(quarantine: ThreatQuarantineItem[]): string {
+  const highConfThreats = quarantine
+    .filter((t) => {
+      const conf = typeof t.confidence === 'number' ? (t.confidence > 1 ? t.confidence : t.confidence * 100) : 0;
+      return conf >= 85 && Boolean(t.domain);
+    })
+    .map((t) => t.domain.trim().toLowerCase());
+  const uniqueDomains = Array.from(new Set(highConfThreats)).sort();
+  const header = [
+    '! Title: Blockingmachine AI Threat Feed (ABP Format)',
+    `! Updated: ${new Date().toISOString()}`,
+    `! High-Confidence Quarantined Domains: ${uniqueDomains.length}`,
+    '! Confidence Threshold: >= 85%',
+    '',
+  ].join('\n');
+  const abpRules = uniqueDomains.map((d) => `||${d}^`);
+  return abpRules.length > 0 ? `${header}${abpRules.join('\n')}\n` : `${header}! No active threats currently quarantined\n`;
+}
+
+/**
+ * Persists the current quarantine as `threats.txt` beside the compiled list — the file
+ * the daemon's THREATS_FILE fallback reads. Best-effort: a missing savePath or a failed
+ * write must not disturb the quarantine write that triggered it.
+ */
+function persistThreatsFile(storeRef: ElectronStore<StoreSchema>): void {
+  const savePath = storeRef.get('savePath');
+  if (typeof savePath !== 'string' || !isAbsolute(savePath)) return;
+  const quarantine = (storeRef.get('aiThreatQuarantine') || []) as ThreatQuarantineItem[];
+  writeFileAtomic(join(dirname(savePath), 'threats.txt'), renderThreatsFeed(quarantine)).catch((err) => {
+    console.warn('[Threats] Could not persist threats.txt snapshot:', err);
+  });
+}
+
+/**
+ * The on-disk feed artifacts the daemon reloads from when the feed server is gone —
+ * same directory the compile writes `dns.txt` into.
+ */
+function daemonFeedFilePaths(storeRef: ElectronStore<StoreSchema>): { feedFilePath?: string; threatsFilePath?: string } {
+  const savePath = storeRef.get('savePath');
+  if (typeof savePath !== 'string' || !isAbsolute(savePath)) return {};
+  const outputDir = dirname(savePath);
+  return { feedFilePath: join(outputDir, 'dns.txt'), threatsFilePath: join(outputDir, 'threats.txt') };
+}
+
+/**
  * A source saved as `./filters/...` is app-relative, not cwd-relative: dev
  * resolves beside the package manifest; the packaged app resolves under
  * `Resources/` where `filters/` ships as an extraResource. Anything already
@@ -1671,7 +1721,9 @@ function createTray() {
         return res.success;
       },
       startDaemon: async () => {
-        const res = await daemonManager.start();
+        // The daemon outlives the app deliberately — the on-disk feed snapshots are its
+        // reload source once the feed server is gone, so it restarts on real rules.
+        const res = await daemonManager.start(daemonFeedFilePaths(store));
         if (res.success) {
           await refreshTrayProtection();
         }
@@ -2871,24 +2923,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
 
         if (lowerPath === '/threats.txt' || lowerPath === '/threats') {
           const quarantine = (storeRef.get('aiThreatQuarantine') || []) as ThreatQuarantineItem[];
-          const highConfThreats = quarantine
-            .filter((t) => {
-              const conf = typeof t.confidence === 'number' ? (t.confidence > 1 ? t.confidence : t.confidence * 100) : 0;
-              return conf >= 85 && Boolean(t.domain);
-            })
-            .map((t) => t.domain.trim().toLowerCase());
-          const uniqueDomains = Array.from(new Set(highConfThreats)).sort();
-
-          const header = [
-            '! Title: Blockingmachine AI Threat Feed (ABP Format)',
-            `! Updated: ${new Date().toISOString()}`,
-            `! High-Confidence Quarantined Domains: ${uniqueDomains.length}`,
-            '! Confidence Threshold: >= 85%',
-            '',
-          ].join('\n');
-
-          const abpRules = uniqueDomains.map((d) => `||${d}^`);
-          const body = abpRules.length > 0 ? `${header}${abpRules.join('\n')}\n` : `${header}! No active threats currently quarantined\n`;
+          const body = renderThreatsFeed(quarantine);
           res.writeHead(200, {
             'Content-Type': 'text/plain; charset=utf-8',
             'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -3108,6 +3143,11 @@ function stopFeedServer() {
 function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
   try {
     console.log('[Main Process] Registering IPC handlers...');
+
+    // The daemon's THREATS_FILE fallback reads this snapshot once the feed server is
+    // gone — seed it now and keep it current on every quarantine write.
+    persistThreatsFile(store);
+    store.onDidChange('aiThreatQuarantine', () => persistThreatsFile(store));
 
     // Initialize schedule if configured
     const initialSchedule = store.get('autoSchedule') || 'disabled';
@@ -4313,7 +4353,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('daemon:start', async () => {
-      return await daemonManager.start();
+      return await daemonManager.start(daemonFeedFilePaths(store));
     });
 
     ipcMain.handle('daemon:stop', async () => {
@@ -4341,7 +4381,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('daemon:get-service-script', async () => {
-      return daemonManager.getServiceInstallInstructions();
+      // A service-installed daemon never has the app running — its reload source is the
+      // persisted snapshot, so the generated scripts carry the file paths explicitly.
+      return daemonManager.getServiceInstallInstructions(daemonFeedFilePaths(store));
     });
 
     ipcMain.handle('daemon:get-network-services', async () => {
