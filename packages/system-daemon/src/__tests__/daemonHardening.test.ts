@@ -9,11 +9,14 @@
 
 import { describe, expect, test } from '@jest/globals';
 import dgram from 'node:dgram';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import dnsPacket from 'dns-packet';
 import { DnsServer } from '../server/dnsServer.js';
 import { DohForwarder } from '../server/dohForwarder.js';
 import { DomainTrie } from '../engine/domainTrie.js';
-import { isQuarantinableDomain } from '../index.js';
+import { isQuarantinableDomain, loadRulesFromFeeds } from '../index.js';
 import type { DaemonConfig } from '../types.js';
 
 const baseConfig: DaemonConfig = {
@@ -54,6 +57,53 @@ describe('quarantine domain validation', () => {
     ]) {
       expect(isQuarantinableDomain(bad)).toBe(false);
     }
+  });
+});
+
+describe('persisted feed fallback (orphaned daemon)', () => {
+  // A daemon spawned detached outlives the app — its only HTTP upstream is the app's
+  // feed server, so without the file fallback a quit strands it on the baseline.
+  test('loads the persisted rule snapshot when every HTTP feed is dead', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bm-feed-'));
+    try {
+      const feedFile = join(dir, 'dns.txt');
+      await writeFile(feedFile, '||snapshot-one.example.com^\n||snapshot-two.example.org^\n', 'utf8');
+      const trie = new DomainTrie();
+      const count = await loadRulesFromFeeds(trie, { ...baseConfig, feedFile });
+      expect(count).toBeGreaterThanOrEqual(2);
+      expect(trie.evaluate('ads.snapshot-one.example.com').verdict).toBe('BLOCKED');
+      expect(trie.evaluate('snapshot-two.example.org').verdict).toBe('BLOCKED');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('falls back to the threats snapshot too', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bm-feed-'));
+    try {
+      await writeFile(join(dir, 'dns.txt'), '||base.example.com^\n', 'utf8');
+      const threatsFile = join(dir, 'threats.txt');
+      await writeFile(threatsFile, '! Title: test\n||quarantined.example.net^\n', 'utf8');
+      const trie = new DomainTrie();
+      await loadRulesFromFeeds(trie, {
+        ...baseConfig,
+        feedFile: join(dir, 'dns.txt'),
+        threatsFile,
+      });
+      expect(trie.evaluate('quarantined.example.net').verdict).toBe('BLOCKED');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing feed file still lands on the honest baseline, not a crash', async () => {
+    const trie = new DomainTrie();
+    const count = await loadRulesFromFeeds(trie, {
+      ...baseConfig,
+      feedFile: join(tmpdir(), 'definitely-missing-feed.txt'),
+    });
+    expect(count).toBeGreaterThanOrEqual(1); // baseline doubleclick.net
+    expect(trie.evaluate('doubleclick.net').verdict).toBe('BLOCKED');
   });
 });
 

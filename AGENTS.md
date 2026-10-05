@@ -20,7 +20,9 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
 - **Forgejo npm registry**: publish fails `401 Unauthorized` — `FORGEJO_TOKEN` in `.env`
   is invalid outright ("access token does not exist" per the API), not merely
   under-scoped. Git pushes authenticate over SSH, a different credential. Needs a
-  fresh token with package write scope — flag 53 tracks it.
+  fresh token with package write scope — flag 53 tracks it. Both publish scripts now
+  exit nonzero on a real failure (already-published tolerated as idempotent), so a
+  future bad token turns the workflow step red instead of passing quietly.
 - **`npm audit`**: one unpatched advisory remains — `braces` (GHSA-vfj7-8cjw-p6xm,
   all versions, no patched release). Forge 8.0.1 took it 9 → 6; the residual chain is
   `webpack-dev-server` → `chokidar`/`http-proxy-middleware` → `micromatch` → `braces`,

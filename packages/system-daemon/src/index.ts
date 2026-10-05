@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { readFile, stat } from 'node:fs/promises';
 import fetch from 'node-fetch';
 import { DomainTrie } from './engine/domainTrie.js';
 import { DnsServer } from './server/dnsServer.js';
@@ -11,11 +12,24 @@ export const defaultConfig: DaemonConfig = {
   upstreamDoHUrl: process.env.UPSTREAM_DOH || 'https://dns.quad9.net/dns-query',
   sinkholeIpv4: '0.0.0.0',
   sinkholeIpv6: '::',
-  feedUrl: process.env.FEED_URL || 'http://127.0.0.1:9191/dns.txt'
+  feedUrl: process.env.FEED_URL || 'http://127.0.0.1:9191/dns.txt',
+  // The hub writes these beside the compiled list — they outlive it, so an orphaned
+  // daemon (or a service install) can still reload real rules when the feed is down.
+  feedFile: process.env.FEED_FILE || undefined,
+  threatsFile: process.env.THREATS_FILE || undefined,
 };
 
 export async function loadRulesFromFeeds(trie: DomainTrie, config: DaemonConfig): Promise<number> {
-  const candidateUrls = [config.feedUrl, 'http://127.0.0.1:9191/adguardDns.txt', 'http://127.0.0.1:9191/rules.txt'];
+  // Alternates follow the configured feed's origin, not a hardcoded hub port — a daemon
+  // pointed at a LAN feed or a dead port must not quietly fall back to a local hub.
+  const candidateUrls = (() => {
+    try {
+      const origin = new URL(config.feedUrl).origin;
+      return [config.feedUrl, `${origin}/adguardDns.txt`, `${origin}/rules.txt`];
+    } catch {
+      return [config.feedUrl];
+    }
+  })();
   let rulesLoaded = false;
   let count = 0;
 
@@ -41,6 +55,27 @@ export async function loadRulesFromFeeds(trie: DomainTrie, config: DaemonConfig)
     }
   }
 
+  if (!rulesLoaded && config.feedFile) {
+    // The hub's feed server is down — but the compiled artifacts it served live on
+    // disk and outlive it. An orphaned daemon (app quit, service install) reloads the
+    // last real rule set instead of degrading to the one-name baseline.
+    try {
+      const [text, info] = await Promise.all([readFile(config.feedFile, 'utf8'), stat(config.feedFile)]);
+      trie.clear();
+      for (const line of text.split('\n')) {
+        trie.addRule(line);
+      }
+      count = trie.getRuleCount();
+      console.warn(
+        `[Daemon] Feed server unreachable — loaded ${count} rules from persisted snapshot ` +
+          `${config.feedFile} (written ${info.mtime.toISOString()}).`,
+      );
+      rulesLoaded = true;
+    } catch {
+      // No persisted copy either — fall through to the baseline below.
+    }
+  }
+
   if (!rulesLoaded) {
     console.warn(`[Daemon] Local hub feeds unreachable. Starting with baseline protection and DoH fallback.`);
     // Baseline covers only a name that is unambiguously a tracker — an invented-looking
@@ -49,26 +84,46 @@ export async function loadRulesFromFeeds(trie: DomainTrie, config: DaemonConfig)
     count = trie.getRuleCount();
   }
 
-  // Ingest live AI Threat Quarantine feed if available
-  try {
-    const threatRes = await fetch('http://127.0.0.1:9191/threats.txt', { signal: AbortSignal.timeout(8000) });
-    if (threatRes.ok) {
-      const threatText = await threatRes.text();
-      let threatCount = 0;
-      for (const line of threatText.split('\n')) {
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('!') && !trimmed.startsWith('#')) {
-          trie.addRule(trimmed);
-          threatCount++;
-        }
-      }
-      if (threatCount > 0) {
-        count = trie.getRuleCount();
-        console.log(`[Daemon] Ingested ${threatCount} active threat quarantine rules from AI Radar.`);
-      }
+  // Ingest the AI Threat Quarantine feed — live over HTTP when the hub is up, the
+  // persisted snapshot when it is not. The URL follows the feed's own origin rather
+  // than hardcoding the hub port.
+  const threatsUrl = (() => {
+    try {
+      const u = new URL(config.feedUrl);
+      u.pathname = '/threats.txt';
+      u.search = '';
+      return u.toString();
+    } catch {
+      return 'http://127.0.0.1:9191/threats.txt';
     }
+  })();
+  let threatText: string | null = null;
+  try {
+    const threatRes = await fetch(threatsUrl, { signal: AbortSignal.timeout(8000) });
+    if (threatRes.ok) threatText = await threatRes.text();
   } catch {
     // Threat feed server not running or offline
+  }
+  if (threatText === null && config.threatsFile) {
+    try {
+      threatText = await readFile(config.threatsFile, 'utf8');
+    } catch {
+      // No persisted quarantine snapshot — fine, quarantine is additive anyway.
+    }
+  }
+  if (threatText !== null) {
+    let threatCount = 0;
+    for (const line of threatText.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('!') && !trimmed.startsWith('#')) {
+        trie.addRule(trimmed);
+        threatCount++;
+      }
+    }
+    if (threatCount > 0) {
+      count = trie.getRuleCount();
+      console.log(`[Daemon] Ingested ${threatCount} active threat quarantine rules from AI Radar.`);
+    }
   }
 
   return count;

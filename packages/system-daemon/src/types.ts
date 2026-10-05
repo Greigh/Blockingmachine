@@ -6,6 +6,15 @@ export interface DaemonConfig {
   sinkholeIpv4: string;
   sinkholeIpv6: string;
   feedUrl: string;
+  /**
+   * Persisted copy of the rule feed on disk (`FEED_FILE`). When every HTTP candidate is
+   * unreachable — an orphaned daemon whose hub quit, or a launchd/systemd service that
+   * runs without the app — the loader falls back to the last compiled list rather than
+   * starting on an invented baseline.
+   */
+  feedFile?: string;
+  /** Persisted copy of the AI quarantine feed (`THREATS_FILE`), same fallback role. */
+  threatsFile?: string;
 }
 
 export type DnsVerdict = 'BLOCKED' | 'ALLOWED' | 'EXCEPTION';
