@@ -18,13 +18,6 @@ function state(overrides: Partial<TraySharedState> = {}): TraySharedState {
   return { ...emptyTrayState(), ...overrides };
 }
 
-/** Every non-separator label, in order. */
-function labels(rows: TrayMenuRow[]): string[] {
-  return rows
-    .filter((row) => row.type !== 'separator')
-    .map((row) => row.label);
-}
-
 function statusLabels(rows: TrayMenuRow[]): string[] {
   return rows.filter((row) => row.type === 'status').map((row) => row.label);
 }
