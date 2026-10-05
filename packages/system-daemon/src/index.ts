@@ -256,8 +256,13 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
   return { dnsServer, controlServer, trie };
 }
 
-// Auto-start if invoked directly
-if (process.argv[1]?.endsWith('index.js') || process.argv[1]?.endsWith('blockingmachine-daemon.js')) {
+// Auto-start if invoked directly — the bare dist entry, the npm bin shim, or the
+// `systemDaemon.cjs` webpack bundle the Electron app spawns for "Start Local Daemon".
+if (
+  process.argv[1]?.endsWith('index.js') ||
+  process.argv[1]?.endsWith('blockingmachine-daemon.js') ||
+  process.argv[1]?.endsWith('systemDaemon.cjs')
+) {
   startDaemon().catch((err) => {
     console.error('[Daemon] Fatal startup failure:', err);
     process.exit(1);

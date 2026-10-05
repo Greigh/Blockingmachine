@@ -25,6 +25,13 @@ module.exports = {
     classifierWorker: './src/classifyWorker.ts',
     // So does the post-dedup generation pass — see src/outputWorker.ts.
     outputWorker: './src/outputWorker.ts',
+    // The managed DNS daemon is spawned as a plain Node script by
+    // daemonManager.start() — bundling the built dist ships it inside the
+    // package instead of resolving paths that only exist in the monorepo (the
+    // packaged "Start Local Daemon" button could never work). The dist entry,
+    // not src: ts-loader would pick up the daemon's own tsconfig (rootDir=src)
+    // and reject every electron-app file in the program.
+    systemDaemon: '../system-daemon/dist/index.js',
   },
   target: 'electron-main',
   output: {

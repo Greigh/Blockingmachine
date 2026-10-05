@@ -90,8 +90,14 @@ export class DaemonManager {
       return { success: true, message: `System daemon is already active on port ${current.port}` };
     }
 
-    // Resolve script path
+    // Resolve script path. Packaged builds ship the daemon as the
+    // `systemDaemon.cjs` webpack bundle — `asarUnpack`'d beside the workers,
+    // so the spawn target is a real file, not an asar virtual path. The
+    // `packages/...` entries stay for the dev monorepo.
     const candidatePaths = [
+      ...(process.resourcesPath
+        ? [path.join(process.resourcesPath, 'app.asar.unpacked', '.webpack', 'main', 'systemDaemon.cjs')]
+        : []),
       path.resolve(__dirname, '../../system-daemon/dist/index.js'),
       path.resolve(__dirname, '../packages/system-daemon/dist/index.js'),
       path.resolve(process.cwd(), 'packages/system-daemon/dist/index.js'),
@@ -120,22 +126,46 @@ export class DaemonManager {
     try {
       this.childProcess = spawn(process.execPath, [entryPath], {
         env,
-        stdio: 'ignore',
+        // stderr is piped so a bind failure or startup crash reaches the app
+        // log — 'ignore' hid exactly those, and the caller then read a dead
+        // spawn as success.
+        stdio: ['ignore', 'ignore', 'pipe'],
         detached: true,
       });
 
-      this.childProcess.unref();
+      const child = this.childProcess;
+      let childExit: number | null = null;
+      child.once('exit', (code) => {
+        childExit = code;
+        if (this.childProcess === child) this.childProcess = null;
+      });
+      child.stderr?.on('data', (chunk) => {
+        console.error(`[Daemon] ${String(chunk).trimEnd()}`);
+      });
+      child.unref();
+      (child.stderr as { unref?: () => void } | null)?.unref?.();
 
-      // Wait briefly for startup
-      for (let i = 0; i < 6; i++) {
+      // Poll the control API — the daemon is only "started" once it answers,
+      // not when spawn() returned. A port taken by something else (mDNS/adb on
+      // 5353 is a real-world collision) reads as the honest failure it is.
+      for (let i = 0; i < 15; i++) {
         await new Promise((r) => setTimeout(r, 400));
+        if (childExit !== null) {
+          return {
+            success: false,
+            message: `Daemon exited during startup (code ${childExit}) — check for a port conflict on ${this.dnsPort}/${this.controlPort}.`,
+          };
+        }
         const status = await this.getStatus();
         if (status.status !== 'stopped') {
           return { success: true, message: `System daemon started successfully on port ${status.port}` };
         }
       }
 
-      return { success: true, message: 'Daemon process spawned.' };
+      return {
+        success: false,
+        message: `Daemon spawned but its control API never answered — something else may hold port ${this.dnsPort} or ${this.controlPort}.`,
+      };
     } catch (err: any) {
       return { success: false, message: `Failed to spawn daemon: ${err?.message || err}` };
     }

@@ -139,12 +139,28 @@ describe('the compile pipeline', () => {
     expect(main).toContain("new Worker(join(__dirname, 'outputWorker.cjs')");
   });
 
-  test('the packaged app unpacks both worker bundles from the asar', () => {
+  test('the packaged app unpacks the worker and daemon bundles from the asar', () => {
     const webpackMain = readFileSync(join(appRoot, 'webpack.main.config.cjs'), 'utf8');
     expect(webpackMain).toContain("outputWorker: './src/outputWorker.ts'");
     expect(webpackMain).toContain("classifierWorker: './src/classifyWorker.ts'");
+    // The managed daemon ships as a bundle too — spawned as a real file, so it
+    // must be unpacked like the workers, and daemonManager must look in
+    // Resources before falling back to the dev monorepo paths (the packaged
+    // "Start Local Daemon" button could never succeed without both).
+    expect(webpackMain).toContain("systemDaemon: '../system-daemon/dist/index.js'");
     expect(forgeConfig).toContain('classifierWorker.cjs');
     expect(forgeConfig).toContain('outputWorker.cjs');
+    expect(forgeConfig).toContain('systemDaemon.cjs');
+    const daemonManager = readFileSync(join(appRoot, 'src/daemonManager.ts'), 'utf8');
+    expect(daemonManager).toContain('app.asar.unpacked');
+    expect(daemonManager).toContain('systemDaemon.cjs');
+    // The bundle's argv[1] ends in systemDaemon.cjs — the daemon's direct-run
+    // guard must name it or a packaged spawn boots silently to nothing.
+    const daemonSrc = readFileSync(
+      join(appRoot, '../system-daemon/src/index.ts'),
+      'utf8',
+    );
+    expect(daemonSrc).toContain("endsWith('systemDaemon.cjs')");
   });
 
   test("the tray's updated stamp lands at completion, not mid-run", () => {

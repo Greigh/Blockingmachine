@@ -1628,6 +1628,13 @@ function createTray() {
         }
         return res.success;
       },
+      startDaemon: async () => {
+        const res = await daemonManager.start();
+        if (res.success) {
+          await refreshTrayProtection();
+        }
+        return res.success;
+      },
       flushDnsCache: async () => {
         const res = await daemonManager.flushCache();
         return res.success;
