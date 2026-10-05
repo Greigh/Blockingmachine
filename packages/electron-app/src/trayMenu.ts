@@ -28,6 +28,7 @@ export type TrayActionId =
   | "open"
   | "compile"
   | "toggle-protection"
+  | "start-daemon"
   | "flush-dns"
   | "open-deploy"
   | "reveal-output"
@@ -63,7 +64,7 @@ export function buildTrayMenu(
   // --- Status header ---
   const statusLine = compiling
     ? `Compiling… ${state.compileProgress?.percent ?? 0}%`
-    : state.protection
+    : state.protection && state.protection.status !== "stopped"
       ? state.protection.enabled
         ? "Protection: Active"
         : "Protection: Paused"
@@ -122,7 +123,14 @@ export function buildTrayMenu(
       protectionEnabled: paused,
     });
   } else {
-    rows.push({ type: "status", label: "DNS Protection: Not Running" });
+    // The daemon being down is exactly the case where the user needs a control
+    // — a dead "Not Running" label can't start anything.
+    rows.push({
+      type: "action",
+      id: "start-daemon",
+      label: "Start DNS Protection",
+      enabled: true,
+    });
   }
   rows.push({
     type: "action",

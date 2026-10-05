@@ -51,7 +51,12 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
   (`generateOutputsInline`, the classify loop). Dedup/attribution loops yield
   via `yieldToEventLoop`. `filters/` ships via `extraResource` — relative
   `./filters/...` sources resolve `process.resourcesPath`-first packaged,
-  `app.getAppPath()` in dev.
+  `app.getAppPath()` in dev. The managed DNS daemon is a third bundle,
+  `systemDaemon.cjs` (`daemonManager.start()` spawns it under
+  `ELECTRON_RUN_AS_NODE`; the tray's "Start DNS Protection" row calls the same
+  path). Webpack entries pointing *outside* `src/` must use the built `dist/`
+  entry, not `src/` — ts-loader picks up the other package's own tsconfig
+  (`rootDir`) and then rejects every electron-app file as "not under rootDir".
 - **macOS notarization**: `osxNotarize` in `forge.config.cjs` is env-gated —
   `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` or
   `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID`; unset means signed-but-unnotarized

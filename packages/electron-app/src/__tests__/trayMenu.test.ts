@@ -35,7 +35,10 @@ describe('buildTrayMenu', () => {
 
     expect(statusLabels(rows)[0]).toBe('Protection: Daemon not running');
     expect(findTrayAction(rows, 'toggle-protection')).toBeUndefined();
-    expect(labels(rows)).toContain('DNS Protection: Not Running');
+    // A downed daemon gets the one action that matters — not a dead status row.
+    const start = findTrayAction(rows, 'start-daemon');
+    expect(start?.label).toBe('Start DNS Protection');
+    expect(start?.enabled).toBe(true);
   });
 
   test('summarizes the last compilation with count and time', () => {
@@ -53,7 +56,6 @@ describe('buildTrayMenu', () => {
     expect(statusLabels(rows).filter((l) => /rules|updated/.test(l))).toEqual([]);
     expect(statusLabels(rows)).toEqual([
       'Protection: Daemon not running',
-      'DNS Protection: Not Running',
       'LAN Feed: Offline',
     ]);
   });
@@ -146,14 +148,15 @@ describe('buildTrayMenu', () => {
     expect(findTrayAction(rows, 'toggle-protection')?.protectionEnabled).toBe(true);
   });
 
-  test('a stopped daemon exposes no protection toggle', () => {
+  test('a stopped daemon offers to start it instead of a dead label', () => {
     const rows = buildTrayMenu(
       state({ protection: { enabled: false, status: 'stopped' } }),
       false,
     );
 
+    expect(statusLabels(rows)[0]).toBe('Protection: Daemon not running');
     expect(findTrayAction(rows, 'toggle-protection')).toBeUndefined();
-    expect(labels(rows)).toContain('DNS Protection: Not Running');
+    expect(findTrayAction(rows, 'start-daemon')?.label).toBe('Start DNS Protection');
   });
 
   test('feed server status is shown when running and when offline', () => {

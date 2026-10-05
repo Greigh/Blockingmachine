@@ -47,6 +47,8 @@ export interface TrayManagerOptions {
   isCompiling: () => boolean;
   /** Pause/resume system DNS daemon protection. */
   setProtection: (enabled: boolean) => Promise<boolean>;
+  /** Spawn the managed local DNS daemon (the :5353 resolver). */
+  startDaemon: () => Promise<boolean>;
   /** Flush the OS DNS cache. */
   flushDnsCache: () => Promise<boolean>;
   /** Live state provider, called on every menu open + rebuild. */
@@ -245,6 +247,15 @@ export class TrayManager {
         this.scheduleRebuild();
         return;
       }
+      case "start-daemon": {
+        const ok = await this.safeStartDaemon();
+        this.notify(
+          "DNS Protection",
+          ok ? "Daemon started." : "Start failed — see logs.",
+        );
+        this.scheduleRebuild();
+        return;
+      }
       case "flush-dns": {
         const ok = await this.safeFlushDns();
         this.notify(
@@ -417,6 +428,14 @@ export class TrayManager {
   private async safeSetProtection(enabled: boolean): Promise<boolean> {
     try {
       return await this.options.setProtection(enabled);
+    } catch {
+      return false;
+    }
+  }
+
+  private async safeStartDaemon(): Promise<boolean> {
+    try {
+      return await this.options.startDaemon();
     } catch {
       return false;
     }
