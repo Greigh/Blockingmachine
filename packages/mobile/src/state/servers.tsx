@@ -177,6 +177,10 @@ export function ServerProvider(props: {
 
   const markOk = useCallback(
     async (id: string) => {
+      // The status poll calls this on every success — skip the AsyncStorage
+      // write while the recorded timestamp is still fresh.
+      const current = serversRef.current.find((s) => s.id === id);
+      if (current?.lastOkAt && Date.now() - Date.parse(current.lastOkAt) < 60_000) return;
       const next = serversRef.current.map((s) =>
         s.id === id ? { ...s, lastOkAt: new Date().toISOString() } : s,
       );
