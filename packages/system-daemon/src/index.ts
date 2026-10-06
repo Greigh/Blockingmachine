@@ -297,7 +297,10 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
             injected++;
           }
           if (rejected.length > 0) {
-            console.warn(`[Daemon] Refused ${rejected.length} invalid quarantine domain(s): ${rejected.slice(0, 5).join(', ')}`);
+            // `rejected` holds the caller's raw strings — strip control characters so a
+            // refused name cannot forge extra log lines.
+            const shown = rejected.slice(0, 5).map((d) => d.replace(/[\x00-\x1f\x7f]+/g, ' '));
+            console.warn(`[Daemon] Refused ${rejected.length} invalid quarantine domain(s): ${shown.join(', ')}`);
           }
           console.log(`[Daemon] Injected ${injected} quarantined threat domain(s) into active DNS trie memory.`);
           res.writeHead(200, { 'Content-Type': 'application/json' });

@@ -14,6 +14,7 @@
  */
 
 import { BIND_NULL_ZONE_CONTENTS, BIND_NULL_ZONE_FILE } from "./formatters.js";
+import { stripTrailingChars } from "../utils/textScan.js";
 
 /** The zone filename a delegated parent uses instead of the shared null file. */
 export function bindNullDelegatedZoneFile(parentDomain: string): string {
@@ -45,7 +46,7 @@ export function renderBindNullDelegatedZone(
           ? sub.slice(0, -(parentDomain.length + 1))
           : `${sub}.`;
     for (const ns of [...nsNames].sort()) {
-      lines.push(`${rel} IN NS ${ns.replace(/\.*$/, "")}.`);
+      lines.push(`${rel} IN NS ${stripTrailingChars(ns, ".")}.`);
     }
   }
   return `${lines.join("\n")}\n`;

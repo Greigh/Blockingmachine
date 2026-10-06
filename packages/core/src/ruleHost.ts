@@ -42,6 +42,8 @@
  * of shapes so the duplication cannot drift — the same arrangement the ledger reader uses.
  */
 
+import { firstIndexOfAny, stripTrailingChars } from './utils/textScan.js';
+
 /** Directives that describe something a browser cannot express as a zone block. */
 const SKIP_MODIFIERS = [
   '$dnsrewrite',
@@ -113,15 +115,18 @@ export function extractHostFromRule(raw: unknown): string | null {
 
   line = line
     .replace(/^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+/, '') // hosts entry
-    .replace(/\$.*$/, '') // ABP modifiers
     .replace(/^@@/, '')
     .replace(/^\|\|/, '') // ABP domain anchor
-    .replace(/^\|/, '')
-    .replace(/[\^|].*$/, '') // terminator or trailing anchor
-    .replace(/\/.*$/, '') // path
-    .replace(/\.+$/, '')
-    .trim()
-    .toLowerCase();
+    .replace(/^\|/, '');
+
+  // Everything from the first `$`, `^`, `|` or `/` is a modifier, terminator or path — cut
+  // by index rather than by `[\^|].*$`-style regexes, which rescan a hostile run of those
+  // markers quadratically. `.*` could never cross a newline, so the scan is restricted to
+  // the final line segment exactly as the regexes were.
+  const segmentStart = line.lastIndexOf('\n') + 1;
+  const cut = firstIndexOfAny(line.slice(segmentStart), '$^|/');
+  if (cut >= 0) line = line.slice(0, segmentStart + cut);
+  line = stripTrailingChars(line, '.').trim().toLowerCase();
 
   if (!line) return null;
   // Wildcards cannot be expressed in a domain-form zone block.

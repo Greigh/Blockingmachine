@@ -50,7 +50,7 @@ def predict_one(trees: list[dict], vector: list[float]) -> float:
         node = tree
         while "leaf_value" not in node:
             x = vector[node["split_feature"]]
-            if x != x:  # NaN: follow LightGBM's missing direction
+            if math.isnan(x):  # NaN: follow LightGBM's missing direction
                 node = node["left"] if node.get("default_left", False) else node["right"]
             else:
                 node = node["left"] if x <= node["threshold"] else node["right"]
