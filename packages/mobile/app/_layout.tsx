@@ -12,6 +12,7 @@ import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { ServerProvider } from '../src/state/servers';
+import { ServerEventsProvider } from '../src/state/events';
 import { colors } from '../src/theme';
 
 const navTheme = {
@@ -43,7 +44,8 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <ServerProvider kv={AsyncStorage} secrets={SecureStore}>
-        <ThemeProvider value={navTheme}>
+        <ServerEventsProvider>
+          <ThemeProvider value={navTheme}>
           <StatusBar style="light" />
           <Stack
             screenOptions={{
@@ -58,7 +60,8 @@ export default function RootLayout() {
               options={{ title: 'Add Server', presentation: 'modal' }}
             />
           </Stack>
-        </ThemeProvider>
+          </ThemeProvider>
+        </ServerEventsProvider>
       </ServerProvider>
     </QueryClientProvider>
   );

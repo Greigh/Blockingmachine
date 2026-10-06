@@ -3,8 +3,8 @@
  * This is the screen you open to answer "is my blocking up" and to flip it.
  */
 
-import React from 'react';
-import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import React, { useEffect } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { ApiError } from '../../src/api/client';
@@ -12,21 +12,24 @@ import { useClient } from '../../src/api/useClient';
 import { useServerEvents } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
 import { ActionButton, Card, ErrorBanner, Pill } from '../../src/components/ui';
+import { formatTimestamp, formatUptime } from '../../src/format';
 import { colors, spacing } from '../../src/theme';
 
-function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+// The hub stamps lastCompile with toLocaleString() (unparseable on Hermes) while
+// the add-on carries lastCompileMs — prefer the epoch, fall back to the raw
+// string since it's already human-readable in the hub's own locale.
+function formatLastCompile(data?: { lastCompile: string | null; lastCompileMs?: number }): string {
+  if (!data) return '—';
+  if (typeof data.lastCompileMs === 'number' && data.lastCompileMs > 0) {
+    return new Date(data.lastCompileMs).toLocaleString();
+  }
+  return formatTimestamp(data.lastCompile);
 }
 
 export default function DashboardScreen() {
   const client = useClient();
-  const { connected } = useServerEvents();
-  const { activeServer } = useServers();
+  const { connected, alert, dismissAlert } = useServerEvents();
+  const { activeServer, markOk } = useServers();
   const queryClient = useQueryClient();
   const baseUrl = activeServer?.baseUrl ?? 'none';
 
@@ -36,6 +39,12 @@ export default function DashboardScreen() {
     enabled: !!client,
     refetchInterval: 15_000,
   });
+
+  // Successful polls are the "last seen" heartbeat shown beside each server in
+  // Settings — markOk itself throttles the storage write.
+  useEffect(() => {
+    if (status.isSuccess && activeServer) void markOk(activeServer.id);
+  }, [status.isSuccess, status.dataUpdatedAt, activeServer, markOk]);
 
   const invalidate = () =>
     Promise.all([
@@ -77,8 +86,23 @@ export default function DashboardScreen() {
   const daemonStopped = data?.protection?.daemonStatus === 'stopped';
   const err = status.error as ApiError | null;
 
+  const quarantineCount =
+    alert?.event === 'quarantine_added' && typeof alert.data.count === 'number'
+      ? alert.data.count
+      : null;
+
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      refreshControl={
+        <RefreshControl
+          refreshing={status.isRefetching}
+          onRefresh={() => void status.refetch()}
+          tintColor={colors.textMuted}
+        />
+      }
+    >
       <View style={styles.headerRow}>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>{data?.service ?? 'Blockingmachine'}</Text>
@@ -93,12 +117,38 @@ export default function DashboardScreen() {
         />
       </View>
 
+      {alert?.event === 'quarantine_added' ? (
+        <TouchableOpacity
+          style={styles.alertBanner}
+          onPress={() => {
+            dismissAlert();
+            router.push('/(tabs)/telemetry');
+          }}
+        >
+          <Text style={styles.alertText}>
+            {quarantineCount
+              ? `${quarantineCount} new threat${quarantineCount === 1 ? '' : 's'} quarantined`
+              : 'New threats quarantined'}
+            {' — review'}
+          </Text>
+          <TouchableOpacity
+            onPress={dismissAlert}
+            hitSlop={8}
+            accessibilityLabel="Dismiss"
+          >
+            <Text style={styles.alertDismiss}>✕</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      ) : null}
+
       {err ? (
         <ErrorBanner
           message={
             err.kind === 'unauthorized'
               ? 'Server requires a feed token — add it in Settings.'
-              : `Can't reach server: ${err.message}`
+              : err.kind === 'unreachable'
+                ? `Can't reach server — check the hub's feed server is on (Settings → Pair Mobile App). ${err.message}`
+                : `Can't reach server: ${err.message}`
           }
           onRetry={() => void status.refetch()}
         />
@@ -159,10 +209,7 @@ export default function DashboardScreen() {
             <Text style={styles.statLabel}>quarantined</Text>
           </View>
         </View>
-        <Text style={styles.metaLine}>
-          Last compile:{' '}
-          {data?.lastCompile ? new Date(data.lastCompile).toLocaleString() : 'never'}
-        </Text>
+        <Text style={styles.metaLine}>Last compile: {formatLastCompile(data)}</Text>
         <Text style={styles.metaLine}>
           Uptime: {data ? formatUptime(data.uptimeSeconds) : '—'}
           {typeof data?.activeSseClients === 'number'
@@ -275,6 +322,20 @@ const styles = StyleSheet.create({
   statValue: { color: colors.text, fontSize: 18, fontWeight: '700' },
   statLabel: { color: colors.textMuted, fontSize: 12 },
   metaLine: { color: colors.textMuted, fontSize: 13, marginTop: spacing.xs },
+  alertBanner: {
+    alignItems: 'center',
+    backgroundColor: colors.card,
+    borderColor: colors.warn,
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  alertText: { color: colors.warn, flex: 1, fontSize: 14, fontWeight: '600' },
+  alertDismiss: { color: colors.textMuted, fontSize: 14, paddingLeft: spacing.sm },
   buttonRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   buttonFlex: { flex: 1 },
   errorLine: { color: colors.danger, fontSize: 13, marginTop: spacing.sm },

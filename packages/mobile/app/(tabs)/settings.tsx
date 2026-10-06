@@ -28,6 +28,17 @@ const ORIGIN_LABEL: Record<string, string> = {
   mdns: 'discovered',
 };
 
+function relativeTime(iso: string): string {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const m = Math.floor(ms / 60_000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 export default function SettingsScreen() {
   const { servers, activeServerId, activeToken, setActive, removeServer, setToken } =
     useServers();
@@ -84,6 +95,7 @@ export default function SettingsScreen() {
                 </View>
                 <Text style={styles.meta}>
                   {s.baseUrl} · {ORIGIN_LABEL[s.origin] ?? s.origin}
+                  {s.lastOkAt ? ` · seen ${relativeTime(s.lastOkAt)}` : ''}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity

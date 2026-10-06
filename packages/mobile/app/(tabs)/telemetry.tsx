@@ -7,8 +7,10 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useClient } from '../../src/api/useClient';
+import { useServerEvents } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
 import { Card, ErrorBanner, Pill } from '../../src/components/ui';
+import { formatTimestamp } from '../../src/format';
 import { colors, spacing } from '../../src/theme';
 
 const RISK_TONES: Record<string, 'bad' | 'warn' | 'info' | 'muted'> = {
@@ -21,7 +23,16 @@ const RISK_TONES: Record<string, 'bad' | 'warn' | 'info' | 'muted'> = {
 export default function TelemetryScreen() {
   const client = useClient();
   const { activeServer } = useServers();
+  const { alert } = useServerEvents();
   const baseUrl = activeServer?.baseUrl ?? 'none';
+
+  // Domains carried by the latest quarantine_added broadcast get a "new" pill
+  // until the alert is dismissed — the screen the dashboard banner routes to.
+  const newDomains = new Set(
+    alert?.event === 'quarantine_added' && Array.isArray(alert.data.domains)
+      ? alert.data.domains.filter((d): d is string => typeof d === 'string')
+      : [],
+  );
 
   const telemetry = useQuery({
     queryKey: ['telemetry', baseUrl],
@@ -61,13 +72,16 @@ export default function TelemetryScreen() {
                 <Text style={styles.threatDomain}>{t.domain}</Text>
                 <Text style={styles.meta}>
                   {t.category} · {t.source} · {Math.round(t.confidence * 100)}% ·{' '}
-                  {new Date(t.timestamp).toLocaleDateString()}
+                  {formatTimestamp(t.timestamp)}
                 </Text>
               </View>
-              <Pill
-                label={t.riskLevel}
-                tone={RISK_TONES[t.riskLevel] ?? 'muted'}
-              />
+              <View style={styles.threatPills}>
+                {newDomains.has(t.domain) ? <Pill label="new" tone="info" /> : null}
+                <Pill
+                  label={t.riskLevel}
+                  tone={RISK_TONES[t.riskLevel] ?? 'muted'}
+                />
+              </View>
             </View>
           ))}
         </Card>
@@ -78,9 +92,7 @@ export default function TelemetryScreen() {
           <Text style={styles.sectionTitle}>Recent compiles</Text>
           {data.history.map((h, i) => (
             <View key={`${h.timestamp}-${i}`} style={styles.historyRow}>
-              <Text style={styles.historyDate}>
-                {new Date(h.timestamp).toLocaleString()}
-              </Text>
+              <Text style={styles.historyDate}>{formatTimestamp(h.timestamp)}</Text>
               <Text style={styles.meta}>
                 {h.uniqueRuleCount.toLocaleString()} unique ·{' '}
                 {h.duplicatesRemoved.toLocaleString()} dupes
@@ -134,6 +146,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   threatDomain: { color: colors.text, fontSize: 15, fontWeight: '600' },
+  threatPills: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   historyRow: {
     borderTopColor: colors.cardBorder,
     borderTopWidth: 1,

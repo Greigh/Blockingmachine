@@ -148,6 +148,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [feedTokenConfigured, setFeedTokenConfigured] = useState(false);
   const [feedTokenMessage, setFeedTokenMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [pairingPayload, setPairingPayload] = useState<{ url: string; payload: string; running: boolean; tokenConfigured: boolean } | null>(null);
+  const [startingFeedForPairing, setStartingFeedForPairing] = useState(false);
 
   // Path state variables
   const [savePath, setSavePath] = useState('');
@@ -358,6 +359,24 @@ const Settings: React.FC<SettingsProps> = ({
       if (res?.success) setPairingPayload(res);
     } catch (err) {
       console.error('Failed to build pairing payload:', err);
+    }
+  };
+
+  // The QR is only useful while the feed server answers, and it defaults to off —
+  // so the pairing block gets its own start path rather than pointing at a
+  // checkbox elsewhere in the page. Refreshing the payload after start keeps the
+  // rendered URL honest.
+  const handleStartFeedForPairing = async () => {
+    if (!window.electron?.startFeedServer || startingFeedForPairing) return;
+    setStartingFeedForPairing(true);
+    try {
+      await window.electron.startFeedServer();
+      const res = await window.electron.getFeedPairingPayload?.();
+      if (res?.success) setPairingPayload(res);
+    } catch (err) {
+      console.error('Failed to start feed server for pairing:', err);
+    } finally {
+      setStartingFeedForPairing(false);
     }
   };
 
@@ -1046,9 +1065,24 @@ const Settings: React.FC<SettingsProps> = ({
               {pairingPayload && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
                   {!pairingPayload.running && (
-                    <p className="setting-message error" style={{ marginTop: '2px' }}>
-                      The feed server is not running — start it before scanning, or the app won't reach anything.
-                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <p className="setting-message error" style={{ marginTop: '2px' }}>
+                        The feed server is not running — the app can't reach this Mac until it is.
+                      </p>
+                      <div>
+                        <button
+                          type="button"
+                          className="browse-button"
+                          disabled={startingFeedForPairing}
+                          onClick={() => void handleStartFeedForPairing()}
+                        >
+                          {startingFeedForPairing ? 'Starting…' : 'Start feed server'}
+                        </button>
+                      </div>
+                      <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                        Tick "Auto-Start Local LAN Feed Server on Launch" above to keep it reachable after restarts.
+                      </span>
+                    </div>
                   )}
                   <div style={{ alignSelf: 'flex-start', background: '#fff', padding: '12px', borderRadius: '8px' }}>
                     <QRCodeSVG value={pairingPayload.payload} size={160} level="M" />
