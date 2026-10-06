@@ -7,10 +7,10 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useClient } from '../../src/api/useClient';
-import { useServerEvents } from '../../src/hooks/useEvents';
+import { useServerEvents, type ServerEventAlert } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
 import { Card, ErrorBanner, Pill } from '../../src/components/ui';
-import { formatTimestamp } from '../../src/format';
+import { formatTimestamp, relativeTime } from '../../src/format';
 import { colors, spacing } from '../../src/theme';
 
 const RISK_TONES: Record<string, 'bad' | 'warn' | 'info' | 'muted'> = {
@@ -20,10 +20,28 @@ const RISK_TONES: Record<string, 'bad' | 'warn' | 'info' | 'muted'> = {
   low: 'info',
 };
 
+/** Human label for a hub broadcast in the activity feed. Unknown names pass through. */
+function describeEvent(e: ServerEventAlert): string {
+  if (e.event === 'connected') return 'Connected to live feed';
+  if (e.event === 'compile_completed') return 'Compile finished';
+  if (e.event === 'rules_updated') return 'Rules updated';
+  if (e.event === 'quarantine_added') {
+    const n = typeof e.data.count === 'number' ? e.data.count : null;
+    return n === null
+      ? 'Threats quarantined'
+      : `${n} threat${n === 1 ? '' : 's'} quarantined`;
+  }
+  if (e.event === 'remote_control') {
+    const action = typeof e.data.action === 'string' ? e.data.action.replace(/_/g, ' ') : 'action';
+    return `Remote control: ${action}`;
+  }
+  return e.event;
+}
+
 export default function TelemetryScreen() {
   const client = useClient();
   const { activeServer } = useServers();
-  const { alert } = useServerEvents();
+  const { alert, recent } = useServerEvents();
   const baseUrl = activeServer?.baseUrl ?? 'none';
 
   // Domains carried by the latest quarantine_added broadcast get a "new" pill
@@ -60,6 +78,18 @@ export default function TelemetryScreen() {
       {!client ? (
         <Card>
           <Text style={styles.meta}>Add a server in Settings first.</Text>
+        </Card>
+      ) : null}
+
+      {recent.length > 0 ? (
+        <Card>
+          <Text style={styles.sectionTitle}>Activity</Text>
+          {recent.slice(0, 15).map((e, i) => (
+            <View key={`${e.at}-${i}`} style={styles.historyRow}>
+              <Text style={styles.historyDate}>{describeEvent(e)}</Text>
+              <Text style={styles.meta}>{relativeTime(e.at)}</Text>
+            </View>
+          ))}
         </Card>
       ) : null}
 

@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useClient } from '../../src/api/useClient';
 import { useServers } from '../../src/state/servers';
 import { ActionButton, Card, Pill } from '../../src/components/ui';
+import { relativeTime } from '../../src/format';
 import { colors, spacing } from '../../src/theme';
 
 const ORIGIN_LABEL: Record<string, string> = {
@@ -28,15 +29,9 @@ const ORIGIN_LABEL: Record<string, string> = {
   mdns: 'discovered',
 };
 
-function relativeTime(iso: string): string {
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms) || ms < 0) return '';
-  const m = Math.floor(ms / 60_000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
+function formatSeen(iso: string): string {
+  const rel = relativeTime(iso);
+  return rel ? ` · seen ${rel}` : '';
 }
 
 export default function SettingsScreen() {
@@ -95,7 +90,7 @@ export default function SettingsScreen() {
                 </View>
                 <Text style={styles.meta}>
                   {s.baseUrl} · {ORIGIN_LABEL[s.origin] ?? s.origin}
-                  {s.lastOkAt ? ` · seen ${relativeTime(s.lastOkAt)}` : ''}
+                  {s.lastOkAt ? formatSeen(s.lastOkAt) : ''}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity

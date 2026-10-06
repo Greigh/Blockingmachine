@@ -153,4 +153,6 @@ export interface ControlResult {
   action?: string;
   enabled?: boolean;
   message?: string;
+  /** Present on /v1/control/daemon responses. */
+  daemonStatus?: string;
 }

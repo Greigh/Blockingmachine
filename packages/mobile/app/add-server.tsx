@@ -18,7 +18,7 @@ import { router } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { BlockingmachineClient, ApiError, normalizeBaseUrl } from '../src/api/client';
 import { browseServers, DiscoveredServer, isDiscoveryAvailable } from '../src/api/discovery';
-import { decodePairingPayload, PairingError } from '../src/api/pairing';
+import { decodePairingPayload, PairingError, type PairingPayload } from '../src/api/pairing';
 import { useServers } from '../src/state/servers';
 import { ActionButton, Card, Pill } from '../src/components/ui';
 import { colors, spacing } from '../src/theme';
@@ -95,17 +95,56 @@ export default function AddServerScreen() {
     router.back();
   };
 
-  const onBarcode = ({ data }: { data: string }) => {
-    if (scannedRef.current) return;
-    scannedRef.current = true;
-    try {
-      const payload = decodePairingPayload(data);
-      void testAndStage({
-        baseUrl: payload.url,
+  // QR codes can carry alternate LAN URLs for multi-homed hosts — try each in
+  // order and stage the first that answers. An "unauthorized" answer still
+  // counts as reachable: the review card's token field handles the auth.
+  const stageQr = async (payload: PairingPayload) => {
+    setTesting(true);
+    setError(null);
+    const candidates = payload.urls?.length ? payload.urls : [payload.url];
+    let unauthorizedUrl: string | null = null;
+    for (const baseUrl of candidates) {
+      try {
+        const client = new BlockingmachineClient({ baseUrl, token: payload.token });
+        const status = await client.getStatus();
+        setPending({
+          baseUrl,
+          label: status.service || 'Paired hub',
+          origin: 'qr',
+          token: payload.token,
+        });
+        setTesting(false);
+        return;
+      } catch (err) {
+        if (err instanceof ApiError && err.kind === 'unauthorized') {
+          unauthorizedUrl = baseUrl;
+          break;
+        }
+      }
+    }
+    if (unauthorizedUrl) {
+      setPending({
+        baseUrl: unauthorizedUrl,
         label: 'Paired hub',
         origin: 'qr',
         token: payload.token,
       });
+    } else {
+      setError(
+        candidates.length > 1
+          ? `The code listed ${candidates.length} hub addresses — none answered. Check both devices are on the same network.`
+          : `Can't reach ${candidates[0]} — check both devices are on the same network.`,
+      );
+      scannedRef.current = false;
+    }
+    setTesting(false);
+  };
+
+  const onBarcode = ({ data }: { data: string }) => {
+    if (scannedRef.current) return;
+    scannedRef.current = true;
+    try {
+      void stageQr(decodePairingPayload(data));
     } catch (err) {
       setError(err instanceof PairingError ? err.message : 'Unreadable QR code');
       scannedRef.current = false;
@@ -135,7 +174,14 @@ export default function AddServerScreen() {
               <ActionButton label="Save" onPress={() => void save()} />
             </View>
             <View style={styles.buttonFlex}>
-              <ActionButton label="Back" tone="ghost" onPress={() => setPending(null)} />
+              <ActionButton
+                label="Back"
+                tone="ghost"
+                onPress={() => {
+                  setPending(null);
+                  scannedRef.current = false; // let a dismissed QR be scanned again
+                }}
+              />
             </View>
           </View>
         </Card>
@@ -249,6 +295,11 @@ export default function AddServerScreen() {
               />
             </>
           )}
+          {testing ? (
+            <Text style={[styles.meta, { marginTop: spacing.sm }]}>
+              Trying the hub addresses from the code…
+            </Text>
+          ) : null}
           <View style={[styles.buttonRow, { marginTop: spacing.sm }]}>
             <View style={styles.buttonFlex}>
               <ActionButton label="Back" tone="ghost" onPress={() => setMode('pick')} />

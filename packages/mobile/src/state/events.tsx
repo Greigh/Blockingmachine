@@ -40,15 +40,20 @@ export interface ServerEventAlert {
   at: number;
 }
 
+const MAX_RECENT = 30;
+
 interface ServerEventsState {
   connected: boolean;
   alert: ServerEventAlert | null;
+  /** Rolling buffer of every hub broadcast, newest first — the activity feed. */
+  recent: ServerEventAlert[];
   dismissAlert: () => void;
 }
 
 const ServerEventsContext = createContext<ServerEventsState>({
   connected: false,
   alert: null,
+  recent: [],
   dismissAlert: () => {},
 });
 
@@ -66,6 +71,7 @@ export function ServerEventsProvider({ children }: { children: React.ReactNode }
   const queryClient = useQueryClient();
   const [connected, setConnected] = useState(false);
   const [alert, setAlert] = useState<ServerEventAlert | null>(null);
+  const [recent, setRecent] = useState<ServerEventAlert[]>([]);
   const baseUrl = activeServer?.baseUrl ?? null;
 
   useEffect(() => {
@@ -75,6 +81,7 @@ export function ServerEventsProvider({ children }: { children: React.ReactNode }
     }
     setConnected(false);
     setAlert(null);
+    setRecent([]);
     const sub = subscribeEvents(
       baseUrl,
       {
@@ -85,12 +92,14 @@ export function ServerEventsProvider({ children }: { children: React.ReactNode }
             void queryClient.invalidateQueries({ queryKey: ['telemetry', baseUrl] });
             void queryClient.invalidateQueries({ queryKey: ['protection', baseUrl] });
           }
+          const decoded: ServerEventAlert = {
+            event: event.event,
+            data: decodeEventData(event.data),
+            at: Date.now(),
+          };
+          setRecent((prev) => [decoded, ...prev].slice(0, MAX_RECENT));
           if (ALERT_EVENTS.has(event.event)) {
-            setAlert({
-              event: event.event,
-              data: decodeEventData(event.data),
-              at: Date.now(),
-            });
+            setAlert(decoded);
           }
         },
         onError: () => setConnected(false),
@@ -104,7 +113,7 @@ export function ServerEventsProvider({ children }: { children: React.ReactNode }
 
   return (
     <ServerEventsContext.Provider
-      value={{ connected, alert, dismissAlert: () => setAlert(null) }}
+      value={{ connected, alert, recent, dismissAlert: () => setAlert(null) }}
     >
       {children}
     </ServerEventsContext.Provider>
