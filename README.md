@@ -10,13 +10,13 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/)
 [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/)
 [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/)
-[![Tests](<https://img.shields.io/badge/Tests-434%20Passing%20(100%25)-brightgreen.svg>)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml)
+[![Tests](<https://img.shields.io/badge/Tests-2%2C900%2B%20Passing%20(100%25)-brightgreen.svg>)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml)
 [![CI](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml)
 [![CodeQL Analysis](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml)
 [![HACS Validation](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml)
 [![Security Policy](https://img.shields.io/badge/Security_Policy-Active-green.svg)](SECURITY.md)
 
-_A modern network defense suite and filter list compiler for AdGuard, uBlock Origin & EasyList. Features an Electron desktop app, MV3 extension, loopback DNS daemon, Home Assistant hub, and embedded Mini-AI classification with intelligent rule deduplication, multi-format exports, and 100% local processing._
+_A modern network defense suite and filter list compiler for AdGuard, uBlock Origin & EasyList. Features an Electron desktop app, MV3 extension, loopback DNS daemon, Home Assistant hub, an iOS/Android companion app, and embedded Mini-AI classification with intelligent rule deduplication, multi-format exports, and 100% local processing._
 
 </div>
 
@@ -36,6 +36,7 @@ Designed for network engineers, homelab operators, and privacy advocates, Blocki
 - **Core Engine (`@blockingmachine/core`)**: Zero-dependency rule parsing engine, hierarchy-aware subdomain deduplicator, multi-format export compiler, Shannon entropy analyzer, CNAME uncloaking resolver, and embedded Mini-AI classification neural model.
 - **Command Line Interface (`@blockingmachine/cli`)**: Autonomous CLI binary (`blockingmachine`) for CI/CD pipelines, automated homelab cron tasks, local feed serving, diffing, and DNS diagnostics.
 - **Home Assistant Hub (`@blockingmachine/homeassistant-addon` & integration)**: HACS-compliant Home Assistant integration and local Add-on container providing a bidirectional telemetry mesh (`sensor.blockingmachine_browser_*`), live rule distribution via Server-Sent Events (`/v1/events`), and remote cosmetic shield toggles. The add-on also serves a **Shadowrocket rule set** at `/shadowrocket.conf`, so a phone can subscribe to the add-on rather than to a desktop hub that has to be awake — the usual reason a rule set stops arriving. It is rendered from the same DNS feed as the Unbound drop-in, and both feeds share one rule-to-host parser, so a domain sinkholed in the resolver is the domain the phone blocks.
+- **Mobile Companion (`@blockingmachine/mobile`)**: React Native (Expo) iOS/Android remote control for the hub's `/v1/*` API — the same contract the HA integration speaks. Reads live status over SSE, toggles protection, checks domains against the compiled list, triggers compiles, and watches browser telemetry. Pairs three ways: QR scan, mDNS discovery of the hub's `_blockingmachine._tcp` advertisement, or manual entry; the feed token lives in the device keychain.
 - **Audit & Database Layer (`blockingmachine-database`)**: Offline JSONL and MongoDB audit logging and rule snapshot rollback engine.
 
 ---
@@ -51,6 +52,16 @@ The latest pre-release desktop application is cryptographically signed with an A
 | **Apple Silicon Disk Image (`.dmg`)**      | macOS `arm64` (M1/M2/M3/M4) | [Download `.dmg`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.9/Blockingmachine-1.0.0-rc.9-arm64.dmg)        |
 | **Standalone Application Bundle (`.zip`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.9/Blockingmachine-darwin-arm64-1.0.0-rc.9.zip) |
 | **SHA-256 Checksums**                      | All Platforms               | [Download `SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.9/SHA256SUMS.txt)                    |
+
+### Mobile Companion (Android)
+
+The signed Android APK is published on the Forgejo generic package registry:
+
+| Package / Installer | Platform | Download |
+| ------------------- | -------- | -------- |
+| **Android APK** (`.apk`) | Android 7.0+ (`minSdk 24`) | [Download `app-release.apk`](https://git.greighstudios.com/api/packages/greighstudios/generic/blockingmachine-mobile/1.0.0-rc.9/app-release.apk) |
+
+Built from `packages/mobile` with `expo prebuild` + `./gradlew assembleRelease`. The iOS build goes through the same Expo dev-client flow; an App Store/TestFlight artifact is not published yet.
 
 #### Checksum Verification
 
@@ -186,6 +197,15 @@ What the fit cost is recorded beside what it bought: a sharper head is better at
   - `binary_sensor.blockingmachine_browser_connected`
 - **Remote Cosmetic Shield Toggles**: Enable or disable cosmetic hiding and scriptlet defusers directly from Home Assistant automations or Lovelace dashboards.
 
+### 📱 Mobile Companion (`@blockingmachine/mobile`)
+
+- **Three Ways to Pair**: scan the hub's QR code (Settings → Pair Mobile App — carries the feed URL and token), let mDNS discovery find the `_blockingmachine._tcp` advertisement the feed server publishes, or type the address by hand. A server advertising `token=required` prompts for the token before saving.
+- **Live Dashboard**: rule counts (total / DNS / browser / quarantined), protection and daemon state, uptime, and the hub's own live-client count — streamed over `/v1/events` SSE, no polling.
+- **Domain Check**: ask the hub whether a domain is covered by the compiled rules and see the covering rule and verdict.
+- **Remote Control**: toggle protection, trigger a compile, flip the cosmetic shield, or reload the extension — server errors surface verbatim rather than being swallowed.
+- **Secure by Default**: the feed token is stored in the device keychain (expo-secure-store), the server registry persists across restarts, and every request rides `Authorization: Bearer` when the hub has a token configured.
+- **Same REST Contract**: speaks the identical `/v1/*` surface the HA integration and add-on implement — status, events, telemetry, check, protection, compile, and control endpoints work against either server.
+
 ### 🛡️ First-Party Curated Defense Modules (`⌘3`)
 
 1. **Base Ad Shield**: Network-level blocking for major ad exchanges, programmatic bidding, and banner injection.
@@ -208,7 +228,7 @@ What the fit cost is recorded beside what it bought: a sharper head is better at
 - **Privoxy Action-File Feed**: A platform tab for the Privoxy filtering proxy, which reads a **section-based action file** rather than a list — every URL pattern belongs to the `{+block{…}}` block above it. The export emits that shape (host patterns with the leading dot that covers subdomains) and the pane hands over the feed URL with the `actionsfile` line to paste, the numbered steps, and the one property that is not obvious from a copy of the list: Privoxy applies the *last* matching action, so an allowed child is emitted in a `{-block}` section *after* the parent block it escapes.
 - **BIND Response Policy Zone**: A platform tab for BIND, which has no remote blocklist feature and no per-domain zone list. The export is a real RPZ — one `CNAME` policy record per blocked name, plus the SOA a primary zone cannot load without — and the pane hands over the zone-stanza and `response-policy` lines `named.conf` needs, the `rndc` reload, and the honest note that this one is a local file to copy rather than a feed to subscribe. Each blocked domain is emitted as **two** records, the name and a wildcard, because a bare RPZ QNAME trigger matches that one name only: without the wildcard every subdomain of a blocked domain resolves, while the same rules sent to Unbound, dnsmasq or Shadowrocket block the whole subtree. Verified against BIND 9.20.29 rather than assumed.
 - **BIND Shared Null Zone**: The same tab offers a second mechanism, for the case where the zone directory is managed by hand and `named.conf` is not. One 3-line file holding an SOA and an NS and nothing else can be loaded under *any* origin, so a single file blocks every domain on the list and never changes between compiles — what changes instead is the `named.conf` fragment, which is the inverse of the RPZ recipe and the thing the recipe says out loud. It is offered second, with its two real costs stated: a null zone has one behaviour, so an allowed subdomain has no stanza that could release it, and it answers NXDOMAIN for subdomains but NODATA at an apex. Both artifacts are validated against `named-checkzone` and `named-checkconf` in the test suite when BIND is installed.
-- **Built-in Local Feed Server**: Serves compiled blocklists on your local network (e.g. `http://localhost:9191/rules.txt`, `/dns.txt`, `/browser.txt`, `/unbound.conf`) for automatic appliance polling.
+- **Built-in Local Feed Server**: Serves compiled blocklists on your local network (e.g. `http://localhost:9191/rules.txt`, `/dns.txt`, `/browser.txt`, `/unbound.conf`) for automatic appliance polling. The same server hosts the `/v1/*` API the mobile companion and HA integration drive, and advertises the hub over mDNS (`_blockingmachine._tcp`) while it runs.
 
 ### 🔌 Unbound Reachability Check (`⌘8` → Unbound)
 
@@ -260,6 +280,7 @@ Blockingmachine/
 │   ├── system-daemon/           # @blockingmachine/system-daemon (Loopback DNS filtering proxy)
 │   ├── homeassistant-addon/     # @blockingmachine/homeassistant-addon (Home Assistant Supervisor Add-on)
 │   ├── homeassistant-integration/# HACS-compliant Home Assistant integration & Python tests
+│   ├── mobile/                  # @blockingmachine/mobile (Expo/React Native companion app)
 │   └── database/                # Snapshot rollback engine and audit logging schemas
 ├── custom_components/           # Root HACS custom component distribution directory
 ├── .github/workflows/           # GitHub Actions CI, CodeQL Analysis, and HACS Validation
@@ -299,6 +320,7 @@ Blockingmachine/
   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
   - **Linux (Ubuntu/Debian)**: `sudo apt-get install build-essential python3`
   - **Windows**: Visual Studio C++ Build Tools
+- **Mobile app** (optional, `packages/mobile` only): JDK 21 + Android SDK (`ANDROID_HOME`) for the Android build, Xcode for iOS; native modules require an Expo dev-client build, not Expo Go
 
 ---
 
@@ -690,7 +712,7 @@ only ever consulted when the export overflows.
 Blockingmachine maintains a strict **100% test pass rate** with **0 ESLint errors and 0 warnings** across all monorepo packages:
 
 ```bash
-# Run all 1,248 automated tests across the monorepo (67 Jest suites + the HA Python suite)
+# Run all ~2,900 automated tests across the monorepo (Jest workspaces + the HA Python suite)
 npm test
 
 # Run tests with open handle leak detection
