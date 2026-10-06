@@ -620,6 +620,13 @@ export interface ElectronAPI {
   getFeedToken?: () => Promise<{ configured: boolean }>;
   setFeedToken?: (token: string) => Promise<{ success: boolean; unchanged?: boolean; error?: string }>;
   clearFeedToken?: () => Promise<{ success: boolean; error?: string }>;
+  getFeedPairingPayload?: () => Promise<{
+    success: boolean;
+    running: boolean;
+    url: string;
+    tokenConfigured: boolean;
+    payload: string;
+  }>;
   getLaunchOnStartup?: () => Promise<boolean>;
   setLaunchOnStartup?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
 

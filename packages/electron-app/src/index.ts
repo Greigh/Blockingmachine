@@ -48,6 +48,7 @@ import {
 import { sinkholeFetch } from './sinkholeFetch';
 import { fetchPiholeQueryLog, piholeGravityUpdate, piholeVersionProbe } from './piholeApi.js';
 import { feedTokenAuthorised } from './feedAuth';
+import { advertiseFeedServer, type AdvertiseHandle } from './mdnsAdvertiser';
 import { isServableFeedFile } from './feedServing';
 import {
   parseDeployRefreshQuery,
@@ -2058,6 +2059,7 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
 }
 
 let feedHttpServer: HttpServer | null = null;
+let feedMdnsHandle: AdvertiseHandle | null = null;
 let feedServerPort = 9191;
 const sseClients = new Set<ServerResponse>();
 let sseHeartbeatTimer: NodeJS.Timeout | null = null;
@@ -3104,6 +3106,15 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
 
       feedHttpServer.listen(feedServerPort, '0.0.0.0', () => {
         console.log(`[Feed Server] Started on http://0.0.0.0:${feedServerPort}`);
+        // Advertise _blockingmachine._tcp so the mobile app (and other LAN clients)
+        // can discover the hub without an address. Best-effort: a publish failure
+        // must not fail the listen.
+        feedMdnsHandle?.stop();
+        feedMdnsHandle = advertiseFeedServer({
+          port: feedServerPort,
+          version: typeof app?.getVersion === 'function' ? app.getVersion() : '0.0.0',
+          tokenRequired: readSecret(storeRef, safeStorage, 'feedToken').trim().length > 0,
+        });
         resolve(getFeedServerStatus());
       });
     } catch (err: any) {
@@ -3116,6 +3127,14 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
 }
 
 function stopFeedServer() {
+  if (feedMdnsHandle) {
+    try {
+      feedMdnsHandle.stop();
+    } catch {
+      // ignore
+    }
+    feedMdnsHandle = null;
+  }
   if (sseHeartbeatTimer) {
     clearInterval(sseHeartbeatTimer);
     sseHeartbeatTimer = null;
@@ -4317,6 +4336,26 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       } catch (err: any) {
         return { success: false, error: err?.message || String(err) };
       }
+    });
+
+    /**
+     * QR pairing payload for the mobile app. The renderer needs the token itself —
+     * it goes into the QR — which is the same trust decision as the token field
+     * already in this form: the user typed it, and the renderer is app chrome, not
+     * remote content. `running` lets the UI warn when the feed server is off and a
+     * scan would fail anyway.
+     */
+    ipcMain.handle('get-feed-pairing-payload', async () => {
+      const status = getFeedServerStatus();
+      const token = readSecret(store, safeStorage, 'feedToken').trim();
+      const url = `http://${getLocalLanIp()}:${feedServerPort}`;
+      return {
+        success: true,
+        running: status.isRunning,
+        url,
+        tokenConfigured: token.length > 0,
+        payload: JSON.stringify({ v: 1, url, ...(token ? { token } : {}) }),
+      };
     });
 
     ipcMain.handle('get-launch-on-startup', async () => {

@@ -1,0 +1,60 @@
+{
+  "name": "@blockingmachine/mobile",
+  "version": "1.0.0-rc.9",
+  "description": "iOS/Android companion app for the Blockingmachine /v1 API — remote status, protection toggle, domain check, and telemetry.",
+  "license": "BSD-3-Clause",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "prebuild": "expo prebuild",
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "author": {
+    "name": "Greigh Studios LLC",
+    "email": "daniel@greighstudios.com",
+    "url": "https://greighstudios.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/greigh/Blockingmachine.git",
+    "directory": "packages/mobile"
+  },
+  "homepage": "https://github.com/greigh/Blockingmachine#readme",
+  "bugs": {
+    "url": "https://github.com/greigh/Blockingmachine/issues"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-navigation/native": "^7.0.0",
+    "@tanstack/react-query": "^5.104.1",
+    "expo": "~57.0.26",
+    "expo-camera": "~57.0.6",
+    "expo-constants": "~57.0.20",
+    "expo-linking": "~57.0.11",
+    "expo-router": "~57.0.24",
+    "expo-secure-store": "~57.0.4",
+    "expo-splash-screen": "~57.0.9",
+    "expo-status-bar": "~57.0.1",
+    "react": "^19.3.0",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-url-polyfill": "^4.0.0",
+    "react-native-zeroconf": "^0.17.3"
+  },
+  "devDependencies": {
+    "@testing-library/react-native": "^14.0.1",
+    "@types/jest": "^30.0.0",
+    "@types/react": "^19.3.0",
+    "jest-expo": "~57.0.5",
+    "test-renderer": "^1.3.0",
+    "typescript": "~5.8.3"
+  }
+}
