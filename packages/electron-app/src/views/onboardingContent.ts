@@ -91,7 +91,7 @@ export const DEPLOY_SETUP_OPTIONS: DeploySetupOption[] = [
   {
     id: 'lan',
     name: 'LAN feed',
-    detail: 'Serve the compiled file on your network for routers and other blockers. The same feed advertises the hub over mDNS and powers the mobile companion app.',
+    detail: 'Starts automatically — serves the compiled file on your network for routers and other blockers, advertises the hub over mDNS, and powers the mobile companion app.',
     format: null,
   },
   {

@@ -17,13 +17,14 @@ incremental later.
 | Endpoint | Method | Use |
 |---|---|---|
 | `/v1/status` | GET | Dashboard poll: rules counts, protection+daemon state, last compile, AI radar, SSE clients, feed URLs |
-| `/v1/events` | GET (SSE) | Live updates: `compile_completed`, `rules_updated`, `remote_control` → query invalidation |
+| `/v1/events` | GET (SSE) | Live updates: `compile_completed`, `rules_updated`, `remote_control` → query invalidation; `quarantine_added` → in-app banner + telemetry "new" marks |
 | `/v1/telemetry` | GET | Quarantine list + compilation history |
 | `/v1/check?domain=` | GET | Domain verdict + covering rule |
 | `/v1/protection` | GET/POST | Read/toggle daemon protection (503 = daemon stopped) |
 | `/v1/compile` | POST | Trigger compile (`alreadyRunning` shown as info) |
 | `/v1/control/cosmetics` | GET/POST | Cosmetics broadcast toggle |
 | `/v1/control/reload` | POST | Reload broadcast to browsers |
+| `/v1/control/daemon` | POST | Hub-only daemon start/stop (`{action}`); the dashboard offers Start when the daemon reads stopped |
 
 Feed files (`/dns.txt`, `/browser.txt`, `/ai-threats.txt`, `/threats.txt`) are linked
 from the status payload's `feedServer` URLs for copy/share, not rendered in-app.
@@ -31,7 +32,7 @@ from the status payload's `feedServer` URLs for copy/share, not rendered in-app.
 
 ## Auth model
 
-No server changes required. `feedToken` unset → LAN-open (documented model). Set →
+`feedToken` unset → LAN-open (documented model). Set →
 mutations and `/v1/events` need `Authorization: Bearer <token>`. React Native `fetch`
 sends no `Origin` header, so the origin guard treats the app like curl/HA — already
 permitted. Token is stored in `expo-secure-store`, never logged, attached only to the
@@ -42,8 +43,9 @@ configured base URL.
 1. **Manual** — host:port + optional token; "test connection" probes `/v1/status`
    (5s timeout) before saving. Works against desktop app and add-on today.
 2. **QR pairing** — `expo-camera` scans a QR rendered by the desktop app:
-   `{"v":1,"url":"http://<lanip>:9191","token":"<feedToken>"}` (token key present only
-   when configured).
+   `{"v":1,"url":"http://<lanip>:9191","urls":[…alternates…],"token":"<feedToken>"}`
+   (`token` present only when configured; `urls` present only on multi-homed
+   hosts — the app tries each address and keeps the first that answers).
 3. **mDNS discovery** — `react-native-zeroconf` browses `_blockingmachine._tcp.local.`;
    results appear as one-tap cards. TXT records: `api=v1`, `version`, `token=required|open`
    so the app knows to prompt for a token before probing mutations.
@@ -53,9 +55,15 @@ configured base URL.
 - `src/mdnsAdvertiser.ts` — publishes `_blockingmachine._tcp` on `startFeedServer`,
   unpublishes on stop; `bonjour-service` dependency. Failure is logged, never fatal —
   advertising is best-effort beside the feed itself.
-- `feed:getPairingPayload` IPC in `preload.ts` → `{ url, token? }` built from the feed
-  server's LAN address + `readSecret(storeRef, safeStorage, 'feedToken')`.
-- Settings pane "Pair mobile app" section renders the payload as a QR (`qrcode.react`).
+- `feed:getPairingPayload` IPC in `preload.ts` → `{ url, urls?, token? }` built from
+  the feed server's LAN addresses + `readSecret(storeRef, safeStorage, 'feedToken')`.
+- Settings pane "Pair mobile app" section renders the payload as a QR (`qrcode.react`);
+  if the feed server isn't running the block offers an inline start action, since the
+  QR is only useful while the server answers.
+- `autoStartFeedServer` defaults to on — pairing out of the box depends on it.
+- `POST /v1/control/daemon {action:'start'|'stop'}` — remote daemon lifecycle,
+  mirroring the tray's own calls (the dashboard's "daemon stopped" state would
+  otherwise be a dead end on mobile).
 - HA add-on stays manual-pair only this phase.
 
 ## App structure

@@ -544,7 +544,10 @@ const store = new Store<StoreSchema>({
     },
     autoStartFeedServer: {
       type: 'boolean',
-      default: false,
+      // On by default: the companion app has no pairing path without this, and
+      // making users hunt a checkbox before the QR works was the hookup gap.
+      // Users who explicitly untick it keep it off (the key is then present).
+      default: true,
     },
     feedToken: {
       type: 'string',
@@ -2123,20 +2126,25 @@ function broadcastSseEvent(eventName: string, data: any) {
   }
 }
 
-function getLocalLanIp(): string {
+function getLocalLanIps(): string[] {
   try {
     const nets = networkInterfaces();
+    const ips: string[] = [];
     for (const name of Object.keys(nets)) {
       for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal) {
-          return net.address;
+        if (net.family === 'IPv4' && !net.internal && !ips.includes(net.address)) {
+          ips.push(net.address);
         }
       }
     }
+    return ips;
   } catch {
-    // fallback
+    return [];
   }
-  return '127.0.0.1';
+}
+
+function getLocalLanIp(): string {
+  return getLocalLanIps()[0] ?? '127.0.0.1';
 }
 
 function getFeedServerStatus() {
@@ -2770,6 +2778,57 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           broadcastSseEvent('remote_control', { action: 'reload_rules' });
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ success: true, action: 'reload_rules', message: 'Reload signal broadcast to connected browsers' }));
+          return;
+        }
+
+        if (lowerPath === '/v1/control/daemon' || lowerPath === '/api/control/daemon') {
+          // Remote start/stop for the DNS daemon — the companion can see "daemon
+          // stopped" on the dashboard and needs a remedy that isn't walking to
+          // the Mac. Same lifecycle calls the tray uses.
+          if (rejectUnauthorisedMutation('Cross-origin control forbidden')) return;
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed' }));
+            return;
+          }
+          let daemonBody = '';
+          req.on('data', (chunk) => {
+            daemonBody += chunk;
+            if (daemonBody.length > 1e6) {
+              req.destroy();
+            }
+          });
+          req.on('end', async () => {
+            try {
+              const data = JSON.parse(daemonBody || '{}');
+              if (data.action !== 'start' && data.action !== 'stop') {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ success: false, error: 'Invalid payload — provide {"action":"start"|"stop"}' }));
+                return;
+              }
+              const result = data.action === 'start'
+                ? await daemonManager.start(daemonFeedFilePaths(storeRef))
+                : await daemonManager.stop();
+              if (!result.success) {
+                res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ success: false, error: result.message || 'Daemon refused the request' }));
+                return;
+              }
+              broadcastSseEvent('remote_control', { action: `daemon_${data.action}` });
+              await refreshTrayProtection();
+              const daemonStatus = await daemonManager.getStatus();
+              res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({
+                success: true,
+                action: data.action,
+                daemonStatus: daemonStatus.status,
+                message: result.message,
+              }));
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
+            }
+          });
           return;
         }
 
@@ -4349,12 +4408,20 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       const status = getFeedServerStatus();
       const token = readSecret(store, safeStorage, 'feedToken').trim();
       const url = `http://${getLocalLanIp()}:${feedServerPort}`;
+      // Multi-homed hosts (VPN, Docker/VM bridges) can order interfaces wrong —
+      // `urls` lets the app try every LAN address instead of trusting the first.
+      const urls = getLocalLanIps().map((ip) => `http://${ip}:${feedServerPort}`);
       return {
         success: true,
         running: status.isRunning,
         url,
         tokenConfigured: token.length > 0,
-        payload: JSON.stringify({ v: 1, url, ...(token ? { token } : {}) }),
+        payload: JSON.stringify({
+          v: 1,
+          url,
+          ...(urls.length > 1 ? { urls } : {}),
+          ...(token ? { token } : {}),
+        }),
       };
     });
 

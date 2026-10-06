@@ -24,6 +24,20 @@ describe('decodePairingPayload', () => {
     expect(() => decodePairingPayload('{"v":1,"url":"not a url !!"}')).toThrow();
   });
 
+  it('decodes alternate urls for multi-homed hubs and drops bad entries', () => {
+    const raw = JSON.stringify({
+      v: 1,
+      url: 'http://192.168.1.10:9191',
+      urls: ['http://192.168.1.10:9191', '10.8.0.2:9191', 'not a url !!', 42],
+    });
+    const payload = decodePairingPayload(raw);
+    expect(payload.url).toBe('http://192.168.1.10:9191');
+    expect(payload.urls).toEqual([
+      'http://192.168.1.10:9191',
+      'http://10.8.0.2:9191',
+    ]);
+  });
+
   it('round-trips through encodePairingPayload', () => {
     const payload = { url: 'http://hub.local:9191', token: 'tok' };
     expect(decodePairingPayload(encodePairingPayload(payload))).toEqual(payload);

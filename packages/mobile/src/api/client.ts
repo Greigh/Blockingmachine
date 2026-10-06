@@ -91,9 +91,11 @@ export class BlockingmachineClient {
   private async request<T>(
     path: string,
     init: { method?: string; body?: unknown } = {},
+    timeoutMs?: number,
   ): Promise<T> {
+    const budget = timeoutMs ?? this.timeoutMs;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), budget);
     try {
       const headers: Record<string, string> = { Accept: 'application/json' };
       if (this.token) headers.Authorization = `Bearer ${this.token}`;
@@ -132,7 +134,7 @@ export class BlockingmachineClient {
       if (err instanceof ApiError) throw err;
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new ApiError('unreachable', `Timed out after ${this.timeoutMs}ms`);
+        throw new ApiError('unreachable', `Timed out after ${budget}ms`);
       }
       throw new ApiError('unreachable', message);
     } finally {
@@ -183,5 +185,17 @@ export class BlockingmachineClient {
 
   reloadBrowsers(): Promise<ControlResult> {
     return this.request<ControlResult>('/v1/control/reload', { method: 'POST', body: {} });
+  }
+
+  /** Hub-only: /v1/control/daemon is not implemented by the HA add-on — it has no
+   *  daemon of its own. Expect a 404/server error there. The hub awaits the
+   *  daemon's control API before answering (up to ~6s on a cold spawn), so this
+   *  request carries a wider budget than the default. */
+  controlDaemon(action: 'start' | 'stop'): Promise<ControlResult> {
+    return this.request<ControlResult>(
+      '/v1/control/daemon',
+      { method: 'POST', body: { action } },
+      15_000,
+    );
   }
 }

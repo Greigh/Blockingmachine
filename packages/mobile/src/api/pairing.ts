@@ -9,6 +9,9 @@ import { normalizeBaseUrl } from './client';
 
 export interface PairingPayload {
   url: string;
+  /** Alternate LAN URLs for the same hub — emitted when the desktop host is
+   *  multi-homed (VPN, Docker bridges) and the first interface may be wrong. */
+  urls?: string[];
   token?: string;
 }
 
@@ -42,12 +45,30 @@ export function decodePairingPayload(raw: string): PairingPayload {
     throw new PairingError('Pairing payload is missing a server URL');
   }
   const url = normalizeBaseUrl(obj.url); // throws ApiError on a bad address
+  // Bad alternates are dropped rather than failing the whole scan — `url` alone
+  // still pins a working payload, matching what older desktop builds emit.
+  const urls = Array.isArray(obj.urls)
+    ? obj.urls
+        .map((u) => {
+          try {
+            return typeof u === 'string' ? normalizeBaseUrl(u) : null;
+          } catch {
+            return null;
+          }
+        })
+        .filter((u): u is string => !!u)
+    : undefined;
   const token =
     typeof obj.token === 'string' && obj.token.trim() ? obj.token.trim() : undefined;
-  return { url, token };
+  return { url, urls, token };
 }
 
 /** Serialise — used by the desktop side's tests to pin the contract both ways. */
 export function encodePairingPayload(payload: PairingPayload): string {
-  return JSON.stringify({ v: 1, url: payload.url, ...(payload.token ? { token: payload.token } : {}) });
+  return JSON.stringify({
+    v: 1,
+    url: payload.url,
+    ...(payload.urls?.length ? { urls: payload.urls } : {}),
+    ...(payload.token ? { token: payload.token } : {}),
+  });
 }

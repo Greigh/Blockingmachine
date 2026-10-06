@@ -19,6 +19,17 @@ export function formatTimestampMs(ms: number | null | undefined): string {
   return new Date(ms).toLocaleString();
 }
 
+export function relativeTime(iso: string | number): string {
+  const ms = Date.now() - (typeof iso === 'number' ? iso : Date.parse(iso));
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const m = Math.floor(ms / 60_000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 export function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);

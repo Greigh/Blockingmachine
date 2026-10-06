@@ -4,24 +4,44 @@
  */
 
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useMutation } from '@tanstack/react-query';
 import { useClient } from '../../src/api/useClient';
 import type { CheckResult } from '../../src/api/types';
 import { ActionButton, Card, Pill } from '../../src/components/ui';
+import { relativeTime } from '../../src/format';
 import { colors, spacing } from '../../src/theme';
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
 
+interface HistoryEntry {
+  domain: string;
+  blocked: boolean;
+  at: number;
+}
+
 export default function CheckScreen() {
   const client = useClient();
   const [domain, setDomain] = useState('');
+  // Session-scoped scratchpad — deduped by domain, newest first, capped at 10.
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const trimmed = domain.trim().toLowerCase();
   const valid = DOMAIN_RE.test(trimmed) && trimmed.length <= 253;
 
   const check = useMutation({
     mutationFn: (d: string) => client!.checkDomain(d),
+    onSuccess: (res, d) => {
+      const name = res.domain || d;
+      setHistory((prev) =>
+        [{ domain: name, blocked: res.blocked, at: Date.now() }, ...prev.filter((h) => h.domain !== name)].slice(0, 10),
+      );
+    },
   });
+
+  const runCheck = (d: string) => {
+    setDomain(d);
+    check.mutate(d);
+  };
 
   const result: CheckResult | undefined = check.data;
 
@@ -46,12 +66,12 @@ export default function CheckScreen() {
           keyboardType="url"
           value={domain}
           onChangeText={setDomain}
-          onSubmitEditing={() => valid && client && check.mutate(trimmed)}
+          onSubmitEditing={() => valid && client && runCheck(trimmed)}
           returnKeyType="search"
         />
         <ActionButton
           label={check.isPending ? 'Checking…' : 'Check'}
-          onPress={() => check.mutate(trimmed)}
+          onPress={() => runCheck(trimmed)}
           disabled={!valid || !client}
           loading={check.isPending}
         />
@@ -88,6 +108,27 @@ export default function CheckScreen() {
         </Card>
       ) : null}
 
+      {history.length > 0 ? (
+        <Card>
+          <Text style={styles.historyTitle}>Recent checks</Text>
+          {history.map((h) => (
+            <TouchableOpacity
+              key={h.domain}
+              style={styles.historyRow}
+              onPress={() => client && runCheck(h.domain)}
+              accessibilityRole="button"
+            >
+              <Pill
+                label={h.blocked ? 'BLOCKED' : 'allowed'}
+                tone={h.blocked ? 'bad' : 'ok'}
+              />
+              <Text style={styles.historyDomain}>{h.domain}</Text>
+              <Text style={styles.historyTime}>{relativeTime(h.at)}</Text>
+            </TouchableOpacity>
+          ))}
+        </Card>
+      ) : null}
+
       {!client ? (
         <Card>
           <Text style={styles.detail}>Add a server in Settings first.</Text>
@@ -118,4 +159,15 @@ const styles = StyleSheet.create({
   domain: { color: colors.text, fontSize: 17, fontWeight: '600', marginBottom: spacing.xs },
   detail: { color: colors.textMuted, fontSize: 13, marginTop: spacing.xs },
   errorText: { color: colors.danger, fontSize: 13 },
+  historyTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginBottom: spacing.xs },
+  historyRow: {
+    alignItems: 'center',
+    borderTopColor: colors.cardBorder,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  historyDomain: { color: colors.text, flex: 1, fontSize: 14 },
+  historyTime: { color: colors.textMuted, fontSize: 12 },
 });

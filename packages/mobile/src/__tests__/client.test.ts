@@ -105,6 +105,18 @@ describe('BlockingmachineClient', () => {
     expect(JSON.parse(init.body)).toEqual({ enabled: false });
   });
 
+  it('posts {action} to /v1/control/daemon and returns the daemon status', async () => {
+    const impl = jest.fn().mockResolvedValue(
+      jsonResponse(200, { success: true, action: 'start', daemonStatus: 'running' }),
+    );
+    const res = await clientWith(impl, 'tok').controlDaemon('start');
+    const [url, init] = impl.mock.calls[0];
+    expect(url).toBe('http://192.168.1.10:9191/v1/control/daemon');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ action: 'start' });
+    expect(res.daemonStatus).toBe('running');
+  });
+
   it('reports a compile already-in-progress as data, not an error', async () => {
     const impl = jest.fn().mockResolvedValue(
       jsonResponse(200, { success: true, alreadyRunning: true }),

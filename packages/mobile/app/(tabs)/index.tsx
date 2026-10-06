@@ -70,6 +70,11 @@ export default function DashboardScreen() {
     mutationFn: () => client!.reloadBrowsers(),
   });
 
+  const daemon = useMutation({
+    mutationFn: (action: 'start' | 'stop') => client!.controlDaemon(action),
+    onSettled: invalidate,
+  });
+
   if (!activeServer) {
     return (
       <View style={styles.empty}>
@@ -159,7 +164,7 @@ export default function DashboardScreen() {
           <Text style={styles.sectionTitle}>Protection</Text>
           <Switch
             value={Boolean(data?.protection?.enabled)}
-            disabled={protection.isPending}
+            disabled={protection.isPending || daemonStopped}
             onValueChange={(v) => protection.mutate(v)}
             trackColor={{ true: colors.accentDim }}
             thumbColor={data?.protection?.enabled ? colors.accent : colors.textMuted}
@@ -178,6 +183,24 @@ export default function DashboardScreen() {
             <Pill label={`daemon: ${data.protection.daemonStatus}`} tone="muted" />
           ) : null}
         </View>
+        {daemonStopped ? (
+          <View style={styles.buttonRow}>
+            <View style={styles.buttonFlex}>
+              <ActionButton
+                label={daemon.isPending ? 'Starting…' : 'Start DNS daemon'}
+                onPress={() => daemon.mutate('start')}
+                loading={daemon.isPending}
+                disabled={!client}
+              />
+            </View>
+          </View>
+        ) : null}
+        {daemon.error ? (
+          <Text style={styles.errorLine}>
+            Daemon {daemon.variables === 'stop' ? 'stop' : 'start'} failed:{' '}
+            {daemon.error.message}
+          </Text>
+        ) : null}
         {protection.error ? (
           <Text style={styles.errorLine}>
             {protection.error instanceof ApiError && protection.error.status === 503

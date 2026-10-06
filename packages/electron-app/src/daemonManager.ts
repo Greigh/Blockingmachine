@@ -103,6 +103,10 @@ export class DaemonManager {
         ? [path.join(process.resourcesPath, 'app.asar.unpacked', '.webpack', 'main', 'systemDaemon.cjs')]
         : []),
       path.resolve(__dirname, '../../system-daemon/dist/index.js'),
+      // Forge dev: __dirname lands in packages/electron-app/.webpack/main and the
+      // cwd is the package dir, so repo-root joins miss the workspace build.
+      path.resolve(__dirname, '../../../system-daemon/dist/index.js'),
+      path.resolve(process.cwd(), '../system-daemon/dist/index.js'),
       path.resolve(__dirname, '../packages/system-daemon/dist/index.js'),
       path.resolve(process.cwd(), 'packages/system-daemon/dist/index.js'),
       path.resolve(process.cwd(), 'node_modules/@blockingmachine/system-daemon/dist/index.js'),

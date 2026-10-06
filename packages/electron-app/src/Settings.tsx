@@ -1010,7 +1010,7 @@ const Settings: React.FC<SettingsProps> = ({
               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 <span style={{ fontWeight: 600 }}>Auto-Start Local LAN Feed Server on Launch</span>
                 <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
-                  Automatically start the HTTP feed server (port 9191) on app launch so Home Assistant, Pi-hole, and LAN devices can pull updated blocklists anytime.
+                  Automatically start the HTTP feed server (port 9191) on app launch so Home Assistant, Pi-hole, LAN devices — and the mobile companion — can reach this hub anytime. On by default; untick to keep the port closed.
                 </span>
               </div>
             </label>
