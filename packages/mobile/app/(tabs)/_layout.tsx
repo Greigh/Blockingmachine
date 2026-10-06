@@ -7,7 +7,7 @@ import { colors } from '../../src/theme';
 const icon =
   (name: keyof typeof Ionicons.glyphMap) =>
   ({ color, size }: { color: ColorValue; size: number }) =>
-    <Ionicons name={name} color={color} size={size} />;
+    <Ionicons name={name} color={color as string} size={size} />;
 
 export default function TabsLayout() {
   return (

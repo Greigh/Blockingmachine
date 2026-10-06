@@ -190,8 +190,16 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
   `test-renderer@^1` (not `react-test-renderer`). `typescript ~5.8.3` is kept for
   repo consistency — `expo install --check` flags all three mismatches; they are
   intentional.
-- Expo-managed dep pins come from `npx expo install --check` (bundledNativeModules);
-  async-storage is `2.2.0` not the npm latest.
+- **Deps track npm-latest, not Expo's bundled pins** (deliberate): `react-native
+  ^0.87.1` vs SDK-57's 0.86.3, `async-storage ^3.1.1` vs 2.2.0, `safe-area-context
+  ^5.10.1` vs ~5.7.0, `screens ^4.28.0` vs ~4.26.0. `expo install --check` flags all
+  of them — intentional. SDK 58 exists only as `next` (pre-release); the expo-*
+  modules stay on the `latest`/57 line. RN 0.87 relocated two entry points Expo 57
+  still addresses at 0.86 paths, bridged by postinstall patch
+  `scripts/patch-react-native-rn087.cjs` (`rn-get-polyfills` →
+  `@react-native/js-polyfills`; `@react-native/assets-registry` stub package →
+  `react-native/asset-registry`). Without it `expo export` hard-fails in
+  `@expo/metro-config` and every jest-expo suite dies on the unresolvable mock.
 - The workspace has **no `build` script** so `npm run build --workspaces` skips it —
   builds are `expo prebuild`/EAS. `test`/`lint`/`type-check` do run under
   `--workspaces`.
