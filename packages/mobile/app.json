@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "Blockingmachine",
+    "slug": "blockingmachine",
+    "version": "1.0.0-rc.9",
+    "orientation": "portrait",
+    "scheme": "blockingmachine",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0d1117",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0d1117"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.blockingmachine.mobile",
+      "infoPlist": {
+        "NSBonjourServices": ["_blockingmachine._tcp."],
+        "NSLocalNetworkUsageDescription": "Blockingmachine finds hub servers on your local network so the app can report status and control protection."
+      }
+    },
+    "android": {
+      "package": "com.blockingmachine.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#0d1117"
+      },
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "CHANGE_WIFI_MULTICAST_STATE"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Blockingmachine to scan a pairing QR code shown by the desktop app."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

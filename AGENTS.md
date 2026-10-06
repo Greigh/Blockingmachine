@@ -178,3 +178,28 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
 - The integration's Python tests mock the `homeassistant` package — new HA
   imports in the component need matching `sys.modules` mocks in
   `tests/test_coordinator_logic.py`.
+
+## Mobile companion (`packages/mobile`, on `feat/mobile-app`)
+
+- Expo SDK 57 + expo-router, iOS/Android remote for the `/v1` surface. Spec:
+  `docs/mobile-app-design.md`. **Dev-client builds only** — `react-native-zeroconf`
+  (mDNS) and `expo-camera` (QR) are native; Expo Go cannot run it.
+- **React is deliberately `^19.3.0`, not the template's 19.2.3** — the repo hoists
+  react@19.3.0; pinning 19.2.3 nests a second copy and every renderer test dies on
+  a null hooks dispatcher. `@testing-library/react-native` v14 renders through
+  `test-renderer@^1` (not `react-test-renderer`). `typescript ~5.8.3` is kept for
+  repo consistency — `expo install --check` flags all three mismatches; they are
+  intentional.
+- Expo-managed dep pins come from `npx expo install --check` (bundledNativeModules);
+  async-storage is `2.2.0` not the npm latest.
+- The workspace has **no `build` script** so `npm run build --workspaces` skips it —
+  builds are `expo prebuild`/EAS. `test`/`lint`/`type-check` do run under
+  `--workspaces`.
+- Server-side pairing surface: `mdnsAdvertiser.ts` publishes `_blockingmachine._tcp`
+  (TXT `api=v1`, `version`, `token=required|open`) while the feed server listens;
+  `get-feed-pairing-payload` IPC feeds the Settings QR (`{"v":1,"url","token?"}`).
+  bonjour-service bundles into `.webpack/main` — no externals config needed.
+- Client shape differences it must tolerate: add-on `/v1/check` answers
+  `matchedHost`/`source` where the hub answers `coveringRule`/`verdict`; add-on
+  `/v1/status` lacks `daemonStatus`/`recentTrackers`/`activeSseClients`; add-on
+  `/v1/protection` is POST-only (read protection via status).

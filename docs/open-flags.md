@@ -12,6 +12,14 @@ Nothing here is scheduled. The list exists so nothing is *relied on* silently.
 
 ## Open
 
+### 55. The mobile companion passed its JS-level gates but has never run on a device — mDNS, QR pairing, and the SSE stream are verified only to the Metro bundle boundary
+
+- **Where:** `packages/mobile` (new workspace on `feat/mobile-app`); `packages/electron-app/src/mdnsAdvertiser.ts` + the `get-feed-pairing-payload` IPC + the Settings QR block.
+- **What:** jest-expo tests (33) pin the API client contract, the SSE wire parser, QR payload decode, and the server store; `expo export` produces a clean iOS JS bundle; electron-app tsc/eslint/jest stay green. What none of that proves: a real device joining the LAN, resolving the mDNS service, rendering the camera scanner against the real QR, holding an SSE stream through screen-lock, or surviving the OS killing the socket. `react-native-zeroconf` in particular needs a dev-client build — its behavior under jest is mocked away entirely.
+- **Why left:** An on-device rehearsal needs a physical phone/simulator toolchain session that a code-only pass cannot substitute for; the branch deliberately lands everything up to that boundary.
+- **Fix shape:** `npx expo prebuild && npm run ios` (or `android`) on a dev-client build against the desktop hub: confirm discovery finds `_blockingmachine._tcp`, QR scan pairs (with and without a configured feedToken), the protection toggle round-trips, and the SSE stream survives backgrounding.
+- **Verify:** A device session log where each connection path produces a working dashboard; discrepancies become real bugs on the flag.
+
 ### 54. The macOS build is signed but not notarized — Gatekeeper blocks a fresh download until Apple credentials reach `osxNotarize`
 
 - **Where:** `packages/electron-app/forge.config.cjs` `packagerConfig.osxNotarize` (wired for `notarytool` with two auth paths: `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` for CI, `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` for local runs); `packagerConfig.osxSign` (Developer ID + hardened runtime, already active).

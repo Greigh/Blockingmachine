@@ -56,9 +56,11 @@
   },
   "dependencies": {
     "@blockingmachine/core": "^1.0.0-rc.9",
+    "bonjour-service": "^1.4.4",
     "electron-is-dev": "^3.0.1",
     "electron-store": "^11.0.2",
     "jszip": "^3.10.2",
+    "qrcode.react": "^4.2.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "recharts": "^3.10.1"

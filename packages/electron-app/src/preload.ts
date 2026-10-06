@@ -105,6 +105,14 @@ contextBridge.exposeInMainWorld('electron', {
   getFeedToken: () => ipcRenderer.invoke('get-feed-token') as Promise<{ configured: boolean }>,
   setFeedToken: (token: string) => ipcRenderer.invoke('set-feed-token', token) as Promise<{ success: boolean; unchanged?: boolean; error?: string }>,
   clearFeedToken: () => ipcRenderer.invoke('clear-feed-token') as Promise<{ success: boolean; error?: string }>,
+  getFeedPairingPayload: () =>
+    ipcRenderer.invoke('get-feed-pairing-payload') as Promise<{
+      success: boolean;
+      running: boolean;
+      url: string;
+      tokenConfigured: boolean;
+      payload: string;
+    }>,
   getLaunchOnStartup: () => ipcRenderer.invoke('get-launch-on-startup'),
   setLaunchOnStartup: (enabled: boolean) => ipcRenderer.invoke('set-launch-on-startup', enabled),
   getModuleContent: (moduleName: string) => ipcRenderer.invoke('get-module-content', moduleName) as Promise<string | null>,

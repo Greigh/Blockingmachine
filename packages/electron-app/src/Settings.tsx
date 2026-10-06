@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { BrandLogo } from './components/BrandLogo';
 import type { ElementHarvestSummary } from './elementHarvest';
 import type {
@@ -146,6 +147,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [feedToken, setFeedToken] = useState('');
   const [feedTokenConfigured, setFeedTokenConfigured] = useState(false);
   const [feedTokenMessage, setFeedTokenMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [pairingPayload, setPairingPayload] = useState<{ url: string; payload: string; running: boolean; tokenConfigured: boolean } | null>(null);
 
   // Path state variables
   const [savePath, setSavePath] = useState('');
@@ -342,6 +344,20 @@ const Settings: React.FC<SettingsProps> = ({
       safeSetTimeout(() => setFeedTokenMessage(null), 4000);
     } catch {
       setFeedTokenMessage({ text: 'Failed to clear feed token', type: 'error' });
+    }
+  };
+
+  const handleTogglePairingQr = async () => {
+    if (pairingPayload) {
+      setPairingPayload(null);
+      return;
+    }
+    if (!window.electron?.getFeedPairingPayload) return;
+    try {
+      const res = await window.electron.getFeedPairingPayload();
+      if (res?.success) setPairingPayload(res);
+    } catch (err) {
+      console.error('Failed to build pairing payload:', err);
     }
   };
 
@@ -1012,6 +1028,38 @@ const Settings: React.FC<SettingsProps> = ({
                 <p className={`setting-message ${feedTokenMessage.type}`} style={{ marginTop: '2px' }}>
                   {feedTokenMessage.text}
                 </p>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Pair Mobile App</span>
+              <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                The Blockingmachine iOS/Android app can scan a QR code instead of typing the
+                server address{feedTokenConfigured ? ' and token' : ''}. The hub also advertises
+                itself over mDNS (_blockingmachine._tcp) while the feed server is running.
+              </span>
+              <div>
+                <button type="button" className="browse-button secondary" onClick={() => void handleTogglePairingQr()}>
+                  {pairingPayload ? 'Hide pairing QR' : 'Show pairing QR'}
+                </button>
+              </div>
+              {pairingPayload && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
+                  {!pairingPayload.running && (
+                    <p className="setting-message error" style={{ marginTop: '2px' }}>
+                      The feed server is not running — start it before scanning, or the app won't reach anything.
+                    </p>
+                  )}
+                  <div style={{ alignSelf: 'flex-start', background: '#fff', padding: '12px', borderRadius: '8px' }}>
+                    <QRCodeSVG value={pairingPayload.payload} size={160} level="M" />
+                  </div>
+                  <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                    {pairingPayload.url}
+                    {pairingPayload.tokenConfigured
+                      ? ' — this code carries your feed token; treat it like a password.'
+                      : ' — no feed token is configured, so the code carries only the address.'}
+                  </span>
+                </div>
               )}
             </div>
           </div>
