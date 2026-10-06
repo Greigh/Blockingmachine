@@ -200,6 +200,22 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
   `@react-native/js-polyfills`; `@react-native/assets-registry` stub package →
   `react-native/asset-registry`). Without it `expo export` hard-fails in
   `@expo/metro-config` and every jest-expo suite dies on the unresolvable mock.
+  The same script carries the whole **Android-side bridge to AGP 9.2.1** (RN 0.87's
+  pinned AGP — requires Gradle 9.4.1; the generated wrapper's distributionUrl is
+  bumped by hand, `android/` is gitignored): `-Xskip-metadata-version-check` on the
+  included plugin builds (KGP-2.1 compilers vs Gradle's stdlib 2.3), removal of every
+  `kotlin-android` apply (AGP-9 built-in Kotlin owns the `kotlin` extension — the
+  external KGP casts to the deleted `BaseExtension`), AGP-8→9 DSL type swaps inside
+  expo's own Gradle plugin Kotlin sources (`BaseExtension`→`CommonExtension<*,…>`,
+  `LibraryExtension`→api.dsl, `flavorDimensions`/`singleVariant`/`versionName`
+  rewrites), a scan that strips `targetSdkVersion`/`versionCode`/`versionName` from
+  every module `android/build.gradle` (removed from the library DSL), `src/compose`
+  added to `kotlin.srcDirs` (built-in Kotlin ignores `java.srcDirs` additions), and
+  `gradle.properties` appends (`android.kotlinVersion=2.2.10` for KSP alignment,
+  `android.sourceset.disallowProvider=false`,
+  `android.disallowKotlinSourceSets=false`). `expo prebuild --clean` regenerates
+  `android/`, so every repo-side edit there is re-applied by the postinstall script —
+  verify `./gradlew assembleRelease` stays green rather than trusting a stale dir.
 - The workspace has **no `build` script** so `npm run build --workspaces` skips it —
   builds are `expo prebuild`/EAS. `test`/`lint`/`type-check` do run under
   `--workspaces`.
