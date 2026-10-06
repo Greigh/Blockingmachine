@@ -311,7 +311,6 @@ function firstSetOf(branch: string): Set<string> {
       i = skipQuantifier(branch, i);
       continue;
     }
-    i = skipQuantifier(branch, i);
     return firsts;
   }
   return firsts;

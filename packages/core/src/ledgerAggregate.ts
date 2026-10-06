@@ -34,6 +34,7 @@
  */
 
 import { isTierId, type TierHitCounts } from './tiers.js';
+import { leadingCountSplit, trailingCountSplit } from './utils/textScan.js';
 
 /** One rule's hits inside one session, as the browser reported them. */
 export interface BrowserLedgerHit {
@@ -448,9 +449,24 @@ export interface ParsedHitLedger {
  * `parseHitLedgerText` and `readTierLedger` so a comment means the same thing to both readers.
  */
 export function readLedgerHeaderLine(line: string): { key: string; value: string } | null {
-  const match = /^#\s*([A-Za-z][A-Za-z ]*):\s*(.+?)\s*$/.exec(line);
-  if (!match) return null;
-  return { key: match[1].trim().toLowerCase(), value: match[2] };
+  // The `# Key Name: value` shape walked by index rather than
+  // `/^#\s*([A-Za-z][A-Za-z ]*):\s*(.+?)\s*$/` — on a colon-less letter-and-space line the
+  // regex's key run backs off one character per start position, quadratically.
+  if (!line.startsWith('#')) return null;
+  const body = line.slice(1).trimStart();
+  const colon = body.indexOf(':');
+  if (colon <= 0) return null;
+  const rawKey = body.slice(0, colon);
+  for (let i = 0; i < rawKey.length; i += 1) {
+    const c = rawKey.charCodeAt(i);
+    const alpha = (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+    // The key is letters, with internal spaces allowed (`# Tier sessions:`); a space in
+    // the first position or any other character fails it, as `[A-Za-z][A-Za-z ]*` did.
+    if (!alpha && !(i > 0 && c === 32)) return null;
+  }
+  const rawValue = body.slice(colon + 1);
+  if (rawValue.length === 0) return null;
+  return { key: rawKey.trim().toLowerCase(), value: rawValue.trim() };
 }
 
 /**
@@ -541,14 +557,14 @@ export function parseHitLedgerText(text: string): ParsedHitLedger {
 
     let rule = line;
     let count = 1;
-    const leading = /^(\d+)\s+(.+)$/.exec(line);
-    const trailing = /^(.+?)\s+(\d+)$/.exec(line);
+    const leading = leadingCountSplit(line);
+    const trailing = leading ? null : trailingCountSplit(line);
     if (leading) {
-      count = parseInt(leading[1], 10);
-      rule = leading[2];
+      count = leading.count;
+      rule = leading.rest;
     } else if (trailing) {
-      rule = trailing[1];
-      count = parseInt(trailing[2], 10);
+      rule = trailing.head;
+      count = trailing.count;
     }
 
     const normalized = normalizeLedgerRule(rule);

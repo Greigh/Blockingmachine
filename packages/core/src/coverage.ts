@@ -40,6 +40,7 @@
  */
 
 import { refusedRegexReason } from './regexSafety.js';
+import { stripTrailingChars } from './utils/textScan.js';
 
 export interface RuleHitCount {
   /** The rule that matched, as it appears in the compiled list. */
@@ -313,11 +314,15 @@ export function requestUrlMatcher(rule: string): ((url: string) => boolean) | nu
 
     // Nothing but a separator and a terminator after the host is a whole-zone rule, not a
     // path rule: the caller has already established the scope, so this is only a guard.
-    if (tail.replace(/^\^/, '').replace(/\|+$/, '').length === 0) return null;
+    // The strips walk the string once — a `^`-lead then a `|`-run at the end — so a hostile
+    // tail of separator repeats cannot make the scan quadratic.
+    if (stripTrailingChars(tail.startsWith('^') ? tail.slice(1) : tail, '|').length === 0) {
+      return null;
+    }
 
     // The tail is what the path must look like, `^` included so the separator stays in the
     // pattern; a trailing `|` is syntax, not something to match.
-    const pathPattern = tail.replace(/\|+$/, '');
+    const pathPattern = stripTrailingChars(tail, '|');
     if (pathPattern.length > MAX_URL_PATTERN_LENGTH) return null;
     const path = new RegExp(compileGlobToRegex(pathPattern, SEPARATOR), 'i');
     return (url) => {
@@ -328,7 +333,7 @@ export function requestUrlMatcher(rule: string): ((url: string) => boolean) | nu
   }
 
   if (urlAnchored) {
-    const prefix = rest.replace(/\|+$/, '');
+    const prefix = stripTrailingChars(rest, '|');
     if (!prefix) return null;
     return (url) => url.toLowerCase().startsWith(prefix.toLowerCase());
   }
@@ -361,7 +366,9 @@ export function exceptionRequestUrlMatcher(rule: string): ((url: string) => bool
   const { body: pattern } = ruleParts(trimmed);
   const carriesSlash = pattern.includes('/');
   // A `^` with anything after it — `^*/x`, `^*.js`, `^|…` excluded — is a path constraint too.
-  const caretTail = (pattern.match(/\^([\s\S]*)$/)?.[1] ?? '').replace(/\|+$/, '');
+  // `indexOf` finds the leftmost `^` just as the regex's leftmost match did.
+  const caret = pattern.indexOf('^');
+  const caretTail = stripTrailingChars(caret < 0 ? '' : pattern.slice(caret + 1), '|');
   if (!carriesSlash && caretTail.length === 0) return null;
 
   // `@@` stripped: the matcher sees the same `||host/path` shape a blocking rule carries.
@@ -465,7 +472,7 @@ export function blockingRuleScope(rule: string): BlockingRuleScope | null {
 
   if (names.some((name) => INITIATOR_MODIFIERS.has(name))) return 'initiator';
   // A scheme is stripped first: `https://host` is a host rule, `https://host/a` is not.
-  const path = body.replace(/^https?:\/\//i, '').replace(/[\^|]+$/, '');
+  const path = stripTrailingChars(body.replace(/^https?:\/\//i, ''), '^|');
   if (isRegex || names.includes('path') || path.includes('/')) return 'path';
   if (names.length > 0) return 'request';
   return 'hostname';
@@ -833,9 +840,22 @@ export interface HotListDerivation {
  * than guess.
  */
 export function parseHotListDerivation(text: string): HotListDerivation | null {
-  const line = /^!\s*Derivation:\s*(.+)$/m.exec(text ?? '');
-  if (!line) return null;
-  const tokens = line[1].trim().split(/\s+/);
+  // The `! Derivation: …` line, found by walking lines rather than `/^!\s*Derivation:\s*(.+)$/m` —
+  // the regex's `\s*` could backtrack over a run of spaces line-start by line-start.
+  let captured: string | null = null;
+  for (const raw of (text ?? '').split('\n')) {
+    if (!raw.startsWith('!')) continue;
+    const afterBang = raw.slice(1).trimStart();
+    if (!afterBang.startsWith('Derivation:')) continue;
+    const rem = afterBang.slice('Derivation:'.length);
+    // `(.+)` needs at least one character after the whitespace run — a bare `!Derivation:`
+    // does not match and the scan continues to the next line, as the regex did.
+    if (rem.length === 0) continue;
+    captured = rem;
+    break;
+  }
+  if (captured === null) return null;
+  const tokens = captured.trim().split(/\s+/);
   const declared: HotListDerivation = {};
   for (let i = 0; i < tokens.length; i += 1) {
     const flag = tokens[i];

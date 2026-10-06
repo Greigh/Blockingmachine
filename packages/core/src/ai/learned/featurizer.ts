@@ -33,6 +33,7 @@ import {
   LEARNED_SUSPICIOUS_TLDS,
   LEARNED_TOKENS,
 } from './featureSpec.js';
+import { stripTrailingChars } from '../../utils/textScan.js';
 
 const VOWELS = new Set(['a', 'e', 'i', 'o', 'u']);
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
@@ -45,7 +46,8 @@ const UNICODE_DIGIT_RE = /\p{Nd}/u;
  * @throws on empty input (mirrors Python's ValueError).
  */
 export function normalizeLearnedDomain(domain: string): string {
-  const d = domain.trim().toLowerCase().replace(/\.+$/, '');
+  // The dot strip walks back once — `/\.+$/` rescanning a long dot run is quadratic.
+  const d = stripTrailingChars(domain.trim().toLowerCase(), '.');
   if (!d) {
     throw new Error('learned featurizer: empty domain');
   }

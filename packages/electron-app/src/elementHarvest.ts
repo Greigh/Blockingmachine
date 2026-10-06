@@ -19,7 +19,7 @@
  * reported rather than thrown on: a Settings pane that refused to open because one line of
  * a harvest was malformed would be a worse outcome than a pane that says "read 41 of 42".
  */
-import { readFileSync, statSync, unlinkSync } from 'fs';
+import { readFileSync, unlinkSync } from 'fs';
 import { parseHarvestFile, selectHarvestCandidates, type HarvestedElement } from '@blockingmachine/core';
 
 /**
@@ -76,7 +76,8 @@ export function summarizeElementHarvest(path: string): ElementHarvestSummary {
   if (!path) return empty;
   let text: string;
   try {
-    statSync(path);
+    // A plain read, not stat-then-read — the check-then-open window is a TOCTOU race, and
+    // readFileSync surfaces the same ENOENT the stat existed to find.
     text = readFileSync(path, 'utf8');
   } catch (error) {
     // ENOENT is the case worth reporting precisely — "the file you picked is gone" and
