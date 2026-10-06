@@ -1,0 +1,14 @@
+name: "blockingmachine-codeql"
+
+# Test suites deliberately hold the shapes the scanner looks for: unsafe-regex
+# fixtures for the ReDoS checker, unescaped filter patterns, intentionally odd
+# prototypes. Alerts there cannot point at shipped behavior, so test trees are
+# excluded rather than "fixed" into weaker fixtures. Build output is excluded
+# the same way — it is generated, not authored.
+paths-ignore:
+  - "**/__tests__/**"
+  - "**/dist/**"
+  - "**/.webpack/**"
+  - "**/out/**"
+  - "**/coverage/**"
+  - "**/node_modules/**"

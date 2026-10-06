@@ -214,9 +214,20 @@ export class CompiledDomainRuleSet {
         // and the refusal is *recorded* the same way. Without this the rule fails the URL
         // matcher, fails the domain extractor, and vanishes without a trace, which is the
         // safe direction for traffic but an invisible hole in the coverage report.
-        const exRegex = rawRule.match(/^@@\/(.+)\/([$].*)?$/);
-        if (exRegex) {
-          const refused = refusedRegexReason(exRegex[1]);
+        // `/^@@\/(.+)\/([$].*)?$/` walked by index: the greedy `.+` rescanning for a closing
+        // `/` on a rule full of `a/$` repeats is quadratic, while `lastIndexOf` is linear.
+        const exBody = (() => {
+          if (!rawRule.startsWith('@@/')) return null;
+          const rest = rawRule.slice(3);
+          const lastSlash = rest.lastIndexOf('/');
+          if (lastSlash < 0) return null;
+          const flags = rest.slice(lastSlash + 1);
+          if (flags.length > 0 && !flags.startsWith('$')) return null;
+          const bodyRe = rest.slice(0, lastSlash);
+          return bodyRe.length > 0 ? bodyRe : null;
+        })();
+        if (exBody) {
+          const refused = refusedRegexReason(exBody);
           if (refused) {
             this.refusedRules.push({ rule: rawRule, reason: refused });
             continue;

@@ -136,7 +136,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve, relative, basename, join } from 'node:path';
+import { resolve, relative, basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeJson } from './stdout.mjs';
 
@@ -808,7 +808,7 @@ export const GENERATED_TIER_SOURCE: { source: string; generatedAt: string; budge
           },
           null,
           2,
-        ).replace(/\n/g, '\n')
+        )
       : 'null'
   };
 `;
@@ -1477,7 +1477,6 @@ export function readCatalogueRuleCounts(path = CATALOGUE_PATH) {
   const text = readFileSync(path, 'utf8');
   const counts = {};
   const pattern = /id:\s*'(tier_[a-z]+)'[\s\S]*?ruleCount:\s*(\d+)/g;
-  let match;
   for (let found = pattern.exec(text); found; found = pattern.exec(text)) {
     counts[found[1]] = Number(found[2]);
   }

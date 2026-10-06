@@ -1125,7 +1125,7 @@ function matchCloakTarget(host: string): string | null {
 export function hostOfUrl(raw: string): string | null {
   if (typeof raw !== 'string' || raw.length === 0) return null;
   const trimmed = raw.trim();
-  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:') || trimmed.startsWith('javascript:')) {
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:') || trimmed.startsWith('javascript:') || trimmed.startsWith('vbscript:')) {
     return null;
   }
   for (const candidate of trimmed.split(',').slice(0, 4)) {

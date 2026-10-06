@@ -64,8 +64,9 @@ function isAuthorized(req, url) {
   if (tokenMatches(url.searchParams.get('token'))) return true;
 
   const header = req.headers.authorization || '';
-  const bearer = /^Bearer\s+(.+)$/i.exec(header);
-  if (bearer && tokenMatches(bearer[1].trim())) return true;
+  // `/^Bearer\s/` then index-slice: the `+`-anchored form rescans a space run quadratically.
+  const bearerPrefix = /^Bearer\s/i.exec(header);
+  if (bearerPrefix && tokenMatches(header.slice(bearerPrefix[0].length).trim())) return true;
 
   const basic = /^Basic\s+([A-Za-z0-9+/=]+)$/i.exec(header);
   if (basic) {
@@ -731,18 +732,22 @@ const server = createServer(async (req, res) => {
       if (body.length > 1e4) req.destroy();
     });
     req.on('end', async () => {
+      let parsed;
       try {
-        const parsed = JSON.parse(body || '{}');
-        if (typeof parsed.pauseMinutes === 'number' && parsed.pauseMinutes > 0 && parsed.pauseMinutes <= 1440) {
-          protection = { enabled: true, pausedUntil: Date.now() + parsed.pauseMinutes * 60 * 1000 };
-        } else if (typeof parsed.enabled === 'boolean') {
-          protection = { enabled: parsed.enabled, pausedUntil: null };
-        } else {
-          throw new Error('Provide {"enabled": true|false} or {"pauseMinutes": N}');
-        }
-      } catch (err) {
+        parsed = JSON.parse(body || '{}');
+      } catch {
+        // A parser error message carries position/stack detail; the client gets the contract.
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) }));
+        res.end(JSON.stringify({ success: false, error: 'Request body must be JSON' }));
+        return;
+      }
+      if (typeof parsed.pauseMinutes === 'number' && parsed.pauseMinutes > 0 && parsed.pauseMinutes <= 1440) {
+        protection = { enabled: true, pausedUntil: Date.now() + parsed.pauseMinutes * 60 * 1000 };
+      } else if (typeof parsed.enabled === 'boolean') {
+        protection = { enabled: parsed.enabled, pausedUntil: null };
+      } else {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: 'Provide {"enabled": true|false} or {"pauseMinutes": N}' }));
         return;
       }
       await persistJson(PROTECTION_PATH, protection);
@@ -772,7 +777,7 @@ const server = createServer(async (req, res) => {
     }
     let host = domain;
     let matched = null;
-    while (!matched && host.includes('.')) {
+    while (host.includes('.')) {
       if (verdicts.has(host)) {
         matched = { host, allowed: verdicts.get(host) };
         break;

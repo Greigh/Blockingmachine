@@ -39,7 +39,6 @@ import csv
 import json
 import sys
 from collections import Counter
-from datetime import datetime
 from pathlib import Path
 
 DECISIONS = {"allow", "review", "block"}
@@ -149,8 +148,6 @@ def review_sample(records: list[dict], n: int, seed: int = 42) -> list[dict]:
     Within a direction, domains closest to the block threshold sort
     first — the boundary is where labels are most informative.
     """
-    import random
-    rng = random.Random(seed)
     disag = [r for r in records if r["kind"] == "disagreement"]
     buckets: dict[tuple[str, str], list[dict]] = {}
     for r in disag:

@@ -65,6 +65,7 @@ import {
   readLedgerTierTally,
   type LedgerTierTally,
 } from './ledgerAggregate.js';
+import { leadingCountSplit, trailingCountSplit } from './utils/textScan.js';
 
 export interface TierFileInput {
   id: StaticTierId;
@@ -606,14 +607,14 @@ export function readTierLedger(
 
     let count = 1;
     let rule = line;
-    const leading = /^(\d+)\s+(.+)$/.exec(line);
-    const trailing = /^(.+?)\s+(\d+)$/.exec(line);
+    const leading = leadingCountSplit(line);
+    const trailing = leading ? null : trailingCountSplit(line);
     if (leading) {
-      count = Number(leading[1]);
-      rule = leading[2];
+      count = leading.count;
+      rule = leading.rest;
     } else if (trailing) {
-      rule = trailing[1];
-      count = Number(trailing[2]);
+      rule = trailing.head;
+      count = trailing.count;
     }
     if (!Number.isFinite(count) || count <= 0) {
       skipped += 1;

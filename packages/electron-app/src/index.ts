@@ -2694,7 +2694,11 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
             detail: parsed.detail,
           });
           storeRef.set('deployRefreshReports', reports);
-          console.log(`[Deploy Report] ${parsed.target}: scheduled refresh ${parsed.ok ? 'ok' : 'FAILED'}${parsed.detail ? ` — ${parsed.detail}` : ''}`);
+          // `target` is allowlisted upstream and `detail` already has control characters
+          // stripped — the log-time pass is belt and braces against a parser that ever
+          // stops doing it, so a report can never smuggle a forged log line.
+          const logSafe = (v: string) => v.replace(/[\x00-\x1f\x7f]+/g, ' ');
+          console.log(`[Deploy Report] ${logSafe(parsed.target)}: scheduled refresh ${parsed.ok ? 'ok' : 'FAILED'}${parsed.detail ? ` — ${logSafe(parsed.detail)}` : ''}`);
           // A mounted pane holds a snapshot whose `refreshReport` was stamped at check time —
           // minutes or days stale. Fold the new report into the stored snapshot and re-publish
           // it through the channel the view already subscribes to, so a fail report lands on

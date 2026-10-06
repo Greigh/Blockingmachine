@@ -23,7 +23,7 @@ import argparse
 import json
 import random
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import lightgbm as lgb
