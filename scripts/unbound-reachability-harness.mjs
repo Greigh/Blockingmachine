@@ -182,7 +182,7 @@ record('unverified', 'the file is served but no resolver has been queried',
 
 // What the reference picker does with the addresses the rig supplied.
 console.log('\n  reference selection');
-for (const candidate of [deployed, bare, swallow].filter(Boolean)) {
+for (const candidate of [deployed, bare, swallow, explicitReference].filter(Boolean)) {
   const tested = address(deployed);
   const picked = pickReferenceTarget(tested, candidate, []);
   console.log(`      reference=${candidate.padEnd(16)} -> ${picked.ok ? `usable (${picked.reference.source})` : `refused: ${picked.message}`}`);

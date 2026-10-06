@@ -146,6 +146,7 @@ def check_cert(domain: str) -> int | None:
     """1 if the TLS cert comes from a free CA, 0 otherwise, None on failure."""
     try:
         ctx = ssl.create_default_context()
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         with socket.create_connection((domain, 443), timeout=5) as sock:
             with ctx.wrap_socket(sock, server_hostname=domain) as ssock:
                 issuer = str(ssock.getpeercert().get("issuer", "")).lower()
