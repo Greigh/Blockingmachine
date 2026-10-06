@@ -402,6 +402,7 @@ describe('Electron App Core Utilities & IPC Logic', () => {
         'AI Radar',
         'Threat Quarantine',
         'Deploy & Sync',
+        'Mobile Companion',
         'One compile, many formats',
       ]);
       for (const item of ONBOARDING_HIGHLIGHTS) {

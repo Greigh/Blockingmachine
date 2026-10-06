@@ -114,6 +114,14 @@ const OnboardingHighlightIcon: React.FC<{ name: OnboardingIcon }> = ({ name }) =
       </svg>
     );
   }
+  if (name === 'companion') {
+    return (
+      <svg {...common}>
+        <rect x="7" y="2" width="10" height="20" rx="2" />
+        <path d="M11 18h2" />
+      </svg>
+    );
+  }
   return (
     <svg {...common}>
       <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
@@ -575,7 +583,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <h2 className="onboarding-title">You're All Set!</h2>
                 <p className="onboarding-desc">
                   Your workspace is ready. Compile a list, then open Deploy & Sync to connect
-                  the sinkhole. AI Radar, Threat Quarantine, and the Unified Inspector stay in the sidebar.
+                  the sinkhole. AI Radar, Threat Quarantine, and the Unified Inspector stay in
+                  the sidebar — and Settings → Pair mobile app shows the QR that connects the
+                  companion app to this hub.
                 </p>
               </div>
 
