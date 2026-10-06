@@ -209,8 +209,11 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
   expo's own Gradle plugin Kotlin sources (`BaseExtension`→`CommonExtension<*,…>`,
   `LibraryExtension`→api.dsl, `flavorDimensions`/`singleVariant`/`versionName`
   rewrites), a scan that strips `targetSdkVersion`/`versionCode`/`versionName` from
-  every module `android/build.gradle` (removed from the library DSL), `src/compose`
-  added to `kotlin.srcDirs` (built-in Kotlin ignores `java.srcDirs` additions), and
+  every module `android/build.gradle` (removed from the library DSL), Kotlin-source
+  dirs built-in Kotlin would miss (`src/compose` in expo-modules-core, `src/main` in
+  `@expo/log-box`, and the autolinking-generated package-list/inline-module dirs —
+  all were registered via `java.srcDirs`, which built-in Kotlin ignores →
+  `ExpoModulesPackageList` `ClassNotFoundException` at app launch), and
   `gradle.properties` appends (`android.kotlinVersion=2.2.10` for KSP alignment,
   `android.sourceset.disallowProvider=false`,
   `android.disallowKotlinSourceSets=false`). `expo prebuild --clean` regenerates
@@ -219,6 +222,13 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
 - The workspace has **no `build` script** so `npm run build --workspaces` skips it —
   builds are `expo prebuild`/EAS. `test`/`lint`/`type-check` do run under
   `--workspaces`.
+- **`usesCleartextTraffic: true` in `app.json` is load-bearing** — every endpoint is
+  a user-supplied LAN `http://` host; Android's default network policy blocks them
+  all. iOS parity rides the `NSAppTransportSecurity`/`NSAllowsArbitraryLoads`
+  infoPlist entry. `react-native-zeroconf@0.17` exports the `Zeroconf` *class* —
+  `discovery.ts` instantiates + caches it (per-instance DeviceEventEmitter
+  listeners). Emulator rehearsal caveat: the virtual NAT blocks host multicast, so
+  mDNS "Find on network" runs NSD but can never resolve — physical-device check.
 - Server-side pairing surface: `mdnsAdvertiser.ts` publishes `_blockingmachine._tcp`
   (TXT `api=v1`, `version`, `token=required|open`) while the feed server listens;
   `get-feed-pairing-payload` IPC feeds the Settings QR (`{"v":1,"url","token?"}`).
