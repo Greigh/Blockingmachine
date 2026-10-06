@@ -18,11 +18,15 @@
       "bundleIdentifier": "com.blockingmachine.mobile",
       "infoPlist": {
         "NSBonjourServices": ["_blockingmachine._tcp."],
-        "NSLocalNetworkUsageDescription": "Blockingmachine finds hub servers on your local network so the app can report status and control protection."
+        "NSLocalNetworkUsageDescription": "Blockingmachine finds hub servers on your local network so the app can report status and control protection.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
       }
     },
     "android": {
       "package": "com.blockingmachine.mobile",
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#0d1117"

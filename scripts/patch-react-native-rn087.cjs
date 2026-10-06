@@ -141,6 +141,18 @@ const AGP9_SOURCE_PATCHES = [
     ],
   },
   {
+    file: '@expo/log-box/android/build.gradle',
+    skipIf: 'kotlin.srcDirs += "src/main"',
+    replacements: [
+      // Kotlin sources live in src/main/ and were registered via java.srcDirs —
+      // built-in Kotlin never compiles them. Register the same dir on kotlin.srcDirs.
+      [
+        '      java.srcDirs += "src/main"',
+        '      java.srcDirs += "src/main"\n      kotlin.srcDirs += "src/main"',
+      ],
+    ],
+  },
+  {
     file: 'expo-modules-core/android/build.gradle',
     skipIf: 'srcDirs += shouldIncludeCompose',
     replacements: [
@@ -166,6 +178,7 @@ const AGP9_SOURCE_PATCHES = [
   },
   {
     file: 'expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-plugin/src/main/kotlin/expo/modules/plugin/ExpoAutolinkingPlugin.kt',
+    skipIf: '.kotlin\n        .srcDirs(getPackageListDir(project)',
     replacements: [
       [
         'import com.android.build.gradle.BaseExtension',
@@ -183,6 +196,13 @@ const AGP9_SOURCE_PATCHES = [
       [
         'consumerAndroid.flavorDimensions(*consumerDimensions.toTypedArray())',
         'consumerAndroid.flavorDimensions.addAll(consumerDimensions.filter { it !in consumerAndroid.flavorDimensions })',
+      ],
+      // Built-in Kotlin compiles kotlin.srcDirs, not java.srcDirs — the generated
+      // ExpoModulesPackageList + inline modules must register on both or they are
+      // never compiled (runtime ClassNotFoundException at app launch).
+      [
+        `.java\n        .srcDirs(getPackageListDir(project), getInlineModulesDir(project))`,
+        `.java\n        .srcDirs(getPackageListDir(project), getInlineModulesDir(project))\n      ext\n        .sourceSets\n        .getByName("main")\n        .kotlin\n        .srcDirs(getPackageListDir(project), getInlineModulesDir(project))`,
       ],
     ],
   },

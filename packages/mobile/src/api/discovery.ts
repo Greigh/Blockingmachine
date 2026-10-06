@@ -52,14 +52,23 @@ interface ZeroconfModule {
   removeListener?: (event: string, cb: (...args: any[]) => void) => void;
 }
 
+let zeroconfInstance: ZeroconfModule | null | undefined;
+
 function loadZeroconf(): ZeroconfModule | null {
+  if (zeroconfInstance !== undefined) return zeroconfInstance;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('react-native-zeroconf');
-    return (mod?.default ?? mod) as ZeroconfModule;
+    // v0.17+ exports the Zeroconf *class* as default — older releases exported a
+    // singleton. The constructor throws when the native module isn't linked, so
+    // instantiating here doubles as the availability check. Cached: each instance
+    // registers DeviceEventEmitter listeners, so repeated construction leaks them.
+    const Klass = (mod?.default ?? mod) as new () => ZeroconfModule;
+    zeroconfInstance = new Klass();
   } catch {
-    return null;
+    zeroconfInstance = null;
   }
+  return zeroconfInstance;
 }
 
 export function isDiscoveryAvailable(): boolean {
@@ -70,13 +79,19 @@ function toDiscovered(svc: ZeroconfService): DiscoveredServer | null {
   const addresses = (svc.addresses ?? []).filter((a) => typeof a === 'string' && a.length > 0);
   const host = svc.host ?? addresses[0];
   if (!host || typeof svc.port !== 'number' || svc.port <= 0) return null;
-  const txt = (svc.txt ?? {}) as DiscoveredServer['txt'];
+  // TXT arrives either as a record or as [key, value] pairs depending on the
+  // resolver path — normalize to a record before reading token/version.
+  const rawTxt = svc.txt;
+  const txt: Record<string, unknown> = Array.isArray(rawTxt)
+    ? Object.fromEntries(rawTxt as [string, unknown][])
+    : ((rawTxt ?? {}) as Record<string, unknown>);
+  const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
   return {
     name: svc.name ?? svc.fullName ?? host,
     host,
     port: svc.port,
     addresses,
-    txt: { api: txt.api, version: txt.version, token: txt.token },
+    txt: { api: str(txt.api), version: str(txt.version), token: str(txt.token) },
   };
 }
 
