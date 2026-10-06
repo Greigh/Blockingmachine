@@ -19,6 +19,7 @@ export type OnboardingIcon =
   | 'radar'
   | 'quarantine'
   | 'deploy'
+  | 'companion'
   | 'export';
 
 export interface OnboardingHighlight {
@@ -51,7 +52,12 @@ export const ONBOARDING_HIGHLIGHTS: OnboardingHighlight[] = [
   {
     icon: 'deploy',
     title: 'Deploy & Sync',
-    body: 'Push a compiled list to Pi-hole, AdGuard Home, Home Assistant, or a LAN feed, and reload after each compile.',
+    body: 'Push a compiled list to Pi-hole, AdGuard Home, BIND, Unbound, dnsmasq, Privoxy, Shadowrocket, Home Assistant, a managed local DNS daemon, or a LAN feed — and reload after each compile.',
+  },
+  {
+    icon: 'companion',
+    title: 'Mobile Companion',
+    body: 'Pair the iOS/Android app by QR code or let it find this hub on the LAN. Check coverage, watch live telemetry, and toggle protection from your phone.',
   },
   {
     icon: 'export',
@@ -85,7 +91,7 @@ export const DEPLOY_SETUP_OPTIONS: DeploySetupOption[] = [
   {
     id: 'lan',
     name: 'LAN feed',
-    detail: 'Serve the compiled file on your network for routers and other blockers. Turn the feed on in Deploy & Sync.',
+    detail: 'Serve the compiled file on your network for routers and other blockers. The same feed advertises the hub over mDNS and powers the mobile companion app.',
     format: null,
   },
   {
