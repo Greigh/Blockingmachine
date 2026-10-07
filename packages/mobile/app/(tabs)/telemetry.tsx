@@ -3,13 +3,15 @@
  * telemetry aggregate. The add-on serves a thinner payload; missing sections hide.
  */
 
-import React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
+import { useIsFocused } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useClient } from '../../src/api/useClient';
 import { useServerEvents, type ServerEventAlert } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
-import { Card, ErrorBanner, Pill } from '../../src/components/ui';
+import { Card, ErrorBanner, Pill, Skeleton } from '../../src/components/ui';
 import { formatTimestamp, relativeTime } from '../../src/format';
 import { colors, spacing } from '../../src/theme';
 
@@ -40,9 +42,22 @@ function describeEvent(e: ServerEventAlert): string {
 
 export default function TelemetryScreen() {
   const client = useClient();
+  const insets = useSafeAreaInsets();
+  const [refreshing, setRefreshing] = useState(false);
   const { activeServer } = useServers();
-  const { alert, recent } = useServerEvents();
+  const { alert, recent, dismissAlert } = useServerEvents();
   const baseUrl = activeServer?.baseUrl ?? 'none';
+
+  // Leaving the tab acknowledges the quarantine alert — clears the tab badge
+  // and stops the "new" pills. The banner's ✕ is the other dismissal path.
+  const focused = useIsFocused();
+  const wasFocused = useRef(false);
+  useEffect(() => {
+    if (wasFocused.current && !focused && alert?.event === 'quarantine_added') {
+      dismissAlert();
+    }
+    wasFocused.current = focused;
+  }, [focused, alert, dismissAlert]);
 
   // Domains carried by the latest quarantine_added broadcast get a "new" pill
   // until the alert is dismissed — the screen the dashboard banner routes to.
@@ -61,8 +76,29 @@ export default function TelemetryScreen() {
 
   const data = telemetry.data;
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await telemetry.refetch();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => void onRefresh()}
+          tintColor={colors.textMuted}
+          colors={[colors.accent]}
+          progressBackgroundColor={colors.card}
+        />
+      }
+    >
       <Text style={styles.title}>Telemetry</Text>
       <Text style={styles.subtitle}>
         Threat quarantine, compile history, and browser-reported counters.
@@ -79,6 +115,32 @@ export default function TelemetryScreen() {
         <Card>
           <Text style={styles.meta}>Add a server in Settings first.</Text>
         </Card>
+      ) : null}
+
+      {telemetry.isLoading && !data ? (
+        <>
+          <Card>
+            <Skeleton width="52%" height={20} />
+            {[0, 1, 2].map((i) => (
+              <View key={i} style={styles.threatRow}>
+                <View style={{ flex: 1 }}>
+                  <Skeleton width="60%" height={16} />
+                  <Skeleton width="80%" height={12} style={{ marginTop: spacing.xs }} />
+                </View>
+                <Skeleton width={52} height={24} />
+              </View>
+            ))}
+          </Card>
+          <Card>
+            <Skeleton width="44%" height={20} />
+            {[0, 1].map((i) => (
+              <View key={i} style={styles.historyRow}>
+                <Skeleton width="50%" height={14} />
+                <Skeleton width="70%" height={12} style={{ marginTop: spacing.xs }} />
+              </View>
+            ))}
+          </Card>
+        </>
       ) : null}
 
       {recent.length > 0 ? (
@@ -189,5 +251,10 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   trackerDomain: { color: colors.textMuted, fontSize: 13 },
-  meta: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
+  meta: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    marginTop: 2,
+  },
 });

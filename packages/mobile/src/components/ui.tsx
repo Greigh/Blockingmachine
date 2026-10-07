@@ -1,13 +1,17 @@
-/** Small shared UI primitives — card, status pill, action button, error banner. */
+/** Small shared UI primitives — card, status pill, action button, error banner, skeleton. */
 
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Pressable,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
+  type DimensionValue,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { haptics } from '../haptics';
 import { colors, spacing } from '../theme';
 
 export function Card(props: { children: React.ReactNode; style?: object }) {
@@ -35,14 +39,19 @@ export function ActionButton(props: {
   const tone = props.tone ?? 'primary';
   const disabled = props.disabled || props.loading;
   return (
-    <TouchableOpacity
+    <Pressable
       accessibilityRole="button"
       disabled={disabled}
-      onPress={props.onPress}
-      style={[
+      android_ripple={{ color: 'rgba(255,255,255,0.12)' }}
+      onPress={() => {
+        haptics.tap();
+        props.onPress();
+      }}
+      style={({ pressed }) => [
         styles.button,
         styles[`button_${tone}` as const],
         disabled && styles.buttonDisabled,
+        pressed && !disabled && styles.buttonPressed,
       ]}
     >
       {props.loading ? (
@@ -50,20 +59,50 @@ export function ActionButton(props: {
       ) : (
         <Text style={styles.buttonText}>{props.label}</Text>
       )}
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
 export function ErrorBanner(props: { message: string; onRetry?: () => void }) {
   return (
     <View style={styles.errorBanner}>
+      <Ionicons name="alert-circle-outline" size={18} color={colors.danger} />
       <Text style={styles.errorText}>{props.message}</Text>
       {props.onRetry ? (
-        <TouchableOpacity onPress={props.onRetry} accessibilityRole="button">
+        <Pressable onPress={props.onRetry} accessibilityRole="button" hitSlop={8}>
           <Text style={styles.errorRetry}>Retry</Text>
-        </TouchableOpacity>
+        </Pressable>
       ) : null}
     </View>
+  );
+}
+
+/** Pulsing placeholder block for loading states — sized to the content it replaces. */
+export function Skeleton(props: {
+  width?: DimensionValue;
+  height?: number;
+  style?: object;
+}) {
+  const opacity = useRef(new Animated.Value(0.35)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 0.7, duration: 700, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0.35, duration: 700, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [opacity]);
+  return (
+    <Animated.View
+      style={[
+        styles.skeleton,
+        { height: props.height ?? 14, width: props.width ?? '100%' },
+        props.style,
+        { opacity },
+      ]}
+    />
   );
 }
 
@@ -109,6 +148,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   buttonDisabled: { opacity: 0.5 },
+  buttonPressed: { opacity: 0.75 },
   buttonText: { color: colors.text, fontSize: 15, fontWeight: '600' },
   errorBanner: {
     alignItems: 'center',
@@ -117,9 +157,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: spacing.sm,
     marginBottom: spacing.md,
     padding: spacing.md,
+  },
+  skeleton: {
+    backgroundColor: colors.cardBorder,
+    borderRadius: 6,
   },
   errorRetry: { color: colors.info, fontWeight: '600', marginLeft: spacing.md },
   errorText: { color: colors.text, flex: 1 },

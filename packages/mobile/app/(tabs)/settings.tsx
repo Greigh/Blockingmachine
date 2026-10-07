@@ -7,16 +7,18 @@
 import React, { useState } from 'react';
 import {
   Alert,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { router } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useClient } from '../../src/api/useClient';
 import { useServers } from '../../src/state/servers';
 import { ActionButton, Card, Pill } from '../../src/components/ui';
@@ -37,6 +39,7 @@ function formatSeen(iso: string): string {
 export default function SettingsScreen() {
   const { servers, activeServerId, activeToken, setActive, removeServer, setToken } =
     useServers();
+  const insets = useSafeAreaInsets();
   const client = useClient();
   const [tokenDraft, setTokenDraft] = useState<string | null>(null);
 
@@ -61,46 +64,61 @@ export default function SettingsScreen() {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
+    >
       <Text style={styles.title}>Settings</Text>
 
       <Card>
         <View style={styles.rowBetween}>
           <Text style={styles.sectionTitle}>Servers</Text>
-          <TouchableOpacity
+          <Pressable
             onPress={() => router.push('/add-server')}
             accessibilityRole="button"
+            hitSlop={8}
           >
             <Text style={styles.link}>Add</Text>
-          </TouchableOpacity>
+          </Pressable>
         </View>
         {servers.length === 0 ? (
           <Text style={styles.meta}>No servers yet — add one to get started.</Text>
         ) : (
           servers.map((s) => (
-            <View key={s.id} style={styles.serverRow}>
-              <TouchableOpacity
-                style={{ flex: 1 }}
+            <ReanimatedSwipeable
+              key={s.id}
+              friction={2}
+              rightThreshold={40}
+              renderRightActions={() => (
+                <Pressable
+                  style={styles.swipeDelete}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${s.label || s.baseUrl}`}
+                  onPress={() => confirmRemove(s.id, s.label || s.baseUrl)}
+                >
+                  <Ionicons name="trash-outline" size={20} color={colors.text} />
+                  <Text style={styles.swipeDeleteText}>Remove</Text>
+                </Pressable>
+              )}
+            >
+              <Pressable
+                style={styles.serverRow}
+                android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
                 onPress={() => void setActive(s.id)}
                 accessibilityRole="button"
               >
-                <View style={styles.serverTitleRow}>
-                  <Text style={styles.serverLabel}>{s.label || s.baseUrl}</Text>
-                  {s.id === activeServerId ? <Pill label="active" tone="ok" /> : null}
+                <View style={{ flex: 1 }}>
+                  <View style={styles.serverTitleRow}>
+                    <Text style={styles.serverLabel}>{s.label || s.baseUrl}</Text>
+                    {s.id === activeServerId ? <Pill label="active" tone="ok" /> : null}
+                  </View>
+                  <Text style={styles.meta}>
+                    {s.baseUrl} · {ORIGIN_LABEL[s.origin] ?? s.origin}
+                    {s.lastOkAt ? formatSeen(s.lastOkAt) : ''}
+                  </Text>
                 </View>
-                <Text style={styles.meta}>
-                  {s.baseUrl} · {ORIGIN_LABEL[s.origin] ?? s.origin}
-                  {s.lastOkAt ? formatSeen(s.lastOkAt) : ''}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => confirmRemove(s.id, s.label || s.baseUrl)}
-                accessibilityRole="button"
-                hitSlop={8}
-              >
-                <Ionicons name="trash-outline" size={18} color={colors.danger} />
-              </TouchableOpacity>
-            </View>
+              </Pressable>
+            </ReanimatedSwipeable>
           ))
         )}
       </Card>
@@ -176,13 +194,24 @@ const styles = StyleSheet.create({
   },
   link: { color: colors.info, fontSize: 15, fontWeight: '600' },
   serverRow: {
-    alignItems: 'center',
+    backgroundColor: colors.card,
     borderTopColor: colors.cardBorder,
     borderTopWidth: 1,
     flexDirection: 'row',
     gap: spacing.sm,
     paddingVertical: spacing.sm,
   },
+  swipeDelete: {
+    alignItems: 'center',
+    backgroundColor: colors.danger,
+    borderTopColor: colors.cardBorder,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  swipeDeleteText: { color: colors.text, fontSize: 13, fontWeight: '600' },
   serverTitleRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
   serverLabel: { color: colors.text, fontSize: 15, fontWeight: '600' },
   meta: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
