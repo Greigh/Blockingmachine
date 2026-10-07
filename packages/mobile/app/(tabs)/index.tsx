@@ -12,6 +12,7 @@ import { ApiError } from '../../src/api/client';
 import { useClient } from '../../src/api/useClient';
 import { useServerEvents } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
+import { useFilter } from '../../src/state/filter';
 import { ActionButton, Card, ErrorBanner, Pill, Skeleton } from '../../src/components/ui';
 import { formatTimestamp, formatUptime } from '../../src/format';
 import { haptics } from '../../src/haptics';
@@ -33,6 +34,7 @@ export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const { connected, alert, dismissAlert } = useServerEvents();
   const { activeServer, markOk } = useServers();
+  const filter = useFilter();
   const queryClient = useQueryClient();
   const baseUrl = activeServer?.baseUrl ?? 'none';
 
@@ -85,10 +87,17 @@ export default function DashboardScreen() {
   if (!activeServer) {
     return (
       <View style={styles.empty}>
-        <Text style={styles.emptyTitle}>No server configured</Text>
-        <Text style={styles.emptyText}>
-          Pair with your Blockingmachine hub or Home Assistant add-on to get started.
+        <Text style={styles.emptyTitle}>
+          {filter.ready ? 'Standalone mode' : 'No server configured'}
         </Text>
+        <Text style={styles.emptyText}>
+          {filter.ready && filter.meta
+            ? `${filter.meta.ruleCount.toLocaleString()} rules on this device — domain checks work without a hub. Pair with a hub for live telemetry and remote control.`
+            : 'Pair with your Blockingmachine hub or Home Assistant add-on to get started.'}
+        </Text>
+        {filter.ready ? (
+          <Pill label="on-device rules active" tone="ok" />
+        ) : null}
         <ActionButton label="Add server" onPress={() => router.push('/add-server')} />
       </View>
     );

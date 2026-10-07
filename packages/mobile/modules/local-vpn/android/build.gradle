@@ -1,0 +1,17 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.blockingmachine.localvpn'
+version = '1.0.0'
+
+android {
+  namespace "com.blockingmachine.localvpn"
+  defaultConfig {
+  }
+}
+
+dependencies {
+  implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0"
+}

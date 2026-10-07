@@ -32,6 +32,11 @@
       "require": "./dist/ai/elementCorpusHarvest.js"
     },
     "./package.json": "./package.json",
+    "./domain-evaluator": {
+      "types": "./dist/ai/domainEvaluator.d.ts",
+      "import": "./dist/ai/domainEvaluator.js",
+      "require": "./dist/ai/domainEvaluator.js"
+    },
     "./ruleHost": {
       "types": "./dist/ruleHost.d.ts",
       "import": "./dist/ruleHost.js",

@@ -1,9 +1,15 @@
-# Expo / React Native build artifacts (prebuild output is generated, not committed)
+# Expo / React Native build artifacts (prebuild output is generated, not committed).
+# Anchored to the package root — modules/*/android/ is REAL source (the local
+# Expo module lives there) and must not be ignored.
 .expo/
-ios/
-android/
+/ios/
+/android/
 dist/
 web-build/
+
+# Local-module build intermediates
+modules/*/android/build/
+modules/*/android/.gradle/
 
 # Native build intermediates
 *.jks

@@ -14,6 +14,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { ServerProvider } from '../src/state/servers';
 import { ServerEventsProvider } from '../src/state/events';
+import { FilterProvider } from '../src/state/filter';
 import { colors } from '../src/theme';
 
 const navTheme = {
@@ -46,6 +47,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <QueryClientProvider client={queryClient}>
         <ServerProvider kv={AsyncStorage} secrets={SecureStore}>
+          <FilterProvider>
         <ServerEventsProvider>
           <ThemeProvider value={navTheme}>
           <StatusBar style="light" />
@@ -64,6 +66,7 @@ export default function RootLayout() {
           </Stack>
           </ThemeProvider>
         </ServerEventsProvider>
+          </FilterProvider>
         </ServerProvider>
       </QueryClientProvider>
     </GestureHandlerRootView>
