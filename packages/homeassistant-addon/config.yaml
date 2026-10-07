@@ -27,6 +27,8 @@ options:
 schema:
   feed_port: int
   feed_token: password?
+  feed_source_url: str?
+  feed_source_token: password?
   auto_compile_interval: list(disabled|12h|24h|weekly)
   enable_ai_radar: bool
   export_formats:

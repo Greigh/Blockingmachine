@@ -178,6 +178,19 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
 - The integration's Python tests mock the `homeassistant` package — new HA
   imports in the component need matching `sys.modules` mocks in
   `tests/test_coordinator_logic.py`.
+- The add-on dashboard is rendered inside a JS **template literal** in
+  `server.js`, so every backslash in the embedded script collapses on serve:
+  `\/?` arrives as `/?` (leaving `//` — a comment — and killing the whole
+  script block). Avoid regex literals there; `node --check` a curl'd copy of
+  the served page to prove it parses. Ingress also forbids root-relative
+  URLs (`/v1/...` resolves to HA core → plaintext `404: Not Found` → the
+  "Non-whitespace character after JSON" SyntaxError toast); the dashboard
+  resolves calls against `document.baseURI` and re-attaches `?token=`.
+- Feed freshness is **pull-based**: add-on option `feed_source_url` points at
+  the desktop's feed server; `runCompile` calls `feedSource.pullFeeds` before
+  recounting, refuses bodies that don't look like feeds (a captive-portal
+  HTML page must never overwrite a good ruleset), and reports sync failures
+  in the compile message while keeping the last good files.
 
 ## Mobile companion (`packages/mobile`, on `feat/mobile-app`)
 

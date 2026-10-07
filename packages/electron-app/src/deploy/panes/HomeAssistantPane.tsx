@@ -436,6 +436,9 @@ export const HomeAssistantPane: React.FC<HomeAssistantPaneProps> = ({
               <li>
                 Enter Host <code>{serverStatus?.lanIp || '127.0.0.1'}</code> and Port <code>{serverStatus?.port || 9191}</code>.
               </li>
+              <li>
+                Running the <strong>Blockingmachine add-on</strong>? Set its <code>feed_source_url</code> option to <code>{hubBase}</code> — the add-on then pulls this Mac's latest feeds on every compile, so the feeds Home Assistant serves stay current even when this app isn't pushing.
+              </li>
               <li>Your Home Assistant dashboard will automatically gain live sensors, compile buttons, and protection switches!</li>
             </ol>
           </div>
