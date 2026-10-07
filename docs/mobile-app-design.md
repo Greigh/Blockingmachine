@@ -78,11 +78,11 @@ packages/mobile/
   jest.config.js           # jest-expo preset
   index.ts                 # expo-router entry
   app/
-    _layout.tsx            # QueryClientProvider + ServerProvider + Tabs
+    _layout.tsx            # QueryClientProvider + ServerProvider + ServerEventsProvider + GestureHandlerRootView + Tabs
     (tabs)/index.tsx       # Dashboard
-    (tabs)/check.tsx       # Domain check
-    (tabs)/telemetry.tsx   # Threats + compile history
-    (tabs)/settings.tsx    # Server list, pairing, token
+    (tabs)/check.tsx       # Domain check (+ swipe-to-delete history)
+    (tabs)/telemetry.tsx   # Threats + compile history + activity feed
+    (tabs)/settings.tsx    # Server list (swipe-to-delete), pairing, token
     add-server.tsx         # Modal: manual / QR / discovered
   src/
     api/types.ts           # /v1 payload shapes (mirrored; shared-contract pkg is a later refactor)
@@ -91,7 +91,10 @@ packages/mobile/
     api/discovery.ts       # zeroconf browse → DiscoveredServer[]
     api/pairing.ts         # QR payload decode/validate
     state/servers.tsx      # ServerProvider: saved list (AsyncStorage) + token (SecureStore)
-    components/…           # StatusCard, ProtectionToggle, VerdictCard, …
+    state/events.tsx       # ServerEventsProvider: app-wide SSE, alert + activity feed
+    components/ui.tsx      # Card, Pill, ActionButton (Pressable+ripple), ErrorBanner, Skeleton
+    haptics.ts             # expo-haptics wrapper: tap / select / success / error
+    format.ts              # Timestamp + uptime + relative-time formatters
     __tests__/             # jest-expo + mocked fetch
 ```
 
