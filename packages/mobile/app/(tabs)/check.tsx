@@ -4,12 +4,16 @@
  */
 
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useMutation } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useClient } from '../../src/api/useClient';
 import type { CheckResult } from '../../src/api/types';
 import { ActionButton, Card, Pill } from '../../src/components/ui';
 import { relativeTime } from '../../src/format';
+import { haptics } from '../../src/haptics';
 import { colors, spacing } from '../../src/theme';
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
@@ -22,6 +26,7 @@ interface HistoryEntry {
 
 export default function CheckScreen() {
   const client = useClient();
+  const insets = useSafeAreaInsets();
   const [domain, setDomain] = useState('');
   // Session-scoped scratchpad — deduped by domain, newest first, capped at 10.
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -31,11 +36,13 @@ export default function CheckScreen() {
   const check = useMutation({
     mutationFn: (d: string) => client!.checkDomain(d),
     onSuccess: (res, d) => {
+      haptics.success();
       const name = res.domain || d;
       setHistory((prev) =>
         [{ domain: name, blocked: res.blocked, at: Date.now() }, ...prev.filter((h) => h.domain !== name)].slice(0, 10),
       );
     },
+    onError: () => haptics.error(),
   });
 
   const runCheck = (d: string) => {
@@ -48,7 +55,7 @@ export default function CheckScreen() {
   return (
     <ScrollView
       style={styles.screen}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
       keyboardShouldPersistTaps="handled"
     >
       <Text style={styles.title}>Check a domain</Text>
@@ -112,19 +119,37 @@ export default function CheckScreen() {
         <Card>
           <Text style={styles.historyTitle}>Recent checks</Text>
           {history.map((h) => (
-            <TouchableOpacity
+            <ReanimatedSwipeable
               key={h.domain}
-              style={styles.historyRow}
-              onPress={() => client && runCheck(h.domain)}
-              accessibilityRole="button"
+              friction={2}
+              rightThreshold={40}
+              renderRightActions={() => (
+                <Pressable
+                  style={styles.swipeDelete}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${h.domain}`}
+                  onPress={() =>
+                    setHistory((prev) => prev.filter((e) => e.domain !== h.domain))
+                  }
+                >
+                  <Ionicons name="trash-outline" size={18} color={colors.text} />
+                </Pressable>
+              )}
             >
-              <Pill
-                label={h.blocked ? 'BLOCKED' : 'allowed'}
-                tone={h.blocked ? 'bad' : 'ok'}
-              />
-              <Text style={styles.historyDomain}>{h.domain}</Text>
-              <Text style={styles.historyTime}>{relativeTime(h.at)}</Text>
-            </TouchableOpacity>
+              <Pressable
+                style={styles.historyRow}
+                android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
+                onPress={() => client && runCheck(h.domain)}
+                accessibilityRole="button"
+              >
+                <Pill
+                  label={h.blocked ? 'BLOCKED' : 'allowed'}
+                  tone={h.blocked ? 'bad' : 'ok'}
+                />
+                <Text style={styles.historyDomain}>{h.domain}</Text>
+                <Text style={styles.historyTime}>{relativeTime(h.at)}</Text>
+              </Pressable>
+            </ReanimatedSwipeable>
           ))}
         </Card>
       ) : null}
@@ -162,11 +187,20 @@ const styles = StyleSheet.create({
   historyTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginBottom: spacing.xs },
   historyRow: {
     alignItems: 'center',
+    backgroundColor: colors.card,
     borderTopColor: colors.cardBorder,
     borderTopWidth: 1,
     flexDirection: 'row',
     gap: spacing.sm,
     paddingVertical: spacing.sm,
+  },
+  swipeDelete: {
+    alignItems: 'center',
+    backgroundColor: colors.danger,
+    borderTopColor: colors.cardBorder,
+    borderTopWidth: 1,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
   },
   historyDomain: { color: colors.text, flex: 1, fontSize: 14 },
   historyTime: { color: colors.textMuted, fontSize: 12 },

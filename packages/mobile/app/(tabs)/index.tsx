@@ -4,15 +4,17 @@
  */
 
 import React, { useEffect } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError } from '../../src/api/client';
 import { useClient } from '../../src/api/useClient';
 import { useServerEvents } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
-import { ActionButton, Card, ErrorBanner, Pill } from '../../src/components/ui';
+import { ActionButton, Card, ErrorBanner, Pill, Skeleton } from '../../src/components/ui';
 import { formatTimestamp, formatUptime } from '../../src/format';
+import { haptics } from '../../src/haptics';
 import { colors, spacing } from '../../src/theme';
 
 // The hub stamps lastCompile with toLocaleString() (unparseable on Hermes) while
@@ -28,6 +30,7 @@ function formatLastCompile(data?: { lastCompile: string | null; lastCompileMs?: 
 
 export default function DashboardScreen() {
   const client = useClient();
+  const insets = useSafeAreaInsets();
   const { connected, alert, dismissAlert } = useServerEvents();
   const { activeServer, markOk } = useServers();
   const queryClient = useQueryClient();
@@ -54,6 +57,8 @@ export default function DashboardScreen() {
 
   const protection = useMutation({
     mutationFn: (enabled: boolean) => client!.setProtection(enabled),
+    onSuccess: () => haptics.success(),
+    onError: () => haptics.error(),
     onSettled: invalidate,
   });
 
@@ -72,6 +77,8 @@ export default function DashboardScreen() {
 
   const daemon = useMutation({
     mutationFn: (action: 'start' | 'stop') => client!.controlDaemon(action),
+    onSuccess: () => haptics.success(),
+    onError: () => haptics.error(),
     onSettled: invalidate,
   });
 
@@ -99,7 +106,7 @@ export default function DashboardScreen() {
   return (
     <ScrollView
       style={styles.screen}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
       refreshControl={
         <RefreshControl
           refreshing={status.isRefetching}
@@ -123,12 +130,12 @@ export default function DashboardScreen() {
       </View>
 
       {alert?.event === 'quarantine_added' ? (
-        <TouchableOpacity
-          style={styles.alertBanner}
-          onPress={() => {
-            dismissAlert();
-            router.push('/(tabs)/telemetry');
-          }}
+        <Pressable
+          style={({ pressed }) => [styles.alertBanner, pressed && { opacity: 0.85 }]}
+          // Navigate without dismissing — the alert still drives the tab badge
+          // and the "new" pills on the telemetry rows. It clears via ✕, or when
+          // the user leaves the telemetry tab (viewed = acknowledged).
+          onPress={() => router.push('/(tabs)/telemetry')}
         >
           <Text style={styles.alertText}>
             {quarantineCount
@@ -136,14 +143,15 @@ export default function DashboardScreen() {
               : 'New threats quarantined'}
             {' — review'}
           </Text>
-          <TouchableOpacity
+          <Pressable
             onPress={dismissAlert}
             hitSlop={8}
             accessibilityLabel="Dismiss"
+            accessibilityRole="button"
           >
             <Text style={styles.alertDismiss}>✕</Text>
-          </TouchableOpacity>
-        </TouchableOpacity>
+          </Pressable>
+        </Pressable>
       ) : null}
 
       {err ? (
@@ -159,15 +167,40 @@ export default function DashboardScreen() {
         />
       ) : null}
 
+      {status.isLoading && !data ? (
+        <>
+          <Card>
+            <Skeleton width="42%" height={20} />
+            <Skeleton height={16} style={{ marginTop: spacing.sm }} />
+            <Skeleton height={16} width="70%" style={{ marginTop: spacing.sm }} />
+          </Card>
+          <Card>
+            <Skeleton width="30%" height={20} />
+            <View style={[styles.statRow, { marginTop: spacing.sm }]}>
+              {[0, 1, 2, 3].map((i) => (
+                <View key={i} style={styles.stat}>
+                  <Skeleton width="75%" height={20} />
+                  <Skeleton width="55%" height={12} style={{ marginTop: spacing.xs }} />
+                </View>
+              ))}
+            </View>
+          </Card>
+        </>
+      ) : (
+        <>
       <Card>
         <View style={styles.rowBetween}>
           <Text style={styles.sectionTitle}>Protection</Text>
           <Switch
             value={Boolean(data?.protection?.enabled)}
             disabled={protection.isPending || daemonStopped}
-            onValueChange={(v) => protection.mutate(v)}
-            trackColor={{ true: colors.accentDim }}
+            onValueChange={(v) => {
+              haptics.select();
+              protection.mutate(v);
+            }}
+            trackColor={{ false: colors.cardBorder, true: colors.accentDim }}
             thumbColor={data?.protection?.enabled ? colors.accent : colors.textMuted}
+            ios_backgroundColor={colors.cardBorder}
           />
         </View>
         <View style={styles.pillRow}>
@@ -240,6 +273,8 @@ export default function DashboardScreen() {
             : ''}
         </Text>
       </Card>
+        </>
+      )}
 
       <Card>
         <Text style={styles.sectionTitle}>Actions</Text>
@@ -342,7 +377,12 @@ const styles = StyleSheet.create({
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   statRow: { flexDirection: 'row', marginBottom: spacing.sm },
   stat: { flex: 1 },
-  statValue: { color: colors.text, fontSize: 18, fontWeight: '700' },
+  statValue: {
+    color: colors.text,
+    fontSize: 18,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '700',
+  },
   statLabel: { color: colors.textMuted, fontSize: 12 },
   metaLine: { color: colors.textMuted, fontSize: 13, marginTop: spacing.xs },
   alertBanner: {

@@ -7,14 +7,15 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { BlockingmachineClient, ApiError, normalizeBaseUrl } from '../src/api/client';
 import { browseServers, DiscoveredServer, isDiscoveryAvailable } from '../src/api/discovery';
@@ -34,6 +35,7 @@ interface PendingSave {
 
 export default function AddServerScreen() {
   const { addServer } = useServers();
+  const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<Mode>('pick');
   const [host, setHost] = useState('');
   const [token, setToken] = useState('');
@@ -152,7 +154,10 @@ export default function AddServerScreen() {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
+    >
       {pending ? (
         <Card>
           <Text style={styles.sectionTitle}>Server reached</Text>
@@ -196,12 +201,17 @@ export default function AddServerScreen() {
       {mode === 'pick' && !pending ? (
         <>
           <Text style={styles.sectionTitle}>How do you want to connect?</Text>
-          <TouchableOpacity style={styles.modeCard} onPress={() => setMode('manual')}>
+          <Pressable
+            style={({ pressed }) => [styles.modeCard, pressed && styles.pressed]}
+            android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
+            onPress={() => setMode('manual')}
+          >
             <Text style={styles.modeTitle}>Enter address</Text>
             <Text style={styles.meta}>Type the hub's LAN address, e.g. 192.168.1.10:9191</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.modeCard}
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.modeCard, pressed && styles.pressed]}
+            android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
             onPress={async () => {
               if (!permission?.granted) await requestPermission();
               setMode('qr');
@@ -211,13 +221,17 @@ export default function AddServerScreen() {
             <Text style={styles.meta}>
               The desktop app shows one under Settings → Pair mobile app
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.modeCard} onPress={() => setMode('discover')}>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.modeCard, pressed && styles.pressed]}
+            android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
+            onPress={() => setMode('discover')}
+          >
             <Text style={styles.modeTitle}>Find on network</Text>
             <Text style={styles.meta}>
               Look for Blockingmachine servers advertising themselves on the LAN
             </Text>
-          </TouchableOpacity>
+          </Pressable>
         </>
       ) : null}
 
@@ -322,9 +336,11 @@ export default function AddServerScreen() {
             <Text style={styles.meta}>Searching for _blockingmachine._tcp…</Text>
           ) : (
             Object.values(found).map((s) => (
-              <TouchableOpacity
+              <Pressable
                 key={`${s.host}:${s.port}`}
-                style={styles.foundRow}
+                style={({ pressed }) => [styles.foundRow, pressed && styles.pressed]}
+                android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
+                accessibilityRole="button"
                 onPress={() =>
                   void testAndStage({
                     baseUrl: `http://${s.host}:${s.port}`,
@@ -345,7 +361,7 @@ export default function AddServerScreen() {
                 ) : (
                   <Pill label="open" tone="ok" />
                 )}
-              </TouchableOpacity>
+              </Pressable>
             ))
           )}
           <View style={[styles.buttonRow, { marginTop: spacing.sm }]}>
@@ -376,6 +392,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     padding: spacing.md,
   },
+  pressed: { opacity: 0.7 },
   modeTitle: { color: colors.text, fontSize: 16, fontWeight: '600' },
   meta: { color: colors.textMuted, fontSize: 12, marginTop: 4 },
   serverName: { color: colors.text, fontSize: 15, fontWeight: '600' },
