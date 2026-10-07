@@ -1,0 +1,30 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!-- The VPN must be a foreground service to survive; the channel is created
+         by the service itself on first run. android:exported=false keeps it
+         un-launchable by other apps (the VPN permission dialog is the only way in). -->
+    <service
+        android:name=".VpnFilterService"
+        android:permission="android.permission.BIND_VPN_SERVICE"
+        android:exported="false"
+        android:foregroundServiceType="specialUse">
+      <intent-filter>
+        <action android:name="android.net.VpnService" />
+      </intent-filter>
+      <meta-data
+          android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
+          android:value="true" />
+      <property
+          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+          android:value="Local VPN service that filters DNS traffic against the synced blocklist" />
+    </service>
+    <service
+        android:name=".PacProxyService"
+        android:exported="false"
+        android:foregroundServiceType="specialUse">
+      <property
+          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+          android:value="Local HTTP/CONNECT proxy that filters requests against the synced blocklist" />
+    </service>
+  </application>
+</manifest>

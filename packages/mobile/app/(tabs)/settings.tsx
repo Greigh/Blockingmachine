@@ -21,8 +21,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useClient } from '../../src/api/useClient';
 import { useServers } from '../../src/state/servers';
+import { useFilter } from '../../src/state/filter';
+import { LocalVpn, isLocalVpnSupported } from '../../src/filter/localVpn';
+import { nativeRulesPath } from '../../src/filter/ruleset';
 import { ActionButton, Card, Pill } from '../../src/components/ui';
 import { relativeTime } from '../../src/format';
+import { haptics } from '../../src/haptics';
 import { colors, spacing } from '../../src/theme';
 
 const ORIGIN_LABEL: Record<string, string> = {
@@ -36,15 +40,112 @@ function formatSeen(iso: string): string {
   return rel ? ` · seen ${rel}` : '';
 }
 
+/**
+ * Android-only card: run the synced ruleset as a device-wide DNS filter (local
+ * VPN service) and/or as a LAN HTTP/CONNECT proxy other devices can use.
+ * VPN consent is a one-time system dialog — Start requests it via
+ * startActivityForResult, then starts the service automatically on grant.
+ */
+function LocalFilterCard({ ready }: { ready: boolean }) {
+  const vpn = useQuery({
+    queryKey: ['localvpn'],
+    queryFn: () => LocalVpn.status(),
+    refetchInterval: 4000,
+  });
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const s = vpn.data;
+  const rules = nativeRulesPath();
+
+  const act = async (key: string, fn: () => Promise<unknown>) => {
+    setBusy(key);
+    setErr(null);
+    try {
+      await fn();
+      haptics.success();
+    } catch (e) {
+      haptics.error();
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+      void vpn.refetch();
+    }
+  };
+
+  const startVpn = () =>
+    act('vpn', async () => {
+      const granted = await LocalVpn.requestVpnConsent();
+      if (!granted) throw new Error('VPN permission denied — the local filter needs it to run.');
+      await LocalVpn.startVpn(rules, '8.8.8.8', 'Blockingmachine');
+    });
+
+  const toggleVpn = () =>
+    s?.vpnRunning ? act('vpn', () => LocalVpn.stopVpn()) : startVpn();
+
+  const toggleProxy = () =>
+    s?.proxyRunning
+      ? act('proxy', () => LocalVpn.stopProxy())
+      : act('proxy', () => LocalVpn.startProxy(rules, 8890));
+
+  return (
+    <Card>
+      <View style={styles.rowBetween}>
+        <Text style={styles.sectionTitle}>On-device filter</Text>
+        {s?.vpnRunning ? <Pill label="vpn on" tone="ok" /> : null}
+        {s?.proxyRunning ? <Pill label="proxy on" tone="info" /> : null}
+      </View>
+      <Text style={styles.meta}>
+        {ready
+          ? 'Filter this device\u2019s DNS (local VPN) and serve a proxy other devices on the network can use. HTTPS is covered at the domain level — no certificate install, no MITM.'
+          : 'Sync rules above first — the local filter runs on the synced ruleset.'}
+      </Text>
+      {err ? <Text style={styles.syncError}>{err}</Text> : null}
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonFlex}>
+          <ActionButton
+            label={s?.vpnRunning ? 'Stop VPN filter' : 'Start VPN filter'}
+            tone={s?.vpnRunning ? 'ghost' : 'primary'}
+            disabled={!ready || busy === 'vpn'}
+            loading={busy === 'vpn'}
+            onPress={() => void toggleVpn()}
+          />
+        </View>
+        <View style={styles.buttonFlex}>
+          <ActionButton
+            label={s?.proxyRunning ? 'Stop proxy' : 'Start proxy'}
+            tone={s?.proxyRunning ? 'ghost' : 'primary'}
+            disabled={!ready || busy === 'proxy'}
+            loading={busy === 'proxy'}
+            onPress={() => void toggleProxy()}
+          />
+        </View>
+      </View>
+      {s?.vpnRunning || s?.proxyRunning ? (
+        <Text style={styles.meta}>
+          {s.vpnRunning
+            ? `DNS: ${s.dnsBlocked.toLocaleString()} blocked · ${s.dnsForwarded.toLocaleString()} forwarded\n`
+            : ''}
+          {s.proxyRunning
+            ? `Proxy: :${s.proxyPort} · PAC http://<this phone>:${s.proxyPort}/proxy.pac · ${s.proxyBlocked.toLocaleString()} blocked`
+            : ''}
+        </Text>
+      ) : null}
+    </Card>
+  );
+}
+
 export default function SettingsScreen() {
   const { servers, activeServerId, activeToken, setActive, removeServer, setToken } =
     useServers();
   const insets = useSafeAreaInsets();
   const client = useClient();
+  const filter = useFilter();
+  const activeServer = servers.find((s) => s.id === activeServerId);
   const [tokenDraft, setTokenDraft] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const status = useQuery({
-    queryKey: ['status', servers.find((s) => s.id === activeServerId)?.baseUrl ?? 'none'],
+    queryKey: ['status', activeServer?.baseUrl ?? 'none'],
     queryFn: () => client!.getStatus(),
     enabled: !!client,
   });
@@ -122,6 +223,58 @@ export default function SettingsScreen() {
           ))
         )}
       </Card>
+
+      <Card>
+        <View style={styles.rowBetween}>
+          <Text style={styles.sectionTitle}>Standalone filter</Text>
+          {filter.ready ? <Pill label="on-device" tone="ok" /> : null}
+        </View>
+        <Text style={styles.meta}>
+          {filter.ready && filter.meta
+            ? `${filter.meta.ruleCount.toLocaleString()} rules stored on this device — synced ${relativeTime(filter.meta.syncedAt) ?? 'recently'} from ${filter.meta.sourceUrl}. Domain checks keep working when the hub is unreachable.`
+            : 'Download the hub\u2019s compiled rules once and the app answers domain checks on-device \u2014 even with the hub unreachable or no server configured.'}
+        </Text>
+        {syncError ? <Text style={styles.syncError}>{syncError}</Text> : null}
+        <View style={styles.buttonRow}>
+          <View style={styles.buttonFlex}>
+            <ActionButton
+              label={filter.syncing ? 'Syncing…' : filter.ready ? 'Re-sync rules' : 'Sync rules from hub'}
+              loading={filter.syncing}
+              disabled={!activeServer}
+              onPress={() => {
+                if (!activeServer) return;
+                setSyncError(null);
+                filter
+                  .sync(activeServer.baseUrl)
+                  .then(() => haptics.success())
+                  .catch((e) => {
+                    haptics.error();
+                    setSyncError(e instanceof Error ? e.message : String(e));
+                  });
+              }}
+            />
+          </View>
+          {filter.ready ? (
+            <View style={styles.buttonFlex}>
+              <ActionButton
+                label="Clear rules"
+                tone="ghost"
+                onPress={() =>
+                  Alert.alert('Clear on-device rules', 'Domain checks will require the hub again.', [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Clear', style: 'destructive', onPress: () => void filter.clear() },
+                  ])
+                }
+              />
+            </View>
+          ) : null}
+        </View>
+        {!activeServer && !filter.ready ? (
+          <Text style={styles.meta}>Add a server above first — the rules feed comes from a hub.</Text>
+        ) : null}
+      </Card>
+
+      {isLocalVpnSupported() ? <LocalFilterCard ready={filter.ready} /> : null}
 
       {activeServerId ? (
         <Card>
@@ -231,4 +384,5 @@ const styles = StyleSheet.create({
   feedRow: { borderTopColor: colors.cardBorder, borderTopWidth: 1, paddingVertical: spacing.sm },
   feedLabel: { color: colors.text, fontSize: 14, fontWeight: '600' },
   feedUrl: { color: colors.info, fontSize: 12, marginTop: 2 },
+  syncError: { color: colors.danger, fontSize: 12, marginTop: spacing.sm },
 });

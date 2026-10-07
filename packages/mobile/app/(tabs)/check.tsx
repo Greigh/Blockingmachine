@@ -9,7 +9,9 @@ import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeabl
 import { useMutation } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ApiError } from '../../src/api/client';
 import { useClient } from '../../src/api/useClient';
+import { useFilter } from '../../src/state/filter';
 import type { CheckResult } from '../../src/api/types';
 import { ActionButton, Card, Pill } from '../../src/components/ui';
 import { relativeTime } from '../../src/format';
@@ -26,6 +28,7 @@ interface HistoryEntry {
 
 export default function CheckScreen() {
   const client = useClient();
+  const filter = useFilter();
   const insets = useSafeAreaInsets();
   const [domain, setDomain] = useState('');
   // Session-scoped scratchpad — deduped by domain, newest first, capped at 10.
@@ -34,7 +37,24 @@ export default function CheckScreen() {
   const valid = DOMAIN_RE.test(trimmed) && trimmed.length <= 253;
 
   const check = useMutation({
-    mutationFn: (d: string) => client!.checkDomain(d),
+    // Hub verdict when it's reachable — richer (verdict source, matched host).
+    // When the hub is unreachable (or none is configured) a synced ruleset
+    // answers on-device with the same evaluator the hub uses.
+    mutationFn: async (d: string): Promise<CheckResult> => {
+      if (client) {
+        try {
+          return await client.checkDomain(d);
+        } catch (err) {
+          if (!(err instanceof ApiError && err.kind === 'unreachable')) throw err;
+          const local = await filter.evaluate(d);
+          if (local) return { ...local, source: 'on-device ruleset' };
+          throw err;
+        }
+      }
+      const local = await filter.evaluate(d);
+      if (local) return { ...local, source: 'on-device ruleset' };
+      throw new Error('No server connected and no on-device ruleset — sync one in Settings.');
+    },
     onSuccess: (res, d) => {
       haptics.success();
       const name = res.domain || d;
@@ -79,7 +99,7 @@ export default function CheckScreen() {
         <ActionButton
           label={check.isPending ? 'Checking…' : 'Check'}
           onPress={() => runCheck(trimmed)}
-          disabled={!valid || !client}
+          disabled={!valid || (!client && !filter.ready)}
           loading={check.isPending}
         />
         {!valid && trimmed.length > 0 ? (
@@ -156,7 +176,11 @@ export default function CheckScreen() {
 
       {!client ? (
         <Card>
-          <Text style={styles.detail}>Add a server in Settings first.</Text>
+          <Text style={styles.detail}>
+            {filter.ready
+              ? `Checking on-device — ${filter.meta?.ruleCount.toLocaleString()} rules synced locally.`
+              : 'Add a server in Settings, or sync an on-device ruleset.'}
+          </Text>
         </Card>
       ) : null}
     </ScrollView>

@@ -240,3 +240,21 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
   `matchedHost`/`source` where the hub answers `coveringRule`/`verdict`; add-on
   `/v1/status` lacks `daemonStatus`/`recentTrackers`/`activeSseClients`; add-on
   `/v1/protection` is POST-only (read protection via status).
+- **Phase 2 (on-device filtering) is implemented on Android** — `modules/local-vpn/`
+  is an Expo local module (autolinked from `./modules` by default): `VpnFilterService`
+  (tun + DNS packet codec, NXDOMAIN on blocklist hits, UDP/53 relay upstream),
+  `PacProxyService` (`proxy.pac` + CONNECT/plain-HTTP forward proxy on :8890),
+  `Blocklist` (native suffix matcher reading `ruleset_native.txt` written by
+  `src/filter/ruleset.ts` at sync). The JS matcher (`src/filter/matcher.ts`) is
+  standalone — do NOT import `domainEvaluator` in runtime code; it transitively
+  pulls `node:fs` and Metro/Hermes can't bundle it (jest parity tests may use it).
+  Hard-won: `VpnService.prepare()` intents MUST go through
+  `startActivityForResult` — ConfirmDialog needs `getCallingPackage()`, else it
+  self-finishes; `FOREGROUND_SERVICE`/`FOREGROUND_SERVICE_SPECIAL_USE` +
+  `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` are required or `startForeground` throws
+  `SecurityException` — and `gradlew assembleRelease` does NOT re-merge
+  `app.json` permissions into the generated manifest (patch the manifest or
+  re-run prebuild when permissions change); `FileSystem.documentDirectory` paths
+  arrive at native code as `file://` URIs — strip the scheme before `File()`.
+  `.gitignore` uses `/android/` anchored to the package root — plain `android/`
+  would silently ignore `modules/*/android/` source.
