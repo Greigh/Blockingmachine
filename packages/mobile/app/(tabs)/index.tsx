@@ -14,9 +14,10 @@ import { useServerEvents } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
 import { useFilter } from '../../src/state/filter';
 import { ActionButton, Card, ErrorBanner, Pill, Skeleton } from '../../src/components/ui';
+import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { formatTimestamp, formatUptime } from '../../src/format';
 import { haptics } from '../../src/haptics';
-import { colors, spacing } from '../../src/theme';
+import { chrome, colors, spacing } from '../../src/theme';
 
 // The hub stamps lastCompile with toLocaleString() (unparseable on Hermes) while
 // the add-on carries lastCompileMs — prefer the epoch, fall back to the raw
@@ -87,6 +88,7 @@ export default function DashboardScreen() {
   if (!activeServer) {
     return (
       <View style={styles.empty}>
+        <GlassBackdrop />
         <Text style={styles.emptyTitle}>
           {filter.ready ? 'Standalone mode' : 'No server configured'}
         </Text>
@@ -113,9 +115,11 @@ export default function DashboardScreen() {
       : null;
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
+    <View style={styles.screen}>
+      <GlassBackdrop />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
       refreshControl={
         <RefreshControl
           refreshing={status.isRefetching}
@@ -207,9 +211,9 @@ export default function DashboardScreen() {
               haptics.select();
               protection.mutate(v);
             }}
-            trackColor={{ false: colors.cardBorder, true: colors.accentDim }}
+            trackColor={{ false: 'rgba(255,255,255,0.15)', true: colors.accentDim }}
             thumbColor={data?.protection?.enabled ? colors.accent : colors.textMuted}
-            ios_backgroundColor={colors.cardBorder}
+            ios_backgroundColor={'rgba(255,255,255,0.15)'}
           />
         </View>
         <View style={styles.pillRow}>
@@ -348,12 +352,14 @@ export default function DashboardScreen() {
           ) : null}
         </Card>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1, backgroundColor: 'transparent' },
+  scroll: { flex: 1 },
   content: { padding: spacing.md, paddingBottom: spacing.xl },
   headerRow: {
     alignItems: 'center',
@@ -364,7 +370,7 @@ const styles = StyleSheet.create({
   subtitle: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
   empty: {
     alignItems: 'center',
-    backgroundColor: colors.bg,
+    backgroundColor: 'transparent',
     flex: 1,
     gap: spacing.md,
     justifyContent: 'center',
@@ -396,8 +402,8 @@ const styles = StyleSheet.create({
   metaLine: { color: colors.textMuted, fontSize: 13, marginTop: spacing.xs },
   alertBanner: {
     alignItems: 'center',
-    backgroundColor: colors.card,
-    borderColor: colors.warn,
+    backgroundColor: 'rgba(210,153,34,0.14)',
+    borderColor: 'rgba(210,153,34,0.45)',
     borderRadius: 10,
     borderWidth: 1,
     flexDirection: 'row',

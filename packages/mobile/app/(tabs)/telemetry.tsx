@@ -12,8 +12,9 @@ import { useClient } from '../../src/api/useClient';
 import { useServerEvents, type ServerEventAlert } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
 import { Card, ErrorBanner, Pill, Skeleton } from '../../src/components/ui';
+import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { formatTimestamp, relativeTime } from '../../src/format';
-import { colors, spacing } from '../../src/theme';
+import { chrome, colors, glass, spacing } from '../../src/theme';
 
 const RISK_TONES: Record<string, 'bad' | 'warn' | 'info' | 'muted'> = {
   critical: 'bad',
@@ -86,16 +87,18 @@ export default function TelemetryScreen() {
   };
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
+    <View style={styles.screen}>
+      <GlassBackdrop />
+      <ScrollView
+        style={styles.scroll}
+      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
           onRefresh={() => void onRefresh()}
           tintColor={colors.textMuted}
           colors={[colors.accent]}
-          progressBackgroundColor={colors.card}
+          progressBackgroundColor={'rgba(255,255,255,0.12)'}
         />
       }
     >
@@ -220,19 +223,21 @@ export default function TelemetryScreen() {
           <Text style={styles.meta}>No telemetry reported yet.</Text>
         </Card>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1, backgroundColor: 'transparent' },
+  scroll: { flex: 1 },
   content: { padding: spacing.md, paddingBottom: spacing.xl },
   title: { color: colors.text, fontSize: 22, fontWeight: '700' },
   subtitle: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md, marginTop: 2 },
   sectionTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginBottom: spacing.sm },
   threatRow: {
     alignItems: 'center',
-    borderTopColor: colors.cardBorder,
+    borderTopColor: glass.border,
     borderTopWidth: 1,
     flexDirection: 'row',
     paddingVertical: spacing.sm,
@@ -240,7 +245,7 @@ const styles = StyleSheet.create({
   threatDomain: { color: colors.text, fontSize: 15, fontWeight: '600' },
   threatPills: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   historyRow: {
-    borderTopColor: colors.cardBorder,
+    borderTopColor: glass.border,
     borderTopWidth: 1,
     paddingVertical: spacing.sm,
   },

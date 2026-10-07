@@ -25,9 +25,10 @@ import { useFilter } from '../../src/state/filter';
 import { LocalVpn, isLocalVpnSupported } from '../../src/filter/localVpn';
 import { nativeRulesPath } from '../../src/filter/ruleset';
 import { ActionButton, Card, Pill } from '../../src/components/ui';
+import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { relativeTime } from '../../src/format';
 import { haptics } from '../../src/haptics';
-import { colors, spacing } from '../../src/theme';
+import { chrome, colors, glass, spacing } from '../../src/theme';
 
 const ORIGIN_LABEL: Record<string, string> = {
   manual: 'manual',
@@ -165,9 +166,11 @@ export default function SettingsScreen() {
   };
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
+    <View style={styles.screen}>
+      <GlassBackdrop />
+      <ScrollView
+        style={styles.scroll}
+      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
     >
       <Text style={styles.title}>Settings</Text>
 
@@ -330,12 +333,14 @@ export default function SettingsScreen() {
           ))}
         </Card>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1, backgroundColor: 'transparent' },
+  scroll: { flex: 1 },
   content: { padding: spacing.md, paddingBottom: spacing.xl },
   title: { color: colors.text, fontSize: 22, fontWeight: '700', marginBottom: spacing.md },
   sectionTitle: { color: colors.text, fontSize: 16, fontWeight: '700' },
@@ -347,8 +352,8 @@ const styles = StyleSheet.create({
   },
   link: { color: colors.info, fontSize: 15, fontWeight: '600' },
   serverRow: {
-    backgroundColor: colors.card,
-    borderTopColor: colors.cardBorder,
+    backgroundColor: glass.surface,
+    borderTopColor: glass.border,
     borderTopWidth: 1,
     flexDirection: 'row',
     gap: spacing.sm,
@@ -369,9 +374,10 @@ const styles = StyleSheet.create({
   serverLabel: { color: colors.text, fontSize: 15, fontWeight: '600' },
   meta: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
   input: {
-    backgroundColor: colors.bg,
-    borderColor: colors.cardBorder,
-    borderRadius: 10,
+    backgroundColor: glass.surface,
+    borderColor: glass.border,
+    borderTopColor: glass.borderTop,
+    borderRadius: 14,
     borderWidth: 1,
     color: colors.text,
     fontSize: 15,
@@ -381,7 +387,7 @@ const styles = StyleSheet.create({
   },
   buttonRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   buttonFlex: { flex: 1 },
-  feedRow: { borderTopColor: colors.cardBorder, borderTopWidth: 1, paddingVertical: spacing.sm },
+  feedRow: { borderTopColor: glass.border, borderTopWidth: 1, paddingVertical: spacing.sm },
   feedLabel: { color: colors.text, fontSize: 14, fontWeight: '600' },
   feedUrl: { color: colors.info, fontSize: 12, marginTop: 2 },
   syncError: { color: colors.danger, fontSize: 12, marginTop: spacing.sm },
