@@ -258,3 +258,13 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
   arrive at native code as `file://` URIs — strip the scheme before `File()`.
   `.gitignore` uses `/android/` anchored to the package root — plain `android/`
   would silently ignore `modules/*/android/` source.
+- **Glass UI**: `src/theme.ts` carries `glass`/`chrome` tokens;
+  `GlassBackdrop` (gradient + concentric-alpha glow orbs) mounts **inside each
+  screen**, never as a sibling of the navigator — native-stack screen fragments
+  on Android paint an opaque background that swallows any sibling behind the
+  navigator (verified: a bright-red sibling view rendered invisible). Tab bar is
+  a floating rounded `tabBarBackground` BlurView; screens pad bottom by
+  `chrome.tabBarClearance`. Headers use `headerBackground` BlurView, not
+  `headerTransparent` (avoids per-screen header-height math without
+  `@react-navigation/elements`). `experimentalBlurMethod="dimezisBlurView"` is
+  required for real blur on Android.

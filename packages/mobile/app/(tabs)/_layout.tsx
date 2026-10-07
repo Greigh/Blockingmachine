@@ -1,14 +1,47 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import type { ColorValue } from 'react-native';
+import { BlurView } from 'expo-blur';
+import { StyleSheet, View, type ColorValue } from 'react-native';
 import { useServerEvents } from '../../src/hooks/useEvents';
-import { colors } from '../../src/theme';
+import { chrome, colors, glass, spacing } from '../../src/theme';
 
 const icon =
   (name: keyof typeof Ionicons.glyphMap) =>
   ({ color, size }: { color: ColorValue; size: number }) =>
     <Ionicons name={name} color={color as string} size={size} />;
+
+/** Frosted fill for the floating tab bar — clipped to the bar's rounded shape. */
+function TabBarGlass() {
+  return (
+    <>
+      <BlurView
+        intensity={60}
+        tint="dark"
+        experimentalBlurMethod="dimezisBlurView"
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={[StyleSheet.absoluteFill, styles.barTint]} />
+      <View style={[StyleSheet.absoluteFill, styles.barBorder]} />
+    </>
+  );
+}
+
+/** Frosted fill for the header — aurora backdrop blurs through it. */
+function HeaderGlass() {
+  return (
+    <>
+      <BlurView
+        intensity={55}
+        tint="dark"
+        experimentalBlurMethod="dimezisBlurView"
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={[StyleSheet.absoluteFill, styles.headerTint]} />
+      <View style={styles.headerEdge} />
+    </>
+  );
+}
 
 export default function TabsLayout() {
   const { alert } = useServerEvents();
@@ -24,12 +57,25 @@ export default function TabsLayout() {
   return (
     <Tabs
       screenOptions={{
-        headerStyle: { backgroundColor: colors.card },
+        headerTransparent: false,
+        headerBackground: HeaderGlass,
+        headerStyle: { backgroundColor: 'transparent' },
         headerTintColor: colors.text,
-        tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.cardBorder },
+        tabBarBackground: TabBarGlass,
+        tabBarStyle: {
+          position: 'absolute',
+          marginHorizontal: spacing.lg,
+          marginBottom: spacing.sm,
+          height: chrome.tabBarHeight,
+          backgroundColor: 'transparent',
+          borderTopWidth: 0,
+          borderRadius: 28,
+          overflow: 'hidden',
+          elevation: 0,
+        },
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.textMuted,
-        sceneStyle: { backgroundColor: colors.bg },
+        sceneStyle: { backgroundColor: 'transparent' },
       }}
     >
       <Tabs.Screen
@@ -56,3 +102,21 @@ export default function TabsLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  barTint: { backgroundColor: glass.chromeSurface },
+  barBorder: {
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: glass.chromeBorder,
+  },
+  headerTint: { backgroundColor: glass.chromeSurface },
+  headerEdge: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: glass.border,
+  },
+});

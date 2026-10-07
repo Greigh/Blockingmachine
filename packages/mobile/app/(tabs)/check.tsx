@@ -14,9 +14,10 @@ import { useClient } from '../../src/api/useClient';
 import { useFilter } from '../../src/state/filter';
 import type { CheckResult } from '../../src/api/types';
 import { ActionButton, Card, Pill } from '../../src/components/ui';
+import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { relativeTime } from '../../src/format';
 import { haptics } from '../../src/haptics';
-import { colors, spacing } from '../../src/theme';
+import { chrome, colors, glass, spacing } from '../../src/theme';
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
 
@@ -73,9 +74,11 @@ export default function CheckScreen() {
   const result: CheckResult | undefined = check.data;
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
+    <View style={styles.screen}>
+      <GlassBackdrop />
+      <ScrollView
+        style={styles.scroll}
+      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
       keyboardShouldPersistTaps="handled"
     >
       <Text style={styles.title}>Check a domain</Text>
@@ -183,19 +186,22 @@ export default function CheckScreen() {
           </Text>
         </Card>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1, backgroundColor: 'transparent' },
+  scroll: { flex: 1 },
   content: { padding: spacing.md, paddingBottom: spacing.xl },
   title: { color: colors.text, fontSize: 22, fontWeight: '700' },
   subtitle: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md, marginTop: 2 },
   input: {
-    backgroundColor: colors.bg,
-    borderColor: colors.cardBorder,
-    borderRadius: 10,
+    backgroundColor: glass.surface,
+    borderColor: glass.border,
+    borderTopColor: glass.borderTop,
+    borderRadius: 14,
     borderWidth: 1,
     color: colors.text,
     fontSize: 16,
@@ -211,8 +217,8 @@ const styles = StyleSheet.create({
   historyTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginBottom: spacing.xs },
   historyRow: {
     alignItems: 'center',
-    backgroundColor: colors.card,
-    borderTopColor: colors.cardBorder,
+    backgroundColor: glass.surface,
+    borderTopColor: glass.border,
     borderTopWidth: 1,
     flexDirection: 'row',
     gap: spacing.sm,

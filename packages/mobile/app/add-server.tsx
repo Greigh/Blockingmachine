@@ -22,7 +22,8 @@ import { browseServers, DiscoveredServer, isDiscoveryAvailable } from '../src/ap
 import { decodePairingPayload, PairingError, type PairingPayload } from '../src/api/pairing';
 import { useServers } from '../src/state/servers';
 import { ActionButton, Card, Pill } from '../src/components/ui';
-import { colors, spacing } from '../src/theme';
+import { GlassBackdrop } from '../src/components/GlassBackdrop';
+import { colors, glass, spacing } from '../src/theme';
 
 type Mode = 'pick' | 'manual' | 'qr' | 'discover';
 
@@ -154,8 +155,10 @@ export default function AddServerScreen() {
   };
 
   return (
-    <ScrollView
-      style={styles.screen}
+    <View style={styles.screen}>
+      <GlassBackdrop />
+      <ScrollView
+        style={styles.scroll}
       contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
     >
       {pending ? (
@@ -371,12 +374,14 @@ export default function AddServerScreen() {
           </View>
         </Card>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1, backgroundColor: 'transparent' },
+  scroll: { flex: 1 },
   content: { padding: spacing.md, paddingBottom: spacing.xl },
   sectionTitle: {
     color: colors.text,
@@ -385,9 +390,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   modeCard: {
-    backgroundColor: colors.card,
-    borderColor: colors.cardBorder,
-    borderRadius: 12,
+    backgroundColor: glass.surface,
+    borderColor: glass.border,
+    borderTopColor: glass.borderTop,
+    borderRadius: 20,
     borderWidth: 1,
     marginBottom: spacing.md,
     padding: spacing.md,
@@ -397,9 +403,10 @@ const styles = StyleSheet.create({
   meta: { color: colors.textMuted, fontSize: 12, marginTop: 4 },
   serverName: { color: colors.text, fontSize: 15, fontWeight: '600' },
   input: {
-    backgroundColor: colors.bg,
-    borderColor: colors.cardBorder,
-    borderRadius: 10,
+    backgroundColor: glass.surface,
+    borderColor: glass.border,
+    borderTopColor: glass.borderTop,
+    borderRadius: 14,
     borderWidth: 1,
     color: colors.text,
     fontSize: 15,
@@ -413,7 +420,7 @@ const styles = StyleSheet.create({
   camera: { aspectRatio: 1, width: '100%' },
   foundRow: {
     alignItems: 'center',
-    borderTopColor: colors.cardBorder,
+    borderTopColor: glass.border,
     borderTopWidth: 1,
     flexDirection: 'row',
     paddingVertical: spacing.sm,

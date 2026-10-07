@@ -15,7 +15,7 @@ import * as SecureStore from 'expo-secure-store';
 import { ServerProvider } from '../src/state/servers';
 import { ServerEventsProvider } from '../src/state/events';
 import { FilterProvider } from '../src/state/filter';
-import { colors } from '../src/theme';
+import { colors, glass } from '../src/theme';
 
 const navTheme = {
   ...DarkTheme,
@@ -53,7 +53,7 @@ export default function RootLayout() {
           <StatusBar style="light" />
           <Stack
             screenOptions={{
-              headerStyle: { backgroundColor: colors.card },
+              headerStyle: { backgroundColor: glass.chromeSurface },
               headerTintColor: colors.text,
               contentStyle: { backgroundColor: colors.bg },
             }}
