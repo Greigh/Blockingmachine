@@ -26,11 +26,17 @@ import { renderShadowrocketFeed, shadowrocketHostCount } from './shadowrocketFee
 import { renderPrivoxyFeed, privoxyPatternCount } from './privoxyFeed.js';
 import { renderBindRpzFeed, bindRpzRecordCount } from './bindFeed.js';
 import { hostFromRule, normalizeHost } from './hostRules.js';
+import { pullFeeds } from './feedSource.js';
 
 const PORT = parseInt(process.env.FEED_PORT || '9191', 10);
 const DATA_DIR = process.env.DATA_DIR || '/data/blockingmachine';
 const AUTO_COMPILE = process.env.AUTO_COMPILE || '24h';
 const ENABLE_AI = process.env.ENABLE_AI !== 'false';
+// The desktop hub's feed server — when set, a compile (manual or scheduled)
+// pulls fresh dns.txt/browser.txt from it before recounting. Empty = serve
+// whatever already sits in DATA_DIR (or the bundled baseline).
+const FEED_SOURCE_URL = (process.env.FEED_SOURCE_URL || '').trim().replace(/\/+$/, '');
+const FEED_SOURCE_TOKEN = (process.env.FEED_SOURCE_TOKEN || '').trim();
 const STARTED_AT = Date.now();
 
 // ─── Feed authentication ──────────────────────────────────────────────────────
@@ -248,6 +254,24 @@ async function runCompile() {
   isCompiling = true;
   const startedAt = Date.now();
   try {
+    // A configured feed source turns "compile" into sync-then-recount: pull the
+    // desktop's published feeds into DATA_DIR first, so a click (or the schedule)
+    // is what keeps the add-on's copy current while the laptop is awake.
+    let pullNote = '';
+    if (FEED_SOURCE_URL) {
+      const pull = await pullFeeds({
+        sourceUrl: FEED_SOURCE_URL,
+        token: FEED_SOURCE_TOKEN || undefined,
+        dataDir: DATA_DIR,
+      });
+      if (pull.errors.length > 0 && pull.pulled.length === 0) {
+        pullNote = ` — feed sync failed (${pull.errors.join('; ')}); kept existing feeds`;
+      } else if (pull.errors.length > 0) {
+        pullNote = ` — synced ${pull.pulled.join(', ')}, but ${pull.errors.join('; ')}`;
+      } else {
+        pullNote = ` — synced from ${FEED_SOURCE_URL}`;
+      }
+    }
     // The add-on consumes feeds prepared by the desktop app / sync pipeline.
     // Compilation here = refresh stats from disk, stamp the ledger, notify.
     const { dns, browser } = await recomputeStats();
@@ -262,11 +286,11 @@ async function runCompile() {
       durationMs: compileStats.lastCompileMs,
     });
     const sourceNote = dns.source === 'baseline' && browser.source === 'baseline'
-      ? ' (baseline rules — run a compile from the Blockingmachine desktop app to publish full feeds)'
+      ? ' (baseline rules — set feed_source_url to the desktop hub to publish full feeds)'
       : '';
     return {
       success: true,
-      message: `Compiled ${compileStats.totalRules} rules (${compileStats.dnsRules} DNS, ${compileStats.browserRules} browser) in ${compileStats.lastCompileMs}ms${sourceNote}`,
+      message: `Compiled ${compileStats.totalRules} rules (${compileStats.dnsRules} DNS, ${compileStats.browserRules} browser) in ${compileStats.lastCompileMs}ms${pullNote}${sourceNote}`,
       durationMs: compileStats.lastCompileMs || 0,
     };
   } catch (err) {
@@ -443,7 +467,7 @@ function renderDashboard(dns, browser) {
       <span>Last compile: <strong id="last-compile">${escapeHtml(lastCompile)}</strong></span>
       <span>Compiles this install: <strong>${compileStats.compileCount}</strong></span>
       <span>Auto-compile: <strong>${escapeHtml(AUTO_COMPILE)}</strong></span>
-      <span>Feed source: <strong>${dns.source === 'file' || browser.source === 'file' ? 'published feeds' : 'baseline'}</strong></span>
+      <span>Feed source: <strong>${dns.source === 'file' || browser.source === 'file' ? 'published feeds' : 'baseline'}</strong></span>${FEED_SOURCE_URL ? `\n      <span>Syncs from: <strong>${escapeHtml(FEED_SOURCE_URL)}</strong></span>` : ''}
       <span>Uptime: <strong>${escapeHtml(uptime)}</strong></span>
       <span>AI Radar: <strong>${ENABLE_AI ? 'enabled' : 'disabled'}</strong></span>
     </div>
@@ -494,7 +518,7 @@ function renderDashboard(dns, browser) {
       <span class="k">Privoxy feed</span><span>${privoxyCount} action-file patterns rendered from the same ${dns.source === 'file' ? 'published dns.txt' : 'baseline fallback'}</span>
       <span class="k">BIND RPZ feed</span><span>${rpzCount} policy records rendered from the same ${dns.source === 'file' ? 'published dns.txt' : 'baseline fallback'}</span>
     </div>
-    <div class="meta-line"><a class="btn secondary" href="/v1/status" target="_blank" rel="noopener">Open raw status JSON</a></div>
+    <div class="meta-line"><a class="btn secondary" id="status-link" href="v1/status" target="_blank" rel="noopener">Open raw status JSON</a></div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -532,11 +556,31 @@ function renderDashboard(dns, browser) {
     });
   });
 
+  // Under Home Assistant Ingress the page lives at /api/hassio_ingress/<token>/ —
+  // a root-relative '/v1/...' would escape that prefix and hit HA core, which
+  // answers '404: Not Found' (plain text, not JSON — hence a SyntaxError toast).
+  // Resolve every call against the page's own base so both ingress and direct
+  // hosting land on this server. baseURI carries the query string, so split it
+  // off first; a ?token= the user opened the dashboard with rides along on the
+  // API calls so a token-gated install stays usable.
+  // (No regex for the trailing slash: this script lives inside a JS template
+  // literal where '\/' collapses to '/', which would leave '//' — a comment.)
+  var apiBase = document.baseURI.split(/[?#]/)[0];
+  if (apiBase.slice(-1) !== '/') apiBase += '/';
+  var apiQuery = '';
+  try {
+    var tokenParam = new URLSearchParams(window.location.search).get('token');
+    if (tokenParam) apiQuery = '?token=' + encodeURIComponent(tokenParam);
+  } catch (e) { /* ancient WebView: leave apiQuery empty */ }
+
+  var statusLink = document.getElementById('status-link');
+  if (statusLink) statusLink.href = apiBase + 'v1/status' + apiQuery;
+
   var compileBtn = document.getElementById('compile-btn');
   compileBtn.addEventListener('click', function () {
     compileBtn.disabled = true;
     compileBtn.textContent = 'Compiling…';
-    fetch('/v1/compile', { method: 'POST' })
+    fetch(apiBase + 'v1/compile' + apiQuery, { method: 'POST' })
       .then(function (res) { return res.json(); })
       .then(function (data) {
         if (data.success) {
@@ -556,7 +600,7 @@ function renderDashboard(dns, browser) {
   var protectionToggle = document.getElementById('protection-toggle');
   protectionToggle.addEventListener('change', function () {
     var enable = protectionToggle.checked;
-    fetch('/v1/protection', {
+    fetch(apiBase + 'v1/protection' + apiQuery, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: enable })
@@ -588,7 +632,7 @@ function renderDashboard(dns, browser) {
   // Live updates: refresh when a compile or protection change lands anywhere
   if (window.EventSource) {
     try {
-      var es = new EventSource('/v1/events');
+      var es = new EventSource(apiBase + 'v1/events' + apiQuery);
       es.addEventListener('compile_completed', function () {
         window.setTimeout(function () { window.location.reload(); }, 1200);
       });

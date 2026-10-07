@@ -250,8 +250,16 @@ Or subscribe to live compile events from any SSE-capable consumer at
 
 ## How feeds are published
 
-The add-on serves whatever the Blockingmachine desktop app (or CLI pipeline)
-publishes into the add-on's data directory as `dns.txt` and `browser.txt`.
-Until a first publish, the bundled baseline blocklist is served and the
-dashboard clearly labels the feed source as `baseline` — compile from the
-desktop app with the Home Assistant sync target to go live.
+The add-on serves `dns.txt` and `browser.txt` from its data directory. Until a
+first publish, the bundled baseline blocklist is served and the dashboard
+clearly labels the feed source as `baseline`.
+
+To go live, point the add-on at the desktop hub — set **`feed_source_url`** in
+the add-on's options to the desktop's feed server (`http://<your-mac>:9191`),
+and **`feed_source_token`** if the desktop has a feed token configured. Every
+compile — the dashboard's *Compile Rules Now* or the `auto_compile_interval`
+schedule — then pulls the latest feeds from the desktop and recounts. The
+add-on pulls rather than waiting for a push on purpose: the desktop is a
+laptop that sleeps, while the add-on is a service that retries on schedule.
+A failed pull keeps the existing feeds and says so in the compile result —
+a stale ruleset is better than an empty one.
