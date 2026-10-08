@@ -235,6 +235,12 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
   `@react-native/js-polyfills`; `@react-native/assets-registry` stub package →
   `react-native/asset-registry`). Without it `expo export` hard-fails in
   `@expo/metro-config` and every jest-expo suite dies on the unresolvable mock.
+  **Caveat:** `npm update`/`npm audit fix` mutate the tree without re-running
+  postinstall — the stub vanishes silently. Jest is now immune (`jest.config.js`
+  maps `@react-native/assets-registry/registry` straight to
+  `react-native/src/asset-registry.js`), but metro/Gradle still need the stub —
+  after any dependency operation that skips postinstall, re-run
+  `node scripts/patch-react-native-rn087.cjs`.
   The same script carries the whole **Android-side bridge to AGP 9.2.1** (RN 0.87's
   pinned AGP — requires Gradle 9.4.1; the generated wrapper's distributionUrl is
   bumped by hand, `android/` is gitignored): `-Xskip-metadata-version-check` on the
