@@ -22,12 +22,14 @@ import { useQueryClient } from '@tanstack/react-query';
 import { subscribeEvents } from '../api/sse';
 import { useServers } from './servers';
 
-/** Every event name the hub currently broadcasts (packages/electron-app/src/index.ts). */
+/** Every event name the hub and the HA add-on broadcast (both servers emit
+ *  `compile_completed`/`protection_changed`; the rest are hub-only). */
 const INVALIDATING_EVENTS = new Set([
   'compile_completed',
   'rules_updated',
   'remote_control',
   'quarantine_added',
+  'protection_changed',
 ]);
 
 /** Events that produce a visible alert rather than a silent refresh. */

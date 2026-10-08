@@ -107,6 +107,10 @@ export default function DashboardScreen() {
 
   const data = status.data;
   const daemonStopped = data?.protection?.daemonStatus === 'stopped';
+  // The HA add-on shares the /v1 surface but not the hub's control endpoints —
+  // daemon control, cosmetics and browser reload are hub-only. When the server
+  // identifies as the add-on, those buttons hide rather than silently 404.
+  const isAddon = /add-?on/i.test(data?.service ?? '');
   const err = status.error as ApiError | null;
 
   const quarantineCount =
@@ -301,24 +305,26 @@ export default function DashboardScreen() {
             />
           </View>
         </View>
-        <View style={styles.buttonRow}>
-          <View style={styles.buttonFlex}>
-            <ActionButton
-              label="Reload browsers"
-              tone="ghost"
-              onPress={() => reload.mutate()}
-              loading={reload.isPending}
-            />
+        {!isAddon ? (
+          <View style={styles.buttonRow}>
+            <View style={styles.buttonFlex}>
+              <ActionButton
+                label="Reload browsers"
+                tone="ghost"
+                onPress={() => reload.mutate()}
+                loading={reload.isPending}
+              />
+            </View>
+            <View style={styles.buttonFlex}>
+              <ActionButton
+                label="Cosmetics off"
+                tone="ghost"
+                onPress={() => cosmetics.mutate(false)}
+                loading={cosmetics.isPending}
+              />
+            </View>
           </View>
-          <View style={styles.buttonFlex}>
-            <ActionButton
-              label="Cosmetics off"
-              tone="ghost"
-              onPress={() => cosmetics.mutate(false)}
-              loading={cosmetics.isPending}
-            />
-          </View>
-        </View>
+        ) : null}
         {compile.data ? (
           <Text style={styles.metaLine}>
             {compile.data.alreadyRunning
@@ -328,6 +334,15 @@ export default function DashboardScreen() {
         ) : null}
         {reload.data?.success ? (
           <Text style={styles.metaLine}>Reload broadcast sent to browsers.</Text>
+        ) : null}
+        {reload.error ? (
+          <Text style={styles.errorLine}>Browser reload failed: {reload.error.message}</Text>
+        ) : null}
+        {cosmetics.error ? (
+          <Text style={styles.errorLine}>Cosmetics toggle failed: {cosmetics.error.message}</Text>
+        ) : null}
+        {compile.error ? (
+          <Text style={styles.errorLine}>Compile failed: {compile.error.message}</Text>
         ) : null}
       </Card>
 

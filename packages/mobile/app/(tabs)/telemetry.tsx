@@ -34,6 +34,7 @@ function describeEvent(e: ServerEventAlert): string {
       ? 'Threats quarantined'
       : `${n} threat${n === 1 ? '' : 's'} quarantined`;
   }
+  if (e.event === 'protection_changed') return 'Protection toggled';
   if (e.event === 'remote_control') {
     const action = typeof e.data.action === 'string' ? e.data.action.replace(/_/g, ' ') : 'action';
     return `Remote control: ${action}`;
