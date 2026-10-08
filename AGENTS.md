@@ -24,11 +24,15 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
   fresh token with package write scope — flag 53 tracks it. Both publish scripts now
   exit nonzero on a real failure (already-published tolerated as idempotent), so a
   future bad token turns the workflow step red instead of passing quietly.
-- **`npm audit`**: one unpatched advisory remains — `braces` (GHSA-vfj7-8cjw-p6xm,
-  all versions, no patched release). Forge 8.0.1 took it 9 → 6; the residual chain is
-  `webpack-dev-server` → `chokidar`/`http-proxy-middleware` → `micromatch` → `braces`,
-  dev-toolchain only. `audit fix --force` proposes a breaking Forge downgrade; do not
-  take it — flag 52 tracks it.
+- **`npm audit`**: ~70 findings, all dev/build-toolchain, none in shipped code —
+  `braces` (GHSA-vfj7-8cjw-p6xm, all versions, no patched release) drives ~60 of
+  them via jest/metro/chokidar/`webpack-dev-server`; the mobile workspace added
+  most of those paths. The rest: `node-forge` (via `@expo/code-signing-certificates`,
+  bundle-signing only), `sprintf-js` (istanbul coverage), `uuid` (xcode plist
+  writer, prebuild only), `decode-uri-component` (via `expo-router`→`query-string` —
+  nominally runtime-reachable on malformed deep links, moderate DoS only).
+  `audit fix` applies nothing; `--force` proposes incoherent downgrades
+  (`expo@44`, `expo-router@58`, Forge 0.0.2) — do not take it. Flag 52 tracks it.
 - **Electron Forge 8 sharp edges**: `main` must be `.webpack/main/index.cjs` (the
   plugin emits `.cjs` and refuses bare `.webpack/main`); `afterPrune` hooks take one
   `{buildPath, electronVersion, platform, arch}` object, not positional args; the
