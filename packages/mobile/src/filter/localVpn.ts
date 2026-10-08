@@ -5,7 +5,7 @@
  */
 
 import { Platform } from 'react-native';
-import { requireNativeModule } from 'expo-modules-core';
+import { requireNativeModule } from 'expo';
 
 export interface LocalVpnStatus {
   vpnRunning: boolean;

@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { router } from 'expo-router';
+import * as Linking from 'expo-linking';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,7 +25,7 @@ import { useServers } from '../../src/state/servers';
 import { useFilter } from '../../src/state/filter';
 import { LocalVpn, isLocalVpnSupported } from '../../src/filter/localVpn';
 import { nativeRulesPath } from '../../src/filter/ruleset';
-import { ActionButton, Card, Pill } from '../../src/components/ui';
+import { ActionButton, Card, Pill, SectionTitle } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { relativeTime } from '../../src/format';
 import { haptics } from '../../src/haptics';
@@ -39,6 +40,57 @@ const ORIGIN_LABEL: Record<string, string> = {
 function formatSeen(iso: string): string {
   const rel = relativeTime(iso);
   return rel ? ` · seen ${rel}` : '';
+}
+
+const DOC_LINKS: { icon: keyof typeof Ionicons.glyphMap; label: string; hint: string; url: string }[] = [
+  {
+    icon: 'book-outline',
+    label: 'User guide & setup',
+    hint: 'README on GitHub',
+    url: 'https://github.com/Greigh/Blockingmachine#readme',
+  },
+  {
+    icon: 'home-outline',
+    label: 'Home Assistant add-on',
+    hint: 'add-on install & feed source config',
+    url: 'https://github.com/Greigh/Blockingmachine/blob/main/packages/homeassistant-addon/DOCS.md',
+  },
+  {
+    icon: 'documents-outline',
+    label: 'Docs & design notes',
+    hint: 'docs/ on GitHub',
+    url: 'https://github.com/Greigh/Blockingmachine/tree/main/docs',
+  },
+  {
+    icon: 'bug-outline',
+    label: 'Report an issue',
+    hint: 'GitHub issues',
+    url: 'https://github.com/Greigh/Blockingmachine/issues',
+  },
+];
+
+function DocLink({ icon, label, hint, url }: (typeof DOC_LINKS)[number]) {
+  return (
+    <Pressable
+      style={styles.docRow}
+      android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
+      accessibilityRole="link"
+      accessibilityLabel={`${label} — opens ${url}`}
+      onPress={() => {
+        haptics.select();
+        void Linking.openURL(url);
+      }}
+    >
+      <View style={styles.docIcon}>
+        <Ionicons name={icon} size={16} color={colors.accent} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.docLabel}>{label}</Text>
+        <Text style={styles.docHint}>{hint}</Text>
+      </View>
+      <Ionicons name="open-outline" size={15} color={colors.textMuted} />
+    </Pressable>
+  );
 }
 
 /**
@@ -62,7 +114,13 @@ function LocalFilterCard({ ready }: { ready: boolean }) {
     setBusy(key);
     setErr(null);
     try {
-      await fn();
+      // Native calls are near-instant and consent resolves false when no
+      // activity can return a result, so anything past ~45s is a wedged system
+      // call — surface it rather than leaving the button dead until restart.
+      await Promise.race([
+        fn(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out talking to the system — try again.')), 45_000)),
+      ]);
       haptics.success();
     } catch (e) {
       haptics.error();
@@ -91,7 +149,7 @@ function LocalFilterCard({ ready }: { ready: boolean }) {
   return (
     <Card>
       <View style={styles.rowBetween}>
-        <Text style={styles.sectionTitle}>On-device filter</Text>
+        <SectionTitle icon="funnel-outline" label="On-device filter" style={{ marginBottom: 0 }} />
         {s?.vpnRunning ? <Pill label="vpn on" tone="ok" /> : null}
         {s?.proxyRunning ? <Pill label="proxy on" tone="info" /> : null}
       </View>
@@ -170,13 +228,13 @@ export default function SettingsScreen() {
       <GlassBackdrop />
       <ScrollView
         style={styles.scroll}
-      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
+      contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
     >
       <Text style={styles.title}>Settings</Text>
 
       <Card>
         <View style={styles.rowBetween}>
-          <Text style={styles.sectionTitle}>Servers</Text>
+          <SectionTitle icon="server-outline" label="Servers" style={{ marginBottom: 0 }} />
           <Pressable
             onPress={() => router.push('/add-server')}
             accessibilityRole="button"
@@ -229,7 +287,7 @@ export default function SettingsScreen() {
 
       <Card>
         <View style={styles.rowBetween}>
-          <Text style={styles.sectionTitle}>Standalone filter</Text>
+          <SectionTitle icon="phone-portrait-outline" label="Standalone filter" style={{ marginBottom: 0 }} />
           {filter.ready ? <Pill label="on-device" tone="ok" /> : null}
         </View>
         <Text style={styles.meta}>
@@ -281,7 +339,7 @@ export default function SettingsScreen() {
 
       {activeServerId ? (
         <Card>
-          <Text style={styles.sectionTitle}>Feed token</Text>
+          <SectionTitle icon="key-outline" label="Feed token" />
           <Text style={styles.meta}>
             Required only if the server has one configured. Stored in the device
             keychain.
@@ -322,7 +380,7 @@ export default function SettingsScreen() {
 
       {feedUrls.length > 0 ? (
         <Card>
-          <Text style={styles.sectionTitle}>Feed URLs</Text>
+          <SectionTitle icon="link-outline" label="Feed URLs" />
           {feedUrls.map((f) => (
             <View key={f.label} style={styles.feedRow}>
               <Text style={styles.feedLabel}>{f.label}</Text>
@@ -333,6 +391,13 @@ export default function SettingsScreen() {
           ))}
         </Card>
       ) : null}
+
+      <Card>
+        <SectionTitle icon="book-outline" label="Docs" />
+        {DOC_LINKS.map((d) => (
+          <DocLink key={d.url} {...d} />
+        ))}
+      </Card>
       </ScrollView>
     </View>
   );
@@ -342,8 +407,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
   content: { padding: spacing.md, paddingBottom: spacing.xl },
-  title: { color: colors.text, fontSize: 22, fontWeight: '700', marginBottom: spacing.md },
-  sectionTitle: { color: colors.text, fontSize: 16, fontWeight: '700' },
+  title: { color: colors.text, fontSize: 28, fontWeight: '800', marginBottom: spacing.md },
   rowBetween: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -388,6 +452,24 @@ const styles = StyleSheet.create({
   buttonRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   buttonFlex: { flex: 1 },
   feedRow: { borderTopColor: glass.border, borderTopWidth: 1, paddingVertical: spacing.sm },
+  docRow: {
+    alignItems: 'center',
+    borderTopColor: glass.border,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm + 2,
+  },
+  docIcon: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(63,185,80,0.12)',
+    borderRadius: 8,
+    height: 30,
+    justifyContent: 'center',
+    width: 30,
+  },
+  docLabel: { color: colors.text, fontSize: 14, fontWeight: '600' },
+  docHint: { color: colors.textMuted, fontSize: 11, marginTop: 1 },
   feedLabel: { color: colors.text, fontSize: 14, fontWeight: '600' },
   feedUrl: { color: colors.info, fontSize: 12, marginTop: 2 },
   syncError: { color: colors.danger, fontSize: 12, marginTop: spacing.sm },

@@ -19,6 +19,21 @@ export function Card(props: { children: React.ReactNode; style?: object }) {
   return <View style={[styles.card, props.style]}>{props.children}</View>;
 }
 
+/** Card header — leading accent icon + bold label. `style` overrides the bottom gap. */
+export function SectionTitle(props: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  color?: string;
+  style?: object;
+}) {
+  return (
+    <View style={[styles.sectionTitle, props.style]}>
+      <Ionicons name={props.icon} size={16} color={props.color ?? colors.accent} />
+      <Text style={styles.sectionTitleText}>{props.label}</Text>
+    </View>
+  );
+}
+
 export function Pill(props: { label: string; tone?: 'ok' | 'warn' | 'bad' | 'info' | 'muted' }) {
   const tone = props.tone ?? 'muted';
   return (
@@ -130,6 +145,13 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     padding: spacing.md,
   },
+  sectionTitle: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: spacing.sm,
+  },
+  sectionTitleText: { color: colors.text, fontSize: 16, fontWeight: '700' },
   pill: {
     alignSelf: 'flex-start',
     borderRadius: 999,

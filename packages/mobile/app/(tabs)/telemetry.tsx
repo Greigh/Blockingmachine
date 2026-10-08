@@ -6,12 +6,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
-import { useIsFocused } from '@react-navigation/native';
+import { usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useClient } from '../../src/api/useClient';
 import { useServerEvents, type ServerEventAlert } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
-import { Card, ErrorBanner, Pill, Skeleton } from '../../src/components/ui';
+import { Card, ErrorBanner, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { formatTimestamp, relativeTime } from '../../src/format';
 import { chrome, colors, glass, spacing } from '../../src/theme';
@@ -52,7 +52,7 @@ export default function TelemetryScreen() {
 
   // Leaving the tab acknowledges the quarantine alert — clears the tab badge
   // and stops the "new" pills. The banner's ✕ is the other dismissal path.
-  const focused = useIsFocused();
+  const focused = usePathname() === '/telemetry';
   const wasFocused = useRef(false);
   useEffect(() => {
     if (wasFocused.current && !focused && alert?.event === 'quarantine_added') {
@@ -92,7 +92,7 @@ export default function TelemetryScreen() {
       <GlassBackdrop />
       <ScrollView
         style={styles.scroll}
-      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
+      contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -149,7 +149,7 @@ export default function TelemetryScreen() {
 
       {recent.length > 0 ? (
         <Card>
-          <Text style={styles.sectionTitle}>Activity</Text>
+          <SectionTitle icon="pulse-outline" label="Activity" />
           {recent.slice(0, 15).map((e, i) => (
             <View key={`${e.at}-${i}`} style={styles.historyRow}>
               <Text style={styles.historyDate}>{describeEvent(e)}</Text>
@@ -161,7 +161,7 @@ export default function TelemetryScreen() {
 
       {data?.threats && data.threats.length > 0 ? (
         <Card>
-          <Text style={styles.sectionTitle}>Quarantined threats</Text>
+          <SectionTitle icon="warning-outline" label="Quarantined threats" color={colors.warn} />
           {data.threats.map((t) => (
             <View key={t.id} style={styles.threatRow}>
               <View style={{ flex: 1 }}>
@@ -185,7 +185,7 @@ export default function TelemetryScreen() {
 
       {data?.history && data.history.length > 0 ? (
         <Card>
-          <Text style={styles.sectionTitle}>Recent compiles</Text>
+          <SectionTitle icon="construct-outline" label="Recent compiles" />
           {data.history.map((h, i) => (
             <View key={`${h.timestamp}-${i}`} style={styles.historyRow}>
               <Text style={styles.historyDate}>{formatTimestamp(h.timestamp)}</Text>
@@ -200,7 +200,7 @@ export default function TelemetryScreen() {
 
       {data?.browser ? (
         <Card>
-          <Text style={styles.sectionTitle}>Browser telemetry</Text>
+          <SectionTitle icon="globe-outline" label="Browser telemetry" />
           <Text style={styles.meta}>
             {data.browser.trackersBlocked.toLocaleString()} trackers blocked ·{' '}
             {data.browser.elementsHidden.toLocaleString()} elements hidden ·{' '}
@@ -233,9 +233,8 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
   content: { padding: spacing.md, paddingBottom: spacing.xl },
-  title: { color: colors.text, fontSize: 22, fontWeight: '700' },
+  title: { color: colors.text, fontSize: 28, fontWeight: '800' },
   subtitle: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md, marginTop: 2 },
-  sectionTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginBottom: spacing.sm },
   threatRow: {
     alignItems: 'center',
     borderTopColor: glass.border,

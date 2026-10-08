@@ -181,7 +181,11 @@ class PacProxyService : Service() {
       return
     }
     // Rewrite absolute URI → origin form, forward headers verbatim.
-    val path = url.removePrefix("http://").substringAfter('/', "/")
+    // substringAfter('/') alone drops the leading slash (upstream 400s), so take
+    // everything from the first '/' or '?' after the authority, defaulting to "/".
+    val path = url.removePrefix("http://")
+      .dropWhile { it != '/' && it != '?' }
+      .ifEmpty { "/" }
     val method = requestLine.substringBefore(' ')
     val up = upstream.getOutputStream()
     up.write("$method $path HTTP/1.1\r\n".toByteArray())
