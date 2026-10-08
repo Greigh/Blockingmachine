@@ -85,6 +85,42 @@ if (!fs.existsSync(registryPkg)) {
   console.log('patched react-native: wrote @react-native/assets-registry stub package');
 }
 
+// Every expo-* package ships a tsconfig.json extending "expo-module-scripts/tsconfig.base",
+// a dev-only package npm never installs for consumers — so the IDE flags that file when
+// it's opened. A minimal stub satisfies the resolution; nothing actually compiles through
+// it (the workspace tsconfig excludes node_modules entirely).
+const emsPkg = path.join(nm, 'expo-module-scripts');
+if (!fs.existsSync(path.join(emsPkg, 'tsconfig.base.json'))) {
+  fs.mkdirSync(emsPkg, { recursive: true });
+  fs.writeFileSync(
+    path.join(emsPkg, 'package.json'),
+    JSON.stringify(
+      { name: 'expo-module-scripts', version: '0.0.0', private: true },
+      null,
+      2,
+    ) + '\n',
+  );
+  fs.writeFileSync(
+    path.join(emsPkg, 'tsconfig.base.json'),
+    JSON.stringify(
+      {
+        // Patched in by scripts/patch-react-native-rn087.cjs — IDE-only stub.
+        compilerOptions: {
+          strict: true,
+          jsx: 'react-native',
+          module: 'esnext',
+          target: 'esnext',
+          moduleResolution: 'bundler',
+          skipLibCheck: true,
+        },
+      },
+      null,
+      2,
+    ) + '\n',
+  );
+  console.log('patched node_modules: wrote expo-module-scripts tsconfig.base stub');
+}
+
 // Third break, on the Android side: RN 0.87's gradle-plugin pulls an AGP that requires
 // Gradle >=9.4.1, whose bundled kotlin-stdlib (2.3.0) is newer than the metadata
 // version the Kotlin JVM plugin (2.1.20) in Expo's included builds can read. The build
