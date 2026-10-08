@@ -192,6 +192,24 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
   HTML page must never overwrite a good ruleset), and reports sync failures
   in the compile message while keeping the last good files.
 
+## Browser extension ↔ hub wiring (`packages/browser-extension`)
+
+- `feedUrl`/`feedToken` in `bm_ha_config` drive **all three** hub paths:
+  `applyHubConfig()` in `background/index.ts` pushes them into `SyncClient`
+  (rule sync), `LiveListener` (SSE, derived as `origin(feedUrl)/v1/events`),
+  and `HaBridge.reportTelemetry`. Before that wiring the popup fields were
+  dead config — sync/SSE were hardcoded to 127.0.0.1:9191.
+- `LiveListener` treats 401/403 as **terminal** — retrying a bad token can
+  never succeed, so the loop stops; a corrected token lands via `setSource`
+  which revives a dead listener (`isRunning` false → `start()`, not restart).
+- `SyncClient` feed candidates must match real server routes — both servers
+  route lowercase `adguardbrowser.txt`; `adguardBrowser.txt` was a dead
+  candidate for a year+. `/rules.txt` is served by neither.
+- The add-on implements `POST /v1/telemetry/browser` (aggregate mirrors the
+  hub: counters + 50-entry recentTrackers ring, persisted in hub-stats.json)
+  and `GET /v1/protection` + `GET /v1/telemetry`, so an extension or the
+  mobile app pointed at the add-on is not a dead end.
+
 ## Mobile companion (`packages/mobile`, on `feat/mobile-app`)
 
 - Expo SDK 57 + expo-router, iOS/Android remote for the `/v1` surface. Spec:

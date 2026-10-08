@@ -11,6 +11,7 @@ export const DEFAULT_HA_CONFIG: HomeAssistantConfig = {
   url: DEFAULT_HA_URL,
   token: '',
   feedUrl: DEFAULT_FEED_URL,
+  feedToken: '',
   cosmeticsEnabled: true,
   autoSync: true,
 };
@@ -67,27 +68,29 @@ export class HaBridge {
     threatsDetected: number;
     trackers?: Array<{ domain: string; count: number }>;
   }): Promise<boolean> {
-    const endpoints: string[] = [];
+    const endpoints: { url: string; bearer?: string }[] = [];
 
-    // 1. Try configured feed server / local hub
+    // 1. Try configured feed server / local hub — the hub's own mutation token, never the
+    // HA credential. A hub with `feedToken` set refuses unauthenticated mutations.
     if (this.config.feedUrl) {
       try {
         const u = new URL(this.config.feedUrl);
-        endpoints.push(`${u.protocol}//${u.host}/v1/telemetry/browser`);
+        endpoints.push({ url: `${u.protocol}//${u.host}/v1/telemetry/browser`, bearer: this.config.feedToken });
       } catch {
         // invalid URL
       }
     }
     // Default local hub fallback
-    endpoints.push('http://127.0.0.1:9191/v1/telemetry/browser');
+    endpoints.push({ url: 'http://127.0.0.1:9191/v1/telemetry/browser', bearer: this.config.feedToken });
 
-    // 2. If Home Assistant is configured, also report to HA webhook
+    // 2. If Home Assistant is configured, also report to the HA webhook — HA authenticates
+    // webhooks by the secret path, but a bearer passes through harmlessly if one is set.
     if (this.config.enabled && this.config.url) {
       const haBase = this.config.url.replace(/\/+$/, '');
-      endpoints.push(`${haBase}/api/webhook/blockingmachine_browser_telemetry`);
+      endpoints.push({ url: `${haBase}/api/webhook/blockingmachine_browser_telemetry`, bearer: this.config.token });
     }
 
-    for (const url of endpoints) {
+    for (const endpoint of endpoints) {
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 4000);
@@ -95,16 +98,14 @@ export class HaBridge {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
-        // The token is presented to every endpoint the user configured — the HA webhook and the
-        // hub feed alike. A hub with `feedToken` set refuses unauthenticated mutations, so
-        // restricting the header to the HA URL would leave the feed push permanently denied.
-        // Every candidate endpoint is user-configured or localhost, so there is no third party
-        // for the credential to leak to.
-        if (this.config.token) {
-          headers['Authorization'] = `Bearer ${this.config.token}`;
+        // Each endpoint gets the credential that belongs to it — the feed mutation token for
+        // /v1/* pushes, the HA long-lived token for the Home Assistant URL. Every candidate is
+        // user-configured or localhost, so there is no third party for a credential to leak to.
+        if (endpoint.bearer) {
+          headers['Authorization'] = `Bearer ${endpoint.bearer}`;
         }
 
-        const resp = await fetch(url, {
+        const resp = await fetch(endpoint.url, {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -116,7 +117,7 @@ export class HaBridge {
         clearTimeout(timeout);
 
         if (resp.ok) {
-          console.log(`[HaBridge] Telemetry reported successfully to ${url}`);
+          console.log(`[HaBridge] Telemetry reported successfully to ${endpoint.url}`);
           return true;
         }
       } catch {
@@ -130,40 +131,47 @@ export class HaBridge {
   /**
    * Tests reachability of Home Assistant or local hub endpoint.
    */
-  public async testConnection(targetUrl?: string, token?: string): Promise<{ ok: boolean; message: string }> {
+  public async testConnection(targetUrl?: string, token?: string, feedToken?: string): Promise<{ ok: boolean; message: string }> {
     const checkUrl = targetUrl || this.config.url;
     const checkToken = token !== undefined ? token : this.config.token;
+    const checkFeedToken = feedToken !== undefined ? feedToken : this.config.feedToken;
 
-    try {
+    // Try /api/ (Home Assistant — its long-lived token) or /v1/status (a hub feed —
+    // the feed mutation token). The fallback covers pointing the field at the hub.
+    const testCandidates = [
+      { url: `${checkUrl.replace(/\/+$/, '')}/api/`, bearer: checkToken },
+      { url: `${checkUrl.replace(/\/+$/, '')}/v1/status`, bearer: checkFeedToken || checkToken },
+    ];
+
+    let sawAuthFailure = false;
+    let lastHttp: { status: number; url: string } | null = null;
+    for (const candidate of testCandidates) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
+      try {
+        const headers: Record<string, string> = {};
+        if (candidate.bearer) headers['Authorization'] = `Bearer ${candidate.bearer}`;
 
-      // Try /api/ discovery or /v1/status
-      const testCandidates = [
-        `${checkUrl.replace(/\/+$/, '')}/api/`,
-        `${checkUrl.replace(/\/+$/, '')}/v1/status`,
-      ];
+        const resp = await fetch(candidate.url, { headers, signal: controller.signal });
+        clearTimeout(timeout);
 
-      for (const candidate of testCandidates) {
-        try {
-          const headers: Record<string, string> = {};
-          if (checkToken) headers['Authorization'] = `Bearer ${checkToken}`;
-
-          const resp = await fetch(candidate, { headers, signal: controller.signal });
-          clearTimeout(timeout);
-
-          if (resp.ok) {
-            return { ok: true, message: `Connected successfully to ${candidate}` };
-          }
-        } catch {
-          // continue
+        if (resp.ok) {
+          return { ok: true, message: `Connected successfully to ${candidate.url}` };
         }
+        if (resp.status === 401 || resp.status === 403) sawAuthFailure = true;
+        else lastHttp = { status: resp.status, url: candidate.url };
+      } catch {
+        clearTimeout(timeout);
+        // continue
       }
-      clearTimeout(timeout);
-    } catch (err: any) {
-      return { ok: false, message: `Connection failed: ${err?.message || err}` };
     }
 
+    if (sawAuthFailure) {
+      return { ok: false, message: 'Reached the server but it rejected the request (HTTP 401/403). Paste your Home Assistant Long-Lived Access Token (Profile, then Security, then Long-Lived Access Tokens).' };
+    }
+    if (lastHttp) {
+      return { ok: false, message: `Reached the server but the probe returned HTTP ${lastHttp.status} at ${lastHttp.url}.` };
+    }
     return { ok: false, message: 'Could not connect to specified address.' };
   }
 }

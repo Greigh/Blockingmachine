@@ -31,6 +31,8 @@ export interface HomeAssistantConfig {
   url: string;
   token: string;
   feedUrl: string;
+  /** The hub feed's mutation token (`feedToken` in the app) — sent to /v1/* endpoints only, never to Home Assistant. */
+  feedToken: string;
   cosmeticsEnabled: boolean;
   autoSync: boolean;
 }

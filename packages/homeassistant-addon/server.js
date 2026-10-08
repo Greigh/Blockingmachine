@@ -127,7 +127,7 @@ const defaultBrowserRules = [
 /** @type {{ enabled: boolean, pausedUntil: number|null }} */
 let protection = { enabled: true, pausedUntil: null };
 
-/** @type {{ lastCompile: string|null, lastCompileMs: number|null, totalRules: number, dnsRules: number, browserRules: number, quarantinedThreats: number, compileCount: number, history: Array<{timestamp: string, processedRuleCount: number, uniqueRuleCount: number, duplicatesRemoved: number}> }} */
+/** @type {{ lastCompile: string|null, lastCompileMs: number|null, totalRules: number, dnsRules: number, browserRules: number, quarantinedThreats: number, compileCount: number, history: Array<{timestamp: string, processedRuleCount: number, uniqueRuleCount: number, duplicatesRemoved: number}>, browserTelemetry: {trackersBlocked: number, elementsHidden: number, threatsDetected: number, recentTrackers: Array<{domain: string, count: number}>, lastUpdated: string|null} }} */
 let compileStats = {
   lastCompile: null,
   lastCompileMs: null,
@@ -137,6 +137,16 @@ let compileStats = {
   quarantinedThreats: 0,
   compileCount: 0,
   history: [],
+  // Extension-reported counters, aggregated from POST /v1/telemetry/browser the
+  // same way the desktop hub does — reported back out via /v1/status and
+  // /v1/telemetry so a browser pointed at the add-on is not a dead end.
+  browserTelemetry: {
+    trackersBlocked: 0,
+    elementsHidden: 0,
+    threatsDetected: 0,
+    recentTrackers: [],
+    lastUpdated: null,
+  },
 };
 
 /** Bounded SSE subscriber registry for live Home Assistant automations */
@@ -181,6 +191,17 @@ async function loadPersistedState() {
           quarantinedThreats: Number(raw.quarantinedThreats) || 0,
           compileCount: Number(raw.compileCount) || 0,
           history: Array.isArray(raw.history) ? raw.history.slice(0, 10) : [],
+          browserTelemetry: raw.browserTelemetry && typeof raw.browserTelemetry === 'object'
+            ? {
+                trackersBlocked: Number(raw.browserTelemetry.trackersBlocked) || 0,
+                elementsHidden: Number(raw.browserTelemetry.elementsHidden) || 0,
+                threatsDetected: Number(raw.browserTelemetry.threatsDetected) || 0,
+                recentTrackers: Array.isArray(raw.browserTelemetry.recentTrackers)
+                  ? raw.browserTelemetry.recentTrackers.slice(0, 50)
+                  : [],
+                lastUpdated: typeof raw.browserTelemetry.lastUpdated === 'string' ? raw.browserTelemetry.lastUpdated : null,
+              }
+            : compileStats.browserTelemetry,
         };
       }
     }
@@ -740,10 +761,15 @@ const server = createServer(async (req, res) => {
         enabled: protection.enabled && !paused,
         pausedUntil: paused ? protection.pausedUntil : null,
       },
-      // The add-on has no browser clients reporting to it — the counters are honestly
-      // zero here rather than absent, so the integration's telemetry sensors stay
-      // meaningful instead of silently reading an undefined object.
-      browserTelemetry: { trackersBlocked: 0, elementsHidden: 0, threatsDetected: 0 },
+      // Aggregated from POST /v1/telemetry/browser — zeroes until an extension
+      // pointed at this add-on reports in, then real counters.
+      browserTelemetry: {
+        trackersBlocked: compileStats.browserTelemetry.trackersBlocked,
+        elementsHidden: compileStats.browserTelemetry.elementsHidden,
+        threatsDetected: compileStats.browserTelemetry.threatsDetected,
+        recentTrackers: compileStats.browserTelemetry.recentTrackers,
+        lastUpdated: compileStats.browserTelemetry.lastUpdated,
+      },
     }, null, 2));
     return;
   }
@@ -881,15 +907,66 @@ const server = createServer(async (req, res) => {
 
   // 6b. Telemetry — same route the hub serves so the mobile app's Telemetry tab
   // renders instead of erroring on a 404. The add-on has no AI quarantine
-  // pipeline or browser extensions of its own, so threats is honestly empty and
-  // the browser counters match the zeros already reported in /v1/status.
+  // pipeline of its own, so threats is honestly empty; the browser counters are
+  // the live aggregate extensions POST below.
   if (pathname === '/v1/telemetry' || pathname === '/api/telemetry') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({
       threats: [],
       history: compileStats.history,
-      browser: { trackersBlocked: 0, elementsHidden: 0, threatsDetected: 0 },
+      browser: compileStats.browserTelemetry,
     }));
+    return;
+  }
+
+  // 6c. Browser telemetry intake — the same POST contract the hub implements, so
+  // an extension pointed at the add-on (feedUrl = the add-on's address) reports
+  // somewhere real instead of 404ing. Aggregation mirrors the hub: running
+  // counters plus a 50-entry recent-trackers ring.
+  if (pathname === '/v1/telemetry/browser' || pathname === '/api/telemetry/browser') {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use POST.' }));
+      return;
+    }
+    let telemetryBody = '';
+    req.on('data', (chunk) => {
+      telemetryBody += chunk;
+      if (telemetryBody.length > 1e6) req.destroy();
+    });
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(telemetryBody || '{}');
+        const agg = compileStats.browserTelemetry;
+        if (typeof data.trackersBlocked === 'number' && Number.isFinite(data.trackersBlocked)) {
+          agg.trackersBlocked += Math.max(0, Math.floor(data.trackersBlocked));
+        }
+        if (typeof data.elementsHidden === 'number' && Number.isFinite(data.elementsHidden)) {
+          agg.elementsHidden += Math.max(0, Math.floor(data.elementsHidden));
+        }
+        if (typeof data.threatsDetected === 'number' && Number.isFinite(data.threatsDetected)) {
+          agg.threatsDetected += Math.max(0, Math.floor(data.threatsDetected));
+        }
+        if (Array.isArray(data.trackers)) {
+          for (const t of data.trackers) {
+            if (typeof t?.domain !== 'string' || !t.domain.trim() || t.domain.length > 253) continue;
+            const domain = t.domain.trim().toLowerCase();
+            const count = typeof t.count === 'number' && Number.isFinite(t.count) && t.count > 0 ? Math.floor(t.count) : 1;
+            const existing = agg.recentTrackers.find((x) => x.domain === domain);
+            if (existing) existing.count += count;
+            else agg.recentTrackers.unshift({ domain, count });
+          }
+          agg.recentTrackers = agg.recentTrackers.slice(0, 50);
+        }
+        agg.lastUpdated = new Date().toISOString();
+        await persistJson(STATS_PATH, compileStats);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: true, aggregated: agg }));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'Invalid JSON' }));
+      }
+    });
     return;
   }
 

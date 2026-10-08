@@ -171,6 +171,7 @@ export const PopupApp: React.FC = () => {
     url: 'http://homeassistant.local:8123',
     token: '',
     feedUrl: 'http://127.0.0.1:9191/browser.txt',
+    feedToken: '',
     cosmeticsEnabled: true,
     autoSync: true,
   });
@@ -644,7 +645,7 @@ export const PopupApp: React.FC = () => {
       error?: string;
     }>({
       type: 'TEST_HA_CONNECTION',
-      payload: { url: haConfig.url, token: haConfig.token },
+      payload: { url: haConfig.url, token: haConfig.token, feedToken: haConfig.feedToken },
     });
     if (res?.success && res.result) {
       setTestResult(res.result.message);
@@ -652,7 +653,7 @@ export const PopupApp: React.FC = () => {
       setTestResult(res?.error ? `Test failed: ${res.error}` : 'Test failed.');
     }
     setTimeout(() => setTestResult(null), 6000);
-  }, [haConfig.url, haConfig.token]);
+  }, [haConfig.url, haConfig.token, haConfig.feedToken]);
 
   const handlePushTelemetry = useCallback(async () => {
     await sendMessage({ type: 'REPORT_BROWSER_TELEMETRY' });
@@ -894,6 +895,24 @@ export const PopupApp: React.FC = () => {
                 value={haConfig.feedUrl}
                 onChange={(e) => setHaConfig({ ...haConfig, feedUrl: e.target.value })}
               />
+              <span className="form-hint">
+                Where rules sync and live events come from — the desktop hub, or the
+                Home Assistant add-on (e.g. http://homeassistant.local:9191/browser.txt).
+              </span>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Feed mutation token</label>
+              <input
+                className="form-input"
+                type="password"
+                placeholder="Leave blank if the hub's feed token is unset"
+                value={haConfig.feedToken}
+                onChange={(e) => setHaConfig({ ...haConfig, feedToken: e.target.value })}
+              />
+              <span className="form-hint">
+                Sent as a bearer token to the hub's feed server only — the value the hub's
+                feed mutation token is set to, not the Home Assistant token.
+              </span>
             </div>
           </section>
 
@@ -1099,8 +1118,8 @@ export const PopupApp: React.FC = () => {
                 onChange={(e) => setHaConfig({ ...haConfig, token: e.target.value })}
               />
               <span className="form-hint">
-                Sent as a bearer token to Home Assistant and to the hub's feed server — paste the
-                same value the hub's feed mutation token is set to if one is configured.
+                Sent as a bearer token to Home Assistant only. Generate one in HA: Profile,
+                then Security, then Long-Lived Access Tokens.
               </span>
             </div>
 

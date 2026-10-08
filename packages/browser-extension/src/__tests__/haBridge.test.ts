@@ -89,4 +89,66 @@ describe('HaBridge', () => {
       })
     );
   });
+
+  test('reportTelemetry sends the feed token to /v1/* and the HA token to Home Assistant', async () => {
+    const calls: { url: string; auth?: string }[] = [];
+    globalThis.fetch = (jest.fn() as any).mockImplementation(async (url: string, init: any) => {
+      calls.push({ url, auth: init?.headers?.Authorization });
+      // Fail until the HA webhook so every endpoint's credential is captured.
+      return url.includes('/api/webhook/') ? { ok: true, status: 200 } : { ok: false, status: 500 };
+    });
+
+    const bridge = new HaBridge();
+    await bridge.saveConfig({
+      enabled: true,
+      url: 'https://abc123xyz.ui.nabu.casa',
+      token: 'ha-long-lived-token',
+      feedUrl: 'http://192.168.1.10:9191/browser.txt',
+      feedToken: 'hub-feed-token',
+    });
+
+    const sent = await bridge.reportTelemetry({ trackersBlocked: 1, elementsHidden: 0, threatsDetected: 0 });
+    expect(sent).toBe(true);
+    expect(calls).toEqual([
+      { url: 'http://192.168.1.10:9191/v1/telemetry/browser', auth: 'Bearer hub-feed-token' },
+      { url: 'http://127.0.0.1:9191/v1/telemetry/browser', auth: 'Bearer hub-feed-token' },
+      { url: 'https://abc123xyz.ui.nabu.casa/api/webhook/blockingmachine_browser_telemetry', auth: 'Bearer ha-long-lived-token' },
+    ]);
+  });
+
+  test('testConnection reports success when /api/ answers ok', async () => {
+    globalThis.fetch = (jest.fn() as any).mockResolvedValue({ ok: true, status: 200 });
+    const bridge = new HaBridge();
+    const result = await bridge.testConnection('http://homeassistant.local:8123', 'tok');
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain('Connected successfully');
+  });
+
+  test('testConnection names the missing token on a 401 rather than claiming no connection', async () => {
+    globalThis.fetch = (jest.fn() as any).mockImplementation(async (url: string) =>
+      url.endsWith('/api/') ? { ok: false, status: 401 } : { ok: false, status: 404 }
+    );
+    const bridge = new HaBridge();
+    const result = await bridge.testConnection('https://abc123xyz.ui.nabu.casa');
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('401');
+    expect(result.message).toContain('Long-Lived Access Token');
+  });
+
+  test('testConnection reports the HTTP status when the server answered without auth failure', async () => {
+    globalThis.fetch = (jest.fn() as any).mockResolvedValue({ ok: false, status: 404 });
+    const bridge = new HaBridge();
+    const result = await bridge.testConnection('http://192.168.1.20:9999');
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('HTTP 404');
+    expect(result.message).not.toContain('Could not connect');
+  });
+
+  test('testConnection only says "could not connect" when every probe throws', async () => {
+    globalThis.fetch = (jest.fn() as any).mockRejectedValue(new TypeError('fetch failed'));
+    const bridge = new HaBridge();
+    const result = await bridge.testConnection('http://192.0.2.1:8123');
+    expect(result.ok).toBe(false);
+    expect(result.message).toBe('Could not connect to specified address.');
+  });
 });

@@ -213,4 +213,53 @@ describe('SyncClient hot set', () => {
     expect(calls).toContain('http://elsewhere.invalid/hotlist.txt');
     expect(calls).toContain('http://127.0.0.1:9191/hotlist.txt');
   });
+
+  test('sends the configured feed token on every feed request', async () => {
+    const seen: Record<string, string>[] = [];
+    (globalThis as any).fetch = (jest.fn() as any).mockImplementation(async (url: string, init: any) => {
+      seen.push((init?.headers ?? {}) as Record<string, string>);
+      if (String(url).endsWith('hotlist.txt')) return { ok: false, text: async () => '' };
+      return { ok: true, text: async () => FULL_BODY };
+    });
+
+    const client = new SyncClient('http://hub.internal:9191/browser.txt');
+    client.setFeed('http://hub.internal:9191/browser.txt', 'feed-secret');
+    await client.fetchCompiledRules();
+
+    expect(seen.length).toBeGreaterThan(0);
+    for (const headers of seen) {
+      expect(headers['Authorization']).toBe('Bearer feed-secret');
+    }
+  });
+
+  test('setFeed with a blank token drops the header entirely', async () => {
+    const seen: Record<string, string>[] = [];
+    (globalThis as any).fetch = (jest.fn() as any).mockImplementation(async (_url: string, init: any) => {
+      seen.push((init?.headers ?? {}) as Record<string, string>);
+      return { ok: true, text: async () => FULL_BODY };
+    });
+
+    const client = new SyncClient();
+    client.setFeed('http://hub.internal:9191/browser.txt', '  ');
+    await client.fetchCompiledRules();
+
+    for (const headers of seen) {
+      expect(headers['Authorization']).toBeUndefined();
+    }
+  });
+
+  test('a 401 on every candidate still falls back to baseline — and says why', async () => {
+    const seen: Record<string, string>[] = [];
+    (globalThis as any).fetch = (jest.fn() as any).mockImplementation(async (_url: string, init: any) => {
+      seen.push((init?.headers ?? {}) as Record<string, string>);
+      return { ok: false, status: 401, text: async () => '' };
+    });
+
+    const client = new SyncClient('http://hub.internal:9191/browser.txt');
+    client.setFeed('http://hub.internal:9191/browser.txt', 'wrong-token');
+    const result = await client.fetchCompiledRules();
+
+    expect(result.networkRules).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('feed token'));
+  });
 });
