@@ -117,15 +117,21 @@ export async function evaluateLocal(domain: string): Promise<LocalVerdict | null
 export async function syncRuleset(
   baseUrl: string,
   fetchImpl: typeof fetch = fetch,
+  token?: string,
 ): Promise<RulesetMeta> {
   const url = `${baseUrl.replace(/\/+$/, '')}/dns.txt`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30_000);
   let res: Response;
   try {
-    res = await fetchImpl(url, { signal: controller.signal });
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    res = await fetchImpl(url, { headers, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new Error('The hub requires a feed token — set it on this server in Settings');
   }
   if (!res.ok) throw new Error(`Hub answered ${res.status} for the rules feed`);
   const body = await res.text();

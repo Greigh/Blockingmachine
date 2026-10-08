@@ -30,7 +30,7 @@ export interface FilterState {
   /** True once a ruleset is stored — safe to call evaluate(). */
   ready: boolean;
   evaluate: (domain: string) => Promise<LocalVerdict | null>;
-  sync: (baseUrl: string) => Promise<void>;
+  sync: (baseUrl: string, token?: string) => Promise<void>;
   clear: () => Promise<void>;
 }
 
@@ -57,11 +57,11 @@ export function FilterProvider({ children }: { children: React.ReactNode }) {
       .finally(() => setHydrated(true));
   }, []);
 
-  const sync = useCallback(async (baseUrl: string) => {
+  const sync = useCallback(async (baseUrl: string, token?: string) => {
     setSyncing(true);
     setLastError(null);
     try {
-      setMeta(await syncRuleset(baseUrl));
+      setMeta(await syncRuleset(baseUrl, fetch, token));
     } catch (err) {
       setLastError(err instanceof Error ? err.message : String(err));
       throw err;

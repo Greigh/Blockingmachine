@@ -1,6 +1,6 @@
 import { compileRuleSet } from '@blockingmachine/core/domain-evaluator';
 import { compileMatcher } from '../filter/matcher';
-import { parseFeedRules } from '../filter/ruleset';
+import { parseFeedRules, syncRuleset } from '../filter/ruleset';
 
 describe('parseFeedRules', () => {
   it('keeps ABP host rules and exceptions, drops comments/headers', () => {
@@ -36,6 +36,39 @@ describe('parseFeedRules', () => {
   it('returns [] for an empty or comment-only body', () => {
     expect(parseFeedRules('')).toEqual([]);
     expect(parseFeedRules('! nothing\n[header]\n\n')).toEqual([]);
+  });
+});
+
+describe('syncRuleset', () => {
+  const FEED = '||doubleclick.net^\n@@||safe.example.com^\n';
+  const okResponse = () =>
+    ({ ok: true, status: 200, text: () => Promise.resolve(FEED) }) as unknown as Response;
+
+  it('sends the server token as Bearer auth when one is configured', async () => {
+    const seen: (RequestInit | undefined)[] = [];
+    const fetchImpl = ((_url: string, init?: RequestInit) => {
+      seen.push(init);
+      return Promise.resolve(okResponse());
+    }) as unknown as typeof fetch;
+    const meta = await syncRuleset('http://hub.local:9191', fetchImpl, 'secret-token');
+    expect(meta.ruleCount).toBe(2);
+    expect((seen[0]?.headers as Record<string, string>).Authorization).toBe('Bearer secret-token');
+  });
+
+  it('omits the header when no token is configured', async () => {
+    const seen: (RequestInit | undefined)[] = [];
+    const fetchImpl = ((_url: string, init?: RequestInit) => {
+      seen.push(init);
+      return Promise.resolve(okResponse());
+    }) as unknown as typeof fetch;
+    await syncRuleset('http://hub.local:9191/', fetchImpl);
+    expect((seen[0]?.headers as Record<string, string>)?.Authorization).toBeUndefined();
+  });
+
+  it('explains a 401 as a token problem, not a generic HTTP error', async () => {
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve({ ok: false, status: 401, text: () => Promise.resolve('') } as Response);
+    await expect(syncRuleset('http://hub.local:9191', fetchImpl)).rejects.toThrow('feed token');
   });
 });
 

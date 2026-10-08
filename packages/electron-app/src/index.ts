@@ -2884,6 +2884,9 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
               }
               // Keep the tray's cached state in step with what the LAN client just set.
               await refreshTrayProtection();
+              // Same event name the add-on broadcasts — other LAN clients
+              // (mobile app, dashboards) refresh their status on it.
+              broadcastSseEvent('protection_changed', { enabled: result.protectionEnabled });
               res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
               res.end(JSON.stringify({ success: true, enabled: result.protectionEnabled }));
             } catch {

@@ -127,7 +127,7 @@ const defaultBrowserRules = [
 /** @type {{ enabled: boolean, pausedUntil: number|null }} */
 let protection = { enabled: true, pausedUntil: null };
 
-/** @type {{ lastCompile: string|null, lastCompileMs: number|null, totalRules: number, dnsRules: number, browserRules: number, quarantinedThreats: number, compileCount: number }} */
+/** @type {{ lastCompile: string|null, lastCompileMs: number|null, totalRules: number, dnsRules: number, browserRules: number, quarantinedThreats: number, compileCount: number, history: Array<{timestamp: string, processedRuleCount: number, uniqueRuleCount: number, duplicatesRemoved: number}> }} */
 let compileStats = {
   lastCompile: null,
   lastCompileMs: null,
@@ -136,6 +136,7 @@ let compileStats = {
   browserRules: 0,
   quarantinedThreats: 0,
   compileCount: 0,
+  history: [],
 };
 
 /** Bounded SSE subscriber registry for live Home Assistant automations */
@@ -179,6 +180,7 @@ async function loadPersistedState() {
           browserRules: Number(raw.browserRules) || 0,
           quarantinedThreats: Number(raw.quarantinedThreats) || 0,
           compileCount: Number(raw.compileCount) || 0,
+          history: Array.isArray(raw.history) ? raw.history.slice(0, 10) : [],
         };
       }
     }
@@ -278,6 +280,16 @@ async function runCompile() {
     compileStats.lastCompile = new Date().toISOString();
     compileStats.lastCompileMs = Date.now() - startedAt;
     compileStats.compileCount += 1;
+    // History powers the /v1/telemetry "recent compiles" card on clients. The
+    // add-on recounts an already-deduped published feed, so processed == unique
+    // and dupes removed is honestly 0 at this layer.
+    compileStats.history.unshift({
+      timestamp: compileStats.lastCompile,
+      processedRuleCount: compileStats.totalRules,
+      uniqueRuleCount: compileStats.totalRules,
+      duplicatesRemoved: 0,
+    });
+    compileStats.history = compileStats.history.slice(0, 10);
     await persistJson(STATS_PATH, compileStats);
     broadcastSse('compile_completed', {
       total: compileStats.totalRules,
@@ -765,6 +777,13 @@ const server = createServer(async (req, res) => {
 
   // 4. Protection toggle (pause / resume blocking state)
   if (pathname === '/v1/protection' || pathname === '/v1/toggle') {
+    // GET parity with the hub — LAN clients (mobile app, integrations) can read
+    // the protection state without parsing it out of /v1/status.
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ enabled: protection.enabled, pausedUntil: protection.pausedUntil }));
+      return;
+    }
     if (req.method !== 'POST') {
       res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
@@ -856,6 +875,20 @@ const server = createServer(async (req, res) => {
       offset,
       limit,
       rules: filtered.slice(offset, offset + limit),
+    }));
+    return;
+  }
+
+  // 6b. Telemetry — same route the hub serves so the mobile app's Telemetry tab
+  // renders instead of erroring on a 404. The add-on has no AI quarantine
+  // pipeline or browser extensions of its own, so threats is honestly empty and
+  // the browser counters match the zeros already reported in /v1/status.
+  if (pathname === '/v1/telemetry' || pathname === '/api/telemetry') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      threats: [],
+      history: compileStats.history,
+      browser: { trackersBlocked: 0, elementsHidden: 0, threatsDetected: 0 },
     }));
     return;
   }

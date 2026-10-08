@@ -248,7 +248,7 @@ export default function SettingsScreen() {
                 if (!activeServer) return;
                 setSyncError(null);
                 filter
-                  .sync(activeServer.baseUrl)
+                  .sync(activeServer.baseUrl, activeToken)
                   .then(() => haptics.success())
                   .catch((e) => {
                     haptics.error();
