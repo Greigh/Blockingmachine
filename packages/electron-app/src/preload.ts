@@ -54,9 +54,9 @@ contextBridge.exposeInMainWorld('electron', {
   selectElementHarvest: () => ipcRenderer.invoke('select-element-harvest') as Promise<string>,
   /** Forgets the chosen harvest, and deletes the file. */
   clearElementHarvest: () => ipcRenderer.invoke('clear-element-harvest') as Promise<string>,
-  /** Downloads the release's extension package and unpacks it where the user picks. */
-  downloadExtension: () =>
-    ipcRenderer.invoke('download-extension') as Promise<{
+  /** Downloads the release's extension package for the chosen browser and unpacks it where the user picks. */
+  downloadExtension: (flavor?: 'chromium' | 'firefox' | 'both') =>
+    ipcRenderer.invoke('download-extension', flavor) as Promise<{
       success: boolean;
       cancelled?: boolean;
       path?: string;

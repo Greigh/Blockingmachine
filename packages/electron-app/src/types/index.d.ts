@@ -160,7 +160,8 @@ export interface SinkholeConfig {
 
 export interface SinkholeSyncResult {
   service: string;
-  status: 'success' | 'error' | 'skipped';
+  /** 'warning' = trigger dispatched but confirmation never arrived (e.g. a slow HA service call). */
+  status: 'success' | 'error' | 'skipped' | 'warning';
   message: string;
   details?: string;
 }
@@ -512,8 +513,8 @@ export interface ElectronAPI {
   getElementHarvest: () => Promise<import('../elementHarvest.js').ElementHarvestSummary>;
   selectElementHarvest: () => Promise<string>;
   clearElementHarvest: () => Promise<string>;
-  /** Downloads the release's extension package and unpacks it where the user picks. */
-  downloadExtension?: () => Promise<{
+  /** Downloads the release's extension package for the chosen browser and unpacks it where the user picks. */
+  downloadExtension?: (flavor?: 'chromium' | 'firefox' | 'both') => Promise<{
     success: boolean;
     cancelled?: boolean;
     /** The unpacked Chromium package folder, when that asset was written. */

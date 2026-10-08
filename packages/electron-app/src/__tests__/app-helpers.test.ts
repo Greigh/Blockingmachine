@@ -5,6 +5,7 @@ import { cleanDomainPattern } from '@blockingmachine/core';
 import {
   formatSinkholeError,
   isPrivateOrLocalHost,
+  isSinkholeTimeoutError,
   normalizeServiceUrl,
   replaceMatchingExplicitPort,
   resolveAdguardDirectUrl,
@@ -655,6 +656,23 @@ describe('Electron App Core Utilities & IPC Logic', () => {
       });
       expect(dnsMessage).toContain('Could not resolve homeassistant.local');
       expect(dnsMessage).toContain('mDNS');
+    });
+
+    test('classifies abort and timeout failures as sinkhole timeouts', () => {
+      const aborted = Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' });
+      const etimedout = Object.assign(new Error('request timed out'), { code: 'ETIMEDOUT' });
+      const headersTimeout = Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('headers timeout'), { code: 'UND_ERR_HEADERS_TIMEOUT' }),
+      });
+      const refused = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+      const httpError = new Error('HTTP status 500');
+
+      expect(isSinkholeTimeoutError(aborted)).toBe(true);
+      expect(isSinkholeTimeoutError(etimedout)).toBe(true);
+      expect(isSinkholeTimeoutError(headersTimeout)).toBe(true);
+      expect(isSinkholeTimeoutError(refused)).toBe(false);
+      expect(isSinkholeTimeoutError(httpError)).toBe(false);
+      expect(isSinkholeTimeoutError(undefined)).toBe(false);
     });
 
     test('limits untrusted TLS bypass to local and private hosts', () => {

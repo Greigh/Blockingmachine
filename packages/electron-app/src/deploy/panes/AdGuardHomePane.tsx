@@ -475,7 +475,7 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
             </span>
           )}
           {lastSyncResult?.service?.toLowerCase().includes('adguard') && !isServiceMismatch(lastSyncResult.details) && (
-            <span className={`test-status-pill ${lastSyncResult.status === 'success' ? 'success' : 'error'}`} style={{ alignSelf: 'flex-start' }}>
+            <span className={`test-status-pill ${lastSyncResult.status === 'success' ? 'success' : lastSyncResult.status === 'warning' ? 'warning' : 'error'}`} style={{ alignSelf: 'flex-start' }}>
               Last Reload: {lastSyncResult.message} ({lastSyncResult.timestamp})
             </span>
           )}

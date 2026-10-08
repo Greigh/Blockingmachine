@@ -70,4 +70,22 @@ describe('the extension package download', () => {
     expect(pane).toContain('blockingmachine-extension-firefox');
     expect(pane).toContain('manifest.json');
   });
+
+  test('fetches only the browser the user picked — the choice is validated main-side', () => {
+    const body = handlerBody();
+    // The renderer's pick arrives as an argument and is re-validated in the main
+    // process — an unknown value widens to 'both', never to an unchecked branch.
+    expect(body).toContain('requested?: string');
+    expect(body).toContain("requested === 'chromium' || requested === 'firefox'");
+    // The filter is what keeps a 'chromium' pick from writing the Firefox folder.
+    expect(body).toContain("flavor === 'both' || t.flavor === flavor");
+    // A missing-asset error names the flavor that was asked for.
+    expect(body).toContain('extension package assets');
+    // The pane offers the pick and hands it to the handler — no silent both-download.
+    expect(pane).toContain('value={extensionBrowser}');
+    expect(pane).toContain('handleDownloadExtension(extensionBrowser)');
+    expect(pane).toContain('value="chromium"');
+    expect(pane).toContain('value="firefox"');
+    expect(pane).toContain('value="both"');
+  });
 });

@@ -178,6 +178,8 @@ function bundle(overrides: Partial<HubPaneProps> = {}): HubPaneProps {
     extensionSaving: false,
     extensionSavedPath: null,
     extensionMessage: null,
+    extensionBrowser: 'both',
+    setExtensionBrowser: noop,
     handleDownloadExtension: noopAsync,
     siblingTargets: [],
     onSelectTarget: noop,
