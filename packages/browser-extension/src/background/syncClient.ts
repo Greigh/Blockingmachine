@@ -25,13 +25,22 @@ const FEED_TIMEOUT_MS = 5000;
  * `await`, so the pending timer survives and keeps a 5-second handle alive in a service worker that
  * has nothing left to do. That is exactly the situation the hot set creates most often, since it is
  * consulted against deployments that are expected not to have one.
+ *
+ * A 401/403 gets its own log line — "the server wants the feed token" and "the server is down"
+ * are very different failures, and both used to collapse into the same silent baseline fallback.
  */
-async function fetchFeedText(url: string): Promise<string | null> {
+async function fetchFeedText(url: string, token?: string): Promise<string | null> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FEED_TIMEOUT_MS);
 
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const response = await fetch(url, { headers, signal: controller.signal });
+    if (response.status === 401 || response.status === 403) {
+      console.warn(`[SyncClient] ${url} rejected the request (HTTP ${response.status}) — the server wants a feed token (Popup → Home Assistant → feed token).`);
+      return null;
+    }
     if (!response.ok) return null;
     return await response.text();
   } catch (err: any) {
@@ -54,9 +63,19 @@ function ingestableLines(text: string): string[] {
 
 export class SyncClient {
   private feedUrl: string;
+  private feedToken?: string;
 
   constructor(feedUrl: string = DEFAULT_FEED_URL) {
     this.feedUrl = feedUrl;
+  }
+
+  /**
+   * Repoint the client at a configured feed (and its token). Called when the HA
+   * config changes — the stored feed URL is otherwise dead config.
+   */
+  public setFeed(feedUrl: string, feedToken?: string): void {
+    if (feedUrl.trim()) this.feedUrl = feedUrl.trim();
+    this.feedToken = feedToken?.trim() || undefined;
   }
 
   /**
@@ -87,7 +106,7 @@ export class SyncClient {
     ];
 
     for (const url of hotUrls) {
-      const text = await fetchFeedText(url);
+      const text = await fetchFeedText(url, this.feedToken);
       if (text === null) continue;
 
       const lines = ingestableLines(text);
@@ -103,10 +122,13 @@ export class SyncClient {
   }
 
   async fetchCompiledRules(): Promise<IngestedRules> {
+    // The fallback filenames must match what the servers actually route — the
+    // hub's feedServing allowlist and the add-on's router both speak lowercase
+    // 'adguardbrowser.txt'; the mixed-case spelling never matched anything.
     const candidateUrls = [
       this.feedUrl,
-      'http://127.0.0.1:9191/adguardBrowser.txt',
-      'http://127.0.0.1:9191/rules.txt'
+      'http://127.0.0.1:9191/adguardbrowser.txt',
+      'http://127.0.0.1:9191/browser.txt',
     ];
 
     // Started here and awaited at the end rather than awaited here, so the hot set costs no
@@ -120,7 +142,7 @@ export class SyncClient {
     const hotRuleLines = this.fetchHotRuleLines(candidateUrls);
 
     for (const url of candidateUrls) {
-      const text = await fetchFeedText(url);
+      const text = await fetchFeedText(url, this.feedToken);
       if (text === null) continue;
 
       const networkRules: string[] = [];

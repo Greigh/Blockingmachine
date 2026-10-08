@@ -60,7 +60,9 @@ import {
 import { tierFromRulesetId } from '../shared/tierAttribution.js';
 import { categoryForTier } from '../shared/trackerCategory.js';
 import {
+  DEFAULT_FEED_URL,
   DEFAULT_HUB_PORT,
+  DEFAULT_SSE_ENDPOINT,
   STORAGE_KEY_COSMETICS,
   STORAGE_KEY_COSMETICS_ENABLED,
   STORAGE_KEY_CUSTOM_RULES,
@@ -90,6 +92,31 @@ const ruleHits = new RuleHitStats();
 const ledger = new LedgerSessionRecorder();
 const sync = new SyncClient();
 const haBridge = new HaBridge();
+
+/**
+ * Push the stored HA config's feed URL/token into the two clients that actually
+ * use them — the popup writes `feedUrl`/`feedToken` but nothing reached the rule
+ * sync or the live event stream, so a configured remote server (or a feed token)
+ * was dead config. A feed-URL change also re-syncs so the new source applies
+ * immediately rather than at the next alarm.
+ */
+let appliedFeedUrl: string | null = null;
+async function applyHubConfig(): Promise<void> {
+  const cfg = await haBridge.loadConfig();
+  const feedUrl = cfg.feedUrl?.trim() || DEFAULT_FEED_URL;
+  const feedToken = cfg.feedToken?.trim() || undefined;
+  let sseEndpoint = DEFAULT_SSE_ENDPOINT;
+  try {
+    sseEndpoint = `${new URL(feedUrl).origin}/v1/events`;
+  } catch {
+    /* malformed configured URL — keep the localhost default */
+  }
+  const feedChanged = appliedFeedUrl !== null && feedUrl !== appliedFeedUrl;
+  sync.setFeed(feedUrl, feedToken);
+  liveListener.setSource(sseEndpoint, feedToken);
+  appliedFeedUrl = feedUrl;
+  if (feedChanged) await syncAndApplyRules();
+}
 
 // ─── Site control state ───────────────────────────────────────────────────────
 
@@ -1046,6 +1073,12 @@ void (async () => {
   await reconcileDynamicRules();
 })().catch(() => {});
 
+// Apply the stored feed URL/token *before* the first connect so a token-gated
+// server never sees an unauthenticated attempt (which now stops the retry loop).
+// The race is covered anyway: setSource restarts the listener if the endpoint or
+// credential it lands on differs from the defaults it first connected with.
+void applyHubConfig();
+
 liveListener.start();
 
 // ─── Matched-rule accounting ──────────────────────────────────────────────────
@@ -1916,12 +1949,15 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       return true;
 
     case 'SET_HA_CONFIG':
-      haBridge.saveConfig(message.payload || {}).then((cfg) => sendResponse({ success: true, config: cfg }));
+      haBridge.saveConfig(message.payload || {}).then((cfg) => {
+        void applyHubConfig();
+        sendResponse({ success: true, config: cfg });
+      });
       return true;
 
     case 'TEST_HA_CONNECTION':
       haBridge
-        .testConnection(message.payload?.url, message.payload?.token)
+        .testConnection(message.payload?.url, message.payload?.token, message.payload?.feedToken)
         .then((result) => sendResponse({ success: true, result }))
         .catch((err) => sendResponse({ success: false, error: String(err) }));
       return true;

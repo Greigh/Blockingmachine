@@ -11,6 +11,7 @@ export interface LiveEventCallbacks {
 
 export class LiveListener {
   private endpoint: string;
+  private token?: string;
   private callbacks: LiveEventCallbacks;
   private abortController: AbortController | null = null;
   private isRunning = false;
@@ -41,6 +42,24 @@ export class LiveListener {
         this.restart();
       }
     }
+  }
+
+  /**
+   * Point the listener at a (possibly different) server's event stream with the
+   * credential that server expects. Called when the HA config's feed URL or
+   * token changes — a token change must reconnect because a 401 stops the loop
+   * and only a fresh fetch carries the new header.
+   */
+  public setSource(endpoint: string, token?: string): void {
+    const nextToken = token?.trim() || undefined;
+    const changed = endpoint !== this.endpoint || nextToken !== this.token;
+    this.endpoint = endpoint;
+    this.token = nextToken;
+    if (!changed) return;
+    // A 401 sets isRunning=false, so restart() alone would leave a listener that
+    // died on a bad token dead forever — the user fixing the token must resume it.
+    if (this.isRunning) this.restart();
+    else this.start();
   }
 
   public start(): void {
@@ -86,13 +105,25 @@ export class LiveListener {
 
     try {
       // Prefer fetch stream for MV3 Service Worker compatibility
+      const headers: Record<string, string> = {
+        Accept: 'text/event-stream',
+        'Cache-Control': 'no-cache',
+      };
+      if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
       const response = await fetch(this.endpoint, {
         signal: this.abortController.signal,
-        headers: {
-          Accept: 'text/event-stream',
-          'Cache-Control': 'no-cache',
-        },
+        headers,
       });
+
+      // An auth failure is terminal — retrying with the same header can never
+      // fix it, so the loop stops instead of hammering a gated server. The user
+      // fixes the token in the popup, which restarts the listener via setSource.
+      if (response.status === 401 || response.status === 403) {
+        console.warn(`[Blockingmachine Live] Event stream rejected with HTTP ${response.status} — check the feed token in the popup.`);
+        this.isRunning = false;
+        this.updateStatus('disconnected');
+        return;
+      }
 
       if (!response.ok || !response.body) {
         throw new Error(`SSE stream HTTP ${response.status}`);
