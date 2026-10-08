@@ -11,6 +11,7 @@
  */
 
 import * as FileSystem from 'expo-file-system/legacy';
+import { UserError } from '../errors';
 import { compileMatcher, type CompiledRuleset } from './matcher';
 
 const RULES_FILE = `${FileSystem.documentDirectory}ruleset.txt`;
@@ -131,12 +132,16 @@ export async function syncRuleset(
     clearTimeout(timer);
   }
   if (res.status === 401 || res.status === 403) {
-    throw new Error('The hub requires a feed token — set it on this server in Settings');
+    throw new UserError('This server is locked — add its feed token in Settings.');
   }
-  if (!res.ok) throw new Error(`Hub answered ${res.status} for the rules feed`);
+  if (!res.ok) {
+    throw new UserError(`The server couldn\u2019t send the rules (error ${res.status}) — try again.`);
+  }
   const body = await res.text();
   const rules = parseFeedRules(body);
-  if (rules.length === 0) throw new Error('The feed contained no usable rules');
+  if (rules.length === 0) {
+    throw new UserError('The rules feed came back empty — the hub may still be compiling. Try again in a moment.');
+  }
   await FileSystem.writeAsStringAsync(RULES_FILE, body);
   await FileSystem.writeAsStringAsync(NATIVE_RULES_FILE, toNativeRules(rules).join('\n') + '\n');
   const meta: RulesetMeta = {

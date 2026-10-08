@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError } from '../../src/api/client';
+import { describeError, describeActionError } from '../../src/errors';
 import { useClient } from '../../src/api/useClient';
 import { useServerEvents } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
@@ -185,16 +186,7 @@ export default function DashboardScreen() {
       ) : null}
 
       {err ? (
-        <ErrorBanner
-          message={
-            err.kind === 'unauthorized'
-              ? 'Server requires a feed token — add it in Settings.'
-              : err.kind === 'unreachable'
-                ? `Can't reach server — check the hub's feed server is on (Settings → Pair Mobile App). ${err.message}`
-                : `Can't reach server: ${err.message}`
-          }
-          onRetry={() => void status.refetch()}
-        />
+        <ErrorBanner {...describeError(err)} onRetry={() => void status.refetch()} />
       ) : null}
 
       {status.isLoading && !data ? (
@@ -260,15 +252,19 @@ export default function DashboardScreen() {
         ) : null}
         {daemon.error ? (
           <Text style={styles.errorLine}>
-            Daemon {daemon.variables === 'stop' ? 'stop' : 'start'} failed:{' '}
-            {daemon.error.message}
+            {describeActionError(
+              daemon.variables === 'stop'
+                ? 'Couldn\u2019t stop the DNS daemon'
+                : 'Couldn\u2019t start the DNS daemon',
+              daemon.error,
+            ).title}
           </Text>
         ) : null}
         {protection.error ? (
           <Text style={styles.errorLine}>
             {protection.error instanceof ApiError && protection.error.status === 503
-              ? 'DNS daemon is not running — start it on the hub first.'
-              : `Toggle failed: ${protection.error.message}`}
+              ? 'The DNS daemon isn\u2019t running — start it first.'
+              : describeActionError('Couldn\u2019t change protection', protection.error).title}
           </Text>
         ) : null}
       </Card>
@@ -349,13 +345,19 @@ export default function DashboardScreen() {
           <Text style={styles.metaLine}>Reload broadcast sent to browsers.</Text>
         ) : null}
         {reload.error ? (
-          <Text style={styles.errorLine}>Browser reload failed: {reload.error.message}</Text>
+          <Text style={styles.errorLine}>
+            {describeActionError('Couldn\u2019t reload browsers', reload.error).title}
+          </Text>
         ) : null}
         {cosmetics.error ? (
-          <Text style={styles.errorLine}>Cosmetics toggle failed: {cosmetics.error.message}</Text>
+          <Text style={styles.errorLine}>
+            {describeActionError('Couldn\u2019t turn off cosmetics', cosmetics.error).title}
+          </Text>
         ) : null}
         {compile.error ? (
-          <Text style={styles.errorLine}>Compile failed: {compile.error.message}</Text>
+          <Text style={styles.errorLine}>
+            {describeActionError('Couldn\u2019t compile rules', compile.error).title}
+          </Text>
         ) : null}
       </Card>
 

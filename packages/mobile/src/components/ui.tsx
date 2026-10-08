@@ -92,11 +92,14 @@ export function ActionButton(props: {
   );
 }
 
-export function ErrorBanner(props: { message: string; onRetry?: () => void }) {
+export function ErrorBanner(props: { title: string; detail?: string; onRetry?: () => void }) {
   return (
     <View style={styles.errorBanner}>
       <Ionicons name="alert-circle-outline" size={18} color={colors.danger} />
-      <Text style={styles.errorText}>{props.message}</Text>
+      <View style={styles.errorBody}>
+        <Text style={styles.errorText}>{props.title}</Text>
+        {props.detail ? <Text style={styles.errorDetail}>{props.detail}</Text> : null}
+      </View>
       {props.onRetry ? (
         <Pressable onPress={props.onRetry} accessibilityRole="button" hitSlop={8}>
           <Text style={styles.errorRetry}>Retry</Text>
@@ -222,6 +225,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.08)',
     borderRadius: 6,
   },
+  errorBody: { flex: 1 },
+  errorDetail: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
   errorRetry: { color: colors.info, fontWeight: '600', marginLeft: spacing.md },
-  errorText: { color: colors.text, flex: 1 },
+  errorText: { color: colors.text },
 });

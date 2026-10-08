@@ -26,6 +26,7 @@ import { useFilter } from '../../src/state/filter';
 import { LocalVpn, isLocalVpnSupported } from '../../src/filter/localVpn';
 import { nativeRulesPath } from '../../src/filter/ruleset';
 import { ActionButton, Card, Pill, SectionTitle } from '../../src/components/ui';
+import { describeError, UserError, type FriendlyError } from '../../src/errors';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { relativeTime } from '../../src/format';
 import { haptics } from '../../src/haptics';
@@ -106,7 +107,7 @@ function LocalFilterCard({ ready }: { ready: boolean }) {
     refetchInterval: 4000,
   });
   const [busy, setBusy] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<FriendlyError | null>(null);
   const s = vpn.data;
   const rules = nativeRulesPath();
 
@@ -119,12 +120,12 @@ function LocalFilterCard({ ready }: { ready: boolean }) {
       // call — surface it rather than leaving the button dead until restart.
       await Promise.race([
         fn(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out talking to the system — try again.')), 45_000)),
+        new Promise((_, reject) => setTimeout(() => reject(new UserError('The system didn\u2019t answer — try again.')), 45_000)),
       ]);
       haptics.success();
     } catch (e) {
       haptics.error();
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(describeError(e));
     } finally {
       setBusy(null);
       void vpn.refetch();
@@ -134,7 +135,7 @@ function LocalFilterCard({ ready }: { ready: boolean }) {
   const startVpn = () =>
     act('vpn', async () => {
       const granted = await LocalVpn.requestVpnConsent();
-      if (!granted) throw new Error('VPN permission denied — the local filter needs it to run.');
+      if (!granted) throw new UserError('VPN access was declined — the filter needs it to run. Tap Start to try again.');
       await LocalVpn.startVpn(rules, '8.8.8.8', 'Blockingmachine');
     });
 
@@ -158,7 +159,12 @@ function LocalFilterCard({ ready }: { ready: boolean }) {
           ? 'Filter this device\u2019s DNS (local VPN) and serve a proxy other devices on the network can use. HTTPS is covered at the domain level — no certificate install, no MITM.'
           : 'Sync rules above first — the local filter runs on the synced ruleset.'}
       </Text>
-      {err ? <Text style={styles.syncError}>{err}</Text> : null}
+      {err ? (
+        <>
+          <Text style={styles.syncError}>{err.title}</Text>
+          {err.detail ? <Text style={styles.syncErrorDetail}>{err.detail}</Text> : null}
+        </>
+      ) : null}
       <View style={styles.buttonRow}>
         <View style={styles.buttonFlex}>
           <ActionButton
@@ -201,7 +207,7 @@ export default function SettingsScreen() {
   const filter = useFilter();
   const activeServer = servers.find((s) => s.id === activeServerId);
   const [tokenDraft, setTokenDraft] = useState<string | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<FriendlyError | null>(null);
 
   const status = useQuery({
     queryKey: ['status', activeServer?.baseUrl ?? 'none'],
@@ -217,7 +223,7 @@ export default function SettingsScreen() {
   ].filter((f) => typeof f.url === 'string');
 
   const confirmRemove = (id: string, label: string) => {
-    Alert.alert('Remove server', `Remove ${label}?`, [
+    Alert.alert('Remove this server?', `You\u2019ll need to add ${label} again to control it.`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Remove', style: 'destructive', onPress: () => void removeServer(id) },
     ]);
@@ -295,7 +301,12 @@ export default function SettingsScreen() {
             ? `${filter.meta.ruleCount.toLocaleString()} rules stored on this device — synced ${relativeTime(filter.meta.syncedAt) ?? 'recently'} from ${filter.meta.sourceUrl}. Domain checks keep working when the hub is unreachable.`
             : 'Download the hub\u2019s compiled rules once and the app answers domain checks on-device \u2014 even with the hub unreachable or no server configured.'}
         </Text>
-        {syncError ? <Text style={styles.syncError}>{syncError}</Text> : null}
+        {syncError ? (
+          <>
+            <Text style={styles.syncError}>{syncError.title}</Text>
+            {syncError.detail ? <Text style={styles.syncErrorDetail}>{syncError.detail}</Text> : null}
+          </>
+        ) : null}
         <View style={styles.buttonRow}>
           <View style={styles.buttonFlex}>
             <ActionButton
@@ -310,7 +321,7 @@ export default function SettingsScreen() {
                   .then(() => haptics.success())
                   .catch((e) => {
                     haptics.error();
-                    setSyncError(e instanceof Error ? e.message : String(e));
+                    setSyncError(describeError(e));
                   });
               }}
             />
@@ -321,7 +332,7 @@ export default function SettingsScreen() {
                 label="Clear rules"
                 tone="ghost"
                 onPress={() =>
-                  Alert.alert('Clear on-device rules', 'Domain checks will require the hub again.', [
+                  Alert.alert('Clear on-device rules?', 'Checks will go back to asking the hub — and won\u2019t work while it\u2019s unreachable.', [
                     { text: 'Cancel', style: 'cancel' },
                     { text: 'Clear', style: 'destructive', onPress: () => void filter.clear() },
                   ])
@@ -473,4 +484,5 @@ const styles = StyleSheet.create({
   feedLabel: { color: colors.text, fontSize: 14, fontWeight: '600' },
   feedUrl: { color: colors.info, fontSize: 12, marginTop: 2 },
   syncError: { color: colors.danger, fontSize: 12, marginTop: spacing.sm },
+  syncErrorDetail: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
 });

@@ -22,6 +22,7 @@ import { browseServers, DiscoveredServer, isDiscoveryAvailable } from '../src/ap
 import { decodePairingPayload, PairingError, type PairingPayload } from '../src/api/pairing';
 import { useServers } from '../src/state/servers';
 import { ActionButton, Card, Pill } from '../src/components/ui';
+import { describeError, type FriendlyError } from '../src/errors';
 import { GlassBackdrop } from '../src/components/GlassBackdrop';
 import { colors, glass, spacing } from '../src/theme';
 
@@ -40,7 +41,7 @@ export default function AddServerScreen() {
   const [mode, setMode] = useState<Mode>('pick');
   const [host, setHost] = useState('');
   const [token, setToken] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<FriendlyError | null>(null);
   const [testing, setTesting] = useState(false);
   const [pending, setPending] = useState<PendingSave | null>(null);
 
@@ -60,7 +61,8 @@ export default function AddServerScreen() {
             Object.entries(prev).filter(([, s]) => s.name !== name),
           ),
         ),
-      onError: (e) => setDiscoverError(e.message),
+      onError: () =>
+        setDiscoverError('Discovery hit a problem — try manual entry or QR instead.'),
     });
     return () => session.stop();
   }, [mode]);
@@ -81,8 +83,8 @@ export default function AddServerScreen() {
     } catch (err) {
       setError(
         err instanceof ApiError && err.kind === 'unauthorized'
-          ? 'Server answered but needs a token — enter it below and retry.'
-          : `Can't reach ${candidate.baseUrl}: ${err instanceof Error ? err.message : String(err)}`,
+          ? { title: 'This server is locked — enter its feed token below.' }
+          : describeError(err),
       );
     } finally {
       setTesting(false);
@@ -133,11 +135,12 @@ export default function AddServerScreen() {
         token: payload.token,
       });
     } else {
-      setError(
-        candidates.length > 1
-          ? `The code listed ${candidates.length} hub addresses — none answered. Check both devices are on the same network.`
-          : `Can't reach ${candidates[0]} — check both devices are on the same network.`,
-      );
+      setError({
+        title:
+          candidates.length > 1
+            ? 'None of the hub\u2019s addresses answered — make sure both devices are on the same network.'
+            : 'The hub didn\u2019t answer — make sure both devices are on the same network.',
+      });
       scannedRef.current = false;
     }
     setTesting(false);
@@ -149,7 +152,12 @@ export default function AddServerScreen() {
     try {
       void stageQr(decodePairingPayload(data));
     } catch (err) {
-      setError(err instanceof PairingError ? err.message : 'Unreadable QR code');
+      setError({
+        title:
+          err instanceof PairingError
+            ? err.message
+            : 'That QR code isn\u2019t from Blockingmachine — scan the one in the desktop app\u2019s Settings → Pair mobile app.',
+      });
       scannedRef.current = false;
     }
   };
@@ -197,7 +205,8 @@ export default function AddServerScreen() {
 
       {error ? (
         <Card style={styles.errorCard}>
-          <Text style={styles.errorText}>{error}</Text>
+          <Text style={styles.errorText}>{error.title}</Text>
+          {error.detail ? <Text style={styles.errorDetail}>{error.detail}</Text> : null}
         </Card>
       ) : null}
 
@@ -270,8 +279,10 @@ export default function AddServerScreen() {
                   let baseUrl: string;
                   try {
                     baseUrl = normalizeBaseUrl(host);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : 'Invalid address');
+                  } catch {
+                    setError({
+                      title: 'That doesn\u2019t look like a server address — try something like 192.168.1.10:9191.',
+                    });
                     return;
                   }
                   void testAndStage({
@@ -330,13 +341,13 @@ export default function AddServerScreen() {
           <Text style={styles.sectionTitle}>On this network</Text>
           {!isDiscoveryAvailable() ? (
             <Text style={styles.meta}>
-              mDNS discovery needs the dev-client build — it isn't available in Expo
-              Go. Use manual entry or QR instead.
+              Network discovery needs the dev-client build — use manual entry or
+              QR instead.
             </Text>
           ) : discoverError ? (
             <Text style={styles.errorText}>{discoverError}</Text>
           ) : Object.keys(found).length === 0 ? (
-            <Text style={styles.meta}>Searching for _blockingmachine._tcp…</Text>
+            <Text style={styles.meta}>Looking for Blockingmachine servers on this network…</Text>
           ) : (
             Object.values(found).map((s) => (
               <Pressable
@@ -426,5 +437,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   errorCard: { borderColor: colors.danger },
+  errorDetail: { color: colors.textMuted, fontSize: 11, marginTop: 4 },
   errorText: { color: colors.danger, fontSize: 13 },
 });

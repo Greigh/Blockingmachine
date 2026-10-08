@@ -10,6 +10,7 @@ import { useMutation } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError } from '../../src/api/client';
+import { describeActionError, UserError } from '../../src/errors';
 import { useClient } from '../../src/api/useClient';
 import { useFilter } from '../../src/state/filter';
 import type { CheckResult } from '../../src/api/types';
@@ -54,7 +55,7 @@ export default function CheckScreen() {
       }
       const local = await filter.evaluate(d);
       if (local) return { ...local, source: 'on-device ruleset' };
-      throw new Error('No server connected and no on-device ruleset — sync one in Settings.');
+      throw new UserError('No server connected and no on-device rules — sync rules in Settings first.');
     },
     onSuccess: (res, d) => {
       haptics.success();
@@ -72,6 +73,13 @@ export default function CheckScreen() {
   };
 
   const result: CheckResult | undefined = check.data;
+  // Thrown check errors are already plain sentences ("No server connected…");
+  // ApiErrors get the humanizer instead of leaking "Network request failed".
+  const checkErrorText = check.error
+    ? check.error instanceof ApiError
+      ? describeActionError('Couldn\u2019t check that domain', check.error).title
+      : check.error.message
+    : null;
 
   return (
     <View style={styles.screen}>
@@ -149,7 +157,7 @@ export default function CheckScreen() {
 
       {check.error ? (
         <Card>
-          <Text style={styles.errorText}>Check failed: {check.error.message}</Text>
+          <Text style={styles.errorText}>{checkErrorText}</Text>
         </Card>
       ) : null}
 
