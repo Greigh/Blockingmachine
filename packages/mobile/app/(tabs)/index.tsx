@@ -88,6 +88,16 @@ export default function DashboardScreen() {
     onSettled: invalidate,
   });
 
+  // Mutation results describe the server they ran against — drop them when the
+  // active server changes or one hub's "Compiled" banner leaks onto another's.
+  useEffect(() => {
+    protection.reset();
+    compile.reset();
+    cosmetics.reset();
+    reload.reset();
+    daemon.reset();
+  }, [baseUrl]);
+
   if (!activeServer) {
     return (
       <View style={[styles.empty, { paddingTop: insets.top }]}>
