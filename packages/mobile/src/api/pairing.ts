@@ -32,19 +32,24 @@ export function decodePairingPayload(raw: string): PairingPayload {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new PairingError('Not a Blockingmachine pairing code (not JSON)');
+    throw new PairingError('That QR code isn\u2019t a Blockingmachine pairing code.');
   }
   if (typeof parsed !== 'object' || parsed === null) {
-    throw new PairingError('Not a Blockingmachine pairing code (not an object)');
+    throw new PairingError('That QR code isn\u2019t a Blockingmachine pairing code.');
   }
   const obj = parsed as Record<string, unknown>;
   if (obj.v !== 1) {
-    throw new PairingError(`Unsupported pairing payload version: ${String(obj.v)}`);
+    throw new PairingError('This pairing code is from a different app version — update the desktop app and scan again.');
   }
   if (typeof obj.url !== 'string' || !obj.url.trim()) {
-    throw new PairingError('Pairing payload is missing a server URL');
+    throw new PairingError('This pairing code is incomplete — re-generate it in the desktop app.');
   }
-  const url = normalizeBaseUrl(obj.url); // throws ApiError on a bad address
+  let url: string;
+  try {
+    url = normalizeBaseUrl(obj.url);
+  } catch {
+    throw new PairingError('This pairing code has a bad address — re-generate it in the desktop app.');
+  }
   // Bad alternates are dropped rather than failing the whole scan — `url` alone
   // still pins a working payload, matching what older desktop builds emit.
   const urls = Array.isArray(obj.urls)

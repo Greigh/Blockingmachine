@@ -103,7 +103,7 @@ function toDiscovered(svc: ZeroconfService): DiscoveredServer | null {
 export function browseServers(handlers: DiscoveryHandlers): DiscoverySession {
   const zeroconf = loadZeroconf();
   if (!zeroconf) {
-    handlers.onError?.(new Error('mDNS discovery requires the dev-client build (not Expo Go)'));
+    handlers.onError?.(new Error('Network discovery needs the dev-client build — use manual entry or QR instead.'));
     return { stop: () => {} };
   }
 

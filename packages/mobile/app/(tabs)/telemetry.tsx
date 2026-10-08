@@ -12,6 +12,7 @@ import { useClient } from '../../src/api/useClient';
 import { useServerEvents, type ServerEventAlert } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
 import { Card, ErrorBanner, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
+import { describeError } from '../../src/errors';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { formatTimestamp, relativeTime } from '../../src/format';
 import { chrome, colors, glass, spacing } from '../../src/theme';
@@ -109,10 +110,7 @@ export default function TelemetryScreen() {
       </Text>
 
       {telemetry.error ? (
-        <ErrorBanner
-          message={`Can't load telemetry: ${telemetry.error.message}`}
-          onRetry={() => void telemetry.refetch()}
-        />
+        <ErrorBanner {...describeError(telemetry.error)} onRetry={() => void telemetry.refetch()} />
       ) : null}
 
       {!client ? (
