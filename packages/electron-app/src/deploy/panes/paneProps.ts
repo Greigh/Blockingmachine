@@ -33,7 +33,8 @@ import type { BindMechanism } from '../../bindDeploy';
 /** The shape of a sync result as the Hub records it: the last push, per service. */
 export interface HubSyncResult {
   service: string;
-  status: 'success' | 'error' | 'skipped';
+  /** 'warning' = trigger dispatched but confirmation never arrived (e.g. a slow HA service call). */
+  status: 'success' | 'error' | 'skipped' | 'warning';
   message: string;
   details?: string;
   timestamp?: string;
@@ -176,14 +177,17 @@ export interface HubPaneProps {
 
   /* -- The browser extension package ---------------------------------------------------- */
 
+  /** Which release package the extension download fetches — the pane's browser selector. */
+  extensionBrowser: 'chromium' | 'firefox' | 'both';
+  setExtensionBrowser: Dispatch<SetStateAction<'chromium' | 'firefox' | 'both'>>;
   /** True while the extension is being built and copied out. */
   extensionSaving: boolean;
   /** The path the last build was written to, so the instructions can name it exactly. */
   extensionSavedPath: string | null;
   /** Transient result text — an error, or a note that the save happened. */
   extensionMessage: { text: string; type: 'success' | 'error' } | null;
-  /** Builds the extension and copies it beside a directory the user picks. */
-  handleDownloadExtension: () => Promise<void>;
+  /** Downloads the release's extension package for the chosen browser, unpacked where the user picks. */
+  handleDownloadExtension: (flavor: 'chromium' | 'firefox' | 'both') => Promise<void>;
   /**
    * The other deploy targets, so the extension pane can index the places the same protection
    * installs — a pane cannot import the registry (the registry imports it), so the Hub narrows

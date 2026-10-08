@@ -39,6 +39,7 @@ import {
 import {
   describeUrlEndpoint,
   formatSinkholeError,
+  isSinkholeTimeoutError,
   normalizeAdguardDirectPort,
   normalizeWebhookUrl,
   resolveAdguardDirectUrl,
@@ -1888,7 +1889,7 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
   const haWebhookUrl = storeRef.get('haWebhookUrl') as string | undefined;
   const customWebhookUrl = storeRef.get('customWebhookUrl') as string | undefined;
 
-  const results: { service: string; status: 'success' | 'error' | 'skipped'; message: string; details?: string }[] = [];
+  const results: { service: string; status: 'success' | 'error' | 'skipped' | 'warning'; message: string; details?: string }[] = [];
 
   if (rawPihole && rawPihole.trim()) {
     try {
@@ -1932,22 +1933,41 @@ async function executeSinkholeSync(storeRef: ElectronStore<StoreSchema>) {
             details: blocked.details,
           });
         } else {
-          const res = await sinkholeFetch(haTarget.target.refreshUrl, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${haToken.trim()}`,
-              'Content-Type': 'application/json',
-            },
-            timeoutMs: 7000,
-            allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
-          });
-          if (res.ok) {
-            const providerMsg = haTarget.target.baseUrl.includes('nabu.casa')
-              ? 'Filters refreshed via Home Assistant API (Nabu Casa Cloud)'
-              : 'Filters refreshed via Home Assistant API';
-            results.push({ service: 'AdGuard Home (Home Assistant)', status: 'success', message: providerMsg });
-          } else {
-            results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: `Home Assistant API returned HTTP ${res.status}: ${res.statusText}` });
+          try {
+            const res = await sinkholeFetch(haTarget.target.refreshUrl, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${haToken.trim()}`,
+                'Content-Type': 'application/json',
+              },
+              // HA holds /api/services/* open until adguard.refresh finishes; over a cloud
+              // relay that outlives a short budget, so this is deliberately generous.
+              timeoutMs: 20000,
+              allowInsecureLocalTls: sinkholeTlsAllowed(storeRef),
+            });
+            if (res.ok) {
+              const providerMsg = haTarget.target.baseUrl.includes('nabu.casa')
+                ? 'Filters refreshed via Home Assistant API (Nabu Casa Cloud)'
+                : 'Filters refreshed via Home Assistant API';
+              results.push({ service: 'AdGuard Home (Home Assistant)', status: 'success', message: providerMsg });
+            } else {
+              results.push({ service: 'AdGuard Home (Home Assistant)', status: 'error', message: `Home Assistant API returned HTTP ${res.status}: ${res.statusText}` });
+            }
+          } catch (err: any) {
+            if (isSinkholeTimeoutError(err)) {
+              const relay = haTarget.target.baseUrl.includes('nabu.casa') ? ' over the Nabu Casa relay' : '';
+              results.push({
+                service: 'AdGuard Home (Home Assistant)',
+                status: 'warning',
+                message: `adguard.refresh sent — Home Assistant did not confirm within 20s${relay}. HA holds the request until the service finishes, so the reload most likely still ran.`,
+              });
+            } else {
+              results.push({
+                service: 'AdGuard Home (Home Assistant)',
+                status: 'error',
+                message: explainSinkholeFailure(storeRef, err, haTarget.target.refreshUrl),
+              });
+            }
           }
         }
       } catch (err: any) {
@@ -4973,7 +4993,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
      * it carries no extension assets (a dev build, or a version whose release is not out yet)
      * the newest release that does carry them is used and named in the result.
      */
-    ipcMain.handle('download-extension', async () => {
+    ipcMain.handle('download-extension', async (_event, requested?: string) => {
+      const flavor: 'chromium' | 'firefox' | 'both' =
+        requested === 'chromium' || requested === 'firefox' ? requested : 'both';
       const picked = await dialog.showOpenDialog({
         title: 'Choose where to save the extension package',
         defaultPath: app.getPath('downloads'),
@@ -5000,10 +5022,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         };
       }
 
-      const targets: Array<{ assetName: RegExp; dirName: string }> = [
-        { assetName: /^blockingmachine-chrome-mv3-.+\.zip$/, dirName: 'blockingmachine-extension' },
-        { assetName: /^blockingmachine-firefox-mv3-.+\.zip$/, dirName: 'blockingmachine-extension-firefox' },
+      const allTargets: Array<{ assetName: RegExp; dirName: string; flavor: 'chromium' | 'firefox' }> = [
+        { flavor: 'chromium', assetName: /^blockingmachine-chrome-mv3-.+\.zip$/, dirName: 'blockingmachine-extension' },
+        { flavor: 'firefox', assetName: /^blockingmachine-firefox-mv3-.+\.zip$/, dirName: 'blockingmachine-extension-firefox' },
       ];
+      const targets = allTargets.filter((t) => flavor === 'both' || t.flavor === flavor);
 
       // Integrity: releases ship SHA256SUMS.txt — fetch it once and verify each archive
       // before anything on disk is replaced. A sums file that names no zip means the
@@ -5087,7 +5110,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           error:
             failures.length > 0
               ? `The extension download failed — ${failures.join('; ')}`
-              : `Release ${release.tag_name ?? '?'} ships no extension package assets.`,
+              : `Release ${release.tag_name ?? '?'} ships no ${flavor === 'both' ? '' : `${flavor} `}extension package assets.`,
         };
       }
       return {

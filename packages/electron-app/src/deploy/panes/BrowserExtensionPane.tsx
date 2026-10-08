@@ -22,6 +22,8 @@ import type { HubPaneProps } from './paneProps';
  * here reaches the pane, and a field read but not declared does not compile.
  */
 export const browserExtensionPaneKeys = [
+  'extensionBrowser',
+  'setExtensionBrowser',
   'extensionSaving',
   'extensionSavedPath',
   'extensionMessage',
@@ -40,6 +42,8 @@ export type BrowserExtensionPaneProps = Pick<
 >;
 
 export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
+  extensionBrowser,
+  setExtensionBrowser,
   extensionSaving,
   extensionSavedPath,
   extensionMessage,
@@ -73,14 +77,27 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
         <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
           Pulled straight from the GitHub release that matches this app — the same packages the
           publish workflow attaches — and unpacked as <code>blockingmachine-extension/</code>{' '}
-          (Chromium) and <code>blockingmachine-extension-firefox/</code> (Firefox).
+          for Chromium or <code>blockingmachine-extension-firefox/</code> for Firefox.
         </p>
+
+        <div className="deploy-field-group" style={{ margin: '10px 0' }}>
+          <label className="deploy-field-label">Browser:</label>
+          <select
+            className="deploy-field-input"
+            value={extensionBrowser}
+            onChange={(e) => setExtensionBrowser(e.target.value as 'chromium' | 'firefox' | 'both')}
+          >
+            <option value="chromium">Chromium — Chrome, Edge, Brave, Arc</option>
+            <option value="firefox">Firefox</option>
+            <option value="both">Both</option>
+          </select>
+        </div>
 
         <div className="deploy-feed-input-row">
           <button
             type="button"
             className="deploy-copy-feed-btn"
-            onClick={() => void handleDownloadExtension()}
+            onClick={() => void handleDownloadExtension(extensionBrowser)}
             disabled={extensionSaving}
           >
             {extensionSaving ? 'Downloading…' : 'Download extension package…'}
@@ -134,33 +151,37 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
         </div>
 
         <div className="deploy-numbered-stepper">
-          <div className="stepper-step">
-            <div className="stepper-num">1</div>
-            <div className="stepper-content">
-              <h4>Chromium — Chrome, Edge, Brave, Arc</h4>
-              <p>
-                Open <code>chrome://extensions</code>, switch on{' '}
-                <strong>Developer mode</strong>, choose{' '}
-                <strong>Load unpacked</strong> and select the{' '}
-                <code>blockingmachine-extension</code> folder the download wrote.
-              </p>
+          {extensionBrowser !== 'firefox' && (
+            <div className="stepper-step">
+              <div className="stepper-num">1</div>
+              <div className="stepper-content">
+                <h4>Chromium — Chrome, Edge, Brave, Arc</h4>
+                <p>
+                  Open <code>chrome://extensions</code>, switch on{' '}
+                  <strong>Developer mode</strong>, choose{' '}
+                  <strong>Load unpacked</strong> and select the{' '}
+                  <code>blockingmachine-extension</code> folder the download wrote.
+                </p>
+              </div>
             </div>
-          </div>
-          <div className="stepper-step">
-            <div className="stepper-num">2</div>
-            <div className="stepper-content">
-              <h4>Firefox</h4>
-              <p>
-                Open <code>about:debugging#/runtime/this-firefox</code>, choose{' '}
-                <strong>Load Temporary Add-on…</strong> and select <code>manifest.json</code>{' '}
-                inside the <code>blockingmachine-extension-firefox</code> folder. Temporary
-                installs unload when the browser restarts — a permanent install needs a
-                Mozilla-signed build.
-              </p>
+          )}
+          {extensionBrowser !== 'chromium' && (
+            <div className="stepper-step">
+              <div className="stepper-num">{extensionBrowser === 'both' ? 2 : 1}</div>
+              <div className="stepper-content">
+                <h4>Firefox</h4>
+                <p>
+                  Open <code>about:debugging#/runtime/this-firefox</code>, choose{' '}
+                  <strong>Load Temporary Add-on…</strong> and select <code>manifest.json</code>{' '}
+                  inside the <code>blockingmachine-extension-firefox</code> folder. Temporary
+                  installs unload when the browser restarts — a permanent install needs a
+                  Mozilla-signed build.
+                </p>
+              </div>
             </div>
-          </div>
+          )}
           <div className="stepper-step">
-            <div className="stepper-num">3</div>
+            <div className="stepper-num">{extensionBrowser === 'both' ? 3 : 2}</div>
             <div className="stepper-content">
               <h4>Point it at this hub</h4>
               <p>

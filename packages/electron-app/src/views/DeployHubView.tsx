@@ -94,6 +94,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   const [tierPlan, setTierPlan] = useState<TierPlanResult | null>(null);
   const [tierPlanError, setTierPlanError] = useState<string | null>(null);
   const [extensionSaving, setExtensionSaving] = useState(false);
+  const [extensionBrowser, setExtensionBrowser] = useState<'chromium' | 'firefox' | 'both'>('both');
   const [extensionSavedPath, setExtensionSavedPath] = useState<string | null>(null);
   const [extensionMessage, setExtensionMessage] = useState<{
     text: string;
@@ -202,7 +203,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   const [sinkholeMessage, setSinkholeMessage] = useState<string | null>(null);
   const [lastSyncResult, setLastSyncResult] = useState<{
     service: string;
-    status: 'success' | 'error' | 'skipped';
+    status: 'success' | 'error' | 'skipped' | 'warning';
     message: string;
     details?: string;
     timestamp?: string;
@@ -712,12 +713,12 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
    * load it. The browser keeps the actual install click — Load unpacked / temporary add-on —
    * and the pane says so rather than implying the download finished the job.
    */
-  const handleDownloadExtension = async () => {
+  const handleDownloadExtension = async (flavor: 'chromium' | 'firefox' | 'both') => {
     if (!window.electron?.downloadExtension) return;
     setExtensionSaving(true);
     setExtensionMessage(null);
     try {
-      const res = await window.electron.downloadExtension();
+      const res = await window.electron.downloadExtension(flavor);
       if (res?.cancelled) return;
       if (res?.success && (res.path || res.firefoxPath)) {
         setExtensionSavedPath(res.path ?? res.firefoxPath ?? '');
@@ -836,6 +837,8 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     bindMechanism,
     setBindMechanism,
 
+    extensionBrowser,
+    setExtensionBrowser,
     extensionSaving,
     extensionSavedPath,
     extensionMessage,

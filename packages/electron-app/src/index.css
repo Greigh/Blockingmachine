@@ -7410,6 +7410,12 @@ button.format-tile .format-target {
   border: 1px solid color-mix(in srgb, var(--danger-color) 30%, transparent);
 }
 
+.test-status-pill.warning {
+  background: color-mix(in srgb, var(--warning-color) 15%, transparent);
+  color: var(--warning-color);
+  border: 1px solid color-mix(in srgb, var(--warning-color) 30%, transparent);
+}
+
 .guide-steps-flow {
   display: flex;
   flex-direction: column;

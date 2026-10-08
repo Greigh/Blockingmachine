@@ -204,7 +204,7 @@ export const PiholePane: React.FC<PiholePaneProps> = ({
             </span>
           )}
           {lastSyncResult?.service?.toLowerCase().includes('pi-hole') && (
-            <span className={`test-status-pill ${lastSyncResult.status === 'success' ? 'success' : 'error'}`} style={{ alignSelf: 'flex-start' }}>
+            <span className={`test-status-pill ${lastSyncResult.status === 'success' ? 'success' : lastSyncResult.status === 'warning' ? 'warning' : 'error'}`} style={{ alignSelf: 'flex-start' }}>
               Last Gravity Reload: {lastSyncResult.message} ({lastSyncResult.timestamp})
             </span>
           )}

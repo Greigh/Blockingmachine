@@ -371,6 +371,11 @@ export function formatSinkholeError(
   return message;
 }
 
+/** True when the failure was an aborted or timed-out request rather than an HTTP answer. */
+export function isSinkholeTimeoutError(err: unknown): boolean {
+  return isTimeout(collectErrorEntries(err));
+}
+
 function ensureScheme(raw: string): string {
   return /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
 }

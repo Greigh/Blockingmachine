@@ -108,7 +108,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [isSyncingSinkhole, setIsSyncingSinkhole] = useState(false);
   const [sinkholeMessage, setSinkholeMessage] = useState('');
   const [secretStorageAvailable, setSecretStorageAvailable] = useState<boolean | null>(null);
-  const [syncResults, setSyncResults] = useState<Array<{ service: string; status: 'success' | 'error' | 'skipped'; message: string; details?: string }>>([]);
+  const [syncResults, setSyncResults] = useState<Array<{ service: string; status: 'success' | 'error' | 'skipped' | 'warning'; message: string; details?: string }>>([]);
   const [showPiholeKey, setShowPiholeKey] = useState(false);
   const [showAdguardPass, setShowAdguardPass] = useState(false);
   const [showHaToken, setShowHaToken] = useState(false);
@@ -1707,7 +1707,7 @@ const Settings: React.FC<SettingsProps> = ({
               {syncResults.map((r, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: i < syncResults.length - 1 ? '6px' : 0 }}>
                   <span style={{ fontWeight: 600 }}>{r.service}:</span>
-                  <span style={{ color: r.status === 'success' ? '#10b981' : r.status === 'error' ? '#ef4444' : 'inherit', opacity: r.status === 'skipped' ? 0.6 : 1 }}>
+                  <span style={{ color: r.status === 'success' ? '#10b981' : r.status === 'error' ? '#ef4444' : r.status === 'warning' ? 'var(--warning-color)' : 'inherit', opacity: r.status === 'skipped' ? 0.6 : 1 }}>
                     {r.message}
                   </span>
                 </div>
