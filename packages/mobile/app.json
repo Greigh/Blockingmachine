@@ -44,6 +44,12 @@
       "expo-router",
       "expo-secure-store",
       [
+        "expo-font",
+        {
+          "fonts": ["./assets/fonts/ionicons.ttf"]
+        }
+      ],
+      [
         "expo-camera",
         {
           "cameraPermission": "Allow Blockingmachine to scan a pairing QR code shown by the desktop app."

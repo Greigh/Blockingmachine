@@ -13,7 +13,7 @@ import { ApiError } from '../../src/api/client';
 import { useClient } from '../../src/api/useClient';
 import { useFilter } from '../../src/state/filter';
 import type { CheckResult } from '../../src/api/types';
-import { ActionButton, Card, Pill } from '../../src/components/ui';
+import { ActionButton, Card, Pill, SectionTitle } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { relativeTime } from '../../src/format';
 import { haptics } from '../../src/haptics';
@@ -78,7 +78,7 @@ export default function CheckScreen() {
       <GlassBackdrop />
       <ScrollView
         style={styles.scroll}
-      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
+      contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
       keyboardShouldPersistTaps="handled"
     >
       <Text style={styles.title}>Check a domain</Text>
@@ -111,24 +111,39 @@ export default function CheckScreen() {
       </Card>
 
       {result ? (
-        <Card>
-          <View style={styles.verdictRow}>
-            <Pill
-              label={result.blocked ? 'BLOCKED' : 'NOT BLOCKED'}
-              tone={result.blocked ? 'bad' : 'ok'}
-            />
-            {result.verdict ? <Pill label={result.verdict} tone="muted" /> : null}
+        <Card style={result.blocked ? styles.verdictBlocked : styles.verdictAllowed}>
+          <View style={styles.verdictHero}>
+            <View
+              style={[
+                styles.verdictIcon,
+                result.blocked ? styles.verdictIconBlocked : styles.verdictIconAllowed,
+              ]}
+            >
+              <Ionicons
+                name={result.blocked ? 'ban-outline' : 'shield-checkmark-outline'}
+                size={30}
+                color={result.blocked ? colors.danger : colors.accent}
+              />
+            </View>
+            <Text
+              style={[styles.verdictText, { color: result.blocked ? colors.danger : colors.accent }]}
+            >
+              {result.blocked ? 'Blocked' : 'Allowed'}
+            </Text>
+            <Text style={styles.domain}>{result.domain}</Text>
+            {result.verdict || result.source ? (
+              <View style={styles.verdictRow}>
+                {result.verdict ? <Pill label={result.verdict} tone="muted" /> : null}
+                {result.source ? <Pill label={result.source} tone="info" /> : null}
+              </View>
+            ) : null}
+            {result.coveringRule ? (
+              <Text style={styles.detail}>Covering rule: {result.coveringRule}</Text>
+            ) : null}
+            {result.matchedHost ? (
+              <Text style={styles.detail}>Matched host: {result.matchedHost}</Text>
+            ) : null}
           </View>
-          <Text style={styles.domain}>{result.domain}</Text>
-          {result.coveringRule ? (
-            <Text style={styles.detail}>Covering rule: {result.coveringRule}</Text>
-          ) : null}
-          {result.matchedHost ? (
-            <Text style={styles.detail}>Matched host: {result.matchedHost}</Text>
-          ) : null}
-          {result.source ? (
-            <Text style={styles.detail}>Feed: {result.source}</Text>
-          ) : null}
         </Card>
       ) : null}
 
@@ -140,7 +155,7 @@ export default function CheckScreen() {
 
       {history.length > 0 ? (
         <Card>
-          <Text style={styles.historyTitle}>Recent checks</Text>
+          <SectionTitle icon="time-outline" label="Recent checks" />
           {history.map((h) => (
             <ReanimatedSwipeable
               key={h.domain}
@@ -195,7 +210,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
   content: { padding: spacing.md, paddingBottom: spacing.xl },
-  title: { color: colors.text, fontSize: 22, fontWeight: '700' },
+  title: { color: colors.text, fontSize: 28, fontWeight: '800' },
   subtitle: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md, marginTop: 2 },
   input: {
     backgroundColor: glass.surface,
@@ -210,11 +225,50 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm + 4,
   },
   hint: { color: colors.warn, fontSize: 12, marginTop: spacing.sm },
-  verdictRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
-  domain: { color: colors.text, fontSize: 17, fontWeight: '600', marginBottom: spacing.xs },
+  verdictBlocked: {
+    backgroundColor: 'rgba(248,81,73,0.10)',
+    borderColor: 'rgba(248,81,73,0.35)',
+    borderTopColor: 'rgba(248,81,73,0.5)',
+  },
+  verdictAllowed: {
+    backgroundColor: 'rgba(63,185,80,0.10)',
+    borderColor: 'rgba(63,185,80,0.35)',
+    borderTopColor: 'rgba(63,185,80,0.5)',
+  },
+  verdictHero: { alignItems: 'center', paddingVertical: spacing.sm },
+  verdictIcon: {
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 60,
+    justifyContent: 'center',
+    marginBottom: spacing.sm,
+    width: 60,
+  },
+  verdictIconBlocked: {
+    backgroundColor: 'rgba(248,81,73,0.15)',
+    borderColor: 'rgba(248,81,73,0.4)',
+  },
+  verdictIconAllowed: {
+    backgroundColor: 'rgba(63,185,80,0.15)',
+    borderColor: 'rgba(63,185,80,0.4)',
+  },
+  verdictText: { fontSize: 24, fontWeight: '800' },
+  verdictRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'center',
+    marginTop: spacing.sm,
+  },
+  domain: {
+    color: colors.text,
+    fontSize: 17,
+    fontWeight: '600',
+    marginTop: spacing.xs,
+    textAlign: 'center',
+  },
   detail: { color: colors.textMuted, fontSize: 13, marginTop: spacing.xs },
   errorText: { color: colors.danger, fontSize: 13 },
-  historyTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginBottom: spacing.xs },
   historyRow: {
     alignItems: 'center',
     backgroundColor: glass.surface,

@@ -48,6 +48,10 @@ class LocalVpnModule : Module() {
       } else {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
+        // A non-forResult launch can still show the consent dialog (a grant then
+        // helps the next tap), but its result never comes back — tell JS now so
+        // requestVpnConsent() doesn't wait on an event that cannot arrive.
+        sendEvent("onVpnConsentResult", mapOf("granted" to false))
       }
       false
     }

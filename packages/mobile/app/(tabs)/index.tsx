@@ -13,7 +13,7 @@ import { useClient } from '../../src/api/useClient';
 import { useServerEvents } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
 import { useFilter } from '../../src/state/filter';
-import { ActionButton, Card, ErrorBanner, Pill, Skeleton } from '../../src/components/ui';
+import { ActionButton, Card, ErrorBanner, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { formatTimestamp, formatUptime } from '../../src/format';
 import { haptics } from '../../src/haptics';
@@ -24,10 +24,13 @@ import { chrome, colors, spacing } from '../../src/theme';
 // string since it's already human-readable in the hub's own locale.
 function formatLastCompile(data?: { lastCompile: string | null; lastCompileMs?: number }): string {
   if (!data) return '—';
-  if (typeof data.lastCompileMs === 'number' && data.lastCompileMs > 0) {
+  if (data.lastCompile) return formatTimestamp(data.lastCompile);
+  // Add-on sends lastCompileMs as a *duration* (compile took N ms) — only treat
+  // it as a timestamp when it's plausibly epoch-millis (> ~2001).
+  if (typeof data.lastCompileMs === 'number' && data.lastCompileMs > 1e12) {
     return new Date(data.lastCompileMs).toLocaleString();
   }
-  return formatTimestamp(data.lastCompile);
+  return '—';
 }
 
 export default function DashboardScreen() {
@@ -87,7 +90,7 @@ export default function DashboardScreen() {
 
   if (!activeServer) {
     return (
-      <View style={styles.empty}>
+      <View style={[styles.empty, { paddingTop: insets.top }]}>
         <GlassBackdrop />
         <Text style={styles.emptyTitle}>
           {filter.ready ? 'Standalone mode' : 'No server configured'}
@@ -123,7 +126,7 @@ export default function DashboardScreen() {
       <GlassBackdrop />
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
       refreshControl={
         <RefreshControl
           refreshing={status.isRefetching}
@@ -207,7 +210,7 @@ export default function DashboardScreen() {
         <>
       <Card>
         <View style={styles.rowBetween}>
-          <Text style={styles.sectionTitle}>Protection</Text>
+          <SectionTitle icon="shield-checkmark-outline" label="Protection" />
           <Switch
             value={Boolean(data?.protection?.enabled)}
             disabled={protection.isPending || daemonStopped}
@@ -261,7 +264,7 @@ export default function DashboardScreen() {
       </Card>
 
       <Card>
-        <Text style={styles.sectionTitle}>Rules</Text>
+        <SectionTitle icon="layers-outline" label="Rules" />
         <View style={styles.statRow}>
           <View style={styles.stat}>
             <Text style={styles.statValue}>{data?.rules?.total?.toLocaleString() ?? '—'}</Text>
@@ -294,7 +297,7 @@ export default function DashboardScreen() {
       )}
 
       <Card>
-        <Text style={styles.sectionTitle}>Actions</Text>
+        <SectionTitle icon="flash-outline" label="Actions" />
         <View style={styles.buttonRow}>
           <View style={styles.buttonFlex}>
             <ActionButton
@@ -348,7 +351,7 @@ export default function DashboardScreen() {
 
       {data?.aiRadar || data?.browserTelemetry ? (
         <Card>
-          <Text style={styles.sectionTitle}>Insights</Text>
+          <SectionTitle icon="sparkles-outline" label="Insights" />
           {data.aiRadar ? (
             <View style={styles.pillRow}>
               <Pill
@@ -381,7 +384,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginBottom: spacing.md,
   },
-  title: { color: colors.text, fontSize: 22, fontWeight: '700' },
+  title: { color: colors.text, fontSize: 28, fontWeight: '800' },
   subtitle: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
   empty: {
     alignItems: 'center',
@@ -398,18 +401,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  sectionTitle: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: spacing.sm,
-  },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   statRow: { flexDirection: 'row', marginBottom: spacing.sm },
   stat: { flex: 1 },
   statValue: {
     color: colors.text,
-    fontSize: 18,
+    fontSize: 22,
     fontVariant: ['tabular-nums'],
     fontWeight: '700',
   },

@@ -14,6 +14,47 @@ const path = require('path');
 
 const nm = path.resolve(__dirname, '../node_modules');
 
+// npm may nest a dep under its dependent's node_modules instead of hoisting to the
+// root — observed with expo-modules-core landing at expo/node_modules/ once its
+// peerOptional react-native-worklets range became unsatisfiable at the root level.
+// All patch targets below must resolve through the real install dir or they are
+// skipped silently while the build breaks.
+const pkgDirCache = new Map();
+function pkgDir(name) {
+  const cached = pkgDirCache.get(name);
+  if (cached) return cached;
+  const direct = path.join(nm, name);
+  let found = direct;
+  if (!fs.existsSync(path.join(direct, 'package.json'))) {
+    const queue = fs.readdirSync(nm, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name !== 'node_modules')
+      .flatMap((e) =>
+        e.name.startsWith('@')
+          ? fs.readdirSync(path.join(nm, e.name), { withFileTypes: true })
+              .filter((s) => s.isDirectory())
+              .map((s) => path.join(nm, e.name, s.name))
+          : [path.join(nm, e.name)],
+      );
+    for (const candidateDir of queue) {
+      const nested = path.join(candidateDir, 'node_modules', name);
+      if (fs.existsSync(path.join(nested, 'package.json'))) {
+        found = nested;
+        break;
+      }
+    }
+  }
+  pkgDirCache.set(name, found);
+  return found;
+}
+function resolveInNm(rel) {
+  const direct = path.join(nm, rel);
+  if (fs.existsSync(direct)) return direct;
+  const segs = rel.split('/');
+  const pkgName = segs[0].startsWith('@') ? segs.slice(0, 2).join('/') : segs[0];
+  const rest = segs.slice(pkgName === segs[0] ? 1 : 2).join('/');
+  return path.join(pkgDir(pkgName), rest);
+}
+
 const polyfillShim = path.join(nm, 'react-native/rn-get-polyfills.js');
 if (fs.existsSync(path.join(nm, 'react-native/package.json')) && !fs.existsSync(polyfillShim)) {
   fs.writeFileSync(
@@ -64,7 +105,7 @@ const KOTLIN_METADATA_TARGETS = [
   'expo-modules-core/expo-module-gradle-plugin/build.gradle.kts',
 ];
 for (const rel of KOTLIN_METADATA_TARGETS) {
-  const ktsPath = path.join(nm, rel);
+  const ktsPath = resolveInNm(rel);
   if (!fs.existsSync(ktsPath)) continue;
   const kts = fs.readFileSync(ktsPath, 'utf8');
   if (!kts.includes('-Xskip-metadata-version-check')) {
@@ -93,7 +134,7 @@ const KOTLIN_ANDROID_APPLY_SITES = [
 ];
 const KOTLIN_APPLY_RE = /^(\s*)(?:apply plugin:\s*["']kotlin-android["']|plugins\.apply\("kotlin-android"\)|apply\(plugin = "org\.jetbrains\.kotlin\.android"\))\s*$/gm;
 for (const rel of KOTLIN_ANDROID_APPLY_SITES) {
-  const filePath = path.join(nm, rel);
+  const filePath = resolveInNm(rel);
   if (!fs.existsSync(filePath)) continue;
   const source = fs.readFileSync(filePath, 'utf8');
   const patched = source.replace(
@@ -208,7 +249,7 @@ const AGP9_SOURCE_PATCHES = [
   },
 ];
 for (const { file, replacements, skipIf } of AGP9_SOURCE_PATCHES) {
-  const filePath = path.join(nm, file);
+  const filePath = resolveInNm(file);
   if (!fs.existsSync(filePath)) continue;
   let source = fs.readFileSync(filePath, 'utf8');
   if (skipIf && source.includes(skipIf)) continue;
@@ -232,16 +273,22 @@ for (const { file, replacements, skipIf } of AGP9_SOURCE_PATCHES) {
 // buildConfigField requires buildFeatures.buildConfig=true in AGP 9. Scan every
 // dependency's android/build.gradle — the set of modules drifts with installs.
 const REMOVED_DSL_LINE = /^\s*(?:targetSdkVersion|versionCode|versionName)\b/m;
-function* iterModuleBuildGradles() {
-  for (const entry of fs.readdirSync(nm, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const entryPath = path.join(nm, entry.name);
+function* iterModuleBuildGradles(rootDir = nm, depth = 0) {
+  for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === 'node_modules') continue;
+    const entryPath = path.join(rootDir, entry.name);
     if (entry.name.startsWith('@')) {
       for (const sub of fs.readdirSync(entryPath, { withFileTypes: true })) {
-        if (sub.isDirectory()) yield path.join(entryPath, sub.name);
+        if (!sub.isDirectory()) continue;
+        const subPath = path.join(entryPath, sub.name);
+        yield subPath;
+        const nested = path.join(subPath, 'node_modules');
+        if (depth === 0 && fs.existsSync(nested)) yield* iterModuleBuildGradles(nested, 1);
       }
     } else {
       yield entryPath;
+      const nested = path.join(entryPath, 'node_modules');
+      if (depth === 0 && fs.existsSync(nested)) yield* iterModuleBuildGradles(nested, 1);
     }
   }
 }

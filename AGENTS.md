@@ -299,3 +299,32 @@ LAN-open model, flag 45) and filename-allowlisted by `feedServing.ts`.
   `headerTransparent` (avoids per-screen header-height math without
   `@react-navigation/elements`). `experimentalBlurMethod="dimezisBlurView"` is
   required for real blur on Android.
+- **No react-navigation hooks on screens.** expo-router 57 renders tab/stack
+  scenes through `standard-navigation`, whose route tree provides no
+  `NavigationContext` — `useNavigation`, `useIsFocused`, `useFocusEffect` (from
+  `expo-router` OR `@react-navigation/native`; every variant calls
+  `useNavigation` first) crash the screen with "Couldn't find a navigation
+  object". `BaseRoute` (useScreens.js) also strips `route`/`navigation` props
+  before the screen sees them. For per-tab focus detection use expo-router's
+  global route store instead — `usePathname() === '/telemetry'` reports the
+  focused route's path for any mounted screen, context-free. `ThemeProvider`/
+  `DarkTheme` should likewise come from `expo-router`'s exports, and
+  `@react-navigation/native` is gone from deps (2026-10) — do not re-add.
+- **`expo-modules-core` gets nested, not hoisted.** Once npm re-resolved the
+  tree (expo 57.0.27), it landed at `node_modules/expo/node_modules/
+  expo-modules-core` because its peerOptional `react-native-worklets`
+  `^0.7.4–^0.10.0` is unsatisfiable beside the root's worklets@0.13 (reanimated).
+  Consequences: declaring it as a direct dep ERESOLVEs (npm tries to place
+  worklets@0.10.4, which peers RN ≤0.86, against RN 0.87.1); source imports
+  should use `expo` (re-exports `requireNativeModule`); jest needs the
+  `moduleNameMapper` entries in `jest.config.js`; and
+  `patch-react-native-rn087.cjs` resolves every package dir nest-aware
+  (`resolveInNm`/`pkgDir` helpers — keep new targets on them, not
+  `path.join(nm, …)`).
+- **Ionicons on Android need a verbatim-named TTF.** `ReactFontManager` looks
+  up `assets/fonts/<fontFamily>.ttf` un-lowercased and the metro asset path for
+  `@expo/vector-icons` fonts never registers in this RN-0.87/Expo-57 mix —
+  every icon renders blank in release builds. `assets/fonts/ionicons.ttf`
+  (plus the generated `android/app/src/main/assets/fonts/` copy) plus the
+  `expo-font` plugin entry in `app.json` is the workaround; verify icons in
+  a release APK before removing it.

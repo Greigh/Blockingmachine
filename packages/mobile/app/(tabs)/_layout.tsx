@@ -27,22 +27,6 @@ function TabBarGlass() {
   );
 }
 
-/** Frosted fill for the header — aurora backdrop blurs through it. */
-function HeaderGlass() {
-  return (
-    <>
-      <BlurView
-        intensity={55}
-        tint="dark"
-        experimentalBlurMethod="dimezisBlurView"
-        style={StyleSheet.absoluteFill}
-      />
-      <View style={[StyleSheet.absoluteFill, styles.headerTint]} />
-      <View style={styles.headerEdge} />
-    </>
-  );
-}
-
 export default function TabsLayout() {
   const { alert } = useServerEvents();
   // New quarantines badge the Telemetry tab until the dashboard banner (or the
@@ -57,10 +41,9 @@ export default function TabsLayout() {
   return (
     <Tabs
       screenOptions={{
-        headerTransparent: false,
-        headerBackground: HeaderGlass,
-        headerStyle: { backgroundColor: 'transparent' },
-        headerTintColor: colors.text,
+        // No nav header — each screen carries its own large title so the aurora
+        // backdrop runs uninterrupted to the status bar.
+        headerShown: false,
         tabBarBackground: TabBarGlass,
         tabBarStyle: {
           position: 'absolute',
@@ -109,14 +92,5 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     borderWidth: 1,
     borderColor: glass.chromeBorder,
-  },
-  headerTint: { backgroundColor: glass.chromeSurface },
-  headerEdge: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: glass.border,
   },
 });
