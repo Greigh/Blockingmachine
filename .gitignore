@@ -8,6 +8,7 @@
 *.code-workspace
 .history/
 *.sublime-*
+.vscode
 
 # OS generated files
 Thumbs.db
@@ -95,6 +96,8 @@ __pycache__/
 
 # Local agent/session scratch — never part of the product
 .freebuff/
+AGENTS.md
+.remember/
 
 # Scratch the Unbound reachability rig builds inside the repo (the VM can only
 # bind-mount from here); the rig removes it on exit, an interrupted run leaves it.
