@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/mobile",
-  "version": "1.0.0-rc.9",
+  "version": "1.0.0-rc.10",
   "description": "iOS/Android companion app for the Blockingmachine /v1 API — remote status, protection toggle, domain check, and telemetry.",
   "license": "BSD-3-Clause",
   "private": true,

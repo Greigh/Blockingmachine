@@ -336,13 +336,19 @@ try {
 
 runExec('git', ['tag', '-fa', `v${targetVersion}`, '-m', `Release v${targetVersion}`], `Creating annotated tag v${targetVersion}`);
 
-// Push to remotes
-runExec('git', ['push', 'origin', 'main', '--tags', '-f'], 'Pushing main branch and tags to GitHub (origin)');
+// Push to remotes — the branch HEAD is on, not a hardcoded `main`. Single-branch
+// release lines ship from wherever the work lives.
+const releaseBranch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
+if (releaseBranch === 'HEAD') {
+  console.error('❌ Error: detached HEAD — refusing to tag a release that pushes no branch.');
+  process.exit(1);
+}
+runExec('git', ['push', 'origin', releaseBranch, '--tags', '-f'], `Pushing ${releaseBranch} and tags to GitHub (origin)`);
 
 try {
   const remotes = execFileSync('git', ['remote'], { encoding: 'utf8' });
   if (remotes.includes('forgejo')) {
-    runExec('git', ['push', 'forgejo', 'main', '--tags', '-f'], 'Pushing main branch and tags to Forgejo (forgejo)');
+    runExec('git', ['push', 'forgejo', releaseBranch, '--tags', '-f'], `Pushing ${releaseBranch} and tags to Forgejo (forgejo)`);
   }
 } catch {
   console.warn('⚠️ Could not push to Forgejo remote.');
