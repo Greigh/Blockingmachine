@@ -112,15 +112,15 @@ item once a real gate report carries the adjusted number.)
 - **Fix shape:** `npmjs.com → Access Tokens → Granular` (packages `@blockingmachine/core` + `@blockingmachine/cli`, read+write, expiry to taste) → replace `NPMJS_TOKEN` in `.env` → `node scripts/publish-npmjs.mjs --tag rc` publishes rc.10 onto the `rc` dist-tag.
 - **Verify:** `npm view @blockingmachine/core versions` lists `1.0.0-rc.10`.
 
-### 74. CI macOS builds had the notary key but not the signing certificate — secrets set, proof run in flight
+## Closed
+
+### 74. CI macOS builds had the notary key but not the signing certificate — closed by shipping the Developer ID p12 to CI, proven by a notarized artifact downloaded from the release
 
 - **Where:** `.github/workflows/publish.yml` (`Import Apple signing assets` step); repo secrets `APPLE_CERTIFICATE_P12` / `APPLE_CERTIFICATE_PASSWORD` (set 2026-10-09).
-- **What:** The first rc.10 tag push proved the missing piece: `APPLE_API_*` secrets alone make `osxNotarize` live, but with no Developer ID identity in the runner keychain `osxSign` falls back to adhoc and `@electron/notarize`'s signature pre-check fails the whole build (`Failed to codesign … Signature=adhoc`). The workflow imports the p12 into a temp keychain and exports `APPLE_API_KEY` **only when the cert import ran** — notarized-when-signable, adhoc-green otherwise.
-- **The p12-format trap that cost a run:** `security export` dumps every identity (a name filter is advisory — 12 identities, ~50 KB, over GitHub's 48 KB secret cap), so the Developer ID cert+key were re-packed with `openssl pkcs12 -export`. An OpenSSL-3-default p12 fails `security import` with *"MAC verification failed during PKCS12 import (wrong password?)"* — the MAC algorithm, not the password. The working invocation is `openssl pkcs12 -export … -legacy -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES` (verified locally: 1 identity imports). Key-to-cert matching was done by modulus comparison.
-- **Residual:** `~/voteaxis-upload.p12` exists but is password-protected and unused; the cert secrets are write-only, so rotating them means repeating the export dance. If a future run still shows "No APPLE_CERTIFICATE_P12", suspect secret scope/rotation, not the workflow.
-- **Verify:** `gh run view` of the current publish run shows the macOS leg signing as `Developer ID` (not `adhoc`) and a downloaded CI zip `stapler validate`s.
-
-## Closed
+- **What it was:** The first rc.10 tag push proved the missing piece — `APPLE_API_*` secrets alone make `osxNotarize` live, but with no Developer ID identity in the runner keychain `osxSign` falls back to adhoc and `@electron/notarize`'s signature pre-check fails the whole build (`Failed to codesign … Signature=adhoc`). The workflow imports the p12 into a temp keychain and exports `APPLE_API_KEY` **only when the cert import ran** — notarized-when-signable, adhoc-green otherwise.
+- **The p12-format trap that cost a run:** `security export` dumps every identity (a name filter is advisory — 12 identities, ~50 KB, over GitHub's 48 KB secret cap), so the Developer ID cert+key were re-packed with `openssl pkcs12 -export` after matching key-to-cert by modulus. An OpenSSL-3-default p12 fails `security import` with *"MAC verification failed during PKCS12 import (wrong password?)"* — the MAC algorithm, not the password. The working invocation is `openssl pkcs12 -export … -legacy -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES` (verified locally: 1 identity imports).
+- **Verify:** run `37876344349` — all four legs green; the macOS leg imported 1 identity into the CI keychain, signed Developer ID, dropped the `APPLE_NOTARIZED` marker, and the `create-release` guard kept its darwin assets. Downloaded from the shipped release: `stapler validate` → *"The validate action worked!"*, `spctl -a -vv` → `accepted, source=Notarized Developer ID`. The unsigned-darwin guard remains for any future run where the cert secrets lapse.
+- **Residual note:** the release carries two dmgs — the locally built `Blockingmachine-1.0.0-rc.10-arm64.dmg` and CI's `Blockingmachine.dmg`, both signed+notarized. `~/voteaxis-upload.p12` exists but is password-protected and was never needed.
 
 ### 54. The macOS build was signed but not notarized — closed by supplying the App Store Connect key and finding a broken local trust setting behind the staple failure
 
