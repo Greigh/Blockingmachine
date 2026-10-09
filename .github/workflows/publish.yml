@@ -138,6 +138,9 @@ jobs:
         run: |
           mkdir -p dist/desktop-assets
           find packages/electron-app/out/make -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} dist/desktop-assets/ \;
+          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$APPLE_API_KEY" ]; then
+            touch dist/desktop-assets/APPLE_NOTARIZED
+          fi
           ls -la dist/desktop-assets/
 
       - name: Upload desktop assets
@@ -160,6 +163,18 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
+
+      - name: Drop unsigned macOS artifacts
+        run: |
+          # The local release flow ships the canonical macOS artifacts — locally
+          # signed and notarized. A CI adhoc build must never --clobber them, so
+          # darwin files upload only when the mac leg actually signed+notarized
+          # (it drops an APPLE_NOTARIZED marker into its artifact when it did).
+          if [ ! -f release-artifacts/APPLE_NOTARIZED ]; then
+            echo "macOS leg was unsigned — keeping the release's local macOS assets"
+            rm -f release-artifacts/*darwin*.zip release-artifacts/Blockingmachine-*.dmg
+          fi
+          rm -f release-artifacts/APPLE_NOTARIZED
 
       - name: Compute SHA256 Checksums
         run: |
