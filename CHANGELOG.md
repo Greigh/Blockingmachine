@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.10] - 2026-10-08
+
 ### Added
 
 - **macOS builds now notarize and staple as part of `forge make` (flag 54).** The App Store Connect API-key path wired in `forge.config.cjs` (`osxNotarize`) is live — the three `APPLE_API_*` vars sit in the gitignored `.env`, pointing at the App Store Connect key the developer account already uses for store uploads. Fresh artifacts verify `stapler validate` / `spctl -a -vv` → `source=Notarized Developer ID`, so a downloaded copy passes Gatekeeper on first launch with no right-click Open or quarantine strip. The same three secrets are configured on the repo, and `publish.yml` writes the `.p8` contents to a temp path on macOS before `npm run make`, so tag-push builds notarize as well.
@@ -20,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **The shipped hot set is now derived from the live-browser URL trace, and the trace parser lives once in core (flag 15).** `hotlist.txt` was regenerated deliberately from `packages/cli/src/__tests__/fixtures/browsing-request-trace.txt` — the re-captured request-URL trace promoted from scratch to a tracked fixture, since the derivation the header names must be replayable on any checkout. The set now ships 91 rules (71 hostname + 10 path-scoped + 10 exceptions) covering all 413 measured blocks of its own session. `parseRequestTrace`/`hostOf` moved to `packages/core/src/ruleReplay.ts` and are re-exported by `CoverageCommand`, so the coverage report, `build-hot-list.mjs`, and the tests read a trace identically — the builder's own parse previously dropped `<TAB>count` multiplicities (under-counting measured blocks as 217) and glued the count onto the URL. The hotlist suites now replay the `Derivation:` header's named input rather than assuming the hostname fixture, and the "every shipped rule fired" check sums the three winner buckets (hostname + URL-decided + scoped).
+- **The flag-72 CodeQL hardening merged in from `main` — quadratic regex scans became linear index walks.** A new `packages/core/src/utils/textScan.ts` holds `firstIndexOfAny`/`stripTrailingChars`/`leadingCountSplit`/`trailingCountSplit`, replacing the nineteen `js/polynomial-redos` regex sites in shipped code (`coverage.ts`, `ledgerAggregate.ts`, `tierPlanInput.ts`, `ruleHost.ts`, `ai/domainEvaluator.ts`, the HA add-on's Bearer parse and protection body, and friends); test trees moved out of CodeQL analysis scope via `codeql-config.yml`; three design-intent alerts were dismissed through the API.
+- **`release.mjs` pushes the branch HEAD is on, not a hardcoded `main`** — single-branch release lines can ship from the working branch, and a detached HEAD now refuses the tag outright rather than pushing nothing.
 
 ## [1.0.0-rc.9] - 2026-10-04
 
