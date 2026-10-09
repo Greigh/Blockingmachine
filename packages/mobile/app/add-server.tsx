@@ -7,6 +7,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -46,6 +47,19 @@ export default function AddServerScreen() {
   const [pending, setPending] = useState<PendingSave | null>(null);
 
   const [permission, requestPermission] = useCameraPermissions();
+  // The OS prompt is the fragile step: it throws when the usage description is
+  // absent from a build, and resolves denied-without-a-dialog once the user has
+  // picked "don't ask again". Route both to UI state rather than a dead card.
+  const requestCamera = async () => {
+    try {
+      await requestPermission();
+    } catch {
+      setError({
+        title:
+          'The camera prompt could not open — allow camera for Blockingmachine in system Settings.',
+      });
+    }
+  };
   const scannedRef = useRef(false);
   const [found, setFound] = useState<Record<string, DiscoveredServer>>({});
   const [discoverError, setDiscoverError] = useState<string | null>(null);
@@ -224,9 +238,9 @@ export default function AddServerScreen() {
           <Pressable
             style={({ pressed }) => [styles.modeCard, pressed && styles.pressed]}
             android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
-            onPress={async () => {
-              if (!permission?.granted) await requestPermission();
+            onPress={() => {
               setMode('qr');
+              if (!permission?.granted) void requestCamera();
             }}
           >
             <Text style={styles.modeTitle}>Scan pairing QR</Text>
@@ -312,6 +326,17 @@ export default function AddServerScreen() {
                 onBarcodeScanned={onBarcode}
               />
             </View>
+          ) : permission && !permission.canAskAgain ? (
+            <>
+              <Text style={styles.meta}>
+                Camera access is off for this app — Android stops asking after a
+                denial, so turn it on in system Settings to scan the pairing code.
+              </Text>
+              <ActionButton
+                label="Open Settings"
+                onPress={() => void Linking.openSettings()}
+              />
+            </>
           ) : (
             <>
               <Text style={styles.meta}>
@@ -319,7 +344,7 @@ export default function AddServerScreen() {
               </Text>
               <ActionButton
                 label="Grant camera access"
-                onPress={() => void requestPermission()}
+                onPress={() => void requestCamera()}
               />
             </>
           )}
