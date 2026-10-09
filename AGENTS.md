@@ -152,6 +152,16 @@ Known sharp edges:
   (`db.bm.null.<parent>`, child `IN NS` to resolved authority); the sync
   `generateFilterList` stays NOT HONOURED — inject `resolveNs` in tests rather
   than hitting DNS.
+- `scripts/openwrt-live.sh` rehearses the OpenWrt dnsmasq + unbound recipes on a
+  real `openwrt/rootfs:x86_64` boot (qemu on arm64 hosts; pull the image first,
+  `--cap-add NET_ADMIN` is required since netifd scrambles docker's netns and the
+  script repairs lo/eth0/route by hand). procd cannot supervise daemons under
+  docker cgroups — the init scripts still run and generate the real configs; the
+  script then execs the shipped binaries against them. unbound is sideloaded from
+  the real 24.10.8 feed (opkg HTTPS wedges under qemu) and its postinst-created
+  `unbound` user is replicated manually. Busybox `nslookup` prints A then AAAA —
+  the second line's REFUSED for hosts-file names is the AAAA forward failing, not
+  the block failing; assert on the `Address:` answer line.
 
 ## Verified suite counts (rc.7)
 
