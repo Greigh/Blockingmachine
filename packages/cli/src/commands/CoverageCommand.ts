@@ -9,6 +9,8 @@ import {
   blockingRuleScope,
   countNetworkRules,
   countRuleScopes,
+  hostOf,
+  parseRequestTrace,
   replayRuleHits,
   type BlockingRuleScope,
   type CoverageReport,
@@ -38,22 +40,14 @@ export interface CoverageOptions {
   json?: boolean;
 }
 
-interface TraceEntry {
-  host: string;
-  /**
-   * The full request URL, when the trace line carried one.
-   *
-   * Aggregating by host instead of by URL is what makes a path-scoped rule undecidable: a trace
-   * of `https://cdn.example.com/x/ads.js` and `https://cdn.example.com/other.js` is two
-   * requests that one rule blocks and another does not, and collapsing them to one host entry
-   * destroys exactly the distinction the replay needs.
-   */
-  url?: string;
-  count: number;
-}
-
 /** The trimmed list `scripts/build-hot-list.mjs` writes, and `--hot` measures. */
 export const HOT_LIST_FILE = "hotlist.txt";
+
+// Re-exported rather than re-implemented: the parsing contract lives in core now
+// (`ruleReplay.ts`), so the coverage report, the hot-set builder, and the tests all read the
+// same trace the same way. Anything importing the helpers from here keeps working without a
+// second copy drifting out of step.
+export { hostOf, parseRequestTrace };
 
 /** A scope a blocking rule can need beyond the hostname. */
 type ScopedScope = Exclude<BlockingRuleScope, "hostname">;
@@ -96,61 +90,6 @@ function tallyCounts(tallies: ScopeTallies): Record<ScopedScope, number> {
 }
 
 /**
- * Parses a captured request trace.
- *
- * Each line is a hostname or a full URL, optionally followed by a repeat count, so both a raw
- * list of requests and an aggregated `host<TAB>count` export are accepted. Lines starting with
- * `#` or `!` are comments.
- *
- * A line that carries a path keeps it, and entries are aggregated per URL rather than per host.
- * That is what lets a path-scoped rule be decided against the request it actually describes
- * instead of being reported as a rule no replay can evaluate. A hostname-only trace still
- * parses; it just yields no URLs, and the replay falls back to the way it has always worked.
- */
-export function parseRequestTrace(text: string): TraceEntry[] {
-  const totals = new Map<string, TraceEntry>();
-
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#") || line.startsWith("!")) continue;
-
-    const parts = line.split(/\s+/);
-    let count = 1;
-    let target = line;
-    if (parts.length >= 2 && /^\d+$/.test(parts[parts.length - 1])) {
-      count = Math.max(1, parseInt(parts[parts.length - 1], 10));
-      target = parts.slice(0, -1).join("");
-    }
-
-    const host = hostOf(target);
-    if (!host) continue;
-    // Only a URL that survived `hostOf` intact, and that actually carries something after the
-    // host, is worth keeping: a bare hostname has no path to decide anything with.
-    const url = target.includes("/") ? normalizeTraceUrl(target) : undefined;
-    if (url) {
-      const existing = totals.get(url);
-      if (existing) existing.count += count;
-      else totals.set(url, { host, url, count });
-    } else {
-      const existing = totals.get(host);
-      if (existing) existing.count += count;
-      else totals.set(host, { host, count });
-    }
-  }
-
-  return [...totals.values()];
-}
-
-/**
- * Lower-cases a trace target and drops a trailing `#fragment`, which is never sent to a server
- * and would make two identical requests look like two different ones.
- */
-function normalizeTraceUrl(target: string): string | null {
-  const value = target.trim().toLowerCase().replace(/#.*$/, "");
-  return value.includes("/") ? value : null;
-}
-
-/**
  * Parses a rule-hit ledger.
  *
  * This is the higher-fidelity input: the browser reports the rule that genuinely won, so paths,
@@ -182,19 +121,6 @@ export function parseRuleHits(text: string): RuleHitCount[] {
   }
 
   return [...totals.entries()].map(([rule, count]) => ({ rule, count }));
-}
-
-/** Extracts a hostname from a full URL, an origin, or a bare hostname. */
-export function hostOf(target: string): string | null {
-  let value = (target || "").trim().toLowerCase();
-  if (!value) return null;
-
-  value = value.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
-  value = value.replace(/^\/\//, "");
-  value = value.split("/")[0].split("?")[0].split("#")[0];
-  value = value.replace(/:\d+$/, "");
-  if (!value || value.includes("@")) return null;
-  return value;
 }
 
 export class CoverageCommand extends BaseCommand<CoverageOptions> {

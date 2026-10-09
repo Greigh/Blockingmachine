@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The shipped hot set is now derived from the live-browser URL trace, and the trace parser lives once in core (flag 15).** `hotlist.txt` was regenerated deliberately from `packages/cli/src/__tests__/fixtures/browsing-request-trace.txt` — the re-captured request-URL trace promoted from scratch to a tracked fixture, since the derivation the header names must be replayable on any checkout. The set now ships 91 rules (71 hostname + 10 path-scoped + 10 exceptions) covering all 413 measured blocks of its own session. `parseRequestTrace`/`hostOf` moved to `packages/core/src/ruleReplay.ts` and are re-exported by `CoverageCommand`, so the coverage report, `build-hot-list.mjs`, and the tests read a trace identically — the builder's own parse previously dropped `<TAB>count` multiplicities (under-counting measured blocks as 217) and glued the count onto the URL. The hotlist suites now replay the `Derivation:` header's named input rather than assuming the hostname fixture, and the "every shipped rule fired" check sums the three winner buckets (hostname + URL-decided + scoped).
+
 ## [1.0.0-rc.9] - 2026-10-04
 
 ### Added

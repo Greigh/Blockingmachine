@@ -274,24 +274,20 @@ if (namedHits ?? declared?.hits) {
     `${rejectedSessions > 0 ? `, ${rejectedSessions} unusable skipped` : ''})`;
 } else {
   const tracePath = resolve(root, namedTrace ?? declared?.trace ?? DEFAULT_TRACE);
-  const hosts = readLines(tracePath).filter((line) => line && !line.startsWith('#') && !line.startsWith('!'));
-  if (hosts.length === 0) {
+  if (!existsSync(tracePath)) {
+    console.error(`Trace not found (${displayPath(tracePath)}).`);
+    process.exit(2);
+  }
+  // The same parser the coverage command and the tests read the trace through — core's
+  // `parseRequestTrace` — so the derivation, the report, and the check all mean the same
+  // requests. It keeps URLs (path rules get decided, not punted) and honours `<TAB>count`
+  // multiplicities rather than reading every line as one request.
+  const requests = replay.parseRequestTrace(readFileSync(tracePath, 'utf8'));
+  if (requests.length === 0) {
     console.error(`No usable requests found in the trace (${displayPath(tracePath)}).`);
     process.exit(2);
   }
   const ruleSet = new evaluator.CompiledDomainRuleSet(listLines);
-  // Split the host from the path rather than discarding the path. A trace line that carries a
-  // URL lets the replay decide path-scoped rules against the request that actually carried it;
-  // collapsing to a host here threw that away before the replay ever saw it.
-  const requests = hosts.map((line) => {
-    const value = line.trim().toLowerCase();
-    const host = value.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').split('/')[0];
-    return {
-      host,
-      url: value.includes('/') ? value.replace(/#.*$/, '') : undefined,
-      count: 1,
-    };
-  });
   // The same replay the coverage command reports from. A hot set derived by a different loop than
   // the one that measures it is a hot set nobody has checked.
   const outcome = replay.replayRuleHits(ruleSet, requests);
@@ -304,7 +300,7 @@ if (namedHits ?? declared?.hits) {
     ...outcome.scopedHits.map((hit) => ({ rule: hit.rule, count: hit.count })),
   ];
   exceptions = outcome.exceptions.map((entry) => entry.rule);
-  measuredOn = `${displayPath(tracePath)} (request trace replay, ${hosts.length.toLocaleString()} requests)`;
+  measuredOn = `${displayPath(tracePath)} (request trace replay, ${requests.length.toLocaleString()} requests)`;
 }
 
 if (hits.length === 0) {

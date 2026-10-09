@@ -4,6 +4,7 @@ import {
   CompiledDomainRuleSet,
   formatHotList,
   parseHitLedgerText,
+  parseRequestTrace,
   replayRuleHits,
   selectHotList,
 } from "@blockingmachine/core";
@@ -19,8 +20,12 @@ const fullListPath = path.join(cliRoot, "filters", "output", "genericBrowserRule
 const hotListPath = path.join(cliRoot, "filters", "output", HOT_LIST_FILE);
 const tracePath = path.join(cliRoot, "src", "__tests__", "fixtures", "browsing-trace.txt");
 
-/** The artifacts are large and generated; the suite skips rather than pretending to have checked. */
-const ready = [fullListPath, hotListPath, tracePath].every((file) => existsSync(file));
+/** The artifacts are large and generated; the suite skips rather than pretending to have checked.
+ *  The derivation input is part of that: a header naming a measurement that is not on disk is a
+ *  file the suite genuinely cannot check, not a reason to fall back to a different one. */
+const ready =
+  [fullListPath, hotListPath, tracePath].every((file) => existsSync(file)) &&
+  existsSync(derivationOf(readFileSync(hotListPath, "utf8")).file);
 
 /**
  * What the shipped artifact declares it was built from — the `! Derivation:` header line the
@@ -106,17 +111,10 @@ describe("coverage-derived hot set", () => {
       hits = ledger.hits;
       exceptions = ledger.exceptions;
     } else {
-      // The same split the builder performs: a trace line may carry a URL, and the replay — not
-      // the reader — decides whether a path-scoped rule fired on it.
-      const requests = (await fs.readFile(derivation.file, "utf8"))
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"))
-        .map((line) => {
-          const value = line.toLowerCase();
-          const host = value.replace(/^[a-z][a-z0-9+.-]*:\/\//, "").split("/")[0];
-          return { host, url: value.includes("/") ? value.replace(/#.*$/, "") : undefined, count: 1 };
-        });
+      // The same parse the builder performs — core's `parseRequestTrace` keeps the URL a line
+      // carries and honours its repeat count, so the replay sees the measured requests, not a
+      // per-line approximation of them.
+      const requests = parseRequestTrace(await fs.readFile(derivation.file, "utf8"));
       const outcome = replayRuleHits(new CompiledDomainRuleSet(lines), requests);
       hits = [
         ...outcome.hits,
@@ -168,8 +166,11 @@ describe("coverage-derived hot set", () => {
       return;
     }
 
-    const full = await measure(fullListPath, tracePath);
-    const hot = await measure(hotListPath, tracePath, true);
+    // The measurement is the one the file's header names, not the checked-in fixture: a shipped
+    // set derived from a different trace (or a richer capture of the same pages) replays that
+    // input, per the derivation contract the `hits` branch above already honors.
+    const full = await measure(fullListPath, derivation.file);
+    const hot = await measure(hotListPath, derivation.file, true);
 
     // The claim, stated as the thing a user would notice: the same hosts, the same requests, the
     // same allow decisions.
@@ -184,8 +185,18 @@ describe("coverage-derived hot set", () => {
       data.coverage.topRules.map((entry: any) => entry.rule).sort();
     expect(rulesOf(hot)).toEqual(rulesOf(full));
 
-    // And the trimmed list reports honestly about itself: every rule in it fired.
-    expect(hot.rules.scopes.hostname).toBe(hot.coverage.matchedRules);
+    // And the trimmed list reports honestly about itself: every rule in it fired. The winners
+    // live in three buckets — `matchedRules` counts the hostname-decided ones, `urlDecidedRules`
+    // the winners a path rule settled by matching the request URL, and `scopedRulesFired` the
+    // winners the replay could not decide even with a URL. The shipped set ships all three, so
+    // the sum — not any single bucket — is what `scopes.total` must equal.
+    const fired =
+      hot.coverage.matchedRules +
+      hot.trace.urlDecidedRules +
+      hot.ledger.scopedRulesFired.initiator +
+      hot.ledger.scopedRulesFired.path +
+      hot.ledger.scopedRulesFired.request;
+    expect(fired).toBe(hot.rules.scopes.total);
     expect(hot.coverage.listHitRatePercent).toBe(100);
     expect(hot.rules.compiledLines).toBeLessThan(200);
   });
@@ -210,7 +221,11 @@ describe("coverage-derived hot set", () => {
     );
     const selection = selectHotList({
       lines,
-      hits: [...outcome.hits, ...outcome.scopedHits.map((hit) => ({ rule: hit.rule, count: hit.count }))],
+      hits: [
+        ...outcome.hits,
+        ...outcome.urlHits,
+        ...outcome.scopedHits.map((hit) => ({ rule: hit.rule, count: hit.count })),
+      ],
       exceptions: outcome.exceptions.map((entry) => entry.rule),
     });
     const derivedPath = path.join(tmpDir, "derived-hotlist.txt");
