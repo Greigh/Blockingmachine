@@ -24,13 +24,10 @@ Release candidate. The macOS build ships notarized for the first time, `npm audi
 ### Verification Checksums (SHA-256)
 
 ```text
-caf78db49be9b17082c011a84cc71c0e694824eab1e6274614198d0102ab3962  Blockingmachine-1.0.0-rc.10-arm64.dmg
-8440b3d01bf5bbf44b03f8ab14be655213675f5b3d6ec436f72f2bdf1be70a44  Blockingmachine-darwin-arm64-1.0.0-rc.10.zip
-22a45cc569904f469148a46c6d66281c0aec0b389e15e1e467c16b1e63faa82f  Blockingmachine-darwin-arm64-1.0.0-rc.7.zip
-cfb8cc276447c4eec7f837a01dab931d5130cdd51678f81234a714a0bc18d6c7  Blockingmachine-darwin-arm64-1.0.0-rc.8.zip
-eb775a012224962b7c292c26997ac541e8feecfd67e53135bde1fd93d9d92eca  Blockingmachine-darwin-arm64-1.0.0-rc.9.zip
-479e47ab9609ec16da20a3ff121d27afd7498f52e678f028216e14b17ffa88db  blockingmachine-chrome-mv3-v1.0.0.zip
+00053c677df2690264697e1c9bbbacc3711287847e1d2503d9ac723f8745215d  Blockingmachine-1.0.0-rc.10-arm64.dmg
+e4c35476d9923d4ff47014473c5ed0a674ecd1446a20c48c90b437e4bc786a2c  Blockingmachine-darwin-arm64-1.0.0-rc.10.zip
+98bbcb2605cf449438d3985fa1fa12d3ef2e41d8d21d665cd98e6dcc00109590  blockingmachine-chrome-mv3-v1.0.0.zip
 5c95b39603bab8dc6e2bbae81c122e8f5fbca2b2d1612ed460fb6bf715bd0b4e  blockingmachine-cli-1.0.0-rc.10.tgz
 f18a3592de4aecbf89181d776a5fc630c1fabe7a6b69505233b05a50525aa0b1  blockingmachine-core-1.0.0-rc.10.tgz
-9898abdadd0a749483eb1f809288f2d51978de6ea664c0b6575f296a49e9681d  blockingmachine-firefox-mv3-v1.0.0.zip
+27c5565ae79b828ce5ba3dbe848601bb7c7409ccc90abfc13d65ace3e51acd97  blockingmachine-firefox-mv3-v1.0.0.zip
 ```
