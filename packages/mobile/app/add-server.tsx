@@ -382,7 +382,9 @@ export default function AddServerScreen() {
                 accessibilityRole="button"
                 onPress={() =>
                   void testAndStage({
-                    baseUrl: `http://${s.host}:${s.port}`,
+                    // Android can't resolve the .local hostname over HTTP —
+                    // dial the address the mDNS record resolved to instead.
+                    baseUrl: `http://${s.connectHost}:${s.port}`,
                     label: s.name,
                     origin: 'mdns',
                   })
@@ -391,7 +393,7 @@ export default function AddServerScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.serverName}>{s.name}</Text>
                   <Text style={styles.meta}>
-                    {s.host}:{s.port}
+                    {s.connectHost}:{s.port}
                     {s.txt.version ? ` · v${s.txt.version}` : ''}
                   </Text>
                 </View>
