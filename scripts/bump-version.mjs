@@ -162,7 +162,40 @@ for (const pkgPath of packagePaths) {
   updatedFiles.push(relPath);
 }
 
-// 4. Update README.md badge if present
+// 4. Update the Expo app manifest — prebuild derives android versionName /
+// iOS CFBundleShortVersionString from app.json's version, so a package.json-only
+// bump ships an APK whose identity is still the old release (rc.9's app.json
+// survived the rc.10 bump exactly this way).
+const appJsonPath = path.join(rootDir, 'packages', 'mobile', 'app.json');
+try {
+  const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+  if (appJson.expo && appJson.expo.version !== targetVersion) {
+    const prevAppVersion = appJson.expo.version;
+    appJson.expo.version = targetVersion;
+    fs.writeFileSync(appJsonPath, JSON.stringify(appJson, null, 2) + '\n', 'utf8');
+    console.log(`✅ [packages/mobile/app.json] expo.version: ${prevAppVersion} -> ${targetVersion}`);
+    updatedFiles.push('packages/mobile/app.json');
+  }
+} catch {
+  // no Expo manifest on this checkout
+}
+
+// A generated android/ tree (gitignored) carries the version it was prebuilt
+// under — rewrite it in place when present so an APK built without a fresh
+// prebuild still reports the right versionName.
+const gradlePath = path.join(rootDir, 'packages', 'mobile', 'android', 'app', 'build.gradle');
+try {
+  const gradle = fs.readFileSync(gradlePath, 'utf8');
+  const gradleRegex = /(versionName\s+")[^"]*(")/;
+  if (gradleRegex.test(gradle)) {
+    fs.writeFileSync(gradlePath, gradle.replace(gradleRegex, `$1${targetVersion}$2`), 'utf8');
+    console.log(`✅ [packages/mobile/android/app/build.gradle] versionName -> ${targetVersion}`);
+  }
+} catch {
+  // android/ is gitignored — absent until prebuild
+}
+
+// 5. Update README.md badge if present
 const readmePath = path.join(rootDir, 'README.md');
 try {
   let readme = fs.readFileSync(readmePath, 'utf8');
