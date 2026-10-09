@@ -3,6 +3,7 @@
  * resolve `.local` names (only NsdManager multicasts), so a discovered server
  * must be dialed by its resolved address, not its advertised hostname.
  */
+import { describe, expect, it, jest } from '@jest/globals';
 import {
   browseServers,
   pickConnectHost,
