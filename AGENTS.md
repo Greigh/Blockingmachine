@@ -23,10 +23,9 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
   `.dmg|.zip|.exe|.deb|.rpm` it found: rc.7/8/9 zips rode onto rc.10's release and
   `SHA256SUMS.txt` until deleted post-hoc. `package-all.mjs` now `rmSync`s `out/make`
   before `npm run make`, so the sweep can only see the current build.
-- **npmjs publish 404'd on rc.10** — `NPMJS_TOKEN` in `.env` returns 401/404 (`npm
-  whoami` fails, machine `~/.npmrc` session dead too); the packages exist (through
-  rc.9 under dist-tag `rc`) but rc.10 is not on npmjs. Needs a fresh granular token —
-  same failure class as flag 53.
+- **npmjs.com**: `@blockingmachine/core` and `@blockingmachine/cli` `1.0.0-rc.10`
+  under dist-tag `rc` — published after the owner rotated `NPMJS_TOKEN` (the old one
+  401'd; flag 75 closed).
 - **CI macOS notarization needs the signing certificate, not just the API key** —
   with `APPLE_API_*` secrets set, `osxNotarize` went live but the runner has no
   Developer ID identity, so `osxSign` fell back to adhoc and `@electron/notarize`'s
