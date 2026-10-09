@@ -67,9 +67,16 @@ for (const pkg of ['core', 'cli']) {
 
 // 3. Package Electron desktop app
 console.log('\n📦 [3/4] Building desktop application installers via Electron Forge...');
+
+// Forge's makers append to out/make without cleaning — every prior release's
+// installers sit there next to this build's, and the sweep below would carry
+// them into make/ (rc.7/8/9 zips rode onto rc.10 exactly this way). Empty the
+// staging dir before the make so the sweep can only see this build's output.
+const forgeOutDir = resolve(ROOT_DIR, 'packages/electron-app/out/make');
+rmSync(forgeOutDir, { recursive: true, force: true });
+
 execFileSync('npm', ['run', '--prefix', 'packages/electron-app', 'make'], { cwd: ROOT_DIR, stdio: 'inherit' });
 
-const forgeOutDir = resolve(ROOT_DIR, 'packages/electron-app/out/make');
 if (existsSync(forgeOutDir)) {
   const findFiles = (dir) => {
     let results = [];
