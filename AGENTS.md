@@ -10,14 +10,33 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
   `Co-Authored-By`, or any tool/agent trailer. The owner explicitly requires commits
   read as their own. (Whole branch history was rewritten 2026-10-09 to remove them.)
 
-- **`v1.0.0-rc.9` shipped 2026-10-04** — tag on `origin` (GitHub `Greigh/Blockingmachine`)
-  and `forgejo` (`git.greighstudios.com`). GitHub pre-release holds the full asset set:
-  local darwin-arm64 dmg/zip + extension zips + npm tarballs + `SHA256SUMS.txt`,
-  plus `publish.yml`'s CI-built win32/linux/macos installers attached on the tag push.
-- **`package-all.mjs` empties `make/` itself now** — `gh release create … make/*`
-  sweeps the whole directory, so rc.7/rc.8 leftovers rode onto the rc.9 release and
-  polluted `SHA256SUMS.txt` until deleted post-hoc. The script now `rmSync`s the dir
-  before collecting; the manual-clean advice is moot.
+- **`v1.0.0-rc.10` shipped 2026-10-08** — tag on `origin` (GitHub `Greigh/Blockingmachine`)
+  and `forgejo` (`git.greighstudios.com`), cut from `feat/mobile-app` after `main` was
+  merged in (the flag-72 CodeQL work). The release holds the local darwin-arm64
+  **notarized** dmg/zip + extension zips + npm tarballs + `SHA256SUMS.txt` (the local
+  zip verifies `stapler validate` / `spctl` → `Notarized Developer ID`).
+- **`release.mjs` pushes the branch HEAD is on, not literal `main`** — single-branch
+  releases ship from the working branch; a detached HEAD refuses the tag.
+- **Stale installers leaked through `out/make`, not `make/`** — the rc.9 fix emptied
+  `make/` before collecting, but Forge's makers append to
+  `packages/electron-app/out/make` without cleaning, and the sweep took every
+  `.dmg|.zip|.exe|.deb|.rpm` it found: rc.7/8/9 zips rode onto rc.10's release and
+  `SHA256SUMS.txt` until deleted post-hoc. `package-all.mjs` now `rmSync`s `out/make`
+  before `npm run make`, so the sweep can only see the current build.
+- **npmjs publish 404'd on rc.10** — `NPMJS_TOKEN` in `.env` returns 401/404 (`npm
+  whoami` fails, machine `~/.npmrc` session dead too); the packages exist (through
+  rc.9 under dist-tag `rc`) but rc.10 is not on npmjs. Needs a fresh granular token —
+  same failure class as flag 53.
+- **CI macOS notarization needs the signing certificate, not just the API key** —
+  with `APPLE_API_*` secrets set, `osxNotarize` went live but the runner has no
+  Developer ID identity, so `osxSign` fell back to adhoc and `@electron/notarize`'s
+  signature pre-check failed the leg. `publish.yml` now imports
+  `APPLE_CERTIFICATE_P12`/`APPLE_CERTIFICATE_PASSWORD` into a temp keychain on macOS
+  only, and exports `APPLE_API_KEY` only when the cert import ran — notarized when
+  signable, adhoc-green otherwise. The bash key-materialization also moved into a
+  macOS-gated step (pwsh on windows-latest was parsing `if [ … ]` → ParserError),
+  and the `workflow_dispatch` fallback tag reads `package.json` instead of a
+  hardcoded rc.7.
 - **npmjs.com**: `@blockingmachine/core` and `@blockingmachine/cli` `1.0.0-rc.9` under
   dist-tag `rc`. A publish may sit in npm's internal "staged" state for minutes —
   `npm view` 404s while the packument finalizes and a republish 409s
