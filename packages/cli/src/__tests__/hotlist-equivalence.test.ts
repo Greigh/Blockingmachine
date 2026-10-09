@@ -1,11 +1,14 @@
 import {
   CompiledDomainRuleSet,
+  createReplayDecider,
   decideRequest,
   parseHitLedgerText,
+  parseRequestTrace,
   replayRuleHits,
   requestUrlMatcher,
   selectHotList,
   type ReplayDecision,
+  type ReplayRequest,
 } from "@blockingmachine/core";
 import { existsSync, readFileSync } from "fs";
 import fs from "fs/promises";
@@ -17,10 +20,6 @@ const repoRoot = path.resolve(cliRoot, "..", "..");
 const fullListPath = path.join(cliRoot, "filters", "output", "genericBrowserRules.txt");
 const hotListPath = path.join(cliRoot, "filters", "output", "hotlist.txt");
 const tracePath = path.join(cliRoot, "src", "__tests__", "fixtures", "browsing-trace.txt");
-
-/** The artifacts are large and generated; the suite skips rather than pretending to have checked. */
-const ready = [fullListPath, hotListPath, tracePath].every((file) => existsSync(file));
-const maybe = ready ? test : test.skip;
 
 /**
  * The input the shipped artifact says it was derived from — the `! Derivation:` header the
@@ -40,14 +39,43 @@ function derivationOf(text: string): { kind: "hits" | "trace"; file: string } {
 const derivation = existsSync(hotListPath)
   ? derivationOf(readFileSync(hotListPath, "utf8"))
   : { kind: "trace" as const, file: tracePath };
+
+/** The artifacts are large and generated; the suite skips rather than pretending to have checked. */
+const ready = [fullListPath, hotListPath, tracePath, derivation.file].every((file) => existsSync(file));
+const maybe = ready ? test : test.skip;
 const requestsDecided = ready && derivation.kind === "trace";
 const onMeasuredRequests = requestsDecided ? test : test.skip;
 
-/** One host, and what each of the two lists decided for it. */
+/** One request — host, and the URL when the measurement carried one — and what each list decided. */
 interface Comparison {
   host: string;
+  url?: string;
   full: ReplayDecision;
   hot: ReplayDecision;
+}
+
+/** The key a per-request verdict cache is safe to be read back by — two requests sharing a host
+ * can decide differently when a path rule is doing the deciding, so the URL is part of the key. */
+function requestKey(request: { host: string; url?: string }): string {
+  return `${request.host}\t${request.url ?? ""}`;
+}
+
+/** Splits a measurement file on its `# page:` markers, then parses each page's share through
+ * `parseRequestTrace` — the same parser the builder and the coverage report read the trace
+ * through — so a derivation half and a hold-out half can be made without a second idea of what
+ * a request line means. */
+function pagesOfRequests(text: string): ReplayRequest[][] {
+  const chunks: string[][] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    if (raw.trim().startsWith("# page:")) {
+      chunks.push([]);
+      continue;
+    }
+    chunks[chunks.length - 1]?.push(raw);
+  }
+  return chunks
+    .map((chunk) => parseRequestTrace(chunk.join("\n")))
+    .filter((page) => page.length > 0);
 }
 
 /**
@@ -68,9 +96,9 @@ interface Comparison {
  * `hotlist.test.ts` does compare the fired *rule set*, which catches most substitutions too — but
  * as a set, so it reports "the rules differ" without saying which host either rule decided. This
  * form names the host and both deciding rules, which is the difference between a failure a person
- * can act on and a count that has to be re-derived. It also covers something the counts cannot
- * reach at all: the measured trace records hostnames, so nothing in the existing suite ever
- * exercises a *path-scoped* rule as one. The URL case below does.
+ * can act on and a count that has to be re-derived. And when the derivation measurement carries
+ * URLs — as the adopted trace does — the replay decides *path-scoped* rules against the request
+ * that carried them, which a hostname-only measurement could never exercise at all.
  *
  * Both verdicts come from {@link decideRequest} — the same function the coverage report and the
  * hot-set builder use — rather than from a second implementation written here, because the whole
@@ -83,17 +111,17 @@ describe("hot set decides as the full export does, on the traffic it was derived
   let hotRules: string[];
   let comparisons: Comparison[];
   let fullLines: string[];
-  let pages: string[][];
+  let pages: ReplayRequest[][];
 
   beforeAll(async () => {
     // `ready` rather than `requestsDecided`: the subset-boundary test at the end derives its own
-    // hot set from the trace regardless of what the shipped artifact was built from, and needs
-    // the cached verdicts this computes.
+    // hot set from the derivation measurement regardless of what the shipped artifact was built
+    // from, and needs the cached verdicts this computes.
     if (!ready) return;
-    const [fullText, hotText, traceText] = await Promise.all([
+    const [fullText, hotText, derivationText] = await Promise.all([
       fs.readFile(fullListPath, "utf8"),
       fs.readFile(hotListPath, "utf8"),
-      fs.readFile(tracePath, "utf8"),
+      fs.readFile(derivation.file, "utf8"),
     ]);
     const body = (text: string) =>
       text
@@ -105,17 +133,28 @@ describe("hot set decides as the full export does, on the traffic it was derived
     full = new CompiledDomainRuleSet(fullLines);
     hotRules = body(hotText);
     const hot = new CompiledDomainRuleSet(hotRules);
-    const traceHosts = body(traceText);
 
-    // Decided once for the whole suite. Each `evaluate` against the 147,000-rule export is real
-    // work, and six tests re-reading the same 232 requests costs a minute for no extra coverage.
-    comparisons = traceHosts.map((host) => ({
-      host,
-      full: decideRequest(full, { host }),
-      hot: decideRequest(hot, { host }),
+    // The replay is the derivation file the header names, not a fixture — a shipped set measured
+    // on one trace cannot promise identical verdicts on another session's traffic, and asserting
+    // it would be asserting the wrong claim (the hold-out measurement is the sibling suite's).
+    // Parsed once through the same parser the builder used, so the suite's requests are exactly
+    // the measured requests.
+    const requests = parseRequestTrace(derivationText);
+
+    // Decided once for the whole suite. `createReplayDecider` rather than `decideRequest`: the
+    // per-call form recompiles the path rules for every request, which at a URL trace's size is
+    // minutes of identical work — the decider shares the compile across all of them and the
+    // decision it returns is the same one.
+    const fullDecider = createReplayDecider(full);
+    const hotDecider = createReplayDecider(hot);
+    comparisons = requests.map((request) => ({
+      host: request.host,
+      url: request.url,
+      full: fullDecider(request),
+      hot: hotDecider(request),
     }));
 
-    pages = pagesOf(traceText);
+    pages = pagesOfRequests(derivationText);
   });
 
   /** Every mismatch between the two lists, shaped so a failure reads as a disagreement. */
@@ -130,8 +169,9 @@ describe("hot set decides as the full export does, on the traffic it was derived
   }
 
   onMeasuredRequests("agrees on every request, not merely in total", () => {
-    // 232 requests over 178 distinct hosts: 132 blocked, 12 released by an exception.
-    expect(comparisons.length).toBe(232);
+    // The count is whatever the derivation measurement carried — the assertion that makes it a
+    // check and not a description is that the number is non-trivial and every verdict agrees.
+    expect(comparisons.length).toBeGreaterThan(100);
     expect(disagreementsOf(comparisons)).toEqual([]);
   });
 
@@ -162,8 +202,10 @@ describe("hot set decides as the full export does, on the traffic it was derived
       if (entry.hot.rule && entry.hot.verdict === "exception") firedHot.add(entry.hot.rule);
     }
 
-    // Six exceptions actually fire, so this is not passing on an empty set.
-    expect(firedFull.size).toBe(6);
+    // At least one exception actually fires, so this is not passing on an empty set. (The count
+    // is whatever the derivation measurement released — asserting a fixture's number would pin
+    // the measurement, not the invariant.)
+    expect(firedFull.size).toBeGreaterThan(0);
     expect([...firedHot].sort()).toEqual([...firedFull].sort());
     // And every one is carried verbatim, so the hot set cannot allow a *different* set of hosts
     // than the export did even if it happened to reach the same number.
@@ -195,23 +237,23 @@ describe("hot set decides as the full export does, on the traffic it was derived
       `\n  [hot set equivalence] requests compared per scope: ${JSON.stringify(summary)}\n`,
     );
 
-    // The measured session decides hostname rules, one path rule, and the exceptions. Each is
-    // present and each agrees — so no bucket is passing vacuously.
-    expect(summary).toEqual({
-      hostname: 127,
-      "exception (allow)": 12,
-      path: 5,
-      "no rule matched": 88,
-    });
+    // The four buckets the measurement can exercise — hostname decisions, path decisions, fired
+    // exceptions, and untouched requests — must each be present or the suite is reporting
+    // agreement across a scope it never looked at; then each is required to actually agree.
+    for (const scope of ["hostname", "path", "exception (allow)", "no rule matched"]) {
+      expect(summary[scope]).toBeGreaterThan(0);
+    }
     for (const [scope, list] of byScope) {
       expect({ scope, disagreements: disagreementsOf(list) }).toEqual({ scope, disagreements: [] });
     }
   });
 
   onMeasuredRequests("agrees on the path-scoped rule when the request carries a URL", () => {
-    // The measured trace records hostnames only, so the one path-scoped rule in the hot set is
-    // never *decided by its path* there — it wins on the host alone, and the bucket above could be
-    // read as covering path matching. It does not, so this does.
+    // On a URL-bearing derivation the trace itself decides path rules by their path — those are
+    // the entries this collects — and the check then goes one step further than per-request
+    // agreement: it constructs a fresh URL under each fired path rule and requires both lists to
+    // let the URL settle it, so "path scope" is exercised as path matching and not merely as a
+    // bucket label.
     //
     // The URL comes from the rule's own text and is checked against the matcher before use, so the
     // assertion cannot pass on a URL the rule does not actually govern. Note the extra path
@@ -223,7 +265,7 @@ describe("hot set decides as the full export does, on the traffic it was derived
         pathDecided.set(entry.host, entry.full.rule);
       }
     }
-    expect(pathDecided.size).toBe(2);
+    expect(pathDecided.size).toBeGreaterThan(0);
 
     for (const [host, rule] of pathDecided) {
       expect(hotRules).toContain(rule);
@@ -264,44 +306,46 @@ describe("hot set decides as the full export does, on the traffic it was derived
     // Both halves are asserted, because a test that only checked the disagreement would pass just
     // as happily on a set that disagreed everywhere.
     const half = Math.floor(pages.length / 2);
-    const derivationHosts = pages.slice(0, half).flat();
-    const holdoutHosts = pages.slice(half).flat();
+    const derivationRequests = pages.slice(0, half).flat();
+    const holdoutRequests = pages.slice(half).flat();
 
-    const outcome = replayRuleHits(
-      full,
-      derivationHosts.map((host) => ({ host, count: 1 })),
-    );
+    const outcome = replayRuleHits(full, derivationRequests);
     const selection = selectHotList({
       lines: fullLines,
-      hits: [...outcome.hits, ...outcome.scopedHits.map((hit) => ({ rule: hit.rule, count: hit.count }))],
+      // `urlHits` too — the builder keeps them (`build-hot-list.mjs`), and dropping path-decided
+      // winners here would manufacture disagreements on URL-carrying derivation traffic.
+      hits: [
+        ...outcome.hits,
+        ...outcome.urlHits,
+        ...outcome.scopedHits.map((hit) => ({ rule: hit.rule, count: hit.count })),
+      ],
       exceptions: outcome.exceptions.map((entry) => entry.rule),
     });
 
     const derived = new CompiledDomainRuleSet(selection.lines);
 
-    // The full export's verdict for a host is looked up from the suite-wide cache rather than
-    // re-decided. `decideRequest` walks the wildcard rules of all 147,000, so re-asking it 232
-    // times cost about twenty seconds of CPU — and because that work is synchronous, Jest cannot
-    // interrupt it, so it passes here while starving an async sibling in another worker past the
-    // 5s default. `beforeAll` already decided every trace host, and the two halves below partition
-    // exactly those hosts, so this asks for nothing new.
-    const fullVerdicts = new Map(comparisons.map((entry) => [entry.host, entry.full]));
+    // The full export's verdict for a request is looked up from the suite-wide cache rather
+    // than re-decided — `beforeAll` already decided every measured request, and the two halves
+    // below partition exactly those requests, so this asks for nothing new. The cache keys on
+    // host *and* URL: two requests to one host can decide differently once a path rule is doing
+    // the deciding, so a host-keyed lookup would sometimes hand back the wrong verdict.
+    const fullVerdicts = new Map(comparisons.map((entry) => [requestKey(entry), entry.full]));
 
-    const compareAll = (hosts: string[]) =>
-      hosts
-        .map((host) => {
-          const fullVerdict = fullVerdicts.get(host);
-          if (!fullVerdict) throw new Error(`no cached full-export verdict for ${host}`);
-          return { host, full: fullVerdict, hot: decideRequest(derived, { host }) };
+    const compareAll = (requests: ReplayRequest[]) =>
+      requests
+        .map((request) => {
+          const fullVerdict = fullVerdicts.get(requestKey(request));
+          if (!fullVerdict) throw new Error(`no cached full-export verdict for ${request.host}`);
+          return { host: request.host, full: fullVerdict, hot: decideRequest(derived, request) };
         })
         .filter((entry) => entry.full.verdict !== entry.hot.verdict);
 
-    const onDerivation = compareAll(derivationHosts);
-    const onHoldout = compareAll(holdoutHosts);
+    const onDerivation = compareAll(derivationRequests);
+    const onHoldout = compareAll(holdoutRequests);
 
     process.stdout.write(
-      `\n  [hot set equivalence scope] derived from ${derivationHosts.length} requests: ` +
-        `${onDerivation.length} disagreements on its own traffic, ${onHoldout.length} on ${holdoutHosts.length} held-out\n`,
+      `\n  [hot set equivalence scope] derived from ${derivationRequests.length} requests: ` +
+        `${onDerivation.length} disagreements on its own traffic, ${onHoldout.length} on ${holdoutRequests.length} held-out\n`,
     );
 
     // Exact on the traffic it came from — the invariant, on a derivation of the operator's choosing.
@@ -357,19 +401,3 @@ describe("hot set carries every decision the ledger recorded that the export can
     expect(droppedExceptions).toEqual([]);
   });
 });
-
-/** Splits a trace into its pages, so a derivation set and a hold-out set can be made from it. */
-function pagesOf(text: string): string[][] {
-  const pages: string[][] = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith("!")) continue;
-    if (line.startsWith("# page:")) {
-      pages.push([]);
-      continue;
-    }
-    if (line.startsWith("#")) continue;
-    pages[pages.length - 1]?.push(line);
-  }
-  return pages.filter((page) => page.length > 0);
-}

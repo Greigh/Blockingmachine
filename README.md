@@ -476,14 +476,15 @@ the rate counts; beside them one path-scoped rule won on 5 requests a hostname c
 the scoped fire is reported next to the rate instead of inside it, and of the 133 blocked requests
 five are those scoped wins, counted as blocked but out of the rule rate.
 
-**And the session cannot currently exercise the URL path at all**, which the command now says
-out loud rather than leaving to be inferred. The trace behind these figures records 232 bare
-hostnames and no paths, because the capture kept only the host of each resource-timing entry — which
-always handed back the full URL. So `Path-decided: 0` here, and the numbers are exactly what they
-were before the matcher existed. Capturing with
-[`scripts/capture-request-trace.js`](scripts/capture-request-trace.js) records URLs, at which point
-the path bucket becomes measurable; adopting a hot set from a URL-bearing session is a separate
-decision from gathering one, because a re-captured session is a different session.
+**And that first session could not exercise the URL path at all** — it recorded 232 bare
+hostnames and no paths, because the capture kept only the host of each resource-timing entry. A
+re-capture with [`scripts/capture-request-trace.js`](scripts/capture-request-trace.js)
+([`browsing-request-trace.txt`](packages/cli/src/__tests__/fixtures/browsing-request-trace.txt))
+records full request URLs, and the path bucket becomes real: **16 requests settled by 9
+path-scoped rules**, a decision class the hostname trace structurally cannot produce. The shipped
+hot set is derived from that URL trace (below), so the older hostname session is now a held-out
+measurement for it — a different session's traffic, which is exactly what "exact for the traffic
+it came from" does not cover.
 
 The honest reading: against a six-figure list, a real browsing session touches a rounding error of
 it — so the list is best understood as a hot set in the low tens of rules (71 here) plus ~118,000
@@ -513,22 +514,25 @@ that fired, so the trimmed list makes the same allow decisions the full one did,
 `npm run check:hotlist` fails if the file drifts from a fresh derivation (CI runs it), and
 `blockingmachine coverage --hot` measures the trimmed list instead of the full export.
 
-The shipped `hotlist.txt` is derived from the four-session ledger in [`ledger/`](ledger/), so the
-committed 11-page session is now a *held-out* measurement for it rather than the traffic it was
-built on:
+The shipped `hotlist.txt` is derived from the URL-bearing re-capture
+[`browsing-request-trace.txt`](packages/cli/src/__tests__/fixtures/browsing-request-trace.txt) —
+the same eleven pages as the hostname session, re-collected in a live browser so path-scoped
+rules could actually be decided. On its derivation traffic it keeps **all 413 measured blocks
+(and all 10 fired exceptions) in 91 rules** — 71 hostname-decidable, 10 path-scoped, 10
+exceptions — with 132,005 never-fired rules left behind. Against the *older* hostname session, a
+held-out measurement from a different day, it keeps **128 of 133 blocks (96.2%)**:
 
-| List | Rules | Blocked | Allowlisted | Rules that fired |
+| List | Rules | Blocked on its own trace | Path-decided | Exceptions fired |
 | :--- | ---: | :--- | :--- | :--- |
-| compiled export | 249,751 lines (118,379 decidable) | **133 requests on 86 hosts** | 4 hosts / 4 rules | 71 |
-| `hotlist.txt` | **17 rules** | **19 requests on 9 hosts (14.3%)** | — | 6 of 17 |
+| compiled export | 249,751 lines (118,379 decidable) | **413 requests on 202 hosts** | 16 req / 9 rules | 10 |
+| `hotlist.txt` | **91 rules** | **413 requests on 202 hosts — identical** | 16 req / 9 rules | 10 |
 
-On its own derivation traffic the hot set still holds no rule that did not fire — **0% dead
-weight** — but "exact" is not the claim the header makes: the 17 rules carry **403 of the ledger's
-1,733 measured blocks (23.3%)**, because 40 of the 57 rules the browser reported have no verbatim
-line in the source list to ship as (the ledger's `||doubleclick.net^` is not the spelling the list
-ships). And on a session it never saw it keeps 19 of 133 blocks; the 11 rules that stand silent
-here are not dead, they are the ledger's traffic rather than this session's. What both gaps mean —
-and why extra sessions of the same kind did not shrink the second — is measured two sections down.
+On its own derivation traffic the hot set holds no rule that did not fire — **0% dead weight** —
+and that is the only claim the header makes. The ledger-derived set it replaced kept 19 of 133
+blocks on the old hostname session (14.3%); the trace-derived set keeps 128 of 133 there, because
+a live browser's URL trace is simply a richer measurement of the same product's traffic. What the
+held-out gap means — and why extra sessions of the same kind do not shrink it — is measured two
+sections down.
 
 ### The Measurement Can Be Real Usage
 
@@ -591,14 +595,19 @@ npm run tiers:weekly                            # re-derive and verify, exactly 
 ```
 
 A weekly job (`.github/workflows/weekly-tier-compile.yml`, Mondays 04:17 UTC) re-runs that derivation,
-verifies the hot set still matches the ledger it names, checks the compiled cut against Chrome's
-rule budget, and opens a PR with the regenerated artifacts. It is one script rather than a workflow
-of steps so that what CI runs weekly is what you run when a derivation looks wrong.
+rebuilds the hot set from the derivation its header records (the URL trace today — whichever
+measurement it was last adopted from, not always the ledger), checks the compiled cut against
+Chrome's rule budget, and opens a PR with the regenerated artifacts. It is one script rather than
+a workflow of steps so that what CI runs weekly is what you run when a derivation looks wrong.
+Choosing *which* measurement the hot set is adopted from is a decision the script deliberately
+does not make — `build-hot-list.mjs --hits|--trace|--sessions … --write` by hand is how the
+default changes, and the weekly run then verifies that new derivation.
 
 **The job cannot collect browsing data** — only the extension can, on someone's machine — so the
 weekly run is a re-derivation and a guard rather than a generator: it proves every week that what
-ships still matches the evidence, and opens the PR when the evidence moves. With an empty dropbox it
-is a no-op that says so, which is the correct outcome rather than a failure.
+ships still matches its evidence, and opens the PR when the evidence moves. With an empty dropbox
+the ledger-derived steps are skipped and the rest still runs, which is the correct outcome rather
+than a failure.
 
 The committed ledger is `<count> <rule>` — a blocklist rule and how often the browser blocked with
 it. Not a browsing history: no URLs, titles, timestamps or initiators, because the merge reads rule
@@ -630,9 +639,12 @@ that.
 
 **The multi-session measurement has now been made, and the page-split curve was not a floor — it
 was an optimistic bound.** `ledger/ledger-hits.txt` holds four scripted sessions (158 pages on one
-day), and `measure:hotlist-generalisation --hits` derives the shipped 17-rule set from it and holds
-out this session whole: **14.3% (19 of 133 blocks)**, *below* the 40.9% a same-session split
-predicts, because a hold-out that shares no traffic with the derivation is a harder question. And
+day), and `measure:hotlist-generalisation --hits` derives a set from it and holds
+out the hostname session whole: **14.3% (19 of 133 blocks)**, *below* the 40.9% a same-session split
+predicts, because a hold-out that shares no traffic with the derivation is a harder question.
+(The shipped set no longer comes from that ledger — it is the URL-trace-derived 91-rule set above,
+which keeps 96.2% on the same held-out session; the ledger figure stays as the measurement of what
+a stranger's traffic buys you.) And
 the session axis is flat from the start: merging the ledger one session at a time grows it
 53 → 56 → 57 fired rules while the held-out share stays **14.3% at every prefix** — sessions of the
 same kind had stopped paying at the first one. The honest use of a ledger is breadth, not

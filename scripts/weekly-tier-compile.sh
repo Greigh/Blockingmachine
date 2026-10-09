@@ -47,29 +47,34 @@ step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 # ------------------------------------------------------------------------------------------------
 step "Checking the ledger"
 
+# The ledger gates the *tier cut*, not the whole run: the hot-set rebuild below replays whatever
+# derivation the shipped file names, which today is a request trace and not this ledger at all,
+# so an absent or empty dropbox is a skip of one step rather than an early exit.
+HAVE_LEDGER=1
 if [ ! -f "$LEDGER" ]; then
+  HAVE_LEDGER=0
   echo "  no ledger at $LEDGER — nothing has been exported from a browser yet."
   echo "  See ledger/README.md. This is the expected state, not a failure."
-  exit 0
+else
+  # A `<count> <rule>` line is what every downstream reader looks for, so this is the same
+  # question `package-extension.mjs` asks before it passes `--hits`. Counting it here rather
+  # than running the derive and reading its exit code keeps an empty dropbox a quiet no-op
+  # instead of a failure that looks like a broken pipeline.
+  HITS="$(grep -cE '^[[:space:]]*[0-9]+[[:space:]]+[^[:space:]]' "$LEDGER" || true)"
+  if [ "${HITS:-0}" -eq 0 ]; then
+    HAVE_LEDGER=0
+    echo "  $LEDGER holds no rule hits yet (header only)."
+    echo "  The cut stays in input order — only the ledger-derived steps are skipped."
+  else
+    echo "  $LEDGER: $HITS rules with measured hits"
+    sed -n '1,12p' "$LEDGER" | sed 's/^/  | /'
+  fi
 fi
-
-# A `<count> <rule>` line is what every downstream reader looks for, so this is the same question
-# `package-extension.mjs` asks before it passes `--hits`. Counting it here rather than running the
-# derive and reading its exit code keeps an empty dropbox a quiet no-op instead of a failure that
-# looks like a broken pipeline.
-HITS="$(grep -cE '^[[:space:]]*[0-9]+[[:space:]]+[^[:space:]]' "$LEDGER" || true)"
-if [ "${HITS:-0}" -eq 0 ]; then
-  echo "  $LEDGER holds no rule hits yet (header only)."
-  echo "  The cut stays in input order and the hot set stays on the trace fixture. Nothing to do."
-  exit 0
-fi
-echo "  $LEDGER: $HITS rules with measured hits"
-sed -n '1,12p' "$LEDGER" | sed 's/^/  | /'
 
 # ------------------------------------------------------------------------------------------------
 step "Refusing to discard tier changes already in the working tree"
 
-if ! git diff --quiet -- "${TIER_PATHS[@]}" 2>/dev/null; then
+if [ "$HAVE_LEDGER" -eq 1 ] && ! git diff --quiet -- "${TIER_PATHS[@]}" 2>/dev/null; then
   echo "  These are modified, and this script restores them after compiling:"
   git status --short -- "${TIER_PATHS[@]}" | sed 's/^/  /'
   echo
@@ -82,15 +87,25 @@ step "Building core (the merge, the hot set and the classifier all read its outp
 npm run build --workspace=@blockingmachine/core >/dev/null
 
 # ------------------------------------------------------------------------------------------------
-step "Rebuilding the hot set from the ledger"
+step "Rebuilding the hot set from the derivation it names"
 
 # `--write`, not `--check`: the point of the weekly run is to find that the shipped hot set no
-# longer matches the evidence, and a check that only fails has no PR to open. The provenance line
-# the file now carries is what lets `check:hotlist` verify this build in CI without being told
-# which input to use.
-node scripts/build-hot-list.mjs --hits "$LEDGER" --write
+# longer matches the evidence it was built from, and a check that only fails has no PR to open.
+#
+# No input flag — deliberately. The file's `Derivation:` header names the measurement it was
+# adopted from (a URL-bearing live trace today; `--check` replays the same line), so the weekly
+# job re-derives *that* and opens a PR when the fresh build differs — which happens when the
+# source list moves, not merely because time passed. Passing `--hits` here would silently revert
+# every deliberate adoption decision (flag 15 adopted the URL trace because it is the only input
+# that can decide path-scoped rules); switching the shipped default to a different measurement
+# is an owner's call — flag 16's question — and is done by running the builder with the new
+# input by hand, not by automation outvoting a review.
+node scripts/build-hot-list.mjs --write
 
 # ------------------------------------------------------------------------------------------------
+if [ "$HAVE_LEDGER" -eq 0 ]; then
+  step "Skipping the ledger-derived tier cut (no hits to derive from)"
+else
 step "Compiling the tier cut from the ledger"
 
 # The compile is the claim under test: that the ledger-derived cut still fits Chrome's guaranteed
@@ -120,13 +135,14 @@ git restore -- "${TIER_PATHS[@]}"
 echo "  restored ${TIER_PATHS[*]}"
 echo "  the plan this run produced is in ledger/last-tier-plan.json (gitignored, and not committed)"
 echo "  for the reasoning, see ledger/README.md"
+fi
 
 # ------------------------------------------------------------------------------------------------
 step "Verifying what actually ships"
 
-# `check:hotlist` is the one that matters: the hot set was just rewritten from the ledger, and this
-# re-derives it from the file's own recorded provenance and asks whether they agree. It is what
-# catches a hand-edited hot list and a ledger that arrived without its hot list.
+# `check:hotlist` is the one that matters: the hot set was just rebuilt from the derivation its
+# header records, and this re-derives it from the same provenance and asks whether they agree.
+# It is what catches a hand-edited hot list and a measurement whose artifact was not regenerated.
 npm run check:hotlist
 
 # The tier budget is enforced by the compile above — it allocates against the budget by
@@ -136,5 +152,9 @@ npm run check:hotlist
 npm run verify:mv3
 
 step "Done"
-echo "  The derived artifacts now match the ledger, and the cut fits the budget."
+if [ "$HAVE_LEDGER" -eq 1 ]; then
+  echo "  The hot set matches its recorded derivation, and the ledger-derived cut fit the budget."
+else
+  echo "  The hot set matches its recorded derivation (no ledger hits, so the tier cut was skipped)."
+fi
 echo "  Commit any change to packages/cli/filters/output/hotlist.txt that you want kept."

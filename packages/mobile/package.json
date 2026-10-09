@@ -54,7 +54,7 @@
     "react-native-zeroconf": "^0.17.4"
   },
   "devDependencies": {
-    "@testing-library/react-native": "^14.0.1",
+    "@testing-library/react-native": "^14.1.0",
     "@types/jest": "^30.0.0",
     "@types/react": "^19.3.0",
     "jest-expo": "^57.0.5",
