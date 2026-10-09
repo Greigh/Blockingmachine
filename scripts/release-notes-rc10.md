@@ -25,14 +25,15 @@ Release candidate. The macOS build ships notarized for the first time, `npm audi
 
 ```text
 00053c677df2690264697e1c9bbbacc3711287847e1d2503d9ac723f8745215d  Blockingmachine-1.0.0-rc.10-arm64.dmg
-e4c35476d9923d4ff47014473c5ed0a674ecd1446a20c48c90b437e4bc786a2c  Blockingmachine-darwin-arm64-1.0.0-rc.10.zip
-8dec4b01596ae987a5330a7c1e28a67d44c3b48a9b2f7517aa39e109de5ee4d3  Blockingmachine-linux-x64-1.0.0-rc.10.zip
-34a4481117ab4dda8fc045d98143b557e25fee00a7442e298a5b4299bb3b5c39  Blockingmachine-win32-x64-1.0.0-rc.10.zip
-d54860c97feba90000e10757eaba29e3d99ede29d87f04ca4f48eca8084e1a79  BlockingmachineSetup.exe
-b3ac3184c6a598ddb782369b275b21467b67803b218f3bef73a6b3cc87e25d97  blockingmachine-1.0.0.rc.10-1.x86_64.rpm
-3b6a9fe6331339da0b076f7955766b7918a539c4930b65ff3f7ac02f3f9cdc2f  blockingmachine-chrome-mv3-v1.0.0.zip
+2ece93896853c62dc2bb46f378c1e50e82cd9aaac6d0372358064123cfedd942  Blockingmachine-darwin-arm64-1.0.0-rc.10.zip
+ae65f10ed2b7c4f65c1c2915906475127c1a77d439c389bf3cac06f1f3531de7  Blockingmachine-linux-x64-1.0.0-rc.10.zip
+1c217ce4575a89a71e370c62882a7fac6154ac3bfb29033b5b568b08a79c461c  Blockingmachine-win32-x64-1.0.0-rc.10.zip
+a56411b733fe00bdb779c156d07430497e44d63c436f2b38e5fd584299a58978  Blockingmachine.dmg
+a4ec9db5765a9c365856f5105fcf4de6426e0b8c2ff5a12efcc95cdc8cf234a0  BlockingmachineSetup.exe
+beec796cecf41a95923acddc514e9cfb1234f379a669d03ea1d8075523d667b2  blockingmachine-1.0.0.rc.10-1.x86_64.rpm
+7f3fc9283050eb6be11b8797337bf837a2a954b7c812bc835f3ccd1082c3cbaa  blockingmachine-chrome-mv3-v1.0.0.zip
 5c95b39603bab8dc6e2bbae81c122e8f5fbca2b2d1612ed460fb6bf715bd0b4e  blockingmachine-cli-1.0.0-rc.10.tgz
 d34e67d439090aaf1787a40b4a6fd818808b046e9db315ae78c0135dd5e12c4c  blockingmachine-core-1.0.0-rc.10.tgz
-44fe0d9f63f7aef92c8442b6ea44631ba9465ba6bab4b325ae3fe85b1cb21bc8  blockingmachine-firefox-mv3-v1.0.0.zip
-e0508243b82710ef964735126385ae1beb49748582864f56547e93c68302da46  blockingmachine_1.0.0.rc.10_amd64.deb
+3b8d002d5626d0412b77af37f9a8356d7f028af01e4ca0634ef8c7154690cd60  blockingmachine-firefox-mv3-v1.0.0.zip
+b0d33b56c0f77fb9b0ab1da19402823b443d76dd3540de3c5699a64462daeee2  blockingmachine_1.0.0.rc.10_amd64.deb
 ```
