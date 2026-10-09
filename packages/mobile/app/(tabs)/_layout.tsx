@@ -3,6 +3,7 @@ import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { StyleSheet, View, type ColorValue } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useServerEvents } from '../../src/hooks/useEvents';
 import { chrome, colors, glass, spacing } from '../../src/theme';
 
@@ -29,6 +30,7 @@ function TabBarGlass() {
 
 export default function TabsLayout() {
   const { alert } = useServerEvents();
+  const insets = useSafeAreaInsets();
   // New quarantines badge the Telemetry tab until the dashboard banner (or the
   // badge's implicit "I saw it") dismisses them — cross-tab signal, not just a
   // banner that only exists while Dashboard happens to be mounted.
@@ -48,7 +50,12 @@ export default function TabsLayout() {
         tabBarStyle: {
           position: 'absolute',
           marginHorizontal: spacing.lg,
-          marginBottom: spacing.sm,
+          // The pill floats above the home indicator via margin — so the bar
+          // must not *also* reserve the inset as padding inside its own height
+          // (react-navigation adds insets.bottom as paddingBottom, which would
+          // squeeze the items into a 30pt top lane).
+          marginBottom: insets.bottom + spacing.sm,
+          paddingBottom: 0,
           height: chrome.tabBarHeight,
           backgroundColor: 'transparent',
           borderTopWidth: 0,
@@ -56,6 +63,9 @@ export default function TabsLayout() {
           overflow: 'hidden',
           elevation: 0,
         },
+        // Items are intrinsic-height buttons inside a full-lane wrapper —
+        // centering the wrapper's children centers the icon+label stack.
+        tabBarItemStyle: { justifyContent: 'center' },
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.textMuted,
         sceneStyle: { backgroundColor: 'transparent' },

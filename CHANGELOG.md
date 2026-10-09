@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NSCameraUsageDescription` (iOS) and `CAMERA` (Android) explicitly rather than
   relying on the expo-camera plugin defaults, and drops `RECORD_AUDIO` /
   `NSMicrophoneUsageDescription`, which the scanner never needed.
+- **Mobile floating tab bar**: icon+label sat pinned to the pill's top edge —
+  the bar reserved `insets.bottom` as internal padding *and* floated the pill
+  with margin, double-counting the safe area. The pill now lifts via
+  `marginBottom: insets.bottom + spacing` alone, drops the internal inset
+  padding, and centers items vertically.
 - The regenerated APK (same `1.0.0-rc.10`) replaces the `mobile-v1.0.0-rc.10`
   release asset and the Forgejo `generic/blockingmachine-mobile/1.0.0-rc.10`
   package — reinstall it to pick up the fix.
