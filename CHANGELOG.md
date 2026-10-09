@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mobile QR pairing**: the "Scan pairing QR" card could silently do nothing —
+  `requestPermission()` was awaited before entering QR mode, so a rejection (or a
+  permanently-denied permission, which resolves without a dialog) left the picker
+  screen dead with no prompt and no way back. The flow now enters QR mode first,
+  surfaces request failures as an error card, and offers an **Open Settings**
+  path when Android reports `canAskAgain: false`. `app.json` also declares
+  `NSCameraUsageDescription` (iOS) and `CAMERA` (Android) explicitly rather than
+  relying on the expo-camera plugin defaults, and drops `RECORD_AUDIO` /
+  `NSMicrophoneUsageDescription`, which the scanner never needed.
+- The regenerated APK (same `1.0.0-rc.10`) replaces the `mobile-v1.0.0-rc.10`
+  release asset and the Forgejo `generic/blockingmachine-mobile/1.0.0-rc.10`
+  package — reinstall it to pick up the fix.
+
 ## [1.0.0-rc.10] - 2026-10-08
 
 ### Added

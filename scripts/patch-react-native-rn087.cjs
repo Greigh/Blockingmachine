@@ -412,12 +412,17 @@ if (fs.existsSync(WRAPPER_PROPS)) {
 const APP_BUILD_GRADLE = path.resolve(__dirname, '../packages/mobile/android/app/build.gradle');
 if (fs.existsSync(APP_BUILD_GRADLE)) {
   const source = fs.readFileSync(APP_BUILD_GRADLE, 'utf8');
-  const patched = source.replace(
-    /^(\s*)apply plugin:\s*["']org\.jetbrains\.kotlin\.android["']\s*$/gm,
-    '$1// kotlin-android apply removed by scripts/patch-react-native-rn087.cjs — AGP 9 built-in Kotlin',
-  );
+  const patched = source
+    .replace(
+      /^(\s*)apply plugin:\s*["']org\.jetbrains\.kotlin\.android["']\s*$/gm,
+      '$1// kotlin-android apply removed by scripts/patch-react-native-rn087.cjs — AGP 9 built-in Kotlin',
+    )
+    .replace(
+      /getDefaultProguardFile\(["']proguard-android\.txt["']\)/,
+      'getDefaultProguardFile("proguard-android-optimize.txt") // AGP 9 dropped the non-optimizing default',
+    );
   if (patched !== source) {
     fs.writeFileSync(APP_BUILD_GRADLE, patched);
-    console.log('patched packages/mobile/android/app/build.gradle: removed kotlin-android apply');
+    console.log('patched packages/mobile/android/app/build.gradle: kotlin-android apply / proguard default');
   }
 }

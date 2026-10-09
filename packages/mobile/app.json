@@ -20,6 +20,7 @@
         "NSBonjourServices": [
           "_blockingmachine._tcp."
         ],
+        "NSCameraUsageDescription": "Blockingmachine uses the camera to scan the pairing QR code shown by your desktop hub.",
         "NSLocalNetworkUsageDescription": "Blockingmachine finds hub servers on your local network so the app can report status and control protection.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -37,6 +38,7 @@
         "INTERNET",
         "ACCESS_NETWORK_STATE",
         "CHANGE_WIFI_MULTICAST_STATE",
+        "CAMERA",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_SPECIAL_USE",
         "POST_NOTIFICATIONS"
@@ -56,7 +58,9 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Blockingmachine to scan a pairing QR code shown by the desktop app."
+          "cameraPermission": "Allow Blockingmachine to scan a pairing QR code shown by the desktop app.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ]
     ],
