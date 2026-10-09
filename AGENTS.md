@@ -82,8 +82,20 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
   (`rootDir`) and then rejects every electron-app file as "not under rootDir".
 - **macOS notarization**: `osxNotarize` in `forge.config.cjs` is env-gated —
   `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` or
-  `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID`; unset means signed-but-unnotarized
-  (flag 54). After `rm -rf` + `cp -R` reinstalling the app, run
+  `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID`. The API-key path is now live:
+  the three vars sit in the gitignored `.env` pointing at
+  `~/.appstoreconnect/private_keys/AuthKey_6AA6XGU4GD.p8`, and `forge make`
+  notarizes+staples end-to-end (verified: `stapler validate` + `spctl -a -vv`
+  → `source=Notarized Developer ID` on a fresh artifact; flag 54 closed).
+  **Stapler trap this machine already bit once:** `stapler staple` fails with
+  *"Could not validate ticket … Error 65"* — even when notarization itself
+  succeeded — when an Apple root cert carries an explicit *Always Trust*
+  override. `security dump-trust-settings` shows them; clear the user-domain
+  ones with `security remove-trusted-cert <pem-of-the-cert>` (admin domain
+  needs `sudo security remove-trusted-cert -d`). An admin-domain override on
+  `Apple Application Integration Certification Authority` still exists on
+  this box — it did not block stapling, but remove it if ticket validation
+  ever regresses. After `rm -rf` + `cp -R` reinstalling the app, run
   `lsregister -f /Applications/Blockingmachine.app` or `open` silently no-ops on
   the stale LaunchServices record. After *several* rm/recopy cycles in one day
   the wedge can deepen: every LaunchServices-mediated launch of

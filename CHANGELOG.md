@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **macOS builds now notarize and staple as part of `forge make` (flag 54).** The App Store Connect API-key path wired in `forge.config.cjs` (`osxNotarize`) is live — the three `APPLE_API_*` vars sit in the gitignored `.env`, pointing at the App Store Connect key the developer account already uses for store uploads. Fresh artifacts verify `stapler validate` / `spctl -a -vv` → `source=Notarized Developer ID`, so a downloaded copy passes Gatekeeper on first launch with no right-click Open or quarantine strip. CI (`publish.yml`) still runs signed-only until the secrets are configured there.
+
 ### Security
 
 - **`npm audit` reports zero — the three advisories with no patched release are fixed by vendored upstream copies under `vendor/` (flag 52).** `braces` gets a 256-level brace-nesting depth guard (`GHSA-vfj7-8cjw-p6xm`, stack-exhaustion DoS — no upstream fix exists); `node-forge` gets upstream's unmerged PR #1152 nested-`DigestAlgorithm` element-count check (`GHSA-86w9-cpqp-85rv`, RSA PKCS#1 v1.5 signature-forgery bypass of the 1.4.0 fix); `decode-uri-component` becomes a CJS port of upstream 0.5.0's linear-scan decoder (`GHSA-vcc3-ghjq-m6fr` — upstream's fixed release is ESM-only, uncallable from `query-string@7`'s `require()`). The vendor dirs are root `devDependencies` with `file:` specs so npm dedupes all satisfying consumers onto them (`braces@3.0.4`, `node-forge@1.4.1`), plus one nested override rewriting `query-string`'s `decode-uri-component` edge to the vendored `0.5.0`. Fixes verified against the real PoCs: the `{`-×4000 stack-exhaustion pattern now throws a catchable `NestingDepthError`, and the PR #1152 forged e=3 signature is rejected. When upstream ships real patched releases, the vendor dirs and overrides come back out.
