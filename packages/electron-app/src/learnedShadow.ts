@@ -14,13 +14,14 @@
  * because of the shadow scorer.
  */
 import { app } from 'electron';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import {
   createLearnedClassifier,
   runShadowComparison,
   verifyLearnedManifest,
+  type BehavioralObservation,
   type LearnedClassifier,
   type LearnedDecision,
   type LearnedVerdict,
@@ -103,6 +104,24 @@ export interface WatchdogShadowResult extends ShadowRunResult {
   modelVersion: number | null;
 }
 
+/** The append end of `learned-shadow.jsonl` — null when the dir cannot be made. */
+function openShadowAppender(): { logPath: string; append: (d: object) => void } | null {
+  const logPath = join(app.getPath('userData'), 'learned-shadow.jsonl');
+  try {
+    mkdirSync(dirname(logPath), { recursive: true });
+  } catch {
+    return null;
+  }
+  const append = (d: object) => {
+    try {
+      appendFileSync(logPath, JSON.stringify(d) + '\n');
+    } catch (err) {
+      console.error('[Learned Shadow] log write failed:', err);
+    }
+  };
+  return { logPath, append };
+}
+
 /**
  * Shadow-score a watchdog sweep. `referenceDecide` maps each domain to
  * the production verdict ('block' for quarantined threats, 'allow'
@@ -131,19 +150,9 @@ export function shadowScoreWatchdogDomains(
 ): WatchdogShadowResult | null {
   const clf = getLearnedClassifier();
   if (!clf) return null;
-  const logPath = join(app.getPath('userData'), 'learned-shadow.jsonl');
-  try {
-    mkdirSync(dirname(logPath), { recursive: true });
-  } catch {
-    return null;
-  }
-  const append = (d: object) => {
-    try {
-      appendFileSync(logPath, JSON.stringify(d) + '\n');
-    } catch (err) {
-      console.error('[Learned Shadow] log write failed:', err);
-    }
-  };
+  const sink = openShadowAppender();
+  if (!sink) return null;
+  const { logPath, append } = sink;
   const result = runShadowComparison({
     classifier: clf,
     reference: referenceDecide,
@@ -176,4 +185,141 @@ export function shadowScoreWatchdogDomains(
     });
   }
   return { ...result, logPath, modelVersion };
+}
+
+export interface ObservationShadowResult extends ShadowRunResult {
+  logPath: string;
+  modelVersion: number | null;
+  /** Bytes of the observation file consumed this pass. */
+  bytesRead: number;
+  /** Newline-delimited records parsed from those bytes. */
+  recordsRead: number;
+}
+
+/**
+ * Shadow-score the daemon's DNS observation stream — flag 43's widened coverage.
+ *
+ * The watchdog hook only sees domains its own AI scan pulled; this tail sees every
+ * name the resolver answered, deduped upstream by the recorder. Each record already
+ * carries the production verdict the daemon gave it, so the reference function is a
+ * lookup, not a rescan — disagreements are genuinely model-vs-production.
+ *
+ * Progress is a byte offset in a `<file>.shadow-offset` sibling (a file, not the
+ * settings store: it is position, not preference). The recorder rotates by rename at
+ * a size cap, so a shrunken file means a fresh stream — restart at 0; the rotated
+ * tail that went unread is acceptable loss for a shadow log.
+ */
+export function shadowScoreObservationFile(
+  observationsPath: string,
+  sampleRate: number,
+): ObservationShadowResult | null {
+  const clf = getLearnedClassifier();
+  if (!clf) return null;
+  const sink = openShadowAppender();
+  if (!sink) return null;
+  const { logPath, append } = sink;
+
+  const offsetPath = `${observationsPath}.shadow-offset`;
+  let offset = 0;
+  try {
+    const raw = readFileSync(offsetPath, 'utf8').trim();
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) offset = parsed;
+  } catch {
+    // No offset file — first pass, or a wiped sibling: start at the beginning.
+  }
+
+  let size: number;
+  try {
+    size = statSync(observationsPath).size;
+  } catch {
+    return null; // no stream yet — the daemon may not be running or recording is off
+  }
+  if (size < offset) offset = 0;
+  if (size === offset) {
+    return { evaluated: 0, disagreements: 0, logPath, modelVersion, bytesRead: 0, recordsRead: 0 };
+  }
+
+  let text: string;
+  try {
+    // Byte offset, not char — the offset file stores statSync().size, and IDN labels
+    // make a utf8-sliced char index drift left of the real position.
+    text = readFileSync(observationsPath).subarray(offset).toString('utf8');
+  } catch (err) {
+    console.error('[Learned Shadow] observation read failed:', err);
+    return null;
+  }
+
+  // First observation per domain wins this pass — the recorder's own dedup already
+  // throttles, so a repeat inside one batch is residue, not signal.
+  const seen = new Map<string, { decision: LearnedDecision; obs: BehavioralObservation }>();
+  let recordsRead = 0;
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const rec = JSON.parse(trimmed) as {
+        domain?: string;
+        verdict?: string;
+        rcode?: number | null;
+        cname_depth?: number;
+        cname_foreign?: boolean;
+        ttl_min?: number;
+        latency_ms?: number;
+      };
+      if (typeof rec.domain !== 'string' || seen.has(rec.domain)) continue;
+      seen.set(rec.domain, {
+        decision: rec.verdict === 'BLOCKED' ? 'block' : 'allow',
+        // Feed the v3 tail the observation that produced this record — a
+        // v1/v2 model ignores it; a v3 model scores what the resolver saw.
+        // dnsQueryCount is 1 by construction (deduped stream), nxdomainRate is
+        // the degenerate single-sample rate, and fanout_* stay absent → 0.
+        obs: {
+          dnsSeen: true,
+          dnsQueryCount: 1,
+          dnsBlocked: rec.verdict === 'BLOCKED',
+          dnsCnameDepth: rec.cname_depth ?? null,
+          dnsCnameForeign: rec.cname_foreign ?? null,
+          dnsNxdomainRate: rec.rcode === 3 ? 1 : typeof rec.rcode === 'number' ? 0 : null,
+          dnsTtlMin: rec.ttl_min ?? null,
+          dnsLatencyMs: rec.latency_ms ?? null,
+        },
+      });
+      recordsRead++;
+    } catch {
+      // A torn final line lands whenever the daemon is mid-append at read time.
+    }
+  }
+
+  try {
+    writeFileSync(offsetPath, String(size));
+  } catch (err) {
+    console.error('[Learned Shadow] offset write failed:', err);
+  }
+
+  const domains = [...seen.keys()];
+  const result = runShadowComparison({
+    classifier: {
+      ...clf,
+      classify: (d) => clf.classify(d, seen.get(d)?.obs),
+    },
+    reference: (d) => seen.get(d)?.decision ?? 'allow',
+    domains,
+    onDisagreement: append,
+    sampleRate,
+    onSample: (d) => append(d),
+    onError: (domain, err) => {
+      console.error(`[Learned Shadow] error on ${domain}:`, err);
+    },
+  });
+  if (result.evaluated > 0) {
+    append({
+      type: 'summary',
+      at: new Date().toISOString(),
+      evaluated: result.evaluated,
+      disagreements: result.disagreements,
+      modelVersion,
+    });
+  }
+  return { ...result, logPath, modelVersion, bytesRead: size - offset, recordsRead };
 }

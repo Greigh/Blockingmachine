@@ -202,10 +202,14 @@ export function hostOf(rawUrl?: string): string {
  * a rule blocking every Blogspot site.
  */
 export function registrableDomainOf(rawUrl?: string): string {
-  const host = hostOf(rawUrl);
+  return registrableDomainOfHost(hostOf(rawUrl));
+}
+
+/** Same suffix-table registrable form, for a caller that already has a bare hostname. */
+export function registrableDomainOfHost(host?: string): string {
   if (!host) return '';
-  const { sld, tld } = decomposeDomain(host);
-  if (!tld || sld === tld) return sld || host;
+  const { sld, tld } = decomposeDomain(host.toLowerCase());
+  if (!tld || sld === tld) return sld || host.toLowerCase();
   return `${sld}.${tld}`;
 }
 

@@ -15,6 +15,13 @@ export interface DaemonConfig {
   feedFile?: string;
   /** Persisted copy of the AI quarantine feed (`THREATS_FILE`), same fallback role. */
   threatsFile?: string;
+  /**
+   * JSONL stream of per-domain DNS observations (`OBSERVATIONS_FILE`) — the behavioural
+   * input `ai-training` needs for the v3 feature set (real `observed_at`, CNAME-chain
+   * depth/targets, response shape). Unset means no recording: the daemon stays silent
+   * when run standalone. See `server/observationRecorder.ts` for bounds and shape.
+   */
+  observationsFile?: string;
 }
 
 export type DnsVerdict = 'BLOCKED' | 'ALLOWED' | 'EXCEPTION';

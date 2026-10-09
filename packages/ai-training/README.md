@@ -386,3 +386,66 @@ classifier is proven score-identical; the "reference" is the true label
 - `tune_thresholds.py --shadow` is advisory only (see above).
 - v2 stays experimental; nothing in M5 changes the shipped v1 weights.
   The real gate run happens after 7 days of actual Electron shadow data.
+
+# M6: live-instrumentation features (v3) — PIPELINE BUILT (2026-10-09)
+
+Flag 43's finding: the v1/v2 miss is a feature-coverage limit — the signals that
+would separate `fonts.gstatic.com` from `cm.g.doubleclick.net` did not exist.
+v2 proved plain-HTTP crawl features cannot see them. v3 adds the tail only the
+running system can produce:
+
+## v3 schema (features3.py) — 33 features
+
+v1 lexical prefix (0–14) and v2 crawl block (15–22) are byte-identical; the new
+tail joins `live_observations.db`, built by `obs_ingest.py` from two runtime
+streams:
+
+- **`dns_*` (8)** — from the system daemon's `dns-observations.jsonl`
+  (`observationRecorder.ts`): `dns_seen`, `dns_query_count` (log1p),
+  `dns_blocked`, `dns_cname_depth`, `dns_cname_foreign` (any CNAME hop crossing
+  the queried name's registrable domain — the cloaking signal `requests`
+  structurally could not see), `dns_nxdomain_rate`, `dns_ttl_min`,
+  `dns_latency_ms`. Absent rows are NaN except `dns_seen`, which is an honest 0.
+- **`fanout_*` (2)** — from the browser extension's first-party ledger
+  (`fanoutLedger.ts` → `/v1/telemetry/browser` deltas → hub's
+  `browser-fanout.json`): `fanout_sites` (distinct registrable sites embedding
+  the host) and `fanout_hits`. Absent rows are an honest 0 — never matched means
+  never observed embedded, which is information, not missingness.
+
+NaN semantics are the contract: LightGBM learns the missing direction per split
+and `export.py` carries `default_left` into the TS port. The shadow tail
+(`shadowScoreObservationFile`) feeds live records to `classify` as
+`BehavioralObservation` fields, so a promoted v3 model scores what the resolver
+actually saw, not a re-fetch.
+
+## Pipeline
+
+```bash
+# Daemon stream + hub fanout aggregate -> live_observations.db (idempotent merges)
+.venv/bin/python obs_ingest.py --db live_observations.db \
+    --dns "$HOME/Library/Application Support/Blockingmachine/dns-observations.jsonl" \
+    --fanout "$HOME/Library/Application Support/Blockingmachine/browser-fanout.json"
+
+# Train / evaluate / export against the v3 schema
+.venv/bin/python train.py --features 3 --observations observations-YYYY-MM-DD.db \
+    --live-observations live_observations.db --out model_artifacts_v3
+.venv/bin/python evaluate.py --artifacts model_artifacts_v3 \
+    --observations observations-YYYY-MM-DD.db --live-observations live_observations.db
+.venv/bin/python export.py --artifacts model_artifacts_v3 \
+    --observations observations-YYYY-MM-DD.db --live-observations live_observations.db \
+    --out model_v3_experimental.json
+.venv/bin/python gen_ts_assets.py --repo ../.. --live-observations live_observations.db
+```
+
+The TS serving side accepts `feature_version` 1, 2 or 3; v1/v2 artifacts stay
+byte-stable. `learned-fixtures-v3.json` pins the Python↔TS tail contract
+(NaN as null) the same way the v2 fixtures do.
+
+## Status
+
+The pipeline is wired end-to-end and tested (recorder unit tests, shadow-tail
+tests, v3 parity fixtures). What it does NOT yet have is coverage: no labels.db
+or live-observation corpus exists on this checkout, so no v3 model has been
+trained and the promotion gate has not been re-run. Flag 43 stays open until a
+v3 model trained on real streams meets the bar — or the bar is deliberately
+revised with measured evidence.

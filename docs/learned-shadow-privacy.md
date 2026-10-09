@@ -112,6 +112,36 @@ private, it makes the bin empty and the gate un-runnable — so the honest priva
 "one percent, on this device, in a file you can delete", not "as little as possible". A
 higher rate buys nothing the smallest bin cannot already see.
 
+## A second file: the daemon's DNS observation stream
+
+Since flag 43's pipeline work there is also `<userData>/dns-observations.jsonl`, written by
+the DNS daemon (`observationRecorder.ts`) — one JSON line per deduped query, capped by a
+10-minute per-domain dedup window, a 50k-domain recency map, and rotation to a single `.1`
+sibling at 8 MB. One record holds:
+
+| field | what it is |
+|---|---|
+| `domain` | the queried hostname |
+| `observed_at` | real observation time — the label store's `observed_at` was a shared import stamp; this one is when the query actually happened |
+| `qtype`, `verdict`, `rcode`, `upstream_ok` | what was asked, what production answered, the wire response code |
+| `cname_depth`, `cname_hosts`, `cname_foreign` | the CNAME chain upstream returned, and whether it crossed the name's registrable origin — the cloaking signal |
+| `ttl_min`, `answer_count`, `latency_ms` | response shape |
+
+Same rules as the shadow log: no client identity, no URL, no upload, deletable at will.
+The same `learned-shadow.jsonl` tails it — `shadowScoreObservationFile` reads each new
+record, feeds its DNS fields to the model as the v3 observation tail, and writes the same
+two record shapes (disagreement/sample/summary), so this file is *input*, not a second
+disclosure. `obs_ingest.py` merges it into `live_observations.db` for training.
+
+## A third file: the browser's first-party fan-out ledger
+
+The browser extension keeps a local tally (`fanoutLedger.ts`) of which third-party
+hostnames it matched under which first-party sites — a hostname, a count of distinct
+registrable sites, a hit count, first/last seen. The telemetry upload sends only the delta
+to the hub, which persists the union as `<userData>/browser-fanout.json`; `obs_ingest.py`
+reads that file too. It contains hostnames and counts — never a URL, a page path, or a
+client identifier — and it is the other half of the v3 feature tail.
+
 ## Turning it off, and what stopping it costs
 
 The sample slice is not a setting, and that is deliberate: a toggle would be a second place

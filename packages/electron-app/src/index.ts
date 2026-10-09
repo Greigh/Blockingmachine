@@ -21,7 +21,7 @@ import {
 import { Readable } from 'node:stream';
 import { Worker } from 'node:worker_threads';
 import JSZip from 'jszip';
-import { promises as fs, existsSync, createReadStream } from 'fs';
+import { promises as fs, existsSync, createReadStream, readFileSync, renameSync, writeFileSync } from 'fs';
 import isDev from 'electron-is-dev';
 
 if (isDev) {
@@ -152,7 +152,7 @@ import type {
 import type { ThreatCategory } from '@blockingmachine/core';
 import { DaemonManager } from './daemonManager';
 import { TrayManager, type TraySharedState } from './trayManager';
-import { shadowScoreWatchdogDomains } from './learnedShadow';
+import { shadowScoreObservationFile, shadowScoreWatchdogDomains } from './learnedShadow';
 import {
   clearHeatForDomain,
   emptyRadarHeatMap,
@@ -659,13 +659,24 @@ function persistThreatsFile(storeRef: ElectronStore<StoreSchema>): void {
 
 /**
  * The on-disk feed artifacts the daemon reloads from when the feed server is gone —
- * same directory the compile writes `dns.txt` into.
+ * same directory the compile writes `dns.txt` into — plus the DNS observation stream
+ * the learned model's v3 features are built from (`ai-training` flag 43). Unlike the
+ * feed files it lives in userData, not the compile dir: it is telemetry, not output.
  */
-function daemonFeedFilePaths(storeRef: ElectronStore<StoreSchema>): { feedFilePath?: string; threatsFilePath?: string } {
+function daemonFeedFilePaths(storeRef: ElectronStore<StoreSchema>): {
+  feedFilePath?: string;
+  threatsFilePath?: string;
+  observationsFilePath?: string;
+} {
+  const observationsFilePath = join(app.getPath('userData'), 'dns-observations.jsonl');
   const savePath = storeRef.get('savePath');
-  if (typeof savePath !== 'string' || !isAbsolute(savePath)) return {};
+  if (typeof savePath !== 'string' || !isAbsolute(savePath)) return { observationsFilePath };
   const outputDir = dirname(savePath);
-  return { feedFilePath: join(outputDir, 'dns.txt'), threatsFilePath: join(outputDir, 'threats.txt') };
+  return {
+    feedFilePath: join(outputDir, 'dns.txt'),
+    threatsFilePath: join(outputDir, 'threats.txt'),
+    observationsFilePath,
+  };
 }
 
 /**
@@ -2127,6 +2138,86 @@ const browserTelemetryAggregator: BrowserTelemetryData = {
   recentTrackers: [],
 };
 
+/**
+ * First-party fan-out aggregate (flag 43): per matched third-party host, the set of
+ * registrable sites it was observed under — the embeddability signal the model is
+ * missing. Pushed by extension deltas on `/v1/telemetry/browser`, unioned here, and
+ * persisted to `<userData>/browser-fanout.json` so the ai-training ingest reads a
+ * file that survives restarts. Bounds mirror the extension's own caps.
+ */
+const browserFanout = new Map<string, { firstParties: Set<string>; hits: number }>();
+const BROWSER_FANOUT_MAX_HOSTS = 5000;
+const BROWSER_FANOUT_MAX_FP = 128;
+
+function browserFanoutPath(): string {
+  return join(app.getPath('userData'), 'browser-fanout.json');
+}
+
+function loadBrowserFanout(): void {
+  try {
+    const raw = JSON.parse(readFileSync(browserFanoutPath(), 'utf8'));
+    const entries = raw?.entries;
+    if (!entries || typeof entries !== 'object') return;
+    for (const [domain, e] of Object.entries(entries)) {
+      if (typeof domain !== 'string' || !domain || domain.length > 253) continue;
+      const rec = e as { firstParties?: unknown; hits?: unknown };
+      const fps = new Set<string>(
+        Array.isArray(rec.firstParties)
+          ? rec.firstParties.filter((p): p is string => typeof p === 'string' && p.length <= 253).slice(0, BROWSER_FANOUT_MAX_FP)
+          : [],
+      );
+      browserFanout.set(domain, {
+        firstParties: fps,
+        hits: typeof rec.hits === 'number' && Number.isFinite(rec.hits) ? Math.max(0, Math.floor(rec.hits)) : 0,
+      });
+    }
+  } catch {
+    // No file yet, or unreadable — the aggregate starts empty either way.
+  }
+}
+
+let browserFanoutPersistTimer: NodeJS.Timeout | null = null;
+function persistBrowserFanout(): void {
+  // Debounced — a push arrives per extension flush beat; writes stay cheap and never
+  // stack behind a busy event loop.
+  if (browserFanoutPersistTimer) return;
+  browserFanoutPersistTimer = setTimeout(() => {
+    browserFanoutPersistTimer = null;
+    try {
+      const entries: Record<string, { firstParties: string[]; firstPartiesCapped: boolean; hits: number }> = {};
+      for (const [domain, e] of browserFanout) {
+        entries[domain] = {
+          firstParties: [...e.firstParties].sort(),
+          // At the cap the list is a floor — the ingester must not read it as exact.
+          firstPartiesCapped: e.firstParties.size >= BROWSER_FANOUT_MAX_FP,
+          hits: e.hits,
+        };
+      }
+      const target = browserFanoutPath();
+      const tmp = `${target}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ entries }, null, 0));
+      renameSync(tmp, target);
+    } catch (err) {
+      console.warn('[Telemetry] browser-fanout persist failed:', err);
+    }
+  }, 5000);
+}
+
+function mergeBrowserFanout(domain: string, firstParties: string[], hits: number): void {
+  let entry = browserFanout.get(domain);
+  if (!entry) {
+    if (browserFanout.size >= BROWSER_FANOUT_MAX_HOSTS) return; // capped — refuse rather than evict blindly
+    entry = { firstParties: new Set(), hits: 0 };
+    browserFanout.set(domain, entry);
+  }
+  for (const fp of firstParties) {
+    if (entry.firstParties.size >= BROWSER_FANOUT_MAX_FP) break;
+    entry.firstParties.add(fp);
+  }
+  entry.hits += Math.max(0, Math.floor(hits));
+  persistBrowserFanout();
+}
+
 function broadcastSseEvent(eventName: string, data: any) {
   const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of sseClients) {
@@ -2686,6 +2777,21 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
                   }
                 }
                 browserTelemetryAggregator.recentTrackers = browserTelemetryAggregator.recentTrackers.slice(0, 50);
+              }
+              // Flag-43 fan-out deltas: same validation discipline as trackers — string
+              // domains, bounded lists, hits floored at a sane integer.
+              if (Array.isArray(data.fanout)) {
+                for (const f of data.fanout.slice(0, 500)) {
+                  if (typeof f?.domain !== 'string' || !f.domain.trim() || f.domain.length > 253) continue;
+                  const fps = Array.isArray(f.firstParties)
+                    ? f.firstParties.filter((p: unknown): p is string => typeof p === 'string' && p.length <= 253).slice(0, BROWSER_FANOUT_MAX_FP)
+                    : [];
+                  mergeBrowserFanout(
+                    f.domain.trim().toLowerCase(),
+                    fps,
+                    typeof f.hits === 'number' && Number.isFinite(f.hits) ? f.hits : 0,
+                  );
+                }
               }
               browserTelemetryAggregator.lastUpdated = new Date().toISOString();
 
@@ -3254,6 +3360,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     persistThreatsFile(store);
     store.onDidChange('aiThreatQuarantine', () => persistThreatsFile(store));
 
+    // The fan-out aggregate resumes from its persisted file — a restart must not zero
+    // the embeddability history the training pipeline ingests.
+    loadBrowserFanout();
+
     // Initialize schedule if configured
     const initialSchedule = store.get('autoSchedule') || 'disabled';
     if (initialSchedule !== 'disabled') {
@@ -3264,6 +3374,26 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     const initialWatchdog = store.get('aiWatchdogConfig') as AiWatchdogConfig | undefined;
     if (initialWatchdog?.enabled) {
       setupAiWatchdogTimer(initialWatchdog, store);
+    }
+
+    // Shadow-score the daemon's DNS observation stream — flag 43's widened coverage.
+    // The watchdog hook only scores domains its AI scan pulled; this tail sees every
+    // name the resolver answered. Ungated: the scorer no-ops cleanly when the file or
+    // the weights are absent, so a daemon that starts later is picked up on a tick.
+    const observationsPath = daemonFeedFilePaths(store).observationsFilePath;
+    if (observationsPath) {
+      const scoreObservations = () => {
+        try {
+          const r = shadowScoreObservationFile(observationsPath, LEARNED_SHADOW_SAMPLE_RATE);
+          if (r && r.evaluated > 0) {
+            console.log(`[Learned Shadow] observation tail: ${r.evaluated} scored (${r.disagreements} disagreements)`);
+          }
+        } catch (err) {
+          console.error('[Learned Shadow] observation tail failed:', err);
+        }
+      };
+      setTimeout(scoreObservations, 30_000); // let the daemon warm up before first read
+      setInterval(scoreObservations, 5 * 60 * 1000);
     }
 
     // Re-judge the persisted quarantine against the current classifier once per launch. The

@@ -30,6 +30,7 @@ import {
   LEARNED_COMMON_TLDS,
   LEARNED_FEATURE_NAMES,
   LEARNED_FEATURE_NAMES_V2,
+  LEARNED_FEATURE_NAMES_V3,
   LEARNED_SUSPICIOUS_TLDS,
   LEARNED_TOKENS,
 } from './featureSpec.js';
@@ -127,6 +128,25 @@ export interface BehavioralObservation {
   httpsOk?: boolean | null;
   certFreeCa?: boolean | null;
   cnameDepth?: number | null;
+
+  // v3 live-instrumentation fields (flag 43) — daemon DNS observations and the
+  // browser's first-party fan-out. dns_* are NaN when unobserved; fanout_* are an
+  // honest 0 (never matched = never observed embedded), mirroring features3.py.
+  /** The daemon has DNS observations for this name (0/1 — a real zero, not NaN). */
+  dnsSeen?: boolean | null;
+  /** Deduped observation count — log1p'd to match the Python featurizer. */
+  dnsQueryCount?: number | null;
+  /** Production answered BLOCKED for this name at least once. */
+  dnsBlocked?: boolean | null;
+  dnsCnameDepth?: number | null;
+  /** Any CNAME hop crossed the queried name's registrable domain — cloaking. */
+  dnsCnameForeign?: boolean | null;
+  dnsNxdomainRate?: number | null;
+  dnsTtlMin?: number | null;
+  dnsLatencyMs?: number | null;
+  /** Distinct registrable sites the browser matched this host under; 0 = never. */
+  fanoutSites?: number | null;
+  fanoutHits?: number | null;
 }
 
 function toBehavioralNumber(v: number | boolean | null | undefined): number {
@@ -135,11 +155,21 @@ function toBehavioralNumber(v: number | boolean | null | undefined): number {
 }
 
 /**
- * Feature vector in LEARNED_FEATURE_NAMES order (v1), or
- * LEARNED_FEATURE_NAMES_V2 order when behavioral observations are given.
- * Pure function of (domain, obs); deterministic across runtimes.
+ * Feature vector in LEARNED_FEATURE_NAMES order (v1), LEARNED_FEATURE_NAMES_V2
+ * order when behavioral observations are given, or LEARNED_FEATURE_NAMES_V3 when
+ * `featureVersion` asks for the live-instrumentation tail. Pure function of
+ * (domain, obs); deterministic across runtimes.
+ *
+ * `featureVersion` is the *target* schema, not a hint about obs — a v3 model gets
+ * a 33-position vector whether or not this domain was observed (the dns_* tail
+ * goes NaN, dns_seen 0, fanout_* 0), because LightGBM routes NaN via each split's
+ * default_left. Omitting it keeps the historical obs?2:1 inference.
  */
-export function featurizeLearned(domain: string, obs?: BehavioralObservation): number[] {
+export function featurizeLearned(
+  domain: string,
+  obs?: BehavioralObservation,
+  featureVersion?: number,
+): number[] {
   const d = normalizeLearnedDomain(domain);
   const cps = Array.from(d); // code points == UTF-16 units for ASCII
   const n = cps.length;
@@ -224,8 +254,11 @@ export function featurizeLearned(domain: string, obs?: BehavioralObservation): n
   };
 
   // Order is the contract: a missing/renamed feature throws here,
-  // loudly, instead of silently shifting every weight.
-  if (obs === undefined) {
+  // loudly, instead of silently shifting every weight. A v3 target
+  // short-circuits obs-optional inference — the model's trees are
+  // positioned on all 33 features regardless of what was observed.
+  const target = featureVersion ?? (obs === undefined ? 1 : 2);
+  if (target === 1) {
     return LEARNED_FEATURE_NAMES.map((name) => {
       const v = feats[name];
       if (v === undefined) {
@@ -234,17 +267,42 @@ export function featurizeLearned(domain: string, obs?: BehavioralObservation): n
       return v;
     });
   }
+  const b = obs ?? {};
   const behavioral: Record<string, number> = {
-    redirect_count: toBehavioralNumber(obs.redirectCount),
-    fetch_error: toBehavioralNumber(obs.fetchError),
-    has_set_cookie: toBehavioralNumber(obs.hasSetCookie),
-    cookie_count: toBehavioralNumber(obs.cookieCount),
-    body_kw_hits: toBehavioralNumber(obs.bodyKeywordHits),
-    https_ok: toBehavioralNumber(obs.httpsOk),
-    cert_free_ca: toBehavioralNumber(obs.certFreeCa),
-    cname_depth: toBehavioralNumber(obs.cnameDepth),
+    redirect_count: toBehavioralNumber(b.redirectCount),
+    fetch_error: toBehavioralNumber(b.fetchError),
+    has_set_cookie: toBehavioralNumber(b.hasSetCookie),
+    cookie_count: toBehavioralNumber(b.cookieCount),
+    body_kw_hits: toBehavioralNumber(b.bodyKeywordHits),
+    https_ok: toBehavioralNumber(b.httpsOk),
+    cert_free_ca: toBehavioralNumber(b.certFreeCa),
+    cname_depth: toBehavioralNumber(b.cnameDepth),
   };
   const all = { ...feats, ...behavioral };
+  if (target === 3) {
+    // dns_*: NaN when absent (unknown ≠ zero), except dns_seen which is a fact.
+    // dns_query_count is log1p'd like features3.py. fanout_*: honest zeros.
+    const dnsQueryCount = toBehavioralNumber(b.dnsQueryCount);
+    Object.assign(all, {
+      dns_seen: b.dnsSeen ? 1 : 0,
+      dns_query_count: Number.isNaN(dnsQueryCount) ? NaN : Math.log1p(dnsQueryCount),
+      dns_blocked: toBehavioralNumber(b.dnsBlocked),
+      dns_cname_depth: toBehavioralNumber(b.dnsCnameDepth),
+      dns_cname_foreign: toBehavioralNumber(b.dnsCnameForeign),
+      dns_nxdomain_rate: toBehavioralNumber(b.dnsNxdomainRate),
+      dns_ttl_min: toBehavioralNumber(b.dnsTtlMin),
+      dns_latency_ms: toBehavioralNumber(b.dnsLatencyMs),
+      fanout_sites: b.fanoutSites ?? 0,
+      fanout_hits: b.fanoutHits ?? 0,
+    } satisfies Record<string, number>);
+    return LEARNED_FEATURE_NAMES_V3.map((name) => {
+      const v = all[name];
+      if (v === undefined) {
+        throw new Error(`learned featurizer: unknown feature "${name}"`);
+      }
+      return v;
+    });
+  }
   return LEARNED_FEATURE_NAMES_V2.map((name) => {
     const v = all[name];
     if (v === undefined) {

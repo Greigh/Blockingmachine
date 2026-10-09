@@ -34,3 +34,5 @@ reviewed.csv
 .venv/
 __pycache__/
 *.pyc
+model_artifacts_v3/
+model_v3_experimental.json

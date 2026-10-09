@@ -17,6 +17,8 @@ export const defaultConfig: DaemonConfig = {
   // daemon (or a service install) can still reload real rules when the feed is down.
   feedFile: process.env.FEED_FILE || undefined,
   threatsFile: process.env.THREATS_FILE || undefined,
+  // The learned-model observation stream — off unless the spawning host names a file.
+  observationsFile: process.env.OBSERVATIONS_FILE || undefined,
 };
 
 export async function loadRulesFromFeeds(trie: DomainTrie, config: DaemonConfig): Promise<number> {

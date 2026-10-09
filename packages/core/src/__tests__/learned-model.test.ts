@@ -20,6 +20,7 @@ import {
   isIpLiteralAddress,
   LEARNED_FEATURE_NAMES,
   LEARNED_FEATURE_NAMES_V2,
+  LEARNED_FEATURE_NAMES_V3,
   LEARNED_FEATURE_VERSION,
   parseLearnedModel,
   parseLearnedManifest,
@@ -209,6 +210,55 @@ describe('learned v2 featurizer parity (Python ground truth)', () => {
   it('omitting obs keeps the v1 15-vector contract', () => {
     const got = featurizeLearned('github.com');
     expect(got.length).toBe(LEARNED_FEATURE_NAMES.length);
+  });
+});
+
+const fixturesV3 = loadJson('./fixtures/learned-fixtures-v3.json') as {
+  domain: string;
+  obs: BehavioralObservation;
+  vector: (number | null)[];
+}[];
+
+describe('learned v3 featurizer parity (Python ground truth)', () => {
+  it('reproduces v3 vectors within 1e-9, NaN for unobserved live fields', () => {
+    expect(fixturesV3.length).toBeGreaterThan(0);
+    for (const { domain, obs, vector } of fixturesV3) {
+      const got = featurizeLearned(domain, obs, 3);
+      expect(got.length).toBe(LEARNED_FEATURE_NAMES_V3.length);
+      for (let i = 0; i < vector.length; i++) {
+        const want = vector[i];
+        if (want === null) {
+          expect(Number.isNaN(got[i])).toBe(true);
+        } else {
+          expect(Math.abs(got[i] - (want as number))).toBeLessThan(1e-9);
+        }
+      }
+    }
+  });
+
+  it('v2 prefix of a v3 vector equals the v2 featurizer output', () => {
+    for (const { domain, obs } of fixturesV3) {
+      const v3 = featurizeLearned(domain, obs, 3);
+      const v2 = featurizeLearned(domain, obs, 2);
+      expect(v3.slice(0, v2.length)).toEqual(v2);
+    }
+  });
+
+  it('a v3 target without obs gives dns_seen 0, all-NaN dns tail, zero fanout', () => {
+    const got = featurizeLearned('github.com', undefined, 3);
+    expect(got.length).toBe(LEARNED_FEATURE_NAMES_V3.length);
+    const tail = got.slice(LEARNED_FEATURE_NAMES_V2.length);
+    expect(tail[0]).toBe(0); // dns_seen — a real zero
+    for (const v of tail.slice(1, 8)) {
+      expect(Number.isNaN(v)).toBe(true);
+    }
+    expect(tail[8]).toBe(0); // fanout_sites
+    expect(tail[9]).toBe(0); // fanout_hits
+  });
+
+  it('dns_query_count is log1p-scaled like the Python featurizer', () => {
+    const got = featurizeLearned('github.com', { dnsSeen: true, dnsQueryCount: 4 }, 3);
+    expect(got[LEARNED_FEATURE_NAMES_V2.length + 1]).toBeCloseTo(Math.log1p(4), 12);
   });
 });
 

@@ -67,6 +67,11 @@ export class HaBridge {
     elementsHidden: number;
     threatsDetected: number;
     trackers?: Array<{ domain: string; count: number }>;
+    /**
+     * New (host, site) edges since the last push — flag 43's embeddability signal.
+     * The hub unions them; re-sends are idempotent.
+     */
+    fanout?: Array<{ domain: string; firstParties: string[]; hits: number }>;
   }): Promise<boolean> {
     const endpoints: { url: string; bearer?: string }[] = [];
 
