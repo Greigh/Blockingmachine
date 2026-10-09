@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **macOS builds now notarize and staple as part of `forge make` (flag 54).** The App Store Connect API-key path wired in `forge.config.cjs` (`osxNotarize`) is live — the three `APPLE_API_*` vars sit in the gitignored `.env`, pointing at the App Store Connect key the developer account already uses for store uploads. Fresh artifacts verify `stapler validate` / `spctl -a -vv` → `source=Notarized Developer ID`, so a downloaded copy passes Gatekeeper on first launch with no right-click Open or quarantine strip. CI (`publish.yml`) still runs signed-only until the secrets are configured there.
+- **macOS builds now notarize and staple as part of `forge make` (flag 54).** The App Store Connect API-key path wired in `forge.config.cjs` (`osxNotarize`) is live — the three `APPLE_API_*` vars sit in the gitignored `.env`, pointing at the App Store Connect key the developer account already uses for store uploads. Fresh artifacts verify `stapler validate` / `spctl -a -vv` → `source=Notarized Developer ID`, so a downloaded copy passes Gatekeeper on first launch with no right-click Open or quarantine strip. The same three secrets are configured on the repo, and `publish.yml` writes the `.p8` contents to a temp path on macOS before `npm run make`, so tag-push builds notarize as well.
 
 ### Security
 
