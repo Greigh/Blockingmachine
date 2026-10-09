@@ -30,13 +30,24 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
 - **CI macOS notarization needs the signing certificate, not just the API key** —
   with `APPLE_API_*` secrets set, `osxNotarize` went live but the runner has no
   Developer ID identity, so `osxSign` fell back to adhoc and `@electron/notarize`'s
-  signature pre-check failed the leg. `publish.yml` now imports
+  signature pre-check failed the leg. `publish.yml` imports
   `APPLE_CERTIFICATE_P12`/`APPLE_CERTIFICATE_PASSWORD` into a temp keychain on macOS
   only, and exports `APPLE_API_KEY` only when the cert import ran — notarized when
   signable, adhoc-green otherwise. The bash key-materialization also moved into a
   macOS-gated step (pwsh on windows-latest was parsing `if [ … ]` → ParserError),
-  and the `workflow_dispatch` fallback tag reads `package.json` instead of a
-  hardcoded rc.7.
+  the `workflow_dispatch` fallback tag reads `package.json` instead of a hardcoded
+  rc.7, and a `create-release` step drops unsigned darwin artifacts before upload —
+  the local release flow ships the canonical mac builds, so a CI adhoc zip must
+  never `--clobber` a notarized one (that's how rc.9's shipped mac zip ended up
+  unsigned). The mac leg marks its artifact `APPLE_NOTARIZED` when it really signed.
+- **The p12 for CI must be re-packed, not raw-exported** — `security export -t
+  identities` ignores the name filter and dumps every identity (~50 KB, over
+  GitHub's 48 KB secret cap), and an `openssl pkcs12 -export` with OpenSSL-3
+  defaults fails `security import` with *"MAC verification failed … (wrong
+  password?)"* — it's the MAC algorithm, not the password. Working recipe:
+  extract the cert by subject, match the key by modulus, re-pack with
+  `openssl pkcs12 -export -legacy -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe
+  PBE-SHA1-3DES`.
 - **npmjs.com**: `@blockingmachine/core` and `@blockingmachine/cli` `1.0.0-rc.9` under
   dist-tag `rc`. A publish may sit in npm's internal "staged" state for minutes —
   `npm view` 404s while the packument finalizes and a republish 409s
