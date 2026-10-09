@@ -4,7 +4,11 @@ Project context and operational knowledge for agents working in this repository.
 Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` and in
 `docs/open-flags.md` (the audit ledger — open items at top, closed ones at bottom).
 
-## Current release state
+## Commits
+
+- **No agent attribution in commit messages** — never add `Generated with [Devin]`,
+  `Co-Authored-By`, or any tool/agent trailer. The owner explicitly requires commits
+  read as their own. (Whole branch history was rewritten 2026-10-09 to remove them.)
 
 - **`v1.0.0-rc.9` shipped 2026-10-04** — tag on `origin` (GitHub `Greigh/Blockingmachine`)
   and `forgejo` (`git.greighstudios.com`). GitHub pre-release holds the full asset set:
