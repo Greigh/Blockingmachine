@@ -10,7 +10,14 @@
 export interface DiscoveredServer {
   /** mDNS instance name, e.g. "Blockingmachine Hub on macbook". */
   name: string;
+  /** Advertised hostname (e.g. `daniels-macbook-pro-3.local.`) — display only. */
   host: string;
+  /**
+   * The address to actually fetch. Android's HTTP stack cannot resolve `.local`
+   * names (mDNS is only reachable via NsdManager, which `fetch` never touches),
+   * so dialing `host` dies with UnknownHostException on Android — use this.
+   */
+  connectHost: string;
   port: number;
   /** All advertised addresses (v4 + v6 as the resolver reports them). */
   addresses: string[];
@@ -75,6 +82,19 @@ export function isDiscoveryAvailable(): boolean {
   return loadZeroconf() !== null;
 }
 
+/**
+ * Pick the address to dial for a discovered service. IPv4 first (always valid
+ * in a URL), then a bracketed IPv6 literal, then the raw hostname — last is the
+ * only choice on iOS when resolution returned no addresses, since `.local` does
+ * resolve there.
+ */
+export function pickConnectHost(host: string, addresses: string[]): string {
+  const ipv4 = addresses.find((a) => /^\d{1,3}(\.\d{1,3}){3}$/.test(a));
+  if (ipv4) return ipv4;
+  const ipv6 = addresses.find((a) => a.includes(':'));
+  return ipv6 ? `[${ipv6}]` : host;
+}
+
 function toDiscovered(svc: ZeroconfService): DiscoveredServer | null {
   const addresses = (svc.addresses ?? []).filter((a) => typeof a === 'string' && a.length > 0);
   const host = svc.host ?? addresses[0];
@@ -89,6 +109,7 @@ function toDiscovered(svc: ZeroconfService): DiscoveredServer | null {
   return {
     name: svc.name ?? svc.fullName ?? host,
     host,
+    connectHost: pickConnectHost(host, addresses),
     port: svc.port,
     addresses,
     txt: { api: str(txt.api), version: str(txt.version), token: str(txt.token) },

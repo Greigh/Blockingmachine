@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with margin, double-counting the safe area. The pill now lifts via
   `marginBottom: insets.bottom + spacing` alone, drops the internal inset
   padding, and centers items vertically.
+- **Mobile mDNS pairing**: "Find on network" found the hub but connect failed
+  `UnknownHostException` — the discovered `.local` hostname was fed to `fetch`,
+  and Android's resolver can't resolve `.local` for HTTP (mDNS only works
+  through NsdManager, which zeroconf uses but `fetch` doesn't). Discovered
+  servers now carry a `connectHost` — resolved IPv4 preferred, bracketed IPv6
+  next, hostname last — and the row dials it instead. (QR pairing was never
+  affected: the desktop emits literal LAN IPs.)
 - The regenerated APK (same `1.0.0-rc.10`) replaces the `mobile-v1.0.0-rc.10`
   release asset and the Forgejo `generic/blockingmachine-mobile/1.0.0-rc.10`
   package — reinstall it to pick up the fix.
