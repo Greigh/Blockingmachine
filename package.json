@@ -66,9 +66,17 @@
     "uuid": "^11.1.1",
     "extract-zip": "npm:@electron-internal/extract-zip@^1.0.5",
     "image-size": "^2.0.4",
+    "query-string": {
+      "decode-uri-component": "^0.5.0"
+    },
     "@electron-forge/plugin-webpack": {
       "webpack-dev-server": "^5.2.6"
     }
+  },
+  "devDependencies": {
+    "braces": "file:vendor/braces",
+    "decode-uri-component": "file:vendor/decode-uri-component",
+    "node-forge": "file:vendor/node-forge"
   },
   "allowScripts": {
     "core-js-pure@3.50.0": true,

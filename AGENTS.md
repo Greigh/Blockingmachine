@@ -28,15 +28,27 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
   fresh token with package write scope — flag 53 tracks it. Both publish scripts now
   exit nonzero on a real failure (already-published tolerated as idempotent), so a
   future bad token turns the workflow step red instead of passing quietly.
-- **`npm audit`**: ~70 findings, all dev/build-toolchain, none in shipped code —
-  `braces` (GHSA-vfj7-8cjw-p6xm, all versions, no patched release) drives ~60 of
-  them via jest/metro/chokidar/`webpack-dev-server`; the mobile workspace added
-  most of those paths. The rest: `node-forge` (via `@expo/code-signing-certificates`,
-  bundle-signing only), `sprintf-js` (istanbul coverage), `uuid` (xcode plist
-  writer, prebuild only), `decode-uri-component` (via `expo-router`→`query-string` —
-  nominally runtime-reachable on malformed deep links, moderate DoS only).
-  `audit fix` applies nothing; `--force` proposes incoherent downgrades
-  (`expo@44`, `expo-router@58`, Forge 0.0.2) — do not take it. Flag 52 tracks it.
+- **`npm audit` is clean (0 findings)** — the three unpatched advisories are
+  neutralized by **vendored patched copies under `vendor/`**, wired as root
+  `devDependencies` with `file:` specs: npm hoists them at top level and dedupes
+  every transitive consumer whose range they satisfy. `vendor/braces@3.0.4`
+  (upstream 3.0.3 + a 256-level nesting-depth guard, `lib/depth.js` —
+  GHSA-vfj7-8cjw-p6xm, satisfies `~3.0.2`/`^3.0.3`), `vendor/node-forge@1.4.1`
+  (upstream 1.4.0 + digitalbazaar/forge PR #1152's nested-DigestAlgorithm
+  element-count check — GHSA-86w9-cpqp-85rv, satisfies `^1.3.3`), and
+  `vendor/decode-uri-component@0.5.0` (CJS port of upstream 0.5.0's linear-scan
+  decoder — GHSA-vcc3-ghjq-m6fr; upstream is ESM-only, which would break
+  `query-string@7`'s `require()`). `decode-uri-component@0.5.0` does **not**
+  satisfy query-string@7's `^0.2.2` range, so a nested override
+  (`query-string → decode-uri-component@^0.5.0`) rewrites that one edge — the
+  other two need no override at all. Vendored package.jsons carry **no
+  `devDependencies`/`scripts`** — npm installs devDeps of `file:` links like
+  workspace members (node-forge's upstream toolchain alone pulls ~900 packages).
+  Maintenance contract: when upstream ships real patched releases
+  (`braces >3.0.3`, `node-forge >1.4.0`, `decode-uri-component >0.4.2`), delete
+  the vendor dir + devDep + override and let the registry version dedupe back.
+  `audit fix --force` still proposes incoherent majors (`expo@44`,
+  `expo-router@58`, Forge 0.0.2) — do not take it.
 - **Electron Forge 8 sharp edges**: `main` must be `.webpack/main/index.cjs` (the
   plugin emits `.cjs` and refuses bare `.webpack/main`); `afterPrune` hooks take one
   `{buildPath, electronVersion, platform, arch}` object, not positional args; the
