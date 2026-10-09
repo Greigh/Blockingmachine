@@ -145,7 +145,13 @@ test('a configured feed token gates every endpoint, by every accepted credential
   const status = await (await fetch(`${base}/v1/status?token=${TOKEN}`)).json();
   assert.equal(status.feedServer.requiresAuth, true);
   assert.ok(status.feedServer.dnsFeedUrl.includes(`?token=${TOKEN}`));
-  assert.deepEqual(status.browserTelemetry, { trackersBlocked: 0, elementsHidden: 0, threatsDetected: 0 });
+  assert.deepEqual(status.browserTelemetry, {
+    trackersBlocked: 0,
+    elementsHidden: 0,
+    threatsDetected: 0,
+    recentTrackers: [],
+    lastUpdated: null,
+  });
 });
 
 test('v1/check resolves a domain the way the DNS consumers would', async (t) => {
