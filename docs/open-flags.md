@@ -104,15 +104,16 @@ item once a real gate report carries the adjusted number.)
 - **Fix shape:** Either land the behavioural features the deferral names (daemon/crawler observations feeding the label store — the M4-shaped work the README already describes) and re-measure, or re-examine the bar itself: with the adjusted P@R now in every report, the reviewer has the measured version of "good enough where the allowlist does not already cover it" — but only if they agree the residual miss is acceptable, which is a decision, not a metric. **What remains is data, not machinery:** nothing below has a corpus yet — no `labels.db` or live-observation accumulation exists on this checkout, so no v3 model has been trained and no gate report has been re-run. Days of real daemon/browser traffic must accrue before `train.py --features 3` can answer whether `cname_foreign`/`fanout_sites` move P@R; the pipeline existing is not the flag closing.
 - **Verify:** `gate.py` over the v1 metrics still FAILs today; it closes when a future model passes the gate as configured, or the config change that passes it records why the adjusted bar is the right one — now with the adjusted number printed next to the raw one instead of having to be argued for. For the landed pipeline: `observationRecorder.test.ts` pins CNAME traversal/loop/dedup/JSONL persistence (5 suites, 34 tests); `learnedShadowObservations.test.ts` pins the offset-tail scorer; `fanoutLedger.test.ts` pins first-party aggregation; `learned-model.test.ts` pins v3 Python↔TS vector parity via `learned-fixtures-v3.json`. The verification that does *not* exist: a `train.py --features 3` run over real accrued streams.
 
-### 73. The npmjs publish token is dead — `1.0.0-rc.10` is not on the npm registry
-
-- **Where:** `.env` `NPMJS_TOKEN` (the credential `scripts/publish-npmjs.mjs` injects as `--//registry.npmjs.org/:_authToken=`); `~/.npmrc` (the machine's own npm session — also dead).
-- **What:** The rc.10 release's npmjs leg 404'd on both packages (`PUT @blockingmachine/core` / `cli` → `404 Not Found`) and a direct `npm whoami --_authToken=$NPMJS_TOKEN` answers **401 Unauthorized**. The package names are fine — `npm view` shows `@blockingmachine/core`/`cli` through `1.0.0-rc.9` under dist-tag `rc` — so this is the credential, same failure class as flag 53's Forgejo token. The machine's own `npm whoami` (separate `~/.npmrc` token) also 401s, so no live npmjs credential exists on this host.
-- **Why left:** Minting a token needs the owner's npmjs account (granular access token with read+write on `@blockingmachine/*`, or a classic publish token). The publish is safe to re-run once it exists — `npm publish` of an already-present version is tolerated as idempotent.
-- **Fix shape:** `npmjs.com → Access Tokens → Granular` (packages `@blockingmachine/core` + `@blockingmachine/cli`, read+write, expiry to taste) → replace `NPMJS_TOKEN` in `.env` → `node scripts/publish-npmjs.mjs --tag rc` publishes rc.10 onto the `rc` dist-tag.
-- **Verify:** `npm view @blockingmachine/core versions` lists `1.0.0-rc.10`.
-
 ## Closed
+
+### 75. The npmjs publish token is dead — closed: fresh token minted, `1.0.0-rc.10` published under `rc`
+
+> Numbered 75 in closure — it was filed as "73" but that number already belonged to the mobile physical-device flag.
+
+- **Where:** `.env` `NPMJS_TOKEN` (the credential `scripts/publish-npmjs.mjs` injects as `--//registry.npmjs.org/:_authToken=`); `~/.npmrc` (the machine's own npm session — also dead at the time).
+- **What it was:** The rc.10 release's npmjs leg 404'd on both packages and `npm whoami --_authToken=$NPMJS_TOKEN` answered **401 Unauthorized** — the token was dead, same failure class as flag 53's Forgejo token.
+- **Resolution (2026-10-09):** the owner replaced `NPMJS_TOKEN` in `.env` with a working credential (`whoami` → `greigh`), `node scripts/publish-npmjs.mjs --tag rc` published both packages, and the packument verified after propagation: `npm view @blockingmachine/core dist-tags` → `rc: 1.0.0-rc.10`, same for `cli`. The post-publish `npm view` 404 was the documented staged-state lag, not a failure — polling resolves it.
+- **Verify:** `npm view @blockingmachine/core versions` lists `1.0.0-rc.10`; `npm install @blockingmachine/cli@rc` resolves to rc.10.
 
 ### 74. CI macOS builds had the notary key but not the signing certificate — closed by shipping the Developer ID p12 to CI, proven by a notarized artifact downloaded from the release
 
