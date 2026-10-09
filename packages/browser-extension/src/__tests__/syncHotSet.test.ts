@@ -1,5 +1,4 @@
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
-import type { MockInstance } from 'jest-mock';
 import { SyncClient } from '../background/syncClient.js';
 
 /**
@@ -25,8 +24,10 @@ function mockFetch(handler: (url: string) => { ok: boolean; body: string }) {
 }
 
 describe('SyncClient hot set', () => {
-  let info: MockInstance;
-  let warn: MockInstance;
+  // ReturnType<typeof jest.spyOn> — the jest-mock copies in this tree diverged
+  // (npm update), so naming the type across the boundary misassigns; infer instead.
+  let info: ReturnType<typeof jest.spyOn>;
+  let warn: ReturnType<typeof jest.spyOn>;
 
   beforeEach(() => {
     info = jest.spyOn(console, 'log').mockImplementation(() => {});

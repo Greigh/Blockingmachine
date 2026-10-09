@@ -39,6 +39,7 @@ import {
   describeElementVerdict,
   describeTabActivity,
   registrableDomainOf,
+  registrableDomainOfHost,
   resolveMenuClick,
   scopeForAction,
   urlFilterFor,
@@ -59,6 +60,13 @@ import {
 } from '../shared/ledgerStatus.js';
 import { tierFromRulesetId } from '../shared/tierAttribution.js';
 import { categoryForTier } from '../shared/trackerCategory.js';
+import {
+  FANOUT_TALLY_STORAGE_KEY,
+  emptyFanoutTally,
+  normalizeStoredFanout,
+  recordFanoutEdge,
+  type FanoutTally,
+} from '../shared/fanoutLedger.js';
 import {
   DEFAULT_FEED_URL,
   DEFAULT_HUB_PORT,
@@ -92,6 +100,27 @@ const ruleHits = new RuleHitStats();
 const ledger = new LedgerSessionRecorder();
 const sync = new SyncClient();
 const haBridge = new HaBridge();
+
+/**
+ * First-party fan-out tally (flag 43) — which registrable sites each matched
+ * third-party host appeared under. `fanoutTally` is the persisted lifetime ledger;
+ * `pendingFanout` holds only the edges added since the last successful hub push, so a
+ * retry sends *new* edges rather than re-adding old ones into the hub's union.
+ */
+let fanoutTally: FanoutTally | null = null;
+let fanoutTallyLoad: Promise<FanoutTally> | null = null;
+const pendingFanout = new Map<string, { firstParties: Set<string>; hits: number }>();
+
+async function getFanoutTally(): Promise<FanoutTally> {
+  if (fanoutTally) return fanoutTally;
+  if (!fanoutTallyLoad) {
+    fanoutTallyLoad = chrome.storage.local
+      .get(FANOUT_TALLY_STORAGE_KEY)
+      .then((stored) => (fanoutTally = normalizeStoredFanout(stored[FANOUT_TALLY_STORAGE_KEY])))
+      .catch(() => (fanoutTally = emptyFanoutTally()));
+  }
+  return fanoutTallyLoad;
+}
 
 /**
  * Push the stored HA config's feed URL/token into the two clients that actually
@@ -653,6 +682,15 @@ async function flushTelemetryReport(): Promise<void> {
   // The hit ledger is persisted on the same beat, so a torn-down worker resumes the day it was
   // browsing rather than starting a fresh session for the same date.
   await ledger.flush();
+  // The fan-out tally persists on the same beat — it is the flag-43 embeddability
+  // evidence, and a suspended worker should not take this sweep's edges with it.
+  if (fanoutTally) {
+    try {
+      await chrome.storage.local.set({ [FANOUT_TALLY_STORAGE_KEY]: fanoutTally });
+    } catch {
+      // Persist fails under quota pressure — the tally keeps accruing in memory.
+    }
+  }
   if (sessionTrackersBlocked === 0 && sessionElementsHidden === 0 && sessionThreatsDetected === 0) {
     return;
   }
@@ -662,11 +700,20 @@ async function flushTelemetryReport(): Promise<void> {
     trackerList.push({ domain, count });
   });
 
+  // Only edges the hub has never seen — the tally dedups, so `pendingFanout` is the
+  // *new* (host, site) pairs this window; the hub unions them into its own aggregate.
+  const fanoutDelta = [...pendingFanout.entries()].map(([domain, p]) => ({
+    domain,
+    firstParties: [...p.firstParties],
+    hits: p.hits,
+  }));
+
   const success = await haBridge.reportTelemetry({
     trackersBlocked: sessionTrackersBlocked,
     elementsHidden: sessionElementsHidden,
     threatsDetected: sessionThreatsDetected,
     trackers: trackerList,
+    fanout: fanoutDelta,
   });
 
   if (success) {
@@ -674,6 +721,7 @@ async function flushTelemetryReport(): Promise<void> {
     sessionElementsHidden = 0;
     sessionThreatsDetected = 0;
     sessionRecentTrackers.clear();
+    pendingFanout.clear();
   }
 }
 
@@ -1275,6 +1323,9 @@ async function applyMatches(
   // The stored-telemetry half is the part that races, so each tab's read-modify-write is chained
   // onto the last commit for the same tab — two overlapping batches can no longer drop a count.
   for (const [tabId, batch] of perTab) {
+    // Fan-out edges: the tab's site is the first party each matched host rode in under —
+    // flag 43's embeddability signal. Dead-tab and missing-URL cases resolve inside.
+    void recordFanoutEdgesForTab(tabId, batch);
     await enqueueTabCommit(tabId, async () => {
       const current =
         (await getTabTelemetry(tabId)) ??
@@ -1302,6 +1353,43 @@ async function applyMatches(
       await setTabTelemetry(tabId, current);
       await updateBadge(tabId, current.blockedRequests);
     });
+  }
+}
+
+/**
+ * Record the first-party→third-party edges one tab's matches represent (flag 43). The
+ * first party is the tab's own site — registrable form, so a "sites embedding this
+ * host" count comes out of the tally rather than a page list. Same-party matches are
+ * skipped: a site loading its own resources is not distribution. No tab, no edge — a
+ * closed tab leaves no honest first party to attribute.
+ */
+async function recordFanoutEdgesForTab(
+  tabId: number,
+  batch: Array<{ match: BrowserMatch; count: number }>,
+): Promise<void> {
+  if (!Number.isInteger(tabId) || tabId < 0) return;
+  let firstParty: string;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    firstParty = registrableDomainOf(tab.url);
+  } catch {
+    return;
+  }
+  if (!firstParty) return;
+  let tally = await getFanoutTally();
+  const now = Date.now();
+  for (const { match, count } of batch) {
+    if (!match.host) continue;
+    if (registrableDomainOfHost(match.host) === firstParty) continue;
+    const { tally: next, newEdge } = recordFanoutEdge(tally, match.host, firstParty, now, count);
+    tally = next;
+    fanoutTally = next;
+    // Hits push as *deltas* — the hub adds them, so a cumulative number would
+    // double-count across flushes. First-party edges only push when genuinely new.
+    const pending = pendingFanout.get(match.host) ?? { firstParties: new Set<string>(), hits: 0 };
+    pending.hits += Math.max(1, Math.floor(count));
+    if (newEdge) pending.firstParties.add(firstParty);
+    pendingFanout.set(match.host, pending);
   }
 }
 

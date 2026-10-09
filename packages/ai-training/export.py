@@ -66,13 +66,14 @@ def main() -> int:
     ap.add_argument("--features", type=int, default=None,
                     help="feature schema version (default: read from test_set.json)")
     ap.add_argument("--observations", default="observations.db")
+    ap.add_argument("--live-observations", default="live_observations.db")
     args = ap.parse_args()
     adir = Path(args.artifacts)
 
     raw_test = json.loads((adir / "test_set.json").read_text())
     fversion = args.features or (raw_test.get("feature_version", 1)
                                  if isinstance(raw_test, dict) else 1)
-    fver, fnames, featurize, _ = load_featurizer(fversion, args.observations)
+    fver, fnames, featurize, _ = load_featurizer(fversion, args.observations, args.live_observations)
 
     booster = lgb.Booster(model_file=str(adir / "model.txt"))
     dump = booster.dump_model()

@@ -2,7 +2,8 @@ import dgram from 'node:dgram';
 import dnsPacket from 'dns-packet';
 import { DomainTrie } from '../engine/domainTrie.js';
 import { DohForwarder } from './dohForwarder.js';
-import { DaemonConfig, DaemonStats, EvaluationResult, QueryTelemetryEntry } from '../types.js';
+import { ObservationRecorder, summarizeAnswer } from './observationRecorder.js';
+import { DaemonConfig, DaemonStats, DnsVerdict, EvaluationResult, QueryTelemetryEntry } from '../types.js';
 
 export class DnsServer {
   private socket: dgram.Socket;
@@ -16,11 +17,13 @@ export class DnsServer {
   private recentQueries: QueryTelemetryEntry[] = [];
   private readonly maxRecentQueries = 50;
   private startTime = Date.now();
+  private recorder: ObservationRecorder | null;
 
   constructor(trie: DomainTrie, config: DaemonConfig) {
     this.trie = trie;
     this.config = config;
     this.forwarder = new DohForwarder(config.upstreamDoHUrl);
+    this.recorder = config.observationsFile ? new ObservationRecorder(config.observationsFile) : null;
     this.socket = dgram.createSocket('udp4');
   }
 
@@ -68,6 +71,45 @@ export class DnsServer {
     }
   }
 
+  /**
+   * Append the upstream side of an answered query to the observation stream — the
+   * CNAME chain and response shape are the behavioural fields the plain-HTTP crawl
+   * could not measure (ai-training flag 43). Fail-soft throughout: an undeodable
+   * answer is still forwarded, and observation failures never block the response path.
+   */
+  private recordObservation(
+    domain: string,
+    qtype: string,
+    verdict: DnsVerdict,
+    upstreamAnswer: Buffer | null,
+    queriedAt: number,
+  ): void {
+    if (!this.recorder) return;
+    try {
+      const base = {
+        domain,
+        observed_at: new Date(queriedAt).toISOString(),
+        qtype: String(qtype),
+        verdict,
+        cname_depth: 0,
+        latency_ms: Math.max(0, Date.now() - queriedAt),
+      };
+      if (!upstreamAnswer) {
+        this.recorder.observe({ ...base, rcode: null, upstream_ok: false });
+        return;
+      }
+      try {
+        this.recorder.observe({ ...base, upstream_ok: true, ...summarizeAnswer(domain, upstreamAnswer) });
+      } catch {
+        // Upstream answered but the answer doesn't decode for summarizing — the bare
+        // observed fact still beats no record.
+        this.recorder.observe({ ...base, rcode: null, upstream_ok: true });
+      }
+    } catch (err) {
+      console.warn('[DnsObservations] observe failed:', err);
+    }
+  }
+
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
       let started = false;
@@ -92,6 +134,17 @@ export class DnsServer {
           this.recordQuery(question.name, evaluation.verdict, rinfo.address, evaluation.matchingRule);
 
           if (evaluation.verdict === 'BLOCKED') {
+            // A blocked name never reaches upstream — the observation records the query
+            // itself (verdict + qtype) so the label store still sees it was requested.
+            this.recorder?.observe({
+              domain: question.name,
+              observed_at: new Date().toISOString(),
+              qtype: String(question.type),
+              verdict: evaluation.verdict,
+              rcode: null,
+              upstream_ok: false,
+              cname_depth: 0,
+            });
             // Sinkhole only the address-record types — answering an A record to an MX/TXT/ANY
             // query is a type-confused response some resolvers treat as bogus. Non-address
             // queries on a blocked name get NXDOMAIN: same outcome, honest shape.
@@ -127,10 +180,13 @@ export class DnsServer {
           } else {
             // Forward to upstream DoH resolver — a failed upstream answers SERVFAIL rather
             // than leaving the client to time out and retry-storm a dead resolver.
+            const queriedAt = Date.now();
             const upstreamAnswer = await this.forwarder.resolvePacket(msg);
             if (upstreamAnswer) {
+              this.recordObservation(question.name, question.type, evaluation.verdict, upstreamAnswer, queriedAt);
               this.socket.send(upstreamAnswer, rinfo.port, rinfo.address);
             } else {
+              this.recordObservation(question.name, question.type, evaluation.verdict, null, queriedAt);
               try {
                 const servfail = dnsPacket.encode({
                   type: 'response',

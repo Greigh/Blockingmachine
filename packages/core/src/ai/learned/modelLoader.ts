@@ -25,6 +25,7 @@ import { evaluateGbdt, type GbdtModelFile } from './gbdt.js';
 import {
   LEARNED_FEATURE_NAMES,
   LEARNED_FEATURE_NAMES_V2,
+  LEARNED_FEATURE_NAMES_V3,
 } from './featureSpec.js';
 import {
   featurizeLearned,
@@ -64,6 +65,7 @@ export function parseLearnedModel(json: unknown): GbdtModelFile {
   const expectedNames =
     version === 1 ? LEARNED_FEATURE_NAMES
     : version === 2 ? LEARNED_FEATURE_NAMES_V2
+    : version === 3 ? LEARNED_FEATURE_NAMES_V3
     : null;
   if (expectedNames === null) {
     throw new Error(
@@ -158,19 +160,26 @@ export function createLearnedClassifier(
           error: err instanceof Error ? err.message : String(err),
         };
       }
-      // v1 model + obs, or v2 model without obs: featurizeLearned adapts.
-      // A v1 model ignores obs; a v2 model without obs gets an empty
-      // observation -> all-NaN behaviorals -> LightGBM missing direction.
-      // (Passing undefined would return the 15-vector, misrouting v2 trees.)
-      const useObs = model.feature_version === 2 ? (obs ?? {}) : undefined;
+      // v1 model + obs, or v2/v3 model without obs: featurizeLearned adapts.
+      // A v1 model ignores obs; a v2+ model without obs gets an empty
+      // observation -> all-NaN behaviorals (+ honest-zero live fields at v3)
+      // -> LightGBM missing direction. (Passing undefined would return the
+      // 15-vector, misrouting the trees.)
+      const useObs = model.feature_version >= 2 ? (obs ?? {}) : undefined;
       if (allowlist.has(normalized)) {
         // Allowlist decides before the model scores. The score is still
         // computed for shadow-mode logging (it shows what the model
         // WOULD have said).
-        const score = evaluateGbdt(model.trees, featurizeLearned(normalized, useObs));
+        const score = evaluateGbdt(
+          model.trees,
+          featurizeLearned(normalized, useObs, model.feature_version),
+        );
         return { domain, score, decision: 'allow', allowlisted: true };
       }
-      const score = evaluateGbdt(model.trees, featurizeLearned(normalized, useObs));
+      const score = evaluateGbdt(
+        model.trees,
+        featurizeLearned(normalized, useObs, model.feature_version),
+      );
       const decision: LearnedDecision =
         score >= thresholds.block ? 'block' : score >= thresholds.review ? 'review' : 'allow';
       return { domain, score, decision, allowlisted: false };

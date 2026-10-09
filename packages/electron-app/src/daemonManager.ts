@@ -88,7 +88,7 @@ export class DaemonManager {
    * that outlives the app (it is spawned detached deliberately) can still refresh from
    * the last compiled snapshot on disk instead of degrading to the baseline.
    */
-  async start(options?: { feedFilePath?: string; threatsFilePath?: string }): Promise<{ success: boolean; message: string }> {
+  async start(options?: { feedFilePath?: string; threatsFilePath?: string; observationsFilePath?: string }): Promise<{ success: boolean; message: string }> {
     const current = await this.getStatus();
     if (current.status !== 'stopped') {
       return { success: true, message: `System daemon is already active on port ${current.port}` };
@@ -131,6 +131,7 @@ export class DaemonManager {
       FEED_URL: 'http://127.0.0.1:9191/dns.txt',
       ...(options?.feedFilePath ? { FEED_FILE: options.feedFilePath } : {}),
       ...(options?.threatsFilePath ? { THREATS_FILE: options.threatsFilePath } : {}),
+      ...(options?.observationsFilePath ? { OBSERVATIONS_FILE: options.observationsFilePath } : {}),
     };
 
     try {
@@ -357,7 +358,7 @@ export class DaemonManager {
    * daemon runs without the app entirely, so the file fallback is what keeps its reloads on
    * real rules rather than the baseline. Optional so tests can render the stock shape.
    */
-  getServiceInstallInstructions(feedFiles?: { feedFilePath?: string; threatsFilePath?: string }): { mac: string; linux: string } {
+  getServiceInstallInstructions(feedFiles?: { feedFilePath?: string; threatsFilePath?: string; observationsFilePath?: string }): { mac: string; linux: string } {
     // Plist values are XML text — an '&' or '<' in a save path would corrupt the document.
     const xml = (s: string) =>
       s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -367,11 +368,17 @@ export class DaemonManager {
     const macThreatsEnv = feedFiles?.threatsFilePath
       ? `        <key>THREATS_FILE</key>\n        <string>${xml(feedFiles.threatsFilePath)}</string>\n`
       : '';
+    const macObservationsEnv = feedFiles?.observationsFilePath
+      ? `        <key>OBSERVATIONS_FILE</key>\n        <string>${xml(feedFiles.observationsFilePath)}</string>\n`
+      : '';
     const linuxFeedFileEnv = feedFiles?.feedFilePath
       ? `Environment="FEED_FILE=${feedFiles.feedFilePath}"\n`
       : '';
     const linuxThreatsEnv = feedFiles?.threatsFilePath
       ? `Environment="THREATS_FILE=${feedFiles.threatsFilePath}"\n`
+      : '';
+    const linuxObservationsEnv = feedFiles?.observationsFilePath
+      ? `Environment="OBSERVATIONS_FILE=${feedFiles.observationsFilePath}"\n`
       : '';
     const macPlist = `sudo tee /Library/LaunchDaemons/com.blockingmachine.daemon.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -396,7 +403,7 @@ export class DaemonManager {
         <string>9292</string>
         <key>FEED_URL</key>
         <string>http://127.0.0.1:9191/dns.txt</string>
-${macFeedFileEnv}${macThreatsEnv}    </dict>
+${macFeedFileEnv}${macThreatsEnv}${macObservationsEnv}    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -422,7 +429,7 @@ Environment="ELECTRON_RUN_AS_NODE=1"
 Environment="DNS_PORT=53"
 Environment="CONTROL_PORT=9292"
 Environment="FEED_URL=http://127.0.0.1:9191/dns.txt"
-${linuxFeedFileEnv}${linuxThreatsEnv}
+${linuxFeedFileEnv}${linuxThreatsEnv}${linuxObservationsEnv}
 [Install]
 WantedBy=multi-user.target
 EOF

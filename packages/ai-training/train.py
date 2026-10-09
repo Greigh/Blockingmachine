@@ -33,8 +33,9 @@ from features import FEATURE_NAMES, featurize_vector
 from golden import GOLDEN_BENIGN
 
 
-def load_featurizer(version: int, observations_path: str | None):
-    """Return (version, names, featurize_fn). v2 appends behavioral features."""
+def load_featurizer(version: int, observations_path: str | None, live_path: str | None = None):
+    """Return (version, names, featurize_fn). v2 appends behavioral features;
+    v3 further appends the daemon/browser live-instrumentation tail (flag 43)."""
     if version == 1:
         return 1, FEATURE_NAMES, featurize_vector, len(FEATURE_NAMES)
     if version == 2:
@@ -43,6 +44,14 @@ def load_featurizer(version: int, observations_path: str | None):
         obs = load_observations(observations_path or "observations.db")
         print(f"v2: {len(obs)} observed domains loaded")
         return V2, N2, lambda d: featurize_vector_v2(d, obs), N_V1
+    if version == 3:
+        from features2 import load_observations as load_v2_obs
+        from features3 import (FEATURE_NAMES as N3, FEATURE_VERSION as V3, N_V2,
+                               featurize_vector_v3, load_live_observations)
+        obs = load_v2_obs(observations_path or "observations.db")
+        live = load_live_observations(live_path or "live_observations.db")
+        print(f"v3: {len(obs)} crawl-observed domains; live db: {'yes' if live else 'absent (all-NaN tail)'}")
+        return V3, N3, lambda d: featurize_vector_v3(d, obs, live), N_V2
     raise ValueError(f"unknown feature version {version}")
 
 PARAMS = {
@@ -151,14 +160,16 @@ def main() -> None:
     ap.add_argument("--out", default="model_artifacts")
     ap.add_argument("--rounds", type=int, default=1000)
     ap.add_argument("--early-stopping", type=int, default=50)
-    ap.add_argument("--features", type=int, default=1, choices=(1, 2),
-                    help="feature schema version (v2 needs --observations)")
+    ap.add_argument("--features", type=int, default=1, choices=(1, 2, 3),
+                    help="feature schema version (v2 needs --observations; v3 also --live-observations)")
     ap.add_argument("--observations", default="observations.db")
+    ap.add_argument("--live-observations", default="live_observations.db",
+                    help="v3: obs_ingest.py's daemon+fanout store")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    fversion, fnames, featurize, n_v1 = load_featurizer(args.features, args.observations)
+    fversion, fnames, featurize, n_v1 = load_featurizer(args.features, args.observations, args.live_observations)
     print(f"feature schema v{fversion} ({len(fnames)} features)")
 
     con = sqlite3.connect(args.db)
@@ -199,11 +210,17 @@ def main() -> None:
             weight=np.array([x[2] for x in split]),
         )
 
-    # How many pool domains actually have observations (v2 signal coverage)?
-    if fversion == 2:
+    # How many pool domains actually have observations (v2/v3 signal coverage)?
+    # Position N_V1 is the first crawl feature — NaN when the domain was never
+    # crawled. For v3 the same index still marks crawl coverage; live coverage
+    # is dns_seen==1 at position N_V2.
+    if fversion >= 2:
         import math
-        n_obs = sum(1 for v in X if not math.isnan(v[n_v1]))
-        print(f"v2 signal coverage: {n_obs}/{len(X)} train-pool domains observed")
+        n_obs = sum(1 for v in X if not math.isnan(v[len(FEATURE_NAMES)]))
+        print(f"v{fversion} signal coverage: {n_obs}/{len(X)} train-pool domains observed")
+        if fversion == 3:
+            n_live = sum(1 for v in X if v[n_v1] == 1.0)
+            print(f"v3 live coverage: {n_live}/{len(X)} domains have daemon observations")
 
     n_neg = sum(1 for _, label, _ in train if label == 0)
     n_pos = sum(1 for _, label, _ in train if label == 1)

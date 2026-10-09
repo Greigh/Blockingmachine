@@ -70,6 +70,7 @@ def main() -> int:
     ap.add_argument("--features", type=int, default=None,
                     help="feature schema version (default: read from test_set.json)")
     ap.add_argument("--observations", default="observations.db")
+    ap.add_argument("--live-observations", default="live_observations.db")
     args = ap.parse_args()
     adir = Path(args.artifacts)
 
@@ -79,7 +80,7 @@ def main() -> int:
     fversion = args.features or raw_test.get("feature_version", 1) \
         if isinstance(raw_test, dict) else 1
     test = raw_test["test"] if isinstance(raw_test, dict) else raw_test
-    _, fnames, featurize, _ = load_featurizer(fversion, args.observations)
+    _, fnames, featurize, _ = load_featurizer(fversion, args.observations, args.live_observations)
 
     y = [t["label"] for t in test]
     scores = booster.predict(np.array([featurize(t["domain"]) for t in test]))
