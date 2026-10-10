@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/cli",
-  "version": "1.0.0-rc.10",
+  "version": "1.0.0-rc.11",
   "description": "Production command-line interface for automated filter list compilation, local feed serving, diffing, and DNS diagnostics.",
   "author": {
     "name": "Greigh Studios LLC",
@@ -33,7 +33,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@blockingmachine/core": "^1.0.0-rc.10",
+    "@blockingmachine/core": "^1.0.0-rc.11",
     "chalk": "^6.0.1",
     "commander": "^15.0.0",
     "cosmiconfig": "^10.0.1",

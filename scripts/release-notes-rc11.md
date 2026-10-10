@@ -22,3 +22,14 @@ Release candidate. Three independent audit passes hardened the LAN control API, 
 | [`blockingmachine-chrome-mv3-v1.0.0.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.11/blockingmachine-chrome-mv3-v1.0.0.zip) | Chrome Web Store Manifest V3 browser extension bundle |
 | [`blockingmachine-firefox-mv3-v1.0.0.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.11/blockingmachine-firefox-mv3-v1.0.0.zip) | Firefox Add-ons Manifest V3 browser extension bundle |
 | [`SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.11/SHA256SUMS.txt) | SHA-256 verification checksums |
+
+### Verification Checksums (SHA-256)
+
+```text
+3f7842fe083e3caa27759e9ec5cca9228629a5804dd73d4cb57d8af5a7de1dbf  Blockingmachine-1.0.0-rc.11-arm64.dmg
+e80fd9b9d6e5c533b80fbbe2f380c10d50a8a95d9a2c42a63b1b3f329a831441  Blockingmachine-darwin-arm64-1.0.0-rc.11.zip
+197367905b29deb3df844b7413d57b3382cf472c6032d02c17193f40a3eefc56  blockingmachine-chrome-mv3-v1.0.0.zip
+594fc8445f25260e591c84c6b094482a66793be3a64d84e01159bd2060f81221  blockingmachine-cli-1.0.0-rc.11.tgz
+dd0d1c0536d2c850ea57183ccf55246f2ee5f41feef65f7460cf42fcb949f143  blockingmachine-core-1.0.0-rc.11.tgz
+918e819a7805794cd76ce658f79181dda499e22dea33f53b4726b51c50d36dbb  blockingmachine-firefox-mv3-v1.0.0.zip
+```
