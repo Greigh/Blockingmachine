@@ -105,8 +105,14 @@ Session-level detail lives in the Dexio wiki under `projects/blockingmachine/` a
   `./filters/...` sources resolve `process.resourcesPath`-first packaged,
   `app.getAppPath()` in dev. The managed DNS daemon is a third bundle,
   `systemDaemon.cjs` (`daemonManager.start()` spawns it under
-  `ELECTRON_RUN_AS_NODE`; the tray's "Start DNS Protection" row calls the same
-  path). Webpack entries pointing *outside* `src/` must use the built `dist/`
+  `ELECTRON_RUN_AS_NODE`; the tray's "Start DNS Protection" row and the
+  dashboard `ProtectionCard` call the same path — `daemon:*` IPC in
+  `index.ts`). **The daemon socket needs `reuseAddr` (dnsServer.ts)** — its
+  rootless port 5353 is also mDNS's, so the app's own bonjour-service advert
+  (and Spotify/Chrome/adb) hold `*:5353`; a plain `udp4` bind always
+  EADDRINUSE'd and "Start DNS Protection" could never succeed while the feed
+  server advertised itself. A non-reuse holder of the exact addr:port still
+  fails honestly. Webpack entries pointing *outside* `src/` must use the built `dist/`
   entry, not `src/` — ts-loader picks up the other package's own tsconfig
   (`rootDir`) and then rejects every electron-app file as "not under rootDir".
 - **macOS notarization**: `osxNotarize` in `forge.config.cjs` is env-gated —

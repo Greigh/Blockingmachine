@@ -509,12 +509,25 @@ describe('AiDetectorService cascade', () => {
   const originalFetch = globalThis.fetch;
   let fetchMock: ReturnType<typeof jest.fn>;
 
-  const modelReply = (payload: Record<string, unknown>) => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    json: async () => ({ choices: [{ message: { content: JSON.stringify(payload) } }] }),
-  });
+  // The service now reads bounded bodies (`readBoundedJsonBody`) rather than
+  // res.json() — the stub needs a real stream, not just a `json()` method.
+  const modelReply = (payload: Record<string, unknown>) => {
+    const wire = new TextEncoder().encode(
+      JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }),
+    );
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(wire);
+          controller.close();
+        },
+      }),
+      json: async () => JSON.parse(new TextDecoder().decode(wire)),
+    };
+  };
 
   const scan = (domain: string, config: Record<string, unknown>) =>
     new AiDetectorService({ provider: 'openai', apiKey: 'test-key', skipDns: true, ...config })

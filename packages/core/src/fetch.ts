@@ -4,6 +4,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 import { Readable } from "stream";
+import dns from "node:dns";
+import http from "node:http";
+import https from "node:https";
+import type { LookupFunction } from "node:net";
 
 import { isSafePublicWebUrl } from "./utils/urlSafety.js";
 
@@ -20,11 +24,110 @@ class NonRetryableFetchError extends Error {
   }
 }
 
+// Resolution happens inside the connection itself: the agent asks DNS for every
+// address the hostname answers, drops any that fail the same public-range
+// policy applied to the URL string, and connects only to a survivor. That makes
+// the checked address the connected address — without it a rebinding hostname
+// can answer a public record at lookup time and a private one when the socket
+// dials, which is a one-packet SSRF around the lexical guard above.
+const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {
+  dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
+    if (err) {
+      callback(err, "", 4);
+      return;
+    }
+    const wanted = options.family ?? 0;
+    const safe = addresses.filter((entry) => {
+      if (wanted && entry.family !== wanted) return false;
+      const target =
+        entry.family === 6
+          ? `http://[${entry.address}]`
+          : `http://${entry.address}`;
+      return isSafePublicWebUrl(target).isSafe;
+    });
+    if (safe.length === 0) {
+      const block = new Error(
+        `URL guard blocked connection to ${hostname}: DNS resolved to a non-public address`,
+      ) as Error & { code?: string };
+      // node-fetch copies .code onto its FetchError, letting the retry loop
+      // treat a deterministic policy block as non-retryable (status 403).
+      block.code = "EBM_PRIVATE_NET_BLOCK";
+      callback(block, "", 4);
+      return;
+    }
+    callback(null, safe[0].address, safe[0].family);
+  });
+};
+
+const publicOnlyAgents = {
+  http: new http.Agent({ lookup: publicOnlyLookup }),
+  https: new https.Agent({ lookup: publicOnlyLookup }),
+};
+const publicOnlyAgent = (parsedUrl: URL): http.Agent =>
+  parsedUrl.protocol === "https:" ? publicOnlyAgents.https : publicOnlyAgents.http;
+
 export interface FetchOptions {
   etag?: string;
   lastModified?: string;
   allowPrivateNetworks?: boolean;
   expectedSha256?: string;
+}
+
+/**
+ * Parse a response body as JSON with a hard byte cap applied *before* parse —
+ * `res.json()` reads the whole body, so a hostile or broken endpoint could
+ * otherwise push an unbounded payload into the main process's heap and turn a
+ * connectivity check into a memory event. The stream is cancelled on overflow.
+ */
+export async function readBoundedJsonBody(
+  res: { body: unknown },
+  maxBytes: number,
+): Promise<unknown> {
+  const body = res.body as { getReader?: () => ReadableStreamDefaultReader<Uint8Array> } | null;
+  if (body && typeof body.getReader === "function") {
+    const reader = body.getReader();
+    const chunks: Buffer[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const buf = Buffer.isBuffer(value) ? value : Buffer.from(value);
+        total += buf.length;
+        if (total > maxBytes) {
+          throw new NonRetryableFetchError(
+            `AI endpoint response exceeded ${Math.round(maxBytes / 1024)}KB limit`,
+            413,
+          );
+        }
+        chunks.push(buf);
+      }
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  }
+  // node-fetch and other Node-side clients expose an async-iterable Readable
+  // instead of a web ReadableStream — bound it the same way rather than
+  // forcing callers to care which fetch produced the response.
+  const iterable = body as AsyncIterable<Uint8Array> | null;
+  if (iterable && typeof iterable[Symbol.asyncIterator] === "function") {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of iterable) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.length;
+      if (total > maxBytes) {
+        throw new NonRetryableFetchError(
+          `AI endpoint response exceeded ${Math.round(maxBytes / 1024)}KB limit`,
+          413,
+        );
+      }
+      chunks.push(buf);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  }
+  throw new Error("Response has no readable body");
 }
 
 export interface FetchResult {
@@ -58,6 +161,9 @@ async function fetchWithRetry(
     ...options,
     redirect: "manual",
     signal: controller.signal,
+    // LAN-directed callers (sinkhole deploys, local feed URLs) opt in through
+    // allowPrivateNetworks and keep the platform resolver untouched.
+    ...(!allowPrivateNetworks ? { agent: publicOnlyAgent } : {}),
   };
   // ---
 
@@ -175,6 +281,9 @@ async function fetchWithRetry(
     } else if (error instanceof NonRetryableFetchError) {
       console.error(`❌ ${error.message}`);
       return { content: null, notModified: false, status: error.status };
+    } else if (error?.code === "EBM_PRIVATE_NET_BLOCK") {
+      console.error(`❌ ${error?.message}`);
+      return { content: null, notModified: false, status: 403 };
     } else {
       console.warn(
         `⚠️ Attempt ${attempt}/${MAX_RETRIES} failed for ${url}: ${error?.message || error}`,

@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import type { ProcessingResult, FilterSource, CompilationSnapshot, FeedServerStatus } from '../types';
 import { BrandLogo } from '../components/BrandLogo';
+import { ProtectionCard } from '../components/ProtectionCard';
 
 interface DashboardViewProps {
   savePath: string;
@@ -323,6 +324,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* DNS Protection — the daemon control that used to live only in the tray */}
+      <ProtectionCard onNavigate={onNavigate} />
 
       {/* Snapshot Summary Cards (Pre-run overview) */}
       <div className="overview-stats-grid">

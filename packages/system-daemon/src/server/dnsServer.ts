@@ -24,7 +24,13 @@ export class DnsServer {
     this.config = config;
     this.forwarder = new DohForwarder(config.upstreamDoHUrl);
     this.recorder = config.observationsFile ? new ObservationRecorder(config.observationsFile) : null;
-    this.socket = dgram.createSocket('udp4');
+    // reuseAddr: the documented rootless port (5353) is also mDNS's, and every
+    // multicast responder on the host — including this app's own bonjour-service
+    // advertisement — holds *:5353 with reuse set. A plain bind would EADDRINUSE
+    // on exactly the machine running the app. Unicast queries still land on the
+    // most-specific binding (127.0.0.1 beats the wildcard), and an exact
+    // addr:port duplicate still fails when the first socket never opted in.
+    this.socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   }
 
   setProtection(enabled: boolean): void {

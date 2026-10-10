@@ -147,6 +147,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [feedToken, setFeedToken] = useState('');
   const [feedTokenConfigured, setFeedTokenConfigured] = useState(false);
   const [feedTokenMessage, setFeedTokenMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [generatedFeedToken, setGeneratedFeedToken] = useState('');
   const [pairingPayload, setPairingPayload] = useState<{ url: string; payload: string; running: boolean; tokenConfigured: boolean } | null>(null);
   const [startingFeedForPairing, setStartingFeedForPairing] = useState(false);
 
@@ -319,6 +320,7 @@ const Settings: React.FC<SettingsProps> = ({
         } else {
           setFeedTokenConfigured(true);
           setFeedToken('');
+          setGeneratedFeedToken('');
           setFeedTokenMessage({ text: 'Feed token saved — mutations now require Authorization: Bearer', type: 'success' });
         }
       } else {
@@ -338,6 +340,7 @@ const Settings: React.FC<SettingsProps> = ({
       if (res?.success) {
         setFeedTokenConfigured(false);
         setFeedToken('');
+        setGeneratedFeedToken('');
         setFeedTokenMessage({ text: 'Feed token cleared — mutations are guarded by origin only', type: 'success' });
       } else {
         setFeedTokenMessage({ text: res?.error || 'Failed to clear feed token', type: 'error' });
@@ -345,6 +348,24 @@ const Settings: React.FC<SettingsProps> = ({
       safeSetTimeout(() => setFeedTokenMessage(null), 4000);
     } catch {
       setFeedTokenMessage({ text: 'Failed to clear feed token', type: 'error' });
+    }
+  };
+
+  const handleGenerateFeedToken = async () => {
+    if (!window.electron?.generateFeedToken) return;
+    try {
+      const res = await window.electron.generateFeedToken();
+      if (res?.success && res.token) {
+        setFeedTokenConfigured(true);
+        setFeedToken('');
+        setGeneratedFeedToken(res.token);
+        setFeedTokenMessage({ text: 'Strong token generated and saved — shown once below and embedded in the pairing QR', type: 'success' });
+      } else {
+        setFeedTokenMessage({ text: res?.error || 'Failed to generate feed token', type: 'error' });
+      }
+      safeSetTimeout(() => setFeedTokenMessage(null), 4000);
+    } catch {
+      setFeedTokenMessage({ text: 'Failed to generate feed token', type: 'error' });
     }
   };
 
@@ -1037,12 +1058,27 @@ const Settings: React.FC<SettingsProps> = ({
                 <button type="button" className="browse-button secondary" onClick={() => void handleSaveFeedToken()}>
                   Save
                 </button>
+                <button type="button" className="browse-button secondary" onClick={() => void handleGenerateFeedToken()}>
+                  Generate
+                </button>
                 {feedTokenConfigured && (
                   <button type="button" className="browse-button secondary" onClick={() => void handleClearFeedToken()}>
                     Clear
                   </button>
                 )}
               </div>
+              {generatedFeedToken && (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <code style={{ fontSize: '0.72rem', wordBreak: 'break-all', opacity: 0.85 }}>{generatedFeedToken}</code>
+                  <button
+                    type="button"
+                    className="browse-button secondary"
+                    onClick={() => setGeneratedFeedToken('')}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
               {feedTokenMessage && (
                 <p className={`setting-message ${feedTokenMessage.type}`} style={{ marginTop: '2px' }}>
                   {feedTokenMessage.text}
@@ -1921,7 +1957,7 @@ const Settings: React.FC<SettingsProps> = ({
 
                   value={aiConfig.apiKey || ''}
                   onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
-                  placeholder="AIzaSy..."
+                  placeholder={aiConfig.apiKeySet ? `Configured ${aiConfig.apiKeyHint} — enter to replace` : 'AIzaSy...'}
                 />
               </div>
             )}
@@ -2000,7 +2036,7 @@ const Settings: React.FC<SettingsProps> = ({
 
                     value={aiConfig.apiKey || ''}
                     onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
-                    placeholder="sk-..."
+                    placeholder={aiConfig.apiKeySet ? `Configured ${aiConfig.apiKeyHint} — enter to replace` : 'sk-...'}
                   />
                   {secretStorageAvailable === false && (
                     <p className="setting-message error" style={{ marginTop: '6px' }}>

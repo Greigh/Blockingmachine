@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type {
   DomainInspectionResult,
   AiScanResult,
@@ -29,6 +29,19 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
   const [feedbackTune, setFeedbackTune] = useState<'idle' | 'threat_confirmed' | 'safe_confirmed'>('idle');
   const [feedbackForgotten, setFeedbackForgotten] = useState<'idle' | 'forgot' | 'nothing'>('idle');
   const [activeDetailTab, setActiveDetailTab] = useState<'overview' | 'rules' | 'ai-heuristics'>('overview');
+
+  // IPC answers can land after the view unmounts — every post-await setState goes
+  // through this flag, and the copy-confirm timeout is released the same way.
+  const isMountedRef = useRef(true);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
 
   const sampleDomains = [
     'doubleclick.net',
@@ -84,6 +97,8 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
         window.electron.aiScanDomain ? window.electron.aiScanDomain(cleanTarget || rawTarget) : Promise.reject(new Error('No AI API')),
       ]);
 
+      if (!isMountedRef.current) return;
+
       if (rulePromise.status === 'fulfilled') {
         setRuleResult(rulePromise.value);
       } else {
@@ -100,7 +115,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
         setAiResult(ai);
         if (window.electron?.checkRuleConflict && ai.generatedRules?.length > 0) {
           window.electron.checkRuleConflict(ai.generatedRules[0]).then((conflict) => {
-            if (conflict?.hasConflict) setRuleConflict(conflict);
+            if (isMountedRef.current && conflict?.hasConflict) setRuleConflict(conflict);
           }).catch(console.error);
         }
       } else {
@@ -109,7 +124,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
 
       if (domainToTest) setQuery(domainToTest);
     } finally {
-      setIsSearching(false);
+      if (isMountedRef.current) setIsSearching(false);
     }
   };
 
@@ -127,8 +142,13 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
 
   const handleCopy = async (text: string, key: string) => {
     if (!(await copyTextToClipboard(text))) return;
+    if (!isMountedRef.current) return;
     setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 2500);
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    copyTimeoutRef.current = setTimeout(() => {
+      copyTimeoutRef.current = null;
+      setCopiedKey(null);
+    }, 2500);
   };
 
   const handleTargetSyntaxChange = async (target: 'all' | 'adguard' | 'pihole' | 'ublock' | 'unbound' | 'hosts') => {
@@ -143,11 +163,12 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
         target,
         confidence: aiResult.confidence,
       });
+      if (!isMountedRef.current) return;
       if (res.success) {
         setCustomSynthesizedRules(res.rules);
         if (window.electron?.checkRuleConflict && res.rules.length > 0) {
           const conflict = await window.electron.checkRuleConflict(res.rules[0]);
-          setRuleConflict(conflict?.hasConflict ? conflict : null);
+          if (isMountedRef.current) setRuleConflict(conflict?.hasConflict ? conflict : null);
         } else {
           setRuleConflict(null);
         }
@@ -161,7 +182,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
     if (!rules || rules.length === 0 || !window.electron?.addCustomRules) return;
     try {
       const res = await window.electron.addCustomRules(rules);
-      if (res.success) {
+      if (isMountedRef.current && res.success) {
         setAddedToCustom(true);
       }
     } catch (err) {
@@ -173,7 +194,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
     if (!domain || !window.electron?.addCustomAllowlist) return;
     try {
       const res = await window.electron.addCustomAllowlist(domain);
-      if (res.success) {
+      if (isMountedRef.current && res.success) {
         setAllowlisted(true);
       }
     } catch (err) {
@@ -185,6 +206,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
     if (!domain || !window.electron?.tuneMiniAiFeedback) return;
     try {
       await window.electron.tuneMiniAiFeedback(domain, action);
+      if (!isMountedRef.current) return;
       setFeedbackTune(action === 'block' ? 'threat_confirmed' : 'safe_confirmed');
       setFeedbackForgotten('idle');
     } catch (err) {
@@ -196,6 +218,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
     if (!domain || !window.electron?.resetMiniAiFeedback) return;
     try {
       const res = await window.electron.resetMiniAiFeedback(domain);
+      if (!isMountedRef.current) return;
       // `success` is the classifier's `removed` flag — report whether anything was stored
       // rather than claiming a delete that did not happen.
       setFeedbackForgotten(res?.success ? 'forgot' : 'nothing');

@@ -22,6 +22,24 @@ All 5 critical and high findings have been **fully remediated directly in source
 
 **Overall Production-Readiness Verdict**: **READY** (remarshaled to production-grade after in-place security remediations, sandboxing, and checksum verification).
 
+> **Pass 2 addendum (2026-10-09):** a scoped follow-up audit of the Electron/TypeScript/React surface
+> re-verified all five findings below as still-remediated in current source, validated the in-flight
+> flag-77 DNS-daemon fix, and remediated seven new low-severity findings (quarantine feed-injection
+> screen, renderer store-payload validation incl. a `setInterval`-NaN busy-loop primitive, a dead
+> `hitsPath` file-read parameter, a floating interval, generated-service-script escaping, an
+> unbounded remote-content echo, and a React lifecycle gap). Full results:
+> `audit/REMEDIATION_RESULTS.md` and `audit/FINAL_VALIDATION.md`; ledger entry `docs/open-flags.md` #78.
+>
+> **Pass 3 addendum (2026-10-09):** independent verification re-proved every Pass-2 fix
+> behaviorally (real IPC handlers under a mocked Electron, jsdom component tests, real HTTP
+> feed-server reads, `plutil` roundtrips, an `--expose-gc` heap profile, and a fresh packaged
+> binary launch+SIGTERM) — and found five completeness gaps, all since corrected: quarantine
+> domains are now screened at the feed **emit** boundary too (pre-fix poisoned stores could
+> still inject LAN feed lines), the observation timer is cleared on quit, one unguarded React
+> `.then` is guarded, newline-bearing paths can no longer break the launchd heredoc, and
+> `writeFileAtomic` tmp names no longer collide. Verdict: **CONDITIONALLY READY** — see
+> `audit/RELEASE_READINESS.md` for the attached conditions; ledger entry `docs/open-flags.md` #79.
+
 ---
 
 ## 2. Architecture/Data-Flow Understanding

@@ -107,6 +107,16 @@ describe('persisted feed fallback (orphaned daemon)', () => {
   });
 });
 
+function sendQuery(port: number, packet: object): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const client = dgram.createSocket('udp4');
+    const timer = setTimeout(() => { client.close(); reject(new Error('no answer')); }, 3000);
+    client.on('message', (msg) => { clearTimeout(timer); client.close(); resolve(msg); });
+    client.on('error', (err) => { clearTimeout(timer); client.close(); reject(err); });
+    client.send(dnsPacket.encode(packet), port, '127.0.0.1');
+  });
+}
+
 describe('DnsServer startup failure', () => {
   test('start() rejects on bind error instead of hanging', async () => {
     const blocker = dgram.createSocket('udp4');
@@ -119,6 +129,39 @@ describe('DnsServer startup failure', () => {
       blocker.close();
     }
   });
+
+  // Port 5353 is also mDNS's: every multicast responder on the host — the app's own
+  // bonjour-service advert included — holds *:5353 with reuse set. The daemon binds
+  // the specific loopback address, so its socket must opt into reuse too or it can
+  // never start beside them (the reported tray "Start failed" bug).
+  test('binds the loopback port beside a wildcard holder that has reuse set', async () => {
+    const wildcard = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+    await new Promise<void>((resolve, reject) => {
+      wildcard.once('error', reject);
+      wildcard.bind(0, '0.0.0.0', resolve);
+    });
+    const takenPort = (wildcard.address() as { port: number }).port;
+    const trie = new DomainTrie();
+    trie.addRule('||blocked.example.com^');
+    const server = new DnsServer(trie, { ...baseConfig, dnsPort: takenPort });
+    try {
+      await server.start();
+      // Unicast traffic to 127.0.0.1 still lands on the most-specific binding — the
+      // wildcard holder keeps its multicast traffic, the daemon gets DNS queries.
+      const answer = dnsPacket.decode(
+        await sendQuery(takenPort, {
+          type: 'query',
+          id: 4,
+          flags: dnsPacket.RECURSION_DESIRED,
+          questions: [{ type: 'A', name: 'blocked.example.com' }],
+        }),
+      );
+      expect(answer.answers[0].data).toBe('0.0.0.0');
+    } finally {
+      await server.stop().catch(() => {});
+      wildcard.close();
+    }
+  }, 15000);
 });
 
 describe('DohForwarder guards', () => {
@@ -131,16 +174,6 @@ describe('DohForwarder guards', () => {
 });
 
 describe('DnsServer answers failure honestly', () => {
-  function sendQuery(port: number, packet: object): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      const client = dgram.createSocket('udp4');
-      const timer = setTimeout(() => { client.close(); reject(new Error('no answer')); }, 3000);
-      client.on('message', (msg) => { clearTimeout(timer); client.close(); resolve(msg); });
-      client.on('error', (err) => { clearTimeout(timer); client.close(); reject(err); });
-      client.send(dnsPacket.encode(packet), port, '127.0.0.1');
-    });
-  }
-
   test('a dead upstream answers SERVFAIL rather than silence', async () => {
     const trie = new DomainTrie();
     const server = new DnsServer(trie, { ...baseConfig, dnsPort: 0 });

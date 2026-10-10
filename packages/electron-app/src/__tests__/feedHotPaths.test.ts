@@ -59,7 +59,7 @@ describe('atomic feed writes', () => {
   });
 
   test('the helper writes a sibling temp file then renames', () => {
-    const helper = blockFrom('async function writeFileAtomic', 900);
+    const helper = blockFrom('async function writeFileAtomic', 2600);
     expect(helper).toContain('fs.rename(tmpPath, filePath)');
     expect(helper).toContain('fs.unlink(tmpPath)');
   });

@@ -165,3 +165,71 @@ export function isSafePublicWebUrl(urlStr: string): SafeUrlCheckResult {
 
   return { isSafe: true };
 }
+
+/**
+ * Validation for user-configured LAN-capable endpoints (Ollama, self-hosted
+ * OpenAI-compatible servers). Unlike `isSafePublicWebUrl`, loopback and RFC1918
+ * are legitimate — a LAN AI server is the point. What is never legitimate is
+ * link-local: 169.254.0.0/16 carries the cloud instance-metadata service
+ * (169.254.169.254) and no AI provider runs on it; multicast and the unspecified
+ * address likewise. Hostnames like `metadata.google.internal` are refused too.
+ */
+export function isSafeLanEndpointUrl(urlStr: string): SafeUrlCheckResult {
+  if (!urlStr || typeof urlStr !== 'string') {
+    return { isSafe: false, reason: 'URL must be a non-empty string' };
+  }
+
+  let toParse = urlStr.trim();
+  if (/^[a-z][a-z0-9+.-]*:/i.test(toParse)) {
+    if (!/^https?:\/\//i.test(toParse)) {
+      const scheme = toParse.split(':')[0].toLowerCase();
+      return { isSafe: false, reason: `Forbidden protocol "${scheme}:": only http and https are permitted` };
+    }
+  } else {
+    toParse = `http://${toParse}`;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(toParse);
+  } catch {
+    return { isSafe: false, reason: 'Malformed or invalid URL' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { isSafe: false, reason: `Forbidden protocol "${parsed.protocol}": only http and https are permitted` };
+  }
+
+  let host = parsed.hostname.toLowerCase().replace(/\.+$/, '');
+  if (host.startsWith('[') && host.endsWith(']')) {
+    host = host.slice(1, -1);
+  }
+
+  if (host === 'metadata.google.internal' || host.endsWith('.metadata.google.internal')) {
+    return { isSafe: false, reason: 'Target is a cloud instance-metadata hostname' };
+  }
+
+  const ipv6Prefix = host.includes(':') ? parseInt(host.split(':')[0], 16) : NaN;
+  if (
+    host === '::' ||
+    (ipv6Prefix & 0xffc0) === 0xfe80 || // fe80::/10 link-local
+    (ipv6Prefix & 0xff00) === 0xff00 // ff00::/8 multicast
+  ) {
+    return { isSafe: false, reason: 'Target is an IPv6 unspecified, link-local, or multicast address' };
+  }
+
+  const octets = extractIpv4Octets(host);
+  if (octets) {
+    const [o0, o1] = octets;
+    if (o0 === 0) {
+      return { isSafe: false, reason: 'Target is IPv4 unspecified address (0.0.0.0/8)' };
+    }
+    if (o0 === 169 && o1 === 254) {
+      return { isSafe: false, reason: 'Target is link-local — includes cloud metadata (169.254.0.0/16)' };
+    }
+    if (o0 >= 224) {
+      return { isSafe: false, reason: 'Target is an IPv4 multicast or reserved address (224.0.0.0/3)' };
+    }
+  }
+
+  return { isSafe: true };
+}

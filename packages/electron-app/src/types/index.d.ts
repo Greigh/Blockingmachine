@@ -209,9 +209,14 @@ export interface AiProviderConfig {
   cascade?: TriageCascadeConfig;
   ollamaUrl?: string;
   ollamaModel?: string;
+  /** Write-only: `get-ai-config` always returns ''. An empty string on save keeps the stored key. */
   apiKey?: string;
   /** `safeStorage`-sealed form of `apiKey` — the two never coexist once the seal has run. */
   apiKeyEncrypted?: string;
+  /** `get-ai-config` only: whether a key is stored (the key itself never crosses IPC). */
+  apiKeySet?: boolean;
+  /** `get-ai-config` only: last-4 display hint for a stored key, e.g. "…k9Qa". */
+  apiKeyHint?: string;
   apiEndpoint?: string;
   modelName?: string;
   allowlist?: string[];
@@ -503,7 +508,6 @@ export interface ElectronAPI {
    */
   getExtensionTierPlan: (request?: {
     capacity?: number;
-    hitsPath?: string;
     enabled?: string;
   }) => Promise<import('../components/ExtensionTierPlanCard.js').TierPlanResponse>;
   /** Picks and remembers the browser's rule-hit ledger for the plan. Empty string when cancelled. */
@@ -620,6 +624,7 @@ export interface ElectronAPI {
   setAutoStartFeedServer?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   getFeedToken?: () => Promise<{ configured: boolean }>;
   setFeedToken?: (token: string) => Promise<{ success: boolean; unchanged?: boolean; error?: string }>;
+  generateFeedToken?: () => Promise<{ success: boolean; token?: string; error?: string }>;
   clearFeedToken?: () => Promise<{ success: boolean; error?: string }>;
   getFeedPairingPayload?: () => Promise<{
     success: boolean;

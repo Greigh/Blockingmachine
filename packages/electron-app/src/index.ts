@@ -2,7 +2,7 @@ import { join, dirname, isAbsolute, basename, resolve as pathResolve, sep } from
 import { createServer, Server as HttpServer, ServerResponse, type IncomingMessage } from 'http';
 import { networkInterfaces } from 'os';
 import { getServers as getDnsServers } from 'dns';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import {
   app,
   BrowserWindow,
@@ -31,6 +31,18 @@ if (isDev) {
 import Store from 'electron-store';
 import type { ElectronStore, StoreSchema } from './types';
 import { revalidateQuarantine, shouldAutoQuarantine } from './quarantineGate';
+import {
+  sanitizeAdditionalFormats,
+  sanitizeAiConfigPatch,
+  sanitizeAutoSchedule,
+  sanitizeCustomRulesText,
+  sanitizeFilterSources,
+  sanitizeLiveRadarOptions,
+  sanitizeQuarantineItems,
+  sanitizeSinkholeConfigPatch,
+  sanitizeWatchdogConfigPatch,
+  sanitizeWebhookUrl,
+} from './storePayloads';
 import {
   clearElementHarvest,
   rememberedElementHarvestPath,
@@ -106,6 +118,8 @@ import {
   synthesizeAllowlistRule,
   sanitizeDomain,
   isSafePublicWebUrl,
+  isSafeLanEndpointUrl,
+  readBoundedJsonBody,
   isDomainCoveredByRules,
   globalMiniAiClassifier,
   compactSubdomainRules,
@@ -602,19 +616,40 @@ function yieldToEventLoop(): Promise<void> {
  * 13MB list is worse than a stale one. Write to a sibling temp file and rename:
  * the swap is atomic on POSIX and on Windows (libuv uses MOVEFILE_REPLACE_EXISTING).
  */
+let writeFileAtomicSeq = 0;
+const atomicWriteChains = new Map<string, Promise<void>>();
 async function writeFileAtomic(filePath: string, data: string | Buffer): Promise<void> {
-  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  // Same-millisecond concurrent callers share pid+Date.now() — a caller's rename
+  // would consume a sibling's tmp file and the loser fails ENOENT. The sequence
+  // number makes every tmp name unique within the process.
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${writeFileAtomicSeq++}`;
+  // Per-path chaining: producers like persistThreatsFile fire per store change, each
+  // carrying a newer snapshot than the last. Without ordering, an earlier snapshot's
+  // rename could land after a later one's and leave stale content as the final file —
+  // the exact failure dnsmasq consumers would then serve. Queue each write behind the
+  // prior write to the same path so the last logical write is the last physical one.
+  const write = async (): Promise<void> => {
+    try {
+      await fs.writeFile(tmpPath, data);
+    } catch (err) {
+      await fs.unlink(tmpPath).catch(() => {});
+      throw err;
+    }
+    try {
+      await fs.rename(tmpPath, filePath);
+    } catch (err) {
+      await fs.unlink(tmpPath).catch(() => {});
+      throw err;
+    }
+  };
+  const queued = (atomicWriteChains.get(filePath) ?? Promise.resolve())
+    .catch(() => {})
+    .then(write);
+  atomicWriteChains.set(filePath, queued);
   try {
-    await fs.writeFile(tmpPath, data);
-  } catch (err) {
-    await fs.unlink(tmpPath).catch(() => {});
-    throw err;
-  }
-  try {
-    await fs.rename(tmpPath, filePath);
-  } catch (err) {
-    await fs.unlink(tmpPath).catch(() => {});
-    throw err;
+    await queued;
+  } finally {
+    if (atomicWriteChains.get(filePath) === queued) atomicWriteChains.delete(filePath);
   }
 }
 
@@ -630,7 +665,11 @@ function renderThreatsFeed(quarantine: ThreatQuarantineItem[]): string {
       const conf = typeof t.confidence === 'number' ? (t.confidence > 1 ? t.confidence : t.confidence * 100) : 0;
       return conf >= 85 && Boolean(t.domain);
     })
-    .map((t) => t.domain.trim().toLowerCase());
+    // Emit boundary, not just the write path: entries persisted before the input
+    // sanitizer existed, or written by any future non-IPC path, must not reach the
+    // feed verbatim — a newline here is a raw injected feed line.
+    .map((t) => sanitizeDomain(t.domain) || '')
+    .filter(Boolean);
   const uniqueDomains = Array.from(new Set(highConfThreats)).sort();
   const header = [
     '! Title: Blockingmachine AI Threat Feed (ABP Format)',
@@ -1058,6 +1097,8 @@ function setupAutoScheduleTimer(schedule: 'disabled' | '12h' | '24h' | 'weekly',
 
 // AI Sentinel Watchdog Background Timer [Beta]
 let aiWatchdogTimer: NodeJS.Timeout | null = null;
+/** Periodic learned-shadow scorer over the daemon's DNS observation stream. */
+let observationScoreTimer: NodeJS.Timeout | null = null;
 let sharedAiDetectorService: AiDetectorService | null = null;
 let sharedAiDetectorConfigKey = '';
 
@@ -1240,7 +1281,10 @@ function setupAiWatchdogTimer(config: AiWatchdogConfig, storeRef: ElectronStore<
           const existingQuarantine: ThreatQuarantineItem[] = storeRef.get('aiThreatQuarantine') || [];
           const existingDomains = new Set(existingQuarantine.map((q) => q.domain));
           const newItems: ThreatQuarantineItem[] = threats
-            .filter((t) => !existingDomains.has(t.domain))
+            // Scan output is normalized, not boundary-checked — a domain that
+            // sanitizeDomain rejects (rule syntax, controls) must not persist.
+            .map((t) => ({ ...t, domain: sanitizeDomain(t.domain) || '' }))
+            .filter((t) => t.domain && !existingDomains.has(t.domain))
             .map((t) => ({
               id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
               domain: t.domain,
@@ -1445,19 +1489,24 @@ async function pollLiveRadarQueries(storeRef: ElectronStore<StoreSchema>): Promi
         if (fresh.verdict !== 'clean') {
           currentLiveRadarSession.flaggedCount++;
           if (shouldAutoQuarantine(fresh, autoQuarantine)) {
-            threatsToQuarantine.push({
-              id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              domain: fresh.domain,
-              category: fresh.category,
-              verdict: fresh.verdict,
-              riskLevel: fresh.riskLevel,
-              confidence: fresh.confidence,
-              reasons: fresh.reasons,
-              generatedRules: fresh.generatedRules,
-              source: 'sinkhole',
-              timestamp: new Date().toISOString(),
-              blocked: false,
-            });
+            // Scan output is normalized, not boundary-checked — drop domains that
+            // fail sanitizeDomain rather than persisting unparseable entries.
+            const qDomain = sanitizeDomain(fresh.domain);
+            if (qDomain) {
+              threatsToQuarantine.push({
+                id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                domain: qDomain,
+                category: fresh.category,
+                verdict: fresh.verdict,
+                riskLevel: fresh.riskLevel,
+                confidence: fresh.confidence,
+                reasons: fresh.reasons,
+                generatedRules: fresh.generatedRules,
+                source: 'sinkhole',
+                timestamp: new Date().toISOString(),
+                blocked: false,
+              });
+            }
           }
         } else {
           currentLiveRadarSession.cleanCount++;
@@ -1743,7 +1792,7 @@ function createTray() {
         if (res.success) {
           await refreshTrayProtection();
         }
-        return res.success;
+        return res;
       },
       flushDnsCache: async () => {
         const res = await daemonManager.flushCache();
@@ -1829,6 +1878,30 @@ function sinkholeUrlFields(storeRef: ElectronStore<StoreSchema>): SinkholeUrlFie
  * decrypt has to happen at the boundary, exactly here, rather than trusting every
  * `{ ...savedConfig, ...override }` site to remember it.
  */
+/**
+ * Merge a renderer-supplied AI config override over the stored config for a single call.
+ *
+ * Two trust rules beyond sanitization:
+ *  - `apiEndpoint` may only move when `apiKey` is overridden in the same call — otherwise
+ *    the stored key would be sent to a renderer-named host (a credential-theft primitive).
+ *  - `apiKeyEncrypted` is an output of the seal, never input, exactly like set-ai-config.
+ */
+function mergeAiOverride(
+  savedConfig: Partial<AiProviderConfig>,
+  overrideConfig: Partial<AiProviderConfig> | undefined,
+): Partial<AiProviderConfig> {
+  if (!overrideConfig) return savedConfig;
+  const parsed = sanitizeAiConfigPatch(overrideConfig);
+  const override = parsed.ok ? parsed.value : {};
+  const { apiKeyEncrypted: _sealed, apiEndpoint, apiKey, ...rest } = override;
+  const merged = { ...savedConfig, ...rest };
+  if (typeof apiKey === 'string' && apiKey) {
+    merged.apiKey = apiKey;
+    if (apiEndpoint) merged.apiEndpoint = apiEndpoint;
+  }
+  return merged;
+}
+
 function loadAiConfig(storeRef: ElectronStore<StoreSchema>): Partial<AiProviderConfig> {
   const saved = (storeRef.get('aiConfig') || {}) as Partial<AiProviderConfig>;
   // Lazy migration, same as `readSecret` on the flat keys: seal a plaintext apiKey on the
@@ -2565,7 +2638,10 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         }
 
         const savePath = storeRef.get('savePath');
-        const outputDir = dirname(savePath);
+        // A persisted non-string savePath must not throw inside the request handler —
+        // feed candidates resolve relative to it, so degrade to the cwd rather than
+        // turning a poisoned store into per-request unhandled rejections.
+        const outputDir = typeof savePath === 'string' ? dirname(savePath) : '';
         let pathname: string;
         let reqUrl: URL;
         try {
@@ -2578,12 +2654,80 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         }
         const lowerPath = pathname.toLowerCase();
 
+        // Origin and bearer token are independent controls. The origin guard decides
+        // whether a browser page may touch this server at all; the token (when
+        // configured) decides whether the caller — browser or not — may act. Both are
+        // defined before the first guarded route so every endpoint below shares them.
+        const originHeader = req.headers.origin || (typeof req.headers.referer === 'string' ? req.headers.referer : undefined);
+        const isSafeClientOrigin = (): boolean => {
+          // No Origin at all means a native client — mobile (RN fetch sends none),
+          // the HA integration (server-side), curl tooling. Browser-mediated clients
+          // always send one, and it is the only thing a drive-by page cannot forge.
+          if (!originHeader) return true;
+          try {
+            const parsedOrigin = new URL(originHeader);
+            // `.local` was dropped deliberately: it is mDNS-claimable by any device on
+            // the LAN, so a page served from `rogue-printer.local` could previously
+            // POST /v1/control/daemon and read /v1/events with no feedToken configured.
+            // No documented consumer uses a .local origin — extensions carry their own
+            // scheme and everything else sends none.
+            return (
+              parsedOrigin.hostname === 'localhost' ||
+              parsedOrigin.hostname === '127.0.0.1' ||
+              parsedOrigin.protocol === 'chrome-extension:' ||
+              parsedOrigin.protocol === 'moz-extension:'
+            );
+          } catch {
+            return false;
+          }
+        };
+
+        // The optional second gate on mutations, resolved once per request — the semantics live
+        // in `feedAuth.ts`. Returns true after writing the rejection, so a guarded endpoint is
+        // one line; read-only queries keep the origin-only guard via `rejectCrossOrigin`.
+        const configuredToken = readSecret(storeRef, safeStorage, 'feedToken').trim();
+        const rejectCrossOrigin = (crossOriginError: string): boolean => {
+          if (!isSafeClientOrigin()) {
+            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: crossOriginError }));
+            return true;
+          }
+          return false;
+        };
+        const rejectUnauthorisedMutation = (crossOriginError: string): boolean => {
+          if (rejectCrossOrigin(crossOriginError)) return true;
+          if (!feedTokenAuthorised(configuredToken, req.headers.authorization)) {
+            res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Unauthorised — a valid feed token is required' }));
+            return true;
+          }
+          return false;
+        };
+        // Telemetry-bearing reads get the same gate `/v1/events` always had: origin, plus
+        // the token when one is configured. Paired clients (mobile, HA, extension) send
+        // the bearer on every request, so this changes nothing for them — but an
+        // arbitrary web page can no longer `fetch` browsing-derived telemetry thanks to
+        // the blanket `Access-Control-Allow-Origin: *` above.
+        const rejectUnauthorisedRead = (crossOriginError: string): boolean => {
+          if (rejectCrossOrigin(crossOriginError)) return true;
+          if (configuredToken && !feedTokenAuthorised(configuredToken, req.headers.authorization)) {
+            res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Unauthorised — a valid feed token is required' }));
+            return true;
+          }
+          return false;
+        };
+
         // ====================================================================
         // REST API Endpoints for Home Assistant Integration & Browser Extension
         // ====================================================================
         if (lowerPath === '/v1/status' || lowerPath === '/api/status') {
+          // Status carries browsing-derived telemetry (`recentTrackers`) plus LAN
+          // addressing — the same data class `/v1/events` guards. Native clients and
+          // extensions are unaffected; an arbitrary web page is not.
+          if (rejectUnauthorisedRead('Cross-origin status forbidden')) return;
           const currentSavePath = storeRef.get('savePath');
-          const currentOutputDir = dirname(currentSavePath);
+          const currentOutputDir = typeof currentSavePath === 'string' ? dirname(currentSavePath) : '';
           const history = storeRef.get('compilationHistory') || [];
           const lastSnapshot = history[0];
           const quarantine = (storeRef.get('aiThreatQuarantine') || []) as ThreatQuarantineItem[];
@@ -2645,58 +2789,13 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           return;
         }
 
-        // Origin guard for control and telemetry mutations
-        const originHeader = req.headers.origin || (typeof req.headers.referer === 'string' ? req.headers.referer : undefined);
-        const isSafeClientOrigin = (): boolean => {
-          if (!originHeader) return true;
-          try {
-            const parsedOrigin = new URL(originHeader);
-            return (
-              parsedOrigin.hostname === 'localhost' ||
-              parsedOrigin.hostname === '127.0.0.1' ||
-              parsedOrigin.hostname.endsWith('.local') ||
-              parsedOrigin.protocol === 'chrome-extension:' ||
-              parsedOrigin.protocol === 'moz-extension:'
-            );
-          } catch {
-            return false;
-          }
-        };
-
-        // The optional second gate on mutations, resolved once per request — the semantics live
-        // in `feedAuth.ts`. Returns true after writing the rejection, so a guarded endpoint is
-        // one line; read-only queries keep the origin-only guard via `rejectCrossOrigin`.
-        const configuredToken = readSecret(storeRef, safeStorage, 'feedToken').trim();
-        const rejectCrossOrigin = (crossOriginError: string): boolean => {
-          if (!isSafeClientOrigin()) {
-            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ success: false, error: crossOriginError }));
-            return true;
-          }
-          return false;
-        };
-        const rejectUnauthorisedMutation = (crossOriginError: string): boolean => {
-          if (rejectCrossOrigin(crossOriginError)) return true;
-          if (!feedTokenAuthorised(configuredToken, req.headers.authorization)) {
-            res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ success: false, error: 'Unauthorised — a valid feed token is required' }));
-            return true;
-          }
-          return false;
-        };
-
         if (lowerPath === '/v1/events' || lowerPath === '/api/events') {
           // The stream carries browsing-derived telemetry and `remote_control` broadcasts, so it
           // gets the origin guard mutations get — an EventSource from an arbitrary web page sends
           // an Origin header and must not be able to read it. A configured feed token gates the
           // stream the same way it gates mutations: otherwise the token would protect writes
           // while leaving the data they produce readable by anyone on the LAN.
-          if (rejectCrossOrigin('Cross-origin event stream forbidden')) return;
-          if (configuredToken && !feedTokenAuthorised(configuredToken, req.headers.authorization)) {
-            res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ success: false, error: 'Unauthorised — a valid feed token is required' }));
-            return;
-          }
+          if (rejectUnauthorisedRead('Cross-origin event stream forbidden')) return;
           if (sseClients.size >= 64) {
             res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ error: 'Too Many Connections', message: 'Maximum SSE subscribers reached' }));
@@ -3046,6 +3145,9 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         }
 
         if (lowerPath === '/v1/check') {
+          // A blocklist oracle for any web page otherwise — extension and mobile clients
+          // carry an allowed origin or none (and the bearer when configured).
+          if (rejectUnauthorisedRead('Cross-origin check forbidden')) return;
           const domainToCheck = reqUrl.searchParams.get('domain') || '';
           const clean = domainToCheck.trim().toLowerCase();
           if (clean.length > 253) {
@@ -3076,6 +3178,8 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         }
 
         if (lowerPath === '/v1/telemetry') {
+          // Quarantined domains + browsing telemetry — guarded like /v1/events.
+          if (rejectUnauthorisedRead('Cross-origin telemetry forbidden')) return;
           const quarantine = (storeRef.get('aiThreatQuarantine') || []) as ThreatQuarantineItem[];
           const history = storeRef.get('compilationHistory') || [];
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -3094,7 +3198,9 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
               const conf = typeof t.confidence === 'number' ? (t.confidence > 1 ? t.confidence : t.confidence * 100) : 0;
               return conf >= 85 && Boolean(t.domain);
             })
-            .map((t) => t.domain.trim().toLowerCase());
+            // Same emit-boundary screening as renderThreatsFeed — see its comment.
+            .map((t) => sanitizeDomain(t.domain) || '')
+            .filter(Boolean);
           const uniqueDomains = Array.from(new Set(highConfThreats)).sort();
 
           const header = [
@@ -3392,8 +3498,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           console.error('[Learned Shadow] observation tail failed:', err);
         }
       };
-      setTimeout(scoreObservations, 30_000); // let the daemon warm up before first read
-      setInterval(scoreObservations, 5 * 60 * 1000);
+      setTimeout(scoreObservations, 30_000).unref?.(); // let the daemon warm up before first read
+      // Same discipline as the other long-lived timers in this file: a referenced interval
+      // that is never unref'd would pin the event loop open on quit paths.
+      observationScoreTimer = setInterval(scoreObservations, 5 * 60 * 1000);
+      observationScoreTimer.unref?.();
     }
 
     // Re-judge the persisted quarantine against the current classifier once per launch. The
@@ -3424,7 +3533,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       async (_event: IpcMainInvokeEvent, rules: string) => {
         console.log('[IPC Main] Received request to save custom rules.');
         try {
-          store.set('customRules', rules);
+          const parsed = sanitizeCustomRulesText(rules);
+          if (!parsed.ok) return { success: false, error: parsed.error };
+          store.set('customRules', parsed.value);
           console.log('[IPC Main] Custom rules saved successfully.');
           return { success: true };
         } catch (error) {
@@ -3460,7 +3571,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       async (_event: IpcMainInvokeEvent, sources: FilterSource[]) => {
         console.log('[IPC Main] Received request to save sources.');
         try {
-          store.set('filterSources', sources);
+          const parsed = sanitizeFilterSources(sources);
+          if (!parsed.ok) return { success: false, error: parsed.error };
+          store.set('filterSources', parsed.value);
           console.log('[IPC Main] Sources saved successfully.');
           return { success: true };
         } catch (error) {
@@ -3476,7 +3589,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       'set-filter-sources',
       async (_event: IpcMainInvokeEvent, sources: FilterSource[]) => {
         try {
-          store.set('filterSources', sources);
+          const parsed = sanitizeFilterSources(sources);
+          if (!parsed.ok) return { success: false, error: parsed.error };
+          store.set('filterSources', parsed.value);
           return { success: true };
         } catch (error) {
           const message =
@@ -4293,7 +4408,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('set-additional-formats', async (_event, formats: FilterFormat[]) => {
-      store.set('additionalFormats', formats);
+      const parsed = sanitizeAdditionalFormats(formats);
+      if (!parsed.ok) return { success: false, error: parsed.error };
+      store.set('additionalFormats', parsed.value);
       return { success: true };
     });
 
@@ -4302,8 +4419,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('set-auto-schedule', async (_event, schedule: 'disabled' | '12h' | '24h' | 'weekly') => {
-      store.set('autoSchedule', schedule);
-      setupAutoScheduleTimer(schedule, store);
+      const parsed = sanitizeAutoSchedule(schedule);
+      if (!parsed.ok) return { success: false, error: parsed.error };
+      store.set('autoSchedule', parsed.value);
+      setupAutoScheduleTimer(parsed.value, store);
       return { success: true };
     });
 
@@ -4312,7 +4431,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('set-webhook-url', async (_event, url: string) => {
-      store.set('webhookUrl', url);
+      const parsed = sanitizeWebhookUrl(url);
+      if (!parsed.ok) return { success: false, error: parsed.error };
+      store.set('webhookUrl', parsed.value);
       return { success: true };
     });
 
@@ -4376,35 +4497,36 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('set-sinkhole-config', async (_event, config: any) => {
+      const parsed = sanitizeSinkholeConfigPatch(config);
+      if (!parsed.ok) return { success: false, error: parsed.error };
+      const patch = parsed.value;
       const previous = sinkholeUrlFields(store);
       const separated = separateAdguardUrls(previous, {
-        adguardMode: config.adguardMode,
-        adguardHomeUrl: config.adguardHomeUrl,
-        adguardDirectUrl: config.adguardDirectUrl,
-        adguardDirectPort: config.adguardDirectPort,
+        adguardMode: patch.adguardMode,
+        adguardHomeUrl: patch.adguardHomeUrl,
+        adguardDirectUrl: patch.adguardDirectUrl,
+        adguardDirectPort: patch.adguardDirectPort,
       });
-      if (config.piholeUrl !== undefined) store.set('piholeUrl', config.piholeUrl);
+      if (patch.piholeUrl !== undefined) store.set('piholeUrl', patch.piholeUrl);
       // Write-only secret fields: a non-empty string writes, an empty string does nothing
       // (blank form fields mean "unchanged"), and clearing is explicit via `clearSecrets`.
-      const clearSecrets = new Set(
-        Array.isArray(config.clearSecrets) ? config.clearSecrets.filter((s: unknown) => typeof s === 'string') : [],
-      );
+      const clearSecrets = new Set(patch.clearSecrets ?? []);
       for (const key of ['piholeApiKey', 'adguardHomePassword', 'haToken'] as const) {
-        const val = config[key];
+        const val = patch[key];
         if (typeof val === 'string' && val.trim().length > 0) {
           writeSecret(store, safeStorage, key, val);
         } else if (val === '' && clearSecrets.has(key)) {
           writeSecret(store, safeStorage, key, '');
         }
       }
-      if (config.adguardHomeUrl !== undefined) store.set('adguardHomeUrl', config.adguardHomeUrl);
-      if (config.adguardHomeUser !== undefined) store.set('adguardHomeUser', config.adguardHomeUser);
-      if (config.syncOnCompile !== undefined) store.set('syncOnCompile', Boolean(config.syncOnCompile));
-      if (config.adguardMode !== undefined) store.set('adguardMode', config.adguardMode);
-      if (config.haWebhookUrl !== undefined) store.set('haWebhookUrl', config.haWebhookUrl);
-      if (config.customWebhookUrl !== undefined) store.set('customWebhookUrl', config.customWebhookUrl);
-      if (config.adguardDirectPort !== undefined) store.set('adguardDirectPort', normalizeAdguardDirectPort(config.adguardDirectPort));
-      if (config.allowInsecureLocalTls !== undefined) store.set('allowInsecureLocalTls', Boolean(config.allowInsecureLocalTls));
+      if (patch.adguardHomeUrl !== undefined) store.set('adguardHomeUrl', patch.adguardHomeUrl);
+      if (patch.adguardHomeUser !== undefined) store.set('adguardHomeUser', patch.adguardHomeUser);
+      if (patch.syncOnCompile !== undefined) store.set('syncOnCompile', patch.syncOnCompile);
+      if (patch.adguardMode !== undefined) store.set('adguardMode', patch.adguardMode);
+      if (patch.haWebhookUrl !== undefined) store.set('haWebhookUrl', patch.haWebhookUrl);
+      if (patch.customWebhookUrl !== undefined) store.set('customWebhookUrl', patch.customWebhookUrl);
+      if (patch.adguardDirectPort !== undefined) store.set('adguardDirectPort', normalizeAdguardDirectPort(patch.adguardDirectPort));
+      if (patch.allowInsecureLocalTls !== undefined) store.set('allowInsecureLocalTls', patch.allowInsecureLocalTls);
       if (separated.adguardDirectUrl !== undefined) {
         store.set('adguardDirectUrl', separated.adguardDirectUrl);
       }
@@ -4531,6 +4653,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // saves the form with the field left empty must not wipe the token. Clearing is
         // the explicit `clear-feed-token` channel.
         if (val.length === 0) return { success: true, unchanged: true };
+        // User-typed tokens get an entropy floor: the token guards every mutation on
+        // the LAN, and a 4-digit PIN is a brute-force exercise for a malicious LAN
+        // guest. Existing stored tokens are unaffected (read path unchanged); the
+        // Generate button produces a CSPRNG token when the user doesn't want to type.
+        if (val.length < 16) {
+          return { success: false, error: 'Token must be at least 16 characters — use Generate for a strong one' };
+        }
         // Same sealed-at-rest path as the sinkhole credentials — the LAN mutation token is a
         // credential, and plaintext `feedToken` entries migrate on the first sealed read.
         writeSecret(store, safeStorage, 'feedToken', val);
@@ -4538,6 +4667,19 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       } catch (err: any) {
         console.error('Failed to set feed token:', err);
         return { success: false, error: err?.message || String(err) };
+      }
+    });
+
+    ipcMain.handle('generate-feed-token', async () => {
+      try {
+        // 192 bits, CSPRNG, URL-safe. Returned to the renderer ONCE for the Settings
+        // display + pairing QR — the renderer can never read the sealed store back.
+        const token = randomBytes(24).toString('base64url');
+        writeSecret(store, safeStorage, 'feedToken', token);
+        return { success: true, token };
+      } catch (err) {
+        console.error('Failed to generate feed token:', err);
+        return { success: false, error: 'Failed to generate token' };
       }
     });
 
@@ -4865,7 +5007,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       'get-extension-tier-plan',
       async (
         _event: IpcMainInvokeEvent,
-        request?: { capacity?: number; hitsPath?: string; enabled?: string },
+        request?: { capacity?: number; enabled?: string },
       ) => {
         const rulesDir = findTierRulesDir();
         if (!rulesDir) {
@@ -4896,11 +5038,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         // The ledger is optional and its absence is not an error: with no ledger the plan is
         // ranked by rule count and says so, which is a true statement rather than a missing one.
         // A ledger that *was* chosen and has since moved is a different thing, and says so.
-        const wanted = typeof request?.hitsPath === 'string' && request.hitsPath.trim()
-          ? request.hitsPath
-          : typeof store.get('tierLedgerPath') === 'string' && store.get('tierLedgerPath')
-            ? (store.get('tierLedgerPath') as string)
-            : null;
+        // Only the dialog-remembered path is read — a renderer-supplied path here would be a
+        // file-read oracle with no UI consumer. (Regression-pinned in ipcBoundary.test.ts.)
+        const wanted = typeof store.get('tierLedgerPath') === 'string' && store.get('tierLedgerPath')
+          ? (store.get('tierLedgerPath') as string)
+          : null;
 
         let ledgerText: string | null = null;
         let ledgerMissing: string | null = null;
@@ -4977,7 +5119,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         if (
           typeof filePath === 'string' &&
           filePath.trim().length > 0 &&
-          isAbsolute(filePath)
+          isAbsolute(filePath) &&
+          // Legal on POSIX but pathological: a newline-bearing path breaks the
+          // generated service-install heredoc and corrupts log/config output.
+          !/[\x00-\x1f\x7f]/.test(filePath)
         ) {
           try {
             store.set('savePath', filePath);
@@ -5321,11 +5466,16 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       // `loadAiConfig` runs the one-time seal of a legacy plaintext key — the same lazy
       // migration `readSecret` gives the flat keys.
       const saved = loadAiConfig(store);
+      // Write-only credential: the key is a renderer input, never an output. The UI
+      // shows `apiKeySet`/`apiKeyHint`; `set-ai-config` keeps the stored key when the
+      // caller sends an empty `apiKey`, so a round-trip of this payload cannot clobber it.
       return {
         provider: saved.provider || 'mini-ai',
         ollamaUrl: saved.ollamaUrl || 'http://127.0.0.1:11434',
         ollamaModel: saved.ollamaModel || 'llama3.2',
-        apiKey: saved.apiKey || '',
+        apiKey: '',
+        apiKeySet: Boolean(saved.apiKey),
+        apiKeyHint: saved.apiKey ? `…${saved.apiKey.slice(-4)}` : '',
         apiEndpoint: saved.apiEndpoint || '',
         modelName: saved.modelName || '',
         cascade: saved.cascade || { enabled: false },
@@ -5335,13 +5485,20 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     ipcMain.handle('set-ai-config', async (_event, config: Partial<AiProviderConfig>) => {
       try {
+        const parsed = sanitizeAiConfigPatch(config);
+        if (!parsed.ok) return { success: false, error: parsed.error };
         const existing = (store.get('aiConfig') || {}) as Partial<AiProviderConfig>;
         // The sealed form is an output of the seal, never input: a caller-supplied
         // `apiKeyEncrypted` — including an `undefined` carried on a spread config — would
         // overwrite the stored one with a blob this keychain cannot read, or nothing at all.
-        // `apiKey` stays: plaintext in, sealed on the way to disk, `undefined` untouched.
-        const { apiKeyEncrypted: _callerSealed, ...rest } = (config ?? {}) as Partial<AiProviderConfig>;
-        store.set('aiConfig', sealSecretField({ ...existing, ...rest }, safeStorage, 'apiKey'));
+        // The sanitizer whitelists it out; this strip stays as the boundary's last check.
+        // `apiKey` is write-only: an empty string means "keep the stored key" — the
+        // masked `get-ai-config` reply is saved back verbatim by the settings UI, and an
+        // absent/empty field must not reach `sealSecretField` (which would clear both
+        // the plaintext and the sealed copy). A non-empty value replaces the key.
+        const { apiKeyEncrypted: _callerSealed, apiKey, ...rest } = parsed.value;
+        const patch = typeof apiKey === 'string' && apiKey ? { ...rest, apiKey } : rest;
+        store.set('aiConfig', sealSecretField({ ...existing, ...patch }, safeStorage, 'apiKey'));
         return { success: true };
       } catch (err: any) {
         return { success: false, error: err?.message || String(err) };
@@ -5362,28 +5519,55 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
       if (provider === 'ollama') {
         const url = config?.ollamaUrl || 'http://127.0.0.1:11434';
+        // LAN is intended — link-local/metadata destinations are not AI servers.
+        const endpointCheck = isSafeLanEndpointUrl(url);
+        if (!endpointCheck.isSafe) {
+          return { success: false, message: `Refused endpoint ${url}: ${endpointCheck.reason}` };
+        }
         try {
-          const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
+          const res = await fetch(`${url}/api/tags`, {
+            signal: AbortSignal.timeout(5000),
+            redirect: 'manual',
+          });
           const latencyMs = Date.now() - start;
+          if (res.status >= 300 && res.status < 400) {
+            return { success: false, latencyMs, message: `Ollama endpoint redirected the request (HTTP ${res.status}) — refusing to follow` };
+          }
           if (res.ok) {
-            const data: any = await res.json();
-            const models = Array.isArray(data?.models) ? data.models.map((m: any) => m.name).join(', ') : '';
+            // The 50×120 model-name bound limits the *echo*; the body bound limits the
+            // read itself — a hostile endpoint could otherwise return a giant JSON body.
+            const data: any = await readBoundedJsonBody(res, 256 * 1024);
+            const models = Array.isArray(data?.models)
+              ? data.models
+                  .map((m: any) => m?.name)
+                  .filter((n: unknown): n is string => typeof n === 'string')
+                  .slice(0, 50)
+                  .map((n: string) => n.slice(0, 120))
+                  .join(', ')
+              : '';
             return { success: true, latencyMs, message: `Connected to Ollama. Models: ${models || 'ready'}` };
           }
-          return { success: false, latencyMs, message: `Ollama returned HTTP ${res.status}: ${res.statusText}` };
+          return { success: false, latencyMs, message: `Ollama returned HTTP ${res.status}: ${res.statusText.slice(0, 120)}` };
         } catch (err: any) {
-          return { success: false, latencyMs: Date.now() - start, message: `Cannot connect to Ollama at ${url} (${err?.message || err})` };
+          return { success: false, latencyMs: Date.now() - start, message: `Cannot connect to Ollama at ${url} (${String(err?.message || err).slice(0, 200)})` };
         }
       }
 
       if (provider === 'gemini') {
-        const key = config?.apiKey;
+        // The renderer tests a candidate key or, with the write-only config, sends ''
+        // to mean "the stored key" — the key itself never comes back over IPC.
+        const key = config?.apiKey || loadAiConfig(store).apiKey;
         if (!key) return { success: false, message: 'Missing Gemini API key' };
         try {
           const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`, {
             signal: AbortSignal.timeout(5000),
+            // The key rides in the URL — a followed 3xx would carry it cross-origin.
+            redirect: 'manual',
           });
           const latencyMs = Date.now() - start;
+          if (res.status >= 300 && res.status < 400) {
+            return { success: false, latencyMs, message: `Gemini endpoint redirected (HTTP ${res.status}) — not following a credentialled URL` };
+          }
           if (res.ok) {
             return { success: true, latencyMs, message: 'Successfully authenticated with Google Gemini API' };
           }
@@ -5394,15 +5578,29 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
 
       if (provider === 'openai') {
-        const key = config?.apiKey;
-        const endpoint = config?.apiEndpoint || 'https://api.openai.com/v1';
+        // A renderer-named endpoint only applies to a renderer-supplied key — paired
+        // movement. With `apiKey:''` the stored credential answers at the stored
+        // endpoint, so this call can never leak the sealed key to a chosen host.
+        const candidateKey = config?.apiKey;
+        const key = candidateKey || loadAiConfig(store).apiKey;
+        const endpoint = candidateKey
+          ? config?.apiEndpoint || 'https://api.openai.com/v1'
+          : loadAiConfig(store).apiEndpoint || 'https://api.openai.com/v1';
         if (!key) return { success: false, message: 'Missing API key' };
+        const endpointCheck = isSafeLanEndpointUrl(endpoint);
+        if (!endpointCheck.isSafe) {
+          return { success: false, message: `Refused endpoint ${endpoint}: ${endpointCheck.reason}` };
+        }
         try {
           const res = await fetch(`${endpoint}/models`, {
             headers: { Authorization: `Bearer ${key}` },
             signal: AbortSignal.timeout(5000),
+            redirect: 'manual',
           });
           const latencyMs = Date.now() - start;
+          if (res.status >= 300 && res.status < 400) {
+            return { success: false, latencyMs, message: `Endpoint redirected (HTTP ${res.status}) — refusing to forward the Authorization header` };
+          }
           if (res.ok) {
             return { success: true, latencyMs, message: 'Successfully authenticated with OpenAI API' };
           }
@@ -5417,7 +5615,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     ipcMain.handle('ai-scan-domain', async (_event, domain: string, overrideConfig?: Partial<AiProviderConfig>) => {
       const savedConfig = loadAiConfig(store);
-      const activeConfig = { ...savedConfig, ...overrideConfig };
+      const activeConfig = mergeAiOverride(savedConfig, overrideConfig);
       const service = getSharedAiDetectorService(activeConfig);
       return await service.scanDomain(domain, activeConfig);
     });
@@ -5427,7 +5625,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         throw new Error(`ai-scan-querylog: unknown service ${JSON.stringify(options?.service)} — expected 'adguard' or 'pihole'`);
       }
       const savedConfig = loadAiConfig(store);
-      const activeConfig = { ...savedConfig, ...overrideConfig };
+      const activeConfig = mergeAiOverride(savedConfig, overrideConfig);
       const service = getSharedAiDetectorService(activeConfig);
 
       const queries: RawDnsQuery[] = [];
@@ -5485,7 +5683,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         throw new Error(`SSRF Guard blocked crawl request to "${url}": ${safety.reason}`);
       }
       const savedConfig = loadAiConfig(store);
-      const activeConfig = { ...savedConfig, ...overrideConfig };
+      const activeConfig = mergeAiOverride(savedConfig, overrideConfig);
       const service = getSharedAiDetectorService(activeConfig);
       return await service.crawlAndScanUrl(url, activeConfig);
     });
@@ -5529,21 +5727,30 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     ipcMain.handle('add-threat-quarantine', async (_event, items: ThreatQuarantineItem[]) => {
       try {
+        // `domain` is spliced into a DNS rule for the daemon, keyed into the store, and
+        // written verbatim into the threats feeds — it must be a hostname, not text.
+        const { accepted, rejected } = sanitizeQuarantineItems(items);
+        if (rejected.length > 0) {
+          console.warn(`[AI Quarantine] Rejected ${rejected.length} item(s) with invalid domains: ${rejected.slice(0, 5).join(', ')}`);
+        }
+        if (accepted.length === 0) {
+          return { success: rejected.length === 0, count: 0, rejected };
+        }
         const existing: ThreatQuarantineItem[] = store.get('aiThreatQuarantine') || [];
         const existingMap = new Map(existing.map((i) => [i.domain, i]));
-        for (const it of items) {
+        for (const it of accepted) {
           existingMap.set(it.domain, it);
         }
         const merged = Array.from(existingMap.values())
           .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
           .slice(0, 200);
         store.set('aiThreatQuarantine', merged);
-        daemonManager.quarantineDomain(items.map((i) => i.domain)).catch(() => {});
+        daemonManager.quarantineDomain(accepted.map((i) => i.domain)).catch(() => {});
         broadcastSseEvent('quarantine_added', {
-          count: items.length,
-          domains: items.map((i) => i.domain),
+          count: accepted.length,
+          domains: accepted.map((i) => i.domain),
         });
-        return { success: true, count: merged.length };
+        return { success: true, count: merged.length, ...(rejected.length > 0 ? { rejected } : {}) };
       } catch (err: any) {
         return { success: false, count: 0, error: err?.message || String(err) };
       }
@@ -5562,7 +5769,12 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     // Live Radar Background Scanning Session [Beta]
     ipcMain.handle('start-live-radar-session', async (_event, options: { service: 'adguard' | 'pihole'; durationMinutes: number; pollIntervalSeconds?: number }) => {
-      return startLiveRadarSession(options, store);
+      const parsed = sanitizeLiveRadarOptions(options);
+      if (!parsed.ok) {
+        // Report the real session state — forcing `active:false` would hide a running one.
+        return { ...currentLiveRadarSession, notice: parsed.error };
+      }
+      return startLiveRadarSession(parsed.value, store);
     });
 
     ipcMain.handle('stop-live-radar-session', async () => {
@@ -5587,13 +5799,15 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('set-ai-watchdog-config', async (_event, cfg: Partial<AiWatchdogConfig>) => {
+      const parsed = sanitizeWatchdogConfigPatch(cfg);
+      if (!parsed.ok) return { success: false, error: parsed.error };
       const current = (store.get('aiWatchdogConfig') || {
         enabled: false,
         intervalMinutes: 60,
         service: 'adguard',
         autoQuarantineEntropyDga: true,
       }) as AiWatchdogConfig;
-      const updated: AiWatchdogConfig = { ...current, ...cfg };
+      const updated: AiWatchdogConfig = { ...current, ...parsed.value };
       // Changing the base interval invalidates a previously suggested adaptive
       // value — otherwise a stale adaptiveIntervalMinutes keeps overriding the
       // user's new choice until the next sweep recomputes it.
@@ -6046,6 +6260,10 @@ async function initialize() {
       if (trayStatusTimer) {
         clearInterval(trayStatusTimer);
         trayStatusTimer = null;
+      }
+      if (observationScoreTimer) {
+        clearInterval(observationScoreTimer);
+        observationScoreTimer = null;
       }
       if (trayManager) {
         try {

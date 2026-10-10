@@ -42,11 +42,13 @@ export {
 export {
   fetchContent,
   fetchWithConditionalCache,
+  readBoundedJsonBody,
   type FetchOptions,
   type FetchResult,
 } from "./fetch.js";
 export {
   isSafePublicWebUrl,
+  isSafeLanEndpointUrl,
   type SafeUrlCheckResult,
 } from "./utils/urlSafety.js";
 
