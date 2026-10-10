@@ -2,7 +2,7 @@
   "expo": {
     "name": "Blockingmachine",
     "slug": "blockingmachine",
-    "version": "1.0.0-rc.10",
+    "version": "1.0.0-rc.11",
     "orientation": "portrait",
     "scheme": "blockingmachine",
     "userInterfaceStyle": "dark",
