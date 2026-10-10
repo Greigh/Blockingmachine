@@ -41,7 +41,6 @@ contextBridge.exposeInMainWorld('electron', {
   getSavePath: () => ipcRenderer.invoke('get-save-path'),
   getExtensionTierPlan: (request?: {
     capacity?: number;
-    hitsPath?: string;
     enabled?: string;
   }) => ipcRenderer.invoke('get-extension-tier-plan', request),
   /** Picks and remembers the browser's rule-hit ledger. Returns '' when cancelled. */
@@ -104,6 +103,7 @@ contextBridge.exposeInMainWorld('electron', {
   setAutoStartFeedServer: (enabled: boolean) => ipcRenderer.invoke('set-auto-start-feed-server', enabled),
   getFeedToken: () => ipcRenderer.invoke('get-feed-token') as Promise<{ configured: boolean }>,
   setFeedToken: (token: string) => ipcRenderer.invoke('set-feed-token', token) as Promise<{ success: boolean; unchanged?: boolean; error?: string }>,
+  generateFeedToken: () => ipcRenderer.invoke('generate-feed-token') as Promise<{ success: boolean; token?: string; error?: string }>,
   clearFeedToken: () => ipcRenderer.invoke('clear-feed-token') as Promise<{ success: boolean; error?: string }>,
   getFeedPairingPayload: () =>
     ipcRenderer.invoke('get-feed-pairing-payload') as Promise<{

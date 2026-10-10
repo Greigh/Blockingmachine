@@ -4,6 +4,7 @@ import { resolveCnameChain, isBenignCnameTarget } from './cnameResolver.js';
 import { analyzeQueryBehavior, escalateRiskWithBehavior, type BehavioralDomainInsight } from './behavioral.js';
 import { sanitizeDomain, synthesizeRules, isDomainCoveredByRules } from './ruleSynthesizer.js';
 import { classifyDomainWithMiniAi, globalMiniAiClassifier } from './MiniAiClassifier.js';
+import { readBoundedJsonBody } from '../fetch.js';
 import {
   getDbLists,
   classifyInfrastructure,
@@ -39,8 +40,11 @@ import {
   type TriageCandidate,
 } from './triage.js';
 
-import { isSafePublicWebUrl, type SafeUrlCheckResult } from '../utils/urlSafety.js';
-export { isSafePublicWebUrl, type SafeUrlCheckResult };
+import { isSafePublicWebUrl, isSafeLanEndpointUrl, type SafeUrlCheckResult } from '../utils/urlSafety.js';
+export { isSafePublicWebUrl, isSafeLanEndpointUrl, type SafeUrlCheckResult };
+
+/** An AI provider's JSON answer is a small object — anything past this is an error or an attack. */
+const AI_JSON_BODY_CAP = 1024 * 1024;
 import { getRegistrableZone } from './MiniAiClassifier.js';
 
 type LlmAssessment = Pick<AiScanResult, 'verdict' | 'confidence' | 'category' | 'reasons'>;
@@ -910,6 +914,12 @@ Respond ONLY with a valid JSON object matching this schema:
     if (config.provider === 'ollama') {
       const ollamaUrl = config.ollamaUrl || 'http://127.0.0.1:11434';
       const model = config.ollamaModel || 'llama3.2';
+      // LAN targets are the point — but link-local/multicast/metadata destinations
+      // are not AI servers, and a redirect on a POST is never how these APIs answer.
+      const ollamaCheck = isSafeLanEndpointUrl(ollamaUrl);
+      if (!ollamaCheck.isSafe) {
+        throw new Error(`Refused AI endpoint ${ollamaUrl}: ${ollamaCheck.reason}`);
+      }
 
       const res = await fetch(`${ollamaUrl}/api/generate`, {
         method: 'POST',
@@ -921,13 +931,17 @@ Respond ONLY with a valid JSON object matching this schema:
           stream: false,
         }),
         signal: AbortSignal.timeout(12000),
+        redirect: 'manual',
       });
 
+      if (res.status >= 300 && res.status < 400) {
+        throw new Error(`Ollama endpoint redirected the request (HTTP ${res.status}) — refusing to follow`);
+      }
       if (!res.ok) {
-        throw new Error(`Ollama HTTP error ${res.status}: ${res.statusText}`);
+        throw new Error(`Ollama HTTP error ${res.status}: ${res.statusText.slice(0, 120)}`);
       }
 
-      const json: any = await res.json();
+      const json: any = await readBoundedJsonBody(res, AI_JSON_BODY_CAP);
       const parsed = this.parseLlmJson(json.response);
       return {
         ...parsed,
@@ -951,13 +965,18 @@ Respond ONLY with a valid JSON object matching this schema:
           },
         }),
         signal: AbortSignal.timeout(12000),
+        // Never follow — a 3xx would carry the ?key= credential in the target URL.
+        redirect: 'manual',
       });
 
+      if (res.status >= 300 && res.status < 400) {
+        throw new Error(`Gemini endpoint redirected the request (HTTP ${res.status}) — refusing to follow`);
+      }
       if (!res.ok) {
-        throw new Error(`Gemini API HTTP error ${res.status}: ${res.statusText}`);
+        throw new Error(`Gemini API HTTP error ${res.status}: ${res.statusText.slice(0, 120)}`);
       }
 
-      const json: any = await res.json();
+      const json: any = await readBoundedJsonBody(res, AI_JSON_BODY_CAP);
       const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) throw new Error('Empty response from Gemini');
 
@@ -973,6 +992,10 @@ Respond ONLY with a valid JSON object matching this schema:
       const endpoint = config.apiEndpoint || 'https://api.openai.com/v1';
       const model = config.modelName || 'gpt-4o-mini';
       const apiKey = config.apiKey;
+      const endpointCheck = isSafeLanEndpointUrl(endpoint);
+      if (!endpointCheck.isSafe) {
+        throw new Error(`Refused AI endpoint ${endpoint}: ${endpointCheck.reason}`);
+      }
 
       const res = await fetch(`${endpoint}/chat/completions`, {
         method: 'POST',
@@ -986,13 +1009,18 @@ Respond ONLY with a valid JSON object matching this schema:
           response_format: { type: 'json_object' },
         }),
         signal: AbortSignal.timeout(12000),
+        // A 3xx re-target would carry the Authorization header's context — never follow.
+        redirect: 'manual',
       });
 
+      if (res.status >= 300 && res.status < 400) {
+        throw new Error(`OpenAI endpoint redirected the request (HTTP ${res.status}) — refusing to follow`);
+      }
       if (!res.ok) {
-        throw new Error(`OpenAI HTTP error ${res.status}: ${res.statusText}`);
+        throw new Error(`OpenAI HTTP error ${res.status}: ${res.statusText.slice(0, 120)}`);
       }
 
-      const json: any = await res.json();
+      const json: any = await readBoundedJsonBody(res, AI_JSON_BODY_CAP);
       const content = json?.choices?.[0]?.message?.content;
       if (!content) throw new Error('Empty response from OpenAI');
 

@@ -47,13 +47,18 @@ describe('the feed file-serving branch', () => {
 describe('the /v1/events route', () => {
   const events = blockFrom("lowerPath === '/v1/events'");
 
-  test('is behind the cross-origin guard', () => {
-    expect(events).toContain('rejectCrossOrigin');
+  test('is behind the shared telemetry-read guard', () => {
+    // `rejectUnauthorisedRead` is the origin check plus the bearer requirement
+    // when a token is configured — the same gate `/v1/status` and `/v1/telemetry`
+    // now share. The behavioral suite proves the 401/403 matrix over real HTTP.
+    expect(events).toContain('rejectUnauthorisedRead');
   });
 
-  test('requires the feed token when one is configured', () => {
-    expect(events).toContain('configuredToken &&');
-    expect(events).toContain('feedTokenAuthorised');
+  test('the read guard itself enforces origin plus configured-token bearer', () => {
+    const guard = blockFrom('const rejectUnauthorisedRead');
+    expect(guard).toContain('rejectCrossOrigin');
+    expect(guard).toContain('configuredToken &&');
+    expect(guard).toContain('feedTokenAuthorised');
   });
 });
 

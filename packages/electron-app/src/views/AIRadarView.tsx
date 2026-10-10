@@ -3201,7 +3201,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                       className="text-input"
                       value={aiConfig.apiKey || ''}
                       onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
-                      placeholder="AIzaSy..."
+                      placeholder={aiConfig.apiKeySet ? `Configured ${aiConfig.apiKeyHint} — enter to replace` : 'AIzaSy...'}
                     />
                   </div>
                 </div>
@@ -3227,7 +3227,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                       className="text-input"
                       value={aiConfig.apiKey || ''}
                       onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
-                      placeholder="sk-..."
+                      placeholder={aiConfig.apiKeySet ? `Configured ${aiConfig.apiKeyHint} — enter to replace` : 'sk-...'}
                     />
                   </div>
                 </div>

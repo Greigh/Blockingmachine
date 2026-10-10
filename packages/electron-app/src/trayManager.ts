@@ -47,8 +47,12 @@ export interface TrayManagerOptions {
   isCompiling: () => boolean;
   /** Pause/resume system DNS daemon protection. */
   setProtection: (enabled: boolean) => Promise<boolean>;
-  /** Spawn the managed local DNS daemon (the :5353 resolver). */
-  startDaemon: () => Promise<boolean>;
+  /**
+   * Spawn the managed local DNS daemon (the :5353 resolver). The result message
+   * rides into the failure notification — "see logs" is a dead end in a packaged
+   * app that has no visible log window.
+   */
+  startDaemon: () => Promise<{ success: boolean; message?: string }>;
   /** Flush the OS DNS cache. */
   flushDnsCache: () => Promise<boolean>;
   /** Live state provider, called on every menu open + rebuild. */
@@ -248,10 +252,12 @@ export class TrayManager {
         return;
       }
       case "start-daemon": {
-        const ok = await this.safeStartDaemon();
+        const res = await this.safeStartDaemon();
         this.notify(
           "DNS Protection",
-          ok ? "Daemon started." : "Start failed — see logs.",
+          res.success
+            ? res.message || "Daemon started."
+            : `Start failed — ${res.message || "see logs."}`,
         );
         this.scheduleRebuild();
         return;
@@ -433,11 +439,14 @@ export class TrayManager {
     }
   }
 
-  private async safeStartDaemon(): Promise<boolean> {
+  private async safeStartDaemon(): Promise<{
+    success: boolean;
+    message?: string;
+  }> {
     try {
       return await this.options.startDaemon();
-    } catch {
-      return false;
+    } catch (err: any) {
+      return { success: false, message: err?.message || "start threw" };
     }
   }
 

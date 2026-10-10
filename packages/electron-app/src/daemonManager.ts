@@ -360,8 +360,24 @@ export class DaemonManager {
    */
   getServiceInstallInstructions(feedFiles?: { feedFilePath?: string; threatsFilePath?: string; observationsFilePath?: string }): { mac: string; linux: string } {
     // Plist values are XML text — an '&' or '<' in a save path would corrupt the document.
+    // CR/LF also need escaping here, though they are legal XML: the plist is delivered
+    // inside a `<< 'EOF'` heredoc, and a raw newline in a path would emit the literal
+    // line 'EOF' — closing the heredoc early and letting the rest of the path run as
+    // shell commands under sudo. Character references stay one physical line and
+    // decode back to the real bytes in the plist value.
     const xml = (s: string) =>
-      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\r/g, '&#13;').replace(/\n/g, '&#10;');
+    // systemd unit text is its own format: inside double quotes it unescapes
+    // C-style sequences and expands `%` specifiers, and ExecStart splits on
+    // unquoted whitespace. A save path with a space, quote, backslash, '%', or
+    // newline would corrupt the unit or inject a directive — escape rather
+    // than interpolate raw. The quoted 'EOF' heredoc means the shell never
+    // expands this text; systemd is the only parser that matters here.
+    const unit = (s: string) =>
+      s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')
+        .replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+    const daemonEntry = path.resolve(process.cwd(), 'packages/system-daemon/dist/index.js');
     const macFeedFileEnv = feedFiles?.feedFilePath
       ? `        <key>FEED_FILE</key>\n        <string>${xml(feedFiles.feedFilePath)}</string>\n`
       : '';
@@ -372,13 +388,13 @@ export class DaemonManager {
       ? `        <key>OBSERVATIONS_FILE</key>\n        <string>${xml(feedFiles.observationsFilePath)}</string>\n`
       : '';
     const linuxFeedFileEnv = feedFiles?.feedFilePath
-      ? `Environment="FEED_FILE=${feedFiles.feedFilePath}"\n`
+      ? `Environment="FEED_FILE=${unit(feedFiles.feedFilePath)}"\n`
       : '';
     const linuxThreatsEnv = feedFiles?.threatsFilePath
-      ? `Environment="THREATS_FILE=${feedFiles.threatsFilePath}"\n`
+      ? `Environment="THREATS_FILE=${unit(feedFiles.threatsFilePath)}"\n`
       : '';
     const linuxObservationsEnv = feedFiles?.observationsFilePath
-      ? `Environment="OBSERVATIONS_FILE=${feedFiles.observationsFilePath}"\n`
+      ? `Environment="OBSERVATIONS_FILE=${unit(feedFiles.observationsFilePath)}"\n`
       : '';
     const macPlist = `sudo tee /Library/LaunchDaemons/com.blockingmachine.daemon.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -389,8 +405,8 @@ export class DaemonManager {
     <string>com.blockingmachine.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${process.execPath}</string>
-        <string>${path.resolve(process.cwd(), 'packages/system-daemon/dist/index.js')}</string>
+        <string>${xml(process.execPath)}</string>
+        <string>${xml(daemonEntry)}</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -423,7 +439,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=${process.execPath} ${path.resolve(process.cwd(), 'packages/system-daemon/dist/index.js')}
+ExecStart="${unit(process.execPath)}" "${unit(daemonEntry)}"
 Restart=always
 Environment="ELECTRON_RUN_AS_NODE=1"
 Environment="DNS_PORT=53"
