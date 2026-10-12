@@ -235,6 +235,8 @@ export default function SettingsScreen() {
       <ScrollView
         style={styles.scroll}
       contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
+      keyboardShouldPersistTaps="handled"
+      automaticallyAdjustKeyboardInsets
     >
       <Text style={styles.title}>Settings</Text>
 

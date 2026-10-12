@@ -3,6 +3,20 @@
   "compilerOptions": {
     "strict": true
   },
-  "include": ["app", "src", "index.ts", "jest.setup.ts"],
-  "exclude": ["node_modules", "ios", "android", ".expo", "dist"]
+  "include": [
+    "app",
+    "src",
+    "index.ts",
+    "jest.setup.ts",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "ios",
+    "android",
+    ".expo",
+    "dist",
+    "expo-env.d.ts"
+  ]
 }

@@ -16,7 +16,7 @@ import { useServers } from '../../src/state/servers';
 import { useFilter } from '../../src/state/filter';
 import { ActionButton, Card, ErrorBanner, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
-import { formatTimestamp, formatUptime } from '../../src/format';
+import { formatTimestamp, formatUptime, relativeTime } from '../../src/format';
 import { haptics } from '../../src/haptics';
 import { chrome, colors, spacing } from '../../src/theme';
 
@@ -138,6 +138,8 @@ export default function DashboardScreen() {
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
+      keyboardShouldPersistTaps="handled"
+      automaticallyAdjustKeyboardInsets
       refreshControl={
         <RefreshControl
           refreshing={status.isRefetching}
@@ -187,6 +189,12 @@ export default function DashboardScreen() {
 
       {err ? (
         <ErrorBanner {...describeError(err)} onRetry={() => void status.refetch()} />
+      ) : null}
+
+      {err && data ? (
+        <Text style={styles.staleNote}>
+          Last refreshed {relativeTime(status.dataUpdatedAt) || 'recently'} — reconnect to the hub to update.
+        </Text>
       ) : null}
 
       {status.isLoading && !data ? (
@@ -441,4 +449,5 @@ const styles = StyleSheet.create({
   buttonRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   buttonFlex: { flex: 1 },
   errorLine: { color: colors.danger, fontSize: 13, marginTop: spacing.sm },
+  staleNote: { color: colors.textMuted, fontSize: 12, marginTop: spacing.xs },
 });
