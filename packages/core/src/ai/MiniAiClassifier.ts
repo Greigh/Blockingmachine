@@ -15,9 +15,11 @@ import {
   detectAntiAdblock,
   hasStrongAdIntent,
   hostnameHasToken,
+  isBenignServiceEndpoint,
   normalizeHostname,
   scoreBrandSpoof,
 } from './reputation.js';
+import type { BehavioralObservation } from './learned/featurizer.js';
 import type {
   AiVerdict,
   DomainFeatureVector,
@@ -174,6 +176,8 @@ export function extractDomainFeatures(
     knownTrackerTarget?: string;
     allowlist?: string[];
     userFeedbackBias?: number; // -1.0 to +1.0
+    /** Live resolver/browser observation for this name, when the app has one. */
+    observations?: BehavioralObservation;
   },
 ): DomainFeatureVector {
   const clean = sanitizeInputDomain(domain);
@@ -275,6 +279,17 @@ export function extractDomainFeatures(
   }
   consentKeywordWeight = Math.max(0, Math.min(1.5, consentKeywordWeight));
 
+  // 7b. Credential-lure wording — phishing vocabulary at label boundaries.
+  // Gated to zero on known-safe infrastructure below: `login.`/`accounts.` on a
+  // real platform are endpoints, not lures. Unlike the ad/tracker/consent lists
+  // this feeds only the Malware/Phishing logit.
+  let lureWeightRaw = 0;
+  for (const token of dbLists.suspiciousLureTokens) {
+    if (!hostnameHasToken(clean, token)) continue;
+    lureWeightRaw += token.length >= 4 ? 0.5 : 0.4;
+  }
+  lureWeightRaw = Math.max(0, Math.min(1.5, lureWeightRaw));
+
   // 8. CNAME Cloaking Flags (bounded)
   const cnameKnownTracker = context?.knownTrackerTarget ? 1.0 : 0.0;
   const cnameExternal = context?.hasCnameCloaking ? 1.0 : 0.0;
@@ -298,6 +313,10 @@ export function extractDomainFeatures(
     && !adIntent
     && brandSpoofScore <= 0;
   const knownSafeInfra = allowlisted || reputationSafe ? 1.0 : 0.0;
+  // The lure gate — `accounts.google.com` and `login.microsoftonline.com` carry
+  // lure vocabulary by name, and `login.<readable-zone>` is a benign product
+  // endpoint; only wording on zones the endpoint guard can't bless counts.
+  const lureTokenWeight = knownSafeInfra || isBenignServiceEndpoint(clean) ? 0 : lureWeightRaw;
 
   // 10. High-Risk TLD & Punycode
   const highRiskTld = dbLists.highAbuseTlds.includes(tld) ? 1.0 : 0.0;
@@ -321,6 +340,19 @@ export function extractDomainFeatures(
     ? context.userFeedbackBias
     : 0;
   const userTuneBias = Math.max(-1.0, Math.min(1.0, rawFeedbackBias));
+
+  // 13. Live observations — what the resolver/browser already saw for this name.
+  // All four default to 0 when no observation exists, so observation-less domains
+  // score byte-identically to before: a live signal can only corroborate, never
+  // penalize a name for merely being unobserved.
+  const obs = context?.observations;
+  const obsCnameForeign = obs?.dnsCnameForeign === true ? 1.0 : 0.0;
+  const obsBlockedBefore = obs?.dnsBlocked === true ? 1.0 : 0.0;
+  const obsFanoutSites = Math.max(0, Math.min(1.0, (obs?.fanoutSites ?? 0) / 12));
+  const obsNxdomainRate =
+    typeof obs?.dnsNxdomainRate === 'number' && Number.isFinite(obs.dnsNxdomainRate)
+      ? Math.max(0, Math.min(1.0, obs.dnsNxdomainRate))
+      : 0.0;
 
   return {
     entropyFull,
@@ -350,6 +382,11 @@ export function extractDomainFeatures(
     numericSubdomain,
     userTuneBias,
     brandSpoofScore,
+    lureTokenWeight,
+    obsCnameForeign,
+    obsBlockedBefore,
+    obsFanoutSites,
+    obsNxdomainRate,
   };
 }
 
@@ -375,6 +412,13 @@ export interface ModelClassWeights {
   punycode: number;
   userTuneBias: number;
   brandSpoofScore: number;
+  /** Lure wording — only Malware/Phishing reads it; other classes carry 0. */
+  lureTokenWeight: number;
+  /** Live-observation weights — 0-valued features when nothing was observed. */
+  obsCnameForeign: number;
+  obsBlockedBefore: number;
+  obsFanoutSites: number;
+  obsNxdomainRate: number;
 }
 
 export const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
@@ -397,6 +441,11 @@ export const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     punycode: 0,
     userTuneBias: -4.0,
     brandSpoofScore: -8.0,
+    lureTokenWeight: -1.5,
+    obsCnameForeign: -8.0,
+    obsBlockedBefore: -6.0,
+    obsFanoutSites: -2.5,
+    obsNxdomainRate: -1.5,
   },
   Advertising: {
     bias: -2.0,
@@ -417,6 +466,11 @@ export const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     punycode: 0.2,
     userTuneBias: 3.5,
     brandSpoofScore: 0,
+    lureTokenWeight: -0.5,
+    obsCnameForeign: 2.0,
+    obsBlockedBefore: 3.0,
+    obsFanoutSites: 4.0,
+    obsNxdomainRate: 0.5,
   },
   'Telemetry/Analytics': {
     bias: -2.0,
@@ -437,6 +491,11 @@ export const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     punycode: 0.2,
     userTuneBias: 3.5,
     brandSpoofScore: 0,
+    lureTokenWeight: -0.5,
+    obsCnameForeign: 4.0,
+    obsBlockedBefore: 3.0,
+    obsFanoutSites: 4.0,
+    obsNxdomainRate: 0.5,
   },
   'Consent/Annoyance': {
     bias: -2.0,
@@ -457,6 +516,11 @@ export const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     punycode: 0.2,
     userTuneBias: 3.5,
     brandSpoofScore: 0,
+    lureTokenWeight: 0.0,
+    obsCnameForeign: 0.0,
+    obsBlockedBefore: 1.0,
+    obsFanoutSites: 1.5,
+    obsNxdomainRate: 0.0,
   },
   'CNAME Cloaking': {
     bias: -3.0,
@@ -477,6 +541,11 @@ export const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     punycode: 0.2,
     userTuneBias: 3.5,
     brandSpoofScore: 0,
+    lureTokenWeight: 0.0,
+    obsCnameForeign: 9.0,
+    obsBlockedBefore: 1.0,
+    obsFanoutSites: 1.0,
+    obsNxdomainRate: 0.0,
   },
   'Malware/Phishing': {
     bias: -3.0,
@@ -497,6 +566,11 @@ export const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     punycode: 3.0,
     userTuneBias: 4.5,
     brandSpoofScore: 12.0,
+    lureTokenWeight: 2.5,
+    obsCnameForeign: 2.0,
+    obsBlockedBefore: 1.5,
+    obsFanoutSites: 0.5,
+    obsNxdomainRate: 3.0,
   },
   Unknown: {
     bias: -5.0,
@@ -517,6 +591,11 @@ export const MODEL_WEIGHTS: Record<ThreatCategory, ModelClassWeights> = {
     punycode: 0,
     userTuneBias: 0,
     brandSpoofScore: 0,
+    lureTokenWeight: 0.0,
+    obsCnameForeign: 0.0,
+    obsBlockedBefore: 0.0,
+    obsFanoutSites: 0.0,
+    obsNxdomainRate: 0.0,
   },
 };
 
@@ -786,6 +865,8 @@ export class MiniAiClassifier {
       hasCnameCloaking?: boolean;
       knownTrackerTarget?: string;
       allowlist?: string[];
+      /** Live resolver/browser observation for this name, when the app has one. */
+      observations?: BehavioralObservation;
     },
   ): MiniAiPrediction {
     const startTime = performance.now();
@@ -876,7 +957,11 @@ export class MiniAiClassifier {
       const userBias = this.getDomainFeedback(normalized);
 
       // Check Fast-Path Prediction Cache
-      const hasDynamicContext = !!context?.knownTrackerTarget || !!context?.hasCnameCloaking || (context?.cnames && context.cnames.length > 0);
+      const hasDynamicContext =
+        !!context?.knownTrackerTarget ||
+        !!context?.hasCnameCloaking ||
+        (context?.cnames && context.cnames.length > 0) ||
+        !!context?.observations;
       let cacheKey = '';
       if (this.enableCache && !hasDynamicContext && (!context?.allowlist || context.allowlist.length === 0)) {
         cacheKey = `${normalized}|${userBias}`;
@@ -975,6 +1060,11 @@ export class MiniAiClassifier {
         z += features.punycode * w.punycode;
         z += features.userTuneBias * w.userTuneBias;
         z += features.brandSpoofScore * w.brandSpoofScore;
+        z += features.lureTokenWeight * w.lureTokenWeight;
+        z += features.obsCnameForeign * w.obsCnameForeign;
+        z += features.obsBlockedBefore * w.obsBlockedBefore;
+        z += features.obsFanoutSites * w.obsFanoutSites;
+        z += features.obsNxdomainRate * w.obsNxdomainRate;
 
         logits[cat] = Number.isFinite(z) ? z : 0;
       }
@@ -1215,6 +1305,66 @@ export class MiniAiClassifier {
         reasons.push('Registered on high-abuse top-level domain frequently used for ad evasion');
       }
 
+      // Credential-lure wording is a *corroborating* signal: it explains itself on a
+      // Malware/Phishing verdict and is silent otherwise — the infra gate already
+      // zeroed it where `login.`/`accounts.` are endpoints rather than lures.
+      if (bestCategory === 'Malware/Phishing' && features.lureTokenWeight > 0) {
+        contributions.push({
+          name: 'Credential-Lure Wording',
+          value: features.lureTokenWeight,
+          weight: 2.5,
+          impact: 'threat',
+          description: 'Hostname carries phishing vocabulary at label boundaries (verify/login/account/billing…)',
+        });
+        reasons.push('Phishing-style credential wording in hostname (verify/login/account/billing language at label boundaries)');
+      }
+
+      // Live-observation signals — resolver/browser facts about this name, not lexical
+      // guesses. They corroborate a non-clean verdict and explain themselves as observed.
+      if (bestCategory !== 'Clean' && features.obsCnameForeign > 0) {
+        contributions.push({
+          name: 'Observed Foreign CNAME',
+          value: 1.0,
+          weight: 9.0,
+          impact: 'threat',
+          description: 'DNS resolution crossed into a different registrable domain — live cloaking evidence',
+        });
+        reasons.push('Resolver saw a CNAME hop leaving the queried domain — live cloaking evidence');
+      }
+
+      if (bestCategory !== 'Clean' && features.obsBlockedBefore > 0) {
+        contributions.push({
+          name: 'Previously Blocked',
+          value: 1.0,
+          weight: 5.0,
+          impact: 'threat',
+          description: 'The deployed ruleset already answered BLOCKED for this name',
+        });
+        reasons.push('The deployed ruleset already blocks this name — observed in DNS traffic');
+      }
+
+      if (bestCategory !== 'Clean' && features.obsFanoutSites >= 0.4) {
+        contributions.push({
+          name: 'Wide Site Fan-out',
+          value: features.obsFanoutSites,
+          weight: 4.0,
+          impact: 'threat',
+          description: 'Embedded as a third-party host across many distinct sites',
+        });
+        reasons.push('Observed embedded across many distinct first-party sites — tracker-grade fan-out');
+      }
+
+      if (bestCategory !== 'Clean' && features.obsNxdomainRate >= 0.6) {
+        contributions.push({
+          name: 'NXDOMAIN Churn',
+          value: features.obsNxdomainRate,
+          weight: 3.0,
+          impact: 'threat',
+          description: 'Most observed queries for this name returned NXDOMAIN — ephemeral or DGA-like infrastructure',
+        });
+        reasons.push('Observed queries mostly resolve NXDOMAIN — ephemeral or machine-generated infrastructure');
+      }
+
       if (adjustment.policyReason) {
         if (bestCategory === 'Clean' || bestCategory === 'Unknown') {
           reasons.length = 0;
@@ -1310,6 +1460,8 @@ export function classifyDomainWithMiniAi(
     hasCnameCloaking?: boolean;
     knownTrackerTarget?: string;
     allowlist?: string[];
+    /** Live resolver/browser observation for this name, when the app has one. */
+    observations?: BehavioralObservation;
   },
 ): MiniAiPrediction {
   return globalMiniAiClassifier.classify(domain, context);

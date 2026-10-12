@@ -110,28 +110,54 @@ describe('ObservationRecorder', () => {
 
   test('writes one JSONL record per new domain', () => {
     const r = new ObservationRecorder(file);
-    r.observe(obs('a.example'));
-    r.observe(obs('b.example'));
+    r.observe(obs('a.example.com'));
+    r.observe(obs('b.example.com'));
     const lines = readFileSync(file, 'utf8').trim().split('\n');
     expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0]).domain).toBe('a.example');
+    expect(JSON.parse(lines[0]).domain).toBe('a.example.com');
   });
 
   test('dedups a domain inside the window, records again after it', () => {
     let now = 1_000_000;
     const r = new ObservationRecorder(file, { now: () => now, dedupWindowMs: 60_000 });
-    r.observe(obs('a.example'));
+    r.observe(obs('a.example.com'));
     now += 30_000;
-    r.observe(obs('a.example')); // inside window — dropped
+    r.observe(obs('a.example.com')); // inside window — dropped
     now += 60_001;
-    r.observe(obs('a.example')); // outside window — recorded
+    r.observe(obs('a.example.com')); // outside window — recorded
     const lines = readFileSync(file, 'utf8').trim().split('\n');
     expect(lines).toHaveLength(2);
   });
 
   test('never carries a clientIp', () => {
     const r = new ObservationRecorder(file);
-    r.observe(obs('a.example'));
+    r.observe(obs('a.example.com'));
     expect(readFileSync(file, 'utf8')).not.toContain('clientIp');
+  });
+
+  test('drops non-public names — discovery chatter and private suffixes are not corpus', () => {
+    const r = new ObservationRecorder(file);
+    for (const name of [
+      '_airplay._tcp.local',
+      'daniels-macbook._airplay._tcp.local',
+      'nas.lan',
+      'router.home',
+      'dc01.corp',
+      '1.2.3.4.in-addr.arpa',
+      'a.b.c.ip6.arpa',
+      'printer.localdomain',
+      'thing.invalid',
+      'host.test',
+      'host.example',
+      'nas', // single label — a machine name, not a domain
+      "daniel's macbook pro._airplay._tcp.local", // spaces/apostrophes are not hostnames
+      '',
+    ]) {
+      r.observe(obs(name));
+    }
+    r.observe(obs('real-tracker.example.com'));
+    const lines = readFileSync(file, 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]).domain).toBe('real-tracker.example.com');
   });
 });

@@ -42,6 +42,17 @@ module.exports = {
     }
   },
   module: {
+    parser: {
+      javascript: {
+        // learnedShadow.ts resolves @blockingmachine/core through a runtime
+        // createRequire(join(app.getAppPath(), ...)) — deliberately dynamic so
+        // it works in dev and inside the packaged asar. `module` is external
+        // under electron-main, so the call must reach the bundle untouched;
+        // disabling the analysis silences "createRequire failed parsing
+        // argument" without changing what is emitted.
+        createRequire: false,
+      },
+    },
     rules: [
       {
         test: /\.tsx?$/,

@@ -1,7 +1,6 @@
 import { join } from "path";
 import {
   app,
-  BrowserWindow,
   Menu,
   nativeImage,
   Notification,
@@ -38,7 +37,17 @@ export type { TraySharedState };
  */
 
 export interface TrayManagerOptions {
-  getMainWindow: () => BrowserWindow | null;
+  /**
+   * Surfaces the main window — creates it when none is live and restores the
+   * Dock icon on macOS. Owns window lifecycle so the tray never touches a
+   * possibly-destroyed BrowserWindow.
+   */
+  showMainWindow: () => void;
+  /**
+   * Delivers an IPC message to the renderer, queueing it when the window is
+   * mid-recreate so the command isn't silently lost.
+   */
+  sendToWindow: (channel: string, ...args: unknown[]) => void;
   /** Absolute path of the compiled rules file, or null. */
   getSavePath: () => string | null;
   /** Kick off a background compilation (main-process pipeline). */
@@ -57,18 +66,6 @@ export interface TrayManagerOptions {
   flushDnsCache: () => Promise<boolean>;
   /** Live state provider, called on every menu open + rebuild. */
   getState: () => TraySharedState;
-}
-
-function safeShowWindow(win: BrowserWindow | null): void {
-  try {
-    if (win && !win.isDestroyed()) {
-      if (win.isMinimized()) win.restore();
-      win.show();
-      win.focus();
-    }
-  } catch {
-    // window died between check and call
-  }
 }
 
 export class TrayManager {
@@ -236,7 +233,7 @@ export class TrayManager {
 
     switch (row.id) {
       case "open":
-        safeShowWindow(this.options.getMainWindow());
+        this.options.showMainWindow();
         return;
       case "compile":
         this.options.triggerCompile();
@@ -271,26 +268,15 @@ export class TrayManager {
         return;
       }
       case "open-deploy":
-        safeShowWindow(this.options.getMainWindow());
-        try {
-          this.options.getMainWindow()?.webContents.send(
-            "navigate-view",
-            "deploy",
-          );
-        } catch {
-          // window destroyed mid-send
-        }
+        this.options.showMainWindow();
+        this.options.sendToWindow("navigate-view", "deploy");
         return;
       case "reveal-output":
         this.safeRevealOutput();
         return;
       case "open-settings":
-        safeShowWindow(this.options.getMainWindow());
-        try {
-          this.options.getMainWindow()?.webContents.send("open-settings");
-        } catch {
-          // ignore
-        }
+        this.options.showMainWindow();
+        this.options.sendToWindow("open-settings");
         return;
     }
   }

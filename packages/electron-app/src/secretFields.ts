@@ -48,6 +48,6 @@ export function toggleSecretCleared(config: SinkholeConfig, key: SinkholeSecretK
 /** Placeholder that tells the truth about what a blank field will do on save. */
 export function secretPlaceholder(config: SinkholeConfig, key: SinkholeSecretKey, emptyPlaceholder: string): string {
   if (secretCleared(config, key)) return 'Saved value will be cleared on save';
-  if (secretConfigured(config, key)) return 'Saved — leave blank to keep';
+  if (secretConfigured(config, key)) return 'Saved — blank keeps it';
   return emptyPlaceholder;
 }

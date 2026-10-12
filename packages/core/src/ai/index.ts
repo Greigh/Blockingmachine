@@ -45,6 +45,7 @@ export {
   CDN_ROUTING_SUFFIXES,
   BRAND_ECOSYSTEMS,
   normalizeHostname,
+  isPublicHostname,
   isInstitutionalDomain,
   isActiveDirectoryOrLocalDomain,
   detectAntiAdblock,

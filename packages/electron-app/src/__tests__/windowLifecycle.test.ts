@@ -72,3 +72,94 @@ describe('mainWindow lifecycle', () => {
     expect(block).toContain('rendererReady = false');
   });
 });
+
+describe('menu-bar agent mode', () => {
+  test('window close hides to the status bar only when the toggle is on and no quit is underway', () => {
+    expect(main).toContain("thisWindow.on('close'");
+    const closeHandler = main.slice(
+      main.indexOf("thisWindow.on('close'"),
+      main.indexOf("thisWindow.on('close'") + 700,
+    );
+    expect(closeHandler).toContain('isQuitting');
+    expect(closeHandler).toContain('menuBarAgentEnabled()');
+    expect(closeHandler).toContain('event.preventDefault()');
+    expect(closeHandler).toContain('thisWindow.hide()');
+    expect(closeHandler).toContain('app.dock?.hide()');
+  });
+
+  test('a real quit is flagged so the close interceptor stands down', () => {
+    const beforeQuit = main.slice(
+      main.indexOf("app.on('before-quit'"),
+      main.indexOf("app.on('before-quit'") + 300,
+    );
+    expect(beforeQuit).toContain('isQuitting = true');
+  });
+
+  test('the toggle is persisted in the store and exposed over IPC + preload', () => {
+    expect(main).toContain('menuBarAgent: {');
+    expect(main).toContain("ipcMain.handle('get-menu-bar-agent'");
+    expect(main).toContain("ipcMain.handle('set-menu-bar-agent'");
+    expect(preload).toContain("'get-menu-bar-agent'");
+    expect(preload).toContain("'set-menu-bar-agent'");
+  });
+
+  test('turning the agent off while hidden surfaces the app again', () => {
+    const handler = main.slice(
+      main.indexOf("ipcMain.handle('set-menu-bar-agent'"),
+      main.indexOf("ipcMain.handle('set-menu-bar-agent'") + 1200,
+    );
+    expect(handler).toContain('app.dock?.show()');
+    expect(handler).toContain('win.show()');
+  });
+
+  test('a login-item launch starts hidden only when the agent is on', () => {
+    const init = main.slice(
+      main.indexOf('wasOpenedAtLogin'),
+      main.indexOf('wasOpenedAtLogin') + 900,
+    );
+    expect(init).toContain('startInMenuBar');
+    expect(init).toContain('menuBarAgentEnabled()');
+    expect(init).toContain('app.dock?.hide()');
+    expect(main).toContain('createWindow(!startInMenuBar)');
+  });
+
+  test('reopen paths — activate and second-instance — surface the window and the Dock icon', () => {
+    expect(main).toContain('function showMainWindow');
+    const show = main.slice(
+      main.indexOf('function showMainWindow'),
+      main.indexOf('function showMainWindow') + 800,
+    );
+    expect(show).toContain('app.dock?.show()');
+    const activate = main.slice(
+      main.indexOf("app.on('activate'"),
+      main.indexOf("app.on('activate'") + 250,
+    );
+    expect(activate).toContain('showMainWindow()');
+    const second = main.slice(
+      main.indexOf("app.on('second-instance'"),
+      main.indexOf("app.on('second-instance'") + 250,
+    );
+    expect(second).toContain('showMainWindow()');
+  });
+
+  test('a second instance can never initialize — the lock gates whenReady', () => {
+    expect(main).toContain('app.requestSingleInstanceLock()');
+    const tail = main.slice(main.indexOf('app.requestSingleInstanceLock()'));
+    expect(tail).toContain('app.quit()');
+    expect(tail.indexOf('app.quit()')).toBeLessThan(tail.indexOf('.whenReady()'));
+  });
+
+  test('tray actions route through showMainWindow/sendToWindow, not a nullable window', () => {
+    const tray = readFileSync(join(appRoot, 'src/trayManager.ts'), 'utf8');
+    expect(tray).not.toContain('getMainWindow');
+    expect(tray).toContain('this.options.showMainWindow()');
+    expect(tray).toContain('this.options.sendToWindow("navigate-view", "deploy")');
+    expect(tray).toContain('this.options.sendToWindow("open-settings")');
+    const wiring = main.slice(
+      main.indexOf('new TrayManager'),
+      main.indexOf('new TrayManager') + 600,
+    );
+    expect(wiring).toContain('showMainWindow: () => showMainWindow()');
+    expect(wiring).toContain('sendToWindow');
+  });
+});

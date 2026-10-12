@@ -161,6 +161,18 @@ const Settings: React.FC<SettingsProps> = ({
   const [aiTestResult, setAiTestResult] = useState<{ success: boolean; latencyMs?: number; message: string } | null>(null);
   const [showAiKey, setShowAiKey] = useState(false);
   const [learnedFeedbackCount, setLearnedFeedbackCount] = useState<number>(0);
+  const [shadowReadiness, setShadowReadiness] = useState<{
+    days: number;
+    scoredDomains: number;
+    disagreementRecords: number;
+    sampleRecords: number;
+    dnsObservationRecords: number;
+    liveIndexEntries: number;
+    fanoutHosts: number;
+    target: { minDays: number; minScored: number };
+    ready: boolean;
+  } | null>(null);
+  const [userLabelStats, setUserLabelStats] = useState<{ count: number; filePath: string } | null>(null);
   const [radarDisplayConfig, setRadarDisplayConfig] = useState<RadarDisplayConfig>({
     showIgnoredOffenders: false,
   });
@@ -168,6 +180,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [elementHarvestBusy, setElementHarvestBusy] = useState(false);
   const [autoStartFeedServer, setAutoStartFeedServer] = useState(false);
   const [launchOnStartup, setLaunchOnStartup] = useState(false);
+  const [menuBarAgent, setMenuBarAgent] = useState(false);
   const [startupMessage, setStartupMessage] = useState('');
   const [feedToken, setFeedToken] = useState('');
   const [feedTokenConfigured, setFeedTokenConfigured] = useState(false);
@@ -273,6 +286,18 @@ const Settings: React.FC<SettingsProps> = ({
       }).catch(console.error);
     }
 
+    if (window.electron?.getAiShadowReadiness) {
+      window.electron.getAiShadowReadiness().then((r) => {
+        if (isMounted && r) setShadowReadiness(r);
+      }).catch(console.error);
+    }
+
+    if (window.electron?.getUserLabelStats) {
+      window.electron.getUserLabelStats().then((s) => {
+        if (isMounted && s) setUserLabelStats(s);
+      }).catch(console.error);
+    }
+
     if (window.electron?.getRadarDisplayConfig) {
       window.electron.getRadarDisplayConfig().then((cfg) => {
         if (isMounted && cfg) setRadarDisplayConfig((prev) => ({ ...prev, ...cfg }));
@@ -304,6 +329,12 @@ const Settings: React.FC<SettingsProps> = ({
     if (window.electron?.getLaunchOnStartup) {
       window.electron.getLaunchOnStartup().then((val) => {
         if (isMounted) setLaunchOnStartup(Boolean(val));
+      }).catch(console.error);
+    }
+
+    if (window.electron?.getMenuBarAgent) {
+      window.electron.getMenuBarAgent().then((val) => {
+        if (isMounted) setMenuBarAgent(Boolean(val));
       }).catch(console.error);
     }
 
@@ -468,6 +499,23 @@ const Settings: React.FC<SettingsProps> = ({
         safeSetTimeout(() => setStartupMessage(''), 3000);
       } catch (err) {
         console.error('Failed to set launch on startup:', err);
+      }
+    }
+  };
+
+  const handleToggleMenuBarAgent = async (enabled: boolean) => {
+    setMenuBarAgent(enabled);
+    if (window.electron?.setMenuBarAgent) {
+      try {
+        await window.electron.setMenuBarAgent(enabled);
+        setStartupMessage(
+          enabled
+            ? 'Runs in the menu bar — closing the window no longer quits the Dock app'
+            : 'Menu bar mode off — the Dock icon stays while the app runs'
+        );
+        safeSetTimeout(() => setStartupMessage(''), 3000);
+      } catch (err) {
+        console.error('Failed to set menu bar agent:', err);
       }
     }
   };
@@ -758,7 +806,8 @@ const Settings: React.FC<SettingsProps> = ({
         <a href="#settings-location">Save Location</a>
         <a href="#settings-automation">Automation</a>
         <a href="#settings-startup">Startup & Services</a>
-        <a href="#settings-network">Network & Pairing</a>
+        <a href="#settings-pairing">LAN & Pairing</a>
+        <a href="#settings-network">Network Sinkholes</a>
         <a href="#settings-ai">AI Engine</a>
         <a href="#about-community">About & Updates</a>
         <a href="#settings-tour">Tour</a>
@@ -1104,6 +1153,21 @@ const Settings: React.FC<SettingsProps> = ({
             <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.85rem' }}>
               <input
                 type="checkbox"
+                checked={menuBarAgent}
+                onChange={(e) => handleToggleMenuBarAgent(e.target.checked)}
+                style={{ marginTop: '2px', cursor: 'pointer', accentColor: 'var(--primary-color)' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontWeight: 600 }}>Run in Menu Bar (macOS)</span>
+                <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                  Closing the window hides it to the status-bar icon instead of quitting — protection, the feed server, and scheduled compiles keep running, and the Dock icon disappears while no window is open. Launch-at-login also starts quietly in the menu bar. Untick to keep the Dock icon while the app runs.
+                </span>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.85rem' }}>
+              <input
+                type="checkbox"
                 checked={autoStartFeedServer}
                 onChange={(e) => handleToggleAutoStartFeedServer(e.target.checked)}
                 style={{ marginTop: '2px', cursor: 'pointer', accentColor: 'var(--primary-color)' }}
@@ -1116,127 +1180,143 @@ const Settings: React.FC<SettingsProps> = ({
               </div>
             </label>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>
-                LAN Authentication{' '}
-                {lanAuthMode === 'required'
-                  ? '(required — secured default)'
-                  : lanAuthMode === 'open'
-                    ? '(explicit compatibility mode)'
-                    : '(legacy posture)'}
-              </span>
-              <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
-                {lanAuthMode === 'required'
-                  ? 'Secured default: every LAN mutation and telemetry read requires Authorization: Bearer, and this install has a generated token. Native clients pair via QR below; use compatibility mode only on a LAN you fully trust.'
-                  : lanAuthMode === 'open'
-                    ? 'Compatibility mode: a stored token is honoured when sent but never required — mutations and reads rely on the origin guard alone.'
-                    : 'Legacy posture: a token is enforced only while one is configured. New installs default to required; migrate to get the same behaviour here.'}
-                {feedTokenConfigured ? ' A token is currently configured.' : ''}
-              </span>
-              {(lanAuthMode === 'legacy' || lanAuthMode === 'open') && (
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '2px' }}>
-                  <button type="button" className="browse-button secondary" onClick={() => void handleSetLanAuthMode('required')}>
-                    {lanAuthMode === 'legacy' ? 'Migrate to required (recommended)' : 'Re-enable required auth'}
-                  </button>
-                </div>
-              )}
-              {lanAuthMode === 'required' && (
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '2px' }}>
-                  <button type="button" className="browse-button secondary" onClick={() => void handleSetLanAuthMode('open')}>
-                    Compatibility mode (no token required)
-                  </button>
-                </div>
-              )}
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <input
-                  type="password"
-                  className="path-input"
-                  placeholder={feedTokenConfigured ? 'Token configured — enter a new one to replace' : 'Leave empty to keep mutations origin-guarded'}
-                  value={feedToken}
-                  onChange={(e) => setFeedToken(e.target.value)}
-                  style={{ maxWidth: '340px' }}
-                  autoComplete="off"
-                />
-                <button type="button" className="browse-button secondary" onClick={() => void handleSaveFeedToken()}>
-                  Save
-                </button>
-                <button type="button" className="browse-button secondary" onClick={() => void handleGenerateFeedToken()}>
-                  Generate
-                </button>
-                {feedTokenConfigured && (
-                  <button type="button" className="browse-button secondary" onClick={() => void handleClearFeedToken()}>
-                    {lanAuthMode === 'required' ? 'Rotate' : 'Clear'}
-                  </button>
-                )}
-              </div>
-              {generatedFeedToken && (
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <code style={{ fontSize: '0.72rem', wordBreak: 'break-all', opacity: 0.85 }}>{generatedFeedToken}</code>
-                  <button
-                    type="button"
-                    className="browse-button secondary"
-                    onClick={() => setGeneratedFeedToken('')}
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              )}
-              {feedTokenMessage && (
-                <p className={`setting-message ${feedTokenMessage.type}`} role={feedTokenMessage.type === 'error' ? 'alert' : 'status'} style={{ marginTop: '2px' }}>
-                  {feedTokenMessage.text}
-                </p>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Pair Mobile App</span>
-              <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
-                The Blockingmachine iOS/Android app can scan a QR code instead of typing the
-                server address{feedTokenConfigured ? ' and token' : ''}. The hub also advertises
-                itself over mDNS (_blockingmachine._tcp) while the feed server is running.
-              </span>
-              <div>
-                <button type="button" className="browse-button secondary" onClick={() => void handleTogglePairingQr()}>
-                  {pairingPayload ? 'Hide pairing QR' : 'Show pairing QR'}
-                </button>
-              </div>
-              {pairingPayload && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
-                  {!pairingPayload.running && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <p className="setting-message error" role="alert" style={{ marginTop: '2px' }}>
-                        The feed server is not running — the app can't reach this Mac until it is.
-                      </p>
-                      <div>
-                        <button
-                          type="button"
-                          className="browse-button"
-                          disabled={startingFeedForPairing}
-                          onClick={() => void handleStartFeedForPairing()}
-                        >
-                          {startingFeedForPairing ? 'Starting…' : 'Start feed server'}
-                        </button>
-                      </div>
-                      <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
-                        Tick "Auto-Start Local LAN Feed Server on Launch" above to keep it reachable after restarts.
-                      </span>
-                    </div>
-                  )}
-                  <div style={{ alignSelf: 'flex-start', background: '#fff', padding: '12px', borderRadius: '8px' }}>
-                    <QRCodeSVG value={pairingPayload.payload} size={160} level="M" />
-                  </div>
-                  <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
-                    {pairingPayload.url}
-                    {pairingPayload.tokenConfigured
-                      ? ' — this code carries your feed token; treat it like a password.'
-                      : ' — no feed token is configured, so the code carries only the address.'}
-                  </span>
-                </div>
-              )}
-            </div>
           </div>
 
           {startupMessage && <p className="setting-message success" role="status" style={{ marginTop: '10px' }}>{startupMessage}</p>}
+        </div>
+
+        {/* LAN Access & Mobile Pairing Card */}
+        <div className="setting-card" id="settings-pairing">
+          <div className="setting-card-header">
+            <h2>
+              <span className="setting-icon-svg">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
+                  <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
+                </svg>
+              </span>
+              LAN Access & Mobile Pairing
+            </h2>
+            <span className="setting-badge secondary">Network</span>
+          </div>
+          <p>Secure this hub on the local network and pair companion apps.</p>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '12px' }}>
+            <h3 className="setting-subsection-title">
+              LAN Authentication
+              <span className={`setting-badge ${lanAuthMode === 'required' ? 'success' : lanAuthMode === 'open' ? 'warning' : 'secondary'}`}>
+                {lanAuthMode === 'required' ? 'Required' : lanAuthMode === 'open' ? 'Compatibility' : 'Legacy'}
+              </span>
+            </h3>
+            <p className="setting-subsection-desc">
+              {lanAuthMode === 'required'
+                ? 'Secured default: every LAN mutation and telemetry read requires Authorization: Bearer, and this install has a generated token. Native clients pair via QR below; use compatibility mode only on a LAN you fully trust.'
+                : lanAuthMode === 'open'
+                  ? 'Compatibility mode: a stored token is honoured when sent but never required — mutations and reads rely on the origin guard alone.'
+                  : 'Legacy posture: a token is enforced only while one is configured. New installs default to required; migrate to get the same behaviour here.'}
+              {feedTokenConfigured ? ' A token is currently configured.' : ''}
+            </p>
+            {(lanAuthMode === 'legacy' || lanAuthMode === 'open') && (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '2px' }}>
+                <button type="button" className="browse-button secondary" onClick={() => void handleSetLanAuthMode('required')}>
+                  {lanAuthMode === 'legacy' ? 'Migrate to required (recommended)' : 'Re-enable required auth'}
+                </button>
+              </div>
+            )}
+            {lanAuthMode === 'required' && (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '2px' }}>
+                <button type="button" className="browse-button secondary" onClick={() => void handleSetLanAuthMode('open')}>
+                  Compatibility mode (no token required)
+                </button>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="password"
+                className="path-input"
+                placeholder={feedTokenConfigured ? 'Token configured — enter a new one to replace' : 'Leave empty to keep origin-guarded'}
+                value={feedToken}
+                onChange={(e) => setFeedToken(e.target.value)}
+                style={{ flex: '1 1 220px', minWidth: 0 }}
+                autoComplete="off"
+              />
+              <button type="button" className="browse-button secondary" onClick={() => void handleSaveFeedToken()}>
+                Save
+              </button>
+              <button type="button" className="browse-button secondary" onClick={() => void handleGenerateFeedToken()}>
+                Generate
+              </button>
+              {feedTokenConfigured && (
+                <button type="button" className="browse-button secondary" onClick={() => void handleClearFeedToken()}>
+                  {lanAuthMode === 'required' ? 'Rotate' : 'Clear'}
+                </button>
+              )}
+            </div>
+            {generatedFeedToken && (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <code style={{ fontSize: '0.72rem', wordBreak: 'break-all', opacity: 0.85 }}>{generatedFeedToken}</code>
+                <button
+                  type="button"
+                  className="browse-button secondary"
+                  onClick={() => setGeneratedFeedToken('')}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+            {feedTokenMessage && (
+              <p className={`setting-message ${feedTokenMessage.type}`} role={feedTokenMessage.type === 'error' ? 'alert' : 'status'} style={{ marginTop: '2px' }}>
+                {feedTokenMessage.text}
+              </p>
+            )}
+          </div>
+
+          <div className="setting-subsection">
+            <h3 className="setting-subsection-title">Pair Mobile App</h3>
+            <p className="setting-subsection-desc">
+              The Blockingmachine iOS/Android app can scan a QR code instead of typing the
+              server address{feedTokenConfigured ? ' and token' : ''}. The hub also advertises
+              itself over mDNS (_blockingmachine._tcp) while the feed server is running.
+            </p>
+            <div>
+              <button type="button" className="browse-button secondary" onClick={() => void handleTogglePairingQr()}>
+                {pairingPayload ? 'Hide pairing QR' : 'Show pairing QR'}
+              </button>
+            </div>
+            {pairingPayload && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
+                {!pairingPayload.running && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <p className="setting-message error" role="alert" style={{ marginTop: '2px' }}>
+                      The feed server is not running — the app can't reach this Mac until it is.
+                    </p>
+                    <div>
+                      <button
+                        type="button"
+                        className="browse-button"
+                        disabled={startingFeedForPairing}
+                        onClick={() => void handleStartFeedForPairing()}
+                      >
+                        {startingFeedForPairing ? 'Starting…' : 'Start feed server'}
+                      </button>
+                    </div>
+                    <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                      Enable "Auto-Start Local LAN Feed Server on Launch" under Startup &amp; Background Services to keep it reachable after restarts.
+                    </span>
+                  </div>
+                )}
+                <div style={{ alignSelf: 'flex-start', background: '#fff', padding: '12px', borderRadius: '8px' }}>
+                  <QRCodeSVG value={pairingPayload.payload} size={160} level="M" />
+                </div>
+                <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                  {pairingPayload.url}
+                  {pairingPayload.tokenConfigured
+                    ? ' — this code carries your feed token; treat it like a password.'
+                    : ' — no feed token is configured, so the code carries only the address.'}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Network Sinkholes & DNS Integration Card */}
@@ -1261,11 +1341,11 @@ const Settings: React.FC<SettingsProps> = ({
             </p>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginTop: '14px' }}>
+          <div className="sinkhole-grid">
             {/* Pi-hole Section */}
-            <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div className="sinkhole-panel">
+              <div className="sinkhole-panel-header">
+                <div className="sinkhole-panel-title">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="4" y="4" width="16" height="16" rx="2" />
                     <rect x="9" y="9" width="6" height="6" />
@@ -1282,8 +1362,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
                 <button
                   type="button"
-                  className="browse-button secondary"
-                  style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                  className="browse-button secondary sinkhole-test-btn"
                   onClick={() => handleTestService('pihole')}
                   disabled={testingService === 'pihole'}
                 >
@@ -1295,33 +1374,33 @@ const Settings: React.FC<SettingsProps> = ({
               </div>
 
               {/* Pi-hole Presets */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>Presets:</span>
+              <div className="preset-row">
+                <span className="preset-row-label">Presets:</span>
                 <button
                   type="button"
-                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  className="preset-chip"
                   onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://pi.hole/admin/api.php' })}
                 >
                   pi.hole
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  className="preset-chip"
                   onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://homeassistant.local:8080/admin/api.php' })}
                 >
                   HA Add-on (8080)
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  className="preset-chip"
                   onClick={() => setSinkholeConfig({ ...sinkholeConfig, piholeUrl: 'http://localhost/admin/api.php' })}
                 >
                   Docker (Port 80)
                 </button>
               </div>
 
-              <div style={{ marginBottom: '10px' }}>
-                <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>API Endpoint URL</label>
+              <div className="field-group">
+                <label className="field-label">API Endpoint URL</label>
                 <input
                   type="text"
                   className="path-input"
@@ -1332,9 +1411,9 @@ const Settings: React.FC<SettingsProps> = ({
                 />
               </div>
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                  <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Auth API Token</label>
-                  <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <div className="field-label-row">
+                  <label className="field-label" style={{ marginBottom: 0 }}>Auth API Token</label>
+                  <span className="secret-actions">
                     {secretConfigured(sinkholeConfig, 'piholeApiKey') && (
                       <SecretClearButton
                         cleared={secretCleared(sinkholeConfig, 'piholeApiKey')}
@@ -1343,7 +1422,7 @@ const Settings: React.FC<SettingsProps> = ({
                     )}
                     <button
                       type="button"
-                      style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                      className="secret-toggle-btn"
                       onClick={() => setShowPiholeKey(!showPiholeKey)}
                     >
                       {showPiholeKey ? 'Hide' : 'Show'}
@@ -1361,17 +1440,17 @@ const Settings: React.FC<SettingsProps> = ({
               </div>
 
               {testResults['pihole'] && (
-                <div style={{ marginTop: '8px', padding: '8px', borderRadius: '6px', fontSize: '0.75rem', background: testResults['pihole'].success ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: testResults['pihole'].success ? '#10b981' : '#ef4444' }}>
+                <div className={`test-result ${testResults['pihole'].success ? 'ok' : 'err'}`}>
                   <div><strong>{testResults['pihole'].success ? '✓' : '✗'} {testResults['pihole'].message}</strong></div>
-                  {testResults['pihole'].details && <div style={{ marginTop: '4px', opacity: 0.85, fontSize: '0.7rem' }}>{testResults['pihole'].details}</div>}
+                  {testResults['pihole'].details && <div className="test-result-details">{testResults['pihole'].details}</div>}
                 </div>
               )}
             </div>
 
             {/* AdGuard Home Section */}
-            <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div className="sinkhole-panel">
+              <div className="sinkhole-panel-header">
+                <div className="sinkhole-panel-title">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                   </svg>
@@ -1379,8 +1458,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
                 <button
                   type="button"
-                  className="browse-button secondary"
-                  style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                  className="browse-button secondary sinkhole-test-btn"
                   onClick={() => handleTestService('adguard')}
                   disabled={testingService === 'adguard'}
                 >
@@ -1392,8 +1470,8 @@ const Settings: React.FC<SettingsProps> = ({
               </div>
 
               {/* Mode Selector */}
-              <div style={{ marginBottom: '10px' }}>
-                <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Integration Method</label>
+              <div className="field-group">
+                <label className="field-label">Integration Method</label>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   <button
                     type="button"
@@ -1423,39 +1501,40 @@ const Settings: React.FC<SettingsProps> = ({
               </div>
 
               {/* Quick Presets Row */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>Presets:</span>
+              <div className="preset-row">
+                <span className="preset-row-label">Presets:</span>
                 <button
                   type="button"
-                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  className="preset-chip"
                   onClick={() => selectAdguardMode('direct', { adguardHomeUrl: `http://homeassistant.local:${directPort}` })}
                 >
                   HA Port {directPort}
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  className="preset-chip"
                   onClick={() => selectAdguardMode('ha-api', { adguardHomeUrl: 'http://homeassistant.local:8123' })}
                 >
                   HA Port 8123 API
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  className="preset-chip"
                   onClick={() => selectAdguardMode('direct', { adguardHomeUrl: `http://localhost:${directPort}` })}
                 >
                   Docker {directPort}
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                  className="preset-chip"
                   onClick={() => selectAdguardMode('direct', { adguardHomeUrl: `http://192.168.8.1:${directPort}` })}
                 >
                   GL.iNet {directPort}
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  className="preset-chip"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                   onClick={() => selectAdguardMode('ha-api', { adguardHomeUrl: 'https://your-instance.ui.nabu.casa' })}
                 >
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1465,7 +1544,8 @@ const Settings: React.FC<SettingsProps> = ({
                 </button>
                 <button
                   type="button"
-                  style={{ background: 'var(--overlay-2)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'inherit', fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  className="preset-chip"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                   onClick={() => selectAdguardMode('webhook', { haWebhookUrl: 'https://hooks.nabu.casa/...' })}
                 >
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1478,24 +1558,27 @@ const Settings: React.FC<SettingsProps> = ({
               {/* Direct Mode Fields */}
               {(!sinkholeConfig.adguardMode || sinkholeConfig.adguardMode === 'direct') && (
                 <>
-                  <div style={{ marginBottom: '10px' }}>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Instance URL (AdGuard port {directPort})</label>
-                    <input
-                      type="text"
-                      className="path-input"
+                  <div className="field-group">
+                    <div className="field-grid-url-port">
+                      <div>
+                        <label className="field-label">Instance URL</label>
+                        <input
+                          type="text"
+                          className="path-input"
 
-                      placeholder={`http://homeassistant.local:${directPort} or http://192.168.1.1:${directPort}`}
-                      value={sinkholeConfig.adguardHomeUrl}
-                      onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value, adguardDirectUrl: e.target.value })}
-                    />
-                    <label htmlFor="adguardDirectPort" style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', margin: '8px 0 4px' }}>AdGuard API port</label>
-                    <input
-                      type="number"
-                      id="adguardDirectPort"
-                      min={1}
-                      max={65535}
-                      className="path-input"
-                      style={{ width: '120px' }}
+                          placeholder={`http://homeassistant.local:${directPort} or http://192.168.1.1:${directPort}`}
+                          value={sinkholeConfig.adguardHomeUrl}
+                          onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value, adguardDirectUrl: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="adguardDirectPort" className="field-label">API port</label>
+                        <input
+                          type="number"
+                          id="adguardDirectPort"
+                          min={1}
+                          max={65535}
+                          className="path-input"
                       value={sinkholeConfig.adguardDirectPort ?? ''}
                       onFocus={() => {
                         directPortFocusRef.current = directPort;
@@ -1522,15 +1605,17 @@ const Settings: React.FC<SettingsProps> = ({
                           adguardDirectUrl: replaceMatchingExplicitPort(sinkholeConfig.adguardDirectUrl || nextUrl, previous, next),
                         });
                       }}
-                    />
-                    <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
+                        />
+                      </div>
+                    </div>
+                    <p className="field-hint">
                       Used when the URL has no port. A port written in the URL is kept.
                     </p>
                     <AdGuardDirectWarning url={sinkholeConfig.adguardHomeUrl || ''} port={directPort} />
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <div className="field-grid-2">
                     <div>
-                      <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Username</label>
+                      <label className="field-label">Username</label>
                       <input
                         type="text"
                         className="path-input"
@@ -1541,9 +1626,9 @@ const Settings: React.FC<SettingsProps> = ({
                       />
                     </div>
                     <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                        <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Password</label>
-                        <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                      <div className="field-label-row">
+                        <label className="field-label" style={{ marginBottom: 0 }}>Password</label>
+                        <span className="secret-actions">
                           {secretConfigured(sinkholeConfig, 'adguardHomePassword') && (
                             <SecretClearButton
                               cleared={secretCleared(sinkholeConfig, 'adguardHomePassword')}
@@ -1552,7 +1637,7 @@ const Settings: React.FC<SettingsProps> = ({
                           )}
                           <button
                             type="button"
-                            style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                            className="secret-toggle-btn"
                             onClick={() => setShowAdguardPass(!showAdguardPass)}
                           >
                             {showAdguardPass ? 'Hide' : 'Show'}
@@ -1575,8 +1660,8 @@ const Settings: React.FC<SettingsProps> = ({
               {/* Home Assistant REST API Mode Fields */}
               {sinkholeConfig.adguardMode === 'ha-api' && (
                 <>
-                  <div style={{ marginBottom: '10px' }}>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Home Assistant URL (Port 8123 / Nabu Casa)</label>
+                  <div className="field-group">
+                    <label className="field-label">Home Assistant URL (Port 8123 / Nabu Casa)</label>
                     <input
                       type="text"
                       className="path-input"
@@ -1587,9 +1672,9 @@ const Settings: React.FC<SettingsProps> = ({
                     />
                   </div>
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                      <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Long-Lived Access Token</label>
-                      <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <div className="field-label-row">
+                      <label className="field-label" style={{ marginBottom: 0 }}>Long-Lived Access Token</label>
+                      <span className="secret-actions">
                         {secretConfigured(sinkholeConfig, 'haToken') && (
                           <SecretClearButton
                             cleared={secretCleared(sinkholeConfig, 'haToken')}
@@ -1598,7 +1683,7 @@ const Settings: React.FC<SettingsProps> = ({
                         )}
                         <button
                           type="button"
-                          style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                          className="secret-toggle-btn"
                           onClick={() => setShowHaToken(!showHaToken)}
                         >
                           {showHaToken ? 'Hide' : 'Show'}
@@ -1613,11 +1698,11 @@ const Settings: React.FC<SettingsProps> = ({
                       value={sinkholeConfig.haToken || ''}
                       onChange={(e) => setSinkholeConfig(updateSecretField(sinkholeConfig, 'haToken', e.target.value))}
                     />
-                    <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
+                    <p className="field-hint">
                       Generate in HA: Profile, then Security, then Long-Lived Access Tokens. Reloads call <code>adguard.refresh</code> on the Home Assistant URL, often port 8123 or Nabu Casa.
                     </p>
                     <div style={{ marginTop: '10px' }}>
-                      <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>AdGuard Direct URL (query log and Radar)</label>
+                      <label className="field-label">AdGuard Direct URL (query log and Radar)</label>
                       <input
                         type="text"
                         className="path-input"
@@ -1626,7 +1711,7 @@ const Settings: React.FC<SettingsProps> = ({
                         value={sinkholeConfig.adguardDirectUrl || ''}
                         onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardDirectUrl: e.target.value })}
                       />
-                      <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
+                      <p className="field-hint">
                         Kept separate from the Home Assistant URL. Radar and the query log use this address with the AdGuard username and password.
                       </p>
                     </div>
@@ -1661,7 +1746,7 @@ const Settings: React.FC<SettingsProps> = ({
               {/* Home Assistant Automation Webhook Mode Fields */}
               {sinkholeConfig.adguardMode === 'webhook' && (
                 <div>
-                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Home Assistant Webhook URL (Local / Nabu Casa)</label>
+                  <label className="field-label">Home Assistant Webhook URL (Local / Nabu Casa)</label>
                   <input
                     type="text"
                     className="path-input"
@@ -1670,11 +1755,11 @@ const Settings: React.FC<SettingsProps> = ({
                     value={sinkholeConfig.haWebhookUrl || ''}
                     onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: e.target.value })}
                   />
-                  <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
+                  <p className="field-hint">
                     Triggered without credentials. Set an Automation in HA with a Webhook Trigger (local or Nabu Casa Cloud Webhook) calling the action <code>adguard.refresh</code>.
                   </p>
                   <div style={{ marginTop: '10px' }}>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>AdGuard Direct URL (query log and Radar)</label>
+                    <label className="field-label">AdGuard Direct URL (query log and Radar)</label>
                     <input
                       type="text"
                       className="path-input"
@@ -1683,7 +1768,7 @@ const Settings: React.FC<SettingsProps> = ({
                       value={sinkholeConfig.adguardDirectUrl || ''}
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardDirectUrl: e.target.value })}
                     />
-                    <p style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '4px', marginBottom: 0 }}>
+                    <p className="field-hint">
                       The webhook reloads Home Assistant. Radar reads the query log from this AdGuard address with the username and password below.
                     </p>
                   </div>
@@ -1737,9 +1822,9 @@ const Settings: React.FC<SettingsProps> = ({
                     }}
                   />
                   {!isServiceMismatch(testResults['adguard'].details) && (
-                    <div style={{ padding: '8px', borderRadius: '6px', fontSize: '0.75rem', background: testResults['adguard'].success ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: testResults['adguard'].success ? '#10b981' : '#ef4444' }}>
+                    <div className={`test-result ${testResults['adguard'].success ? 'ok' : 'err'}`}>
                       <div><strong>{testResults['adguard'].success ? '✓' : '✗'} {testResults['adguard'].message}</strong></div>
-                      {testResults['adguard'].details && !isServiceMismatch(testResults['adguard'].details) && <div style={{ marginTop: '4px', opacity: 0.85, fontSize: '0.7rem' }}>{testResults['adguard'].details}</div>}
+                      {testResults['adguard'].details && !isServiceMismatch(testResults['adguard'].details) && <div className="test-result-details">{testResults['adguard'].details}</div>}
                     </div>
                   )}
                 </div>
@@ -1748,9 +1833,9 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
 
           {/* Homelab & Custom Webhook Endpoint */}
-          <div style={{ marginTop: '14px', background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <div style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div className="sinkhole-panel" style={{ marginTop: '14px' }}>
+            <div className="sinkhole-panel-header">
+              <div className="sinkhole-panel-title">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10" />
                   <line x1="2" y1="12" x2="22" y2="12" />
@@ -1760,8 +1845,7 @@ const Settings: React.FC<SettingsProps> = ({
               </div>
               <button
                 type="button"
-                className="browse-button secondary"
-                style={{ padding: '4px 10px', fontSize: '0.75rem', height: '28px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                className="browse-button secondary sinkhole-test-btn"
                 onClick={() => handleTestService('webhook')}
                 disabled={testingService === 'webhook'}
               >
@@ -1783,9 +1867,9 @@ const Settings: React.FC<SettingsProps> = ({
               onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, customWebhookUrl: e.target.value })}
             />
             {testResults['webhook'] && (
-              <div style={{ marginTop: '8px', padding: '8px', borderRadius: '6px', fontSize: '0.75rem', background: testResults['webhook'].success ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: testResults['webhook'].success ? '#10b981' : '#ef4444' }}>
+              <div className={`test-result ${testResults['webhook'].success ? 'ok' : 'err'}`}>
                 <div><strong>{testResults['webhook'].success ? '✓' : '✗'} {testResults['webhook'].message}</strong></div>
-                {testResults['webhook'].details && <div style={{ marginTop: '4px', opacity: 0.85, fontSize: '0.7rem' }}>{testResults['webhook'].details}</div>}
+                {testResults['webhook'].details && <div className="test-result-details">{testResults['webhook'].details}</div>}
               </div>
             )}
           </div>
@@ -1986,6 +2070,56 @@ const Settings: React.FC<SettingsProps> = ({
                     </button>
                   )}
                 </div>
+
+                {shadowReadiness && (
+                  <div className="v3-readiness">
+                    <div className="v3-readiness-head">
+                      <span className="v3-readiness-title">v3 training evidence</span>
+                      <span className={`setting-badge ${shadowReadiness.ready ? 'success' : 'warning'}`}>
+                        {shadowReadiness.ready ? 'Ready to evaluate' : 'Collecting'}
+                      </span>
+                    </div>
+                    <div className="v3-progress-row">
+                      <span className="v3-progress-label">Days of traffic</span>
+                      <div className="progress-track">
+                        <div
+                          className="progress-fill"
+                          style={{ width: `${Math.min(100, (shadowReadiness.days / shadowReadiness.target.minDays) * 100)}%` }}
+                        />
+                      </div>
+                      <span className="v3-progress-count">
+                        {shadowReadiness.days}/{shadowReadiness.target.minDays}
+                      </span>
+                    </div>
+                    <div className="v3-progress-row">
+                      <span className="v3-progress-label">Domains scored</span>
+                      <div className="progress-track">
+                        <div
+                          className="progress-fill"
+                          style={{ width: `${Math.min(100, (shadowReadiness.scoredDomains / shadowReadiness.target.minScored) * 100)}%` }}
+                        />
+                      </div>
+                      <span className="v3-progress-count">
+                        {shadowReadiness.scoredDomains.toLocaleString()}/{shadowReadiness.target.minScored.toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="v3-readiness-sources">
+                      Sources: {shadowReadiness.dnsObservationRecords.toLocaleString()} DNS observations ·{' '}
+                      {shadowReadiness.fanoutHosts.toLocaleString()} browser-tracked hosts ·{' '}
+                      {shadowReadiness.liveIndexEntries.toLocaleString()} live in classifier ·{' '}
+                      {shadowReadiness.disagreementRecords.toLocaleString()} disagreements ·{' '}
+                      {shadowReadiness.sampleRecords.toLocaleString()} samples
+                    </p>
+                    {userLabelStats && (
+                      <p className="v3-readiness-sources">
+                        Labels: {userLabelStats.count.toLocaleString()} of your Confirm-Threat / Mark-Safe corrections recorded — merged into labels.db at the next training run (<code>user-labels.jsonl</code>).
+                      </p>
+                    )}
+                    <p className="v3-readiness-note">
+                      “Ready” means enough real traffic exists to evaluate a v3 model — promotion still has to pass the precision gate.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2017,7 +2151,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Ollama Host URL</label>
+                    <label className="field-label">Ollama Host URL</label>
                     <input
                       type="text"
                       className="path-input"
@@ -2028,7 +2162,7 @@ const Settings: React.FC<SettingsProps> = ({
                     />
                   </div>
                   <div>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Model Name</label>
+                    <label className="field-label">Model Name</label>
                     <input
                       type="text"
                       className="path-input"
@@ -2044,11 +2178,11 @@ const Settings: React.FC<SettingsProps> = ({
 
             {aiConfig.provider === 'gemini' && (
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                  <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>Google Gemini API Key</label>
+                <div className="field-label-row">
+                  <label className="field-label" style={{ marginBottom: 0 }}>Google Gemini API Key</label>
                   <button
                     type="button"
-                    style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                    className="secret-toggle-btn"
                     onClick={() => setShowAiKey(!showAiKey)}
                   >
                     {showAiKey ? 'Hide' : 'Show'}
@@ -2100,7 +2234,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '12px', marginBottom: '10px' }}>
                   <div>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>API Endpoint URL</label>
+                    <label className="field-label">API Endpoint URL</label>
                     <input
                       type="text"
                       className="path-input"
@@ -2111,7 +2245,7 @@ const Settings: React.FC<SettingsProps> = ({
                     />
                   </div>
                   <div>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Model Name</label>
+                    <label className="field-label">Model Name</label>
                     <input
                       type="text"
                       className="path-input"
@@ -2123,11 +2257,11 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
                 </div>
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8 }}>API Key</label>
+                  <div className="field-label-row">
+                    <label className="field-label" style={{ marginBottom: 0 }}>API Key</label>
                     <button
                       type="button"
-                      style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}
+                      className="secret-toggle-btn"
                       onClick={() => setShowAiKey(!showAiKey)}
                     >
                       {showAiKey ? 'Hide' : 'Show'}
@@ -2151,7 +2285,7 @@ const Settings: React.FC<SettingsProps> = ({
             )}
 
             {aiTestResult && (
-              <div style={{ marginTop: '10px', padding: '8px 10px', borderRadius: '6px', fontSize: '0.75rem', background: aiTestResult.success ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: aiTestResult.success ? '#10b981' : '#ef4444' }}>
+              <div className={`test-result ${aiTestResult.success ? 'ok' : 'err'}`} style={{ marginTop: '10px' }}>
                 <strong>{aiTestResult.success ? '✓' : '✗'} {aiTestResult.message}</strong> {aiTestResult.latencyMs ? `(${aiTestResult.latencyMs}ms)` : ''}
               </div>
             )}
@@ -2159,7 +2293,7 @@ const Settings: React.FC<SettingsProps> = ({
 
           {/* Triage Cascade — local screening with a bounded escalation budget */}
           <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', marginBottom: '14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div className="sinkhole-panel-header">
               <div style={{ fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M3 5h18M6 12h12M10 19h4" />
@@ -2192,7 +2326,7 @@ const Settings: React.FC<SettingsProps> = ({
             {aiConfig.cascade?.enabled && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div>
-                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Model calls per scan</label>
+                  <label className="field-label">Model calls per scan</label>
                   <input
                     type="number"
                     className="path-input"
@@ -2213,7 +2347,7 @@ const Settings: React.FC<SettingsProps> = ({
                   />
                 </div>
                 <div>
-                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Clean-traffic discovery</label>
+                  <label className="field-label">Clean-traffic discovery</label>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.78rem', height: '34px' }}>
                     <input
                       type="checkbox"
@@ -2239,7 +2373,7 @@ const Settings: React.FC<SettingsProps> = ({
 
           {/* Sentinel Watchdog Automation */}
           <div style={{ background: 'var(--overlay-1)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', marginBottom: '14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div className="sinkhole-panel-header">
               <div style={{ fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />

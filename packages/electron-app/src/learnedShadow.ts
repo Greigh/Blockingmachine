@@ -19,6 +19,7 @@ import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import {
   createLearnedClassifier,
+  isPublicHostname,
   runShadowComparison,
   verifyLearnedManifest,
   type BehavioralObservation,
@@ -28,6 +29,12 @@ import {
   type ShadowRunResult,
   type ShadowSample,
 } from '@blockingmachine/core';
+import {
+  indexLiveObservation,
+  liveObservationCount,
+  observationFromDnsRecord,
+  type DnsObservationRecord,
+} from './liveObservations';
 
 let classifier: LearnedClassifier | null = null;
 let initAttempted = false;
@@ -258,32 +265,21 @@ export function shadowScoreObservationFile(
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
-      const rec = JSON.parse(trimmed) as {
-        domain?: string;
-        verdict?: string;
-        rcode?: number | null;
-        cname_depth?: number;
-        cname_foreign?: boolean;
-        ttl_min?: number;
-        latency_ms?: number;
-      };
-      if (typeof rec.domain !== 'string' || seen.has(rec.domain)) continue;
+      const rec = JSON.parse(trimmed) as DnsObservationRecord;
+      // Skip names the serving index would reject anyway (mDNS chatter, reverse
+      // zones) — the recorder now drops them at write time, but records written
+      // before that still reach this tail.
+      if (typeof rec.domain !== 'string' || !isPublicHostname(rec.domain) || seen.has(rec.domain)) continue;
+      const obsRecord = observationFromDnsRecord(rec);
+      // Same record, second reader: the serving classifier's observation index.
+      indexLiveObservation(rec.domain, obsRecord);
       seen.set(rec.domain, {
         decision: rec.verdict === 'BLOCKED' ? 'block' : 'allow',
         // Feed the v3 tail the observation that produced this record — a
         // v1/v2 model ignores it; a v3 model scores what the resolver saw.
         // dnsQueryCount is 1 by construction (deduped stream), nxdomainRate is
         // the degenerate single-sample rate, and fanout_* stay absent → 0.
-        obs: {
-          dnsSeen: true,
-          dnsQueryCount: 1,
-          dnsBlocked: rec.verdict === 'BLOCKED',
-          dnsCnameDepth: rec.cname_depth ?? null,
-          dnsCnameForeign: rec.cname_foreign ?? null,
-          dnsNxdomainRate: rec.rcode === 3 ? 1 : typeof rec.rcode === 'number' ? 0 : null,
-          dnsTtlMin: rec.ttl_min ?? null,
-          dnsLatencyMs: rec.latency_ms ?? null,
-        },
+        obs: obsRecord,
       });
       recordsRead++;
     } catch {
@@ -322,4 +318,119 @@ export function shadowScoreObservationFile(
     });
   }
   return { ...result, logPath, modelVersion, bytesRead: size - offset, recordsRead };
+}
+
+/** Gate thresholds this readout measures against — the same numbers gate.py enforces. */
+const SHADOW_GATE_MIN_DAYS = 7;
+const SHADOW_GATE_MIN_SCORED = 1000;
+
+export interface ShadowReadiness {
+  /** Distinct UTC dates with at least one real record (zero-eval sweeps don't count). */
+  days: number;
+  /** Sum of per-sweep `evaluated` counters — what `shadow.py coverage()` reports. */
+  scoredDomains: number;
+  disagreementRecords: number;
+  sampleRecords: number;
+  firstAt: string | null;
+  lastAt: string | null;
+  /** Scored by weights with no promotion manifest — evidence, but unversioned. */
+  unversionedScoredDomains: number;
+  modelVersions: number[];
+  /** Line count of the daemon's raw observation stream (post-filter from now on). */
+  dnsObservationRecords: number;
+  /** Entries in the serving classifier's live-observation index right now. */
+  liveIndexEntries: number;
+  /** Hosts the browser's first-party fan-out ledger currently tracks. */
+  fanoutHosts: number;
+  target: { minDays: number; minScored: number };
+  /** True only when both gate coverage thresholds are met — never earlier. */
+  ready: boolean;
+}
+
+/**
+ * Promotion-gate readiness, computed from the same files `gate.py` reads and
+ * with the same counting rules as `shadow.py`'s `coverage()`: scored domains
+ * come from summary `evaluated` counters (a domain the model and the reference
+ * agreed on is never written as its own line), and a zero-eval sweep is not a
+ * day of coverage. A *readout*, not the gate — `ready` says only that the
+ * corpus is big enough to evaluate, never that the model deserves promotion.
+ */
+export function shadowReadiness(
+  observationsPath: string | null,
+  fanoutHosts: number,
+): ShadowReadiness {
+  const days = new Set<string>();
+  let scoredDomains = 0;
+  let unversionedScoredDomains = 0;
+  const modelVersions = new Set<number>();
+  let disagreementRecords = 0;
+  let sampleRecords = 0;
+  let firstAt: string | null = null;
+  let lastAt: string | null = null;
+
+  const noteAt = (at: unknown) => {
+    if (typeof at !== 'string' || at.length < 10) return;
+    if (firstAt === null || at < firstAt) firstAt = at;
+    if (lastAt === null || at > lastAt) lastAt = at;
+  };
+
+  try {
+    const text = readFileSync(join(app.getPath('userData'), 'learned-shadow.jsonl'), 'utf8');
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let rec: { type?: string; sample?: boolean; evaluated?: number; modelVersion?: number | null; at?: string; learnedDecision?: string; referenceDecision?: string; domain?: string };
+      try {
+        rec = JSON.parse(trimmed);
+      } catch {
+        continue; // torn tail line
+      }
+      if (!rec || typeof rec !== 'object') continue;
+      if (rec.type === 'summary') {
+        const evaluated = typeof rec.evaluated === 'number' && Number.isFinite(rec.evaluated) ? rec.evaluated : 0;
+        scoredDomains += evaluated;
+        if (evaluated > 0) {
+          days.add((rec.at ?? '').slice(0, 10));
+          if (rec.modelVersion == null) unversionedScoredDomains += evaluated;
+          else if (typeof rec.modelVersion === 'number') modelVersions.add(rec.modelVersion);
+        }
+        noteAt(rec.at);
+        continue;
+      }
+      const isDecisionRecord = typeof rec.learnedDecision === 'string' && typeof rec.referenceDecision === 'string';
+      if (rec.sample === true && isDecisionRecord) sampleRecords++;
+      else if (isDecisionRecord) disagreementRecords++;
+      else continue; // unknown kind — same as shadow.py's parser, ignore it
+      if (rec.at) days.add(rec.at.slice(0, 10));
+      noteAt(rec.at);
+    }
+  } catch {
+    // No shadow log yet — readiness is all zeros, which is the honest answer.
+  }
+
+  let dnsObservationRecords = 0;
+  if (observationsPath) {
+    try {
+      const text = readFileSync(observationsPath, 'utf8');
+      dnsObservationRecords = text.split('\n').reduce((n, l) => n + (l.trim() ? 1 : 0), 0);
+    } catch {
+      // Stream absent — the daemon may not be recording yet.
+    }
+  }
+
+  return {
+    days: days.size,
+    scoredDomains,
+    disagreementRecords,
+    sampleRecords,
+    firstAt,
+    lastAt,
+    unversionedScoredDomains,
+    modelVersions: [...modelVersions].sort((a, b) => a - b),
+    dnsObservationRecords,
+    liveIndexEntries: liveObservationCount(),
+    fanoutHosts,
+    target: { minDays: SHADOW_GATE_MIN_DAYS, minScored: SHADOW_GATE_MIN_SCORED },
+    ready: days.size >= SHADOW_GATE_MIN_DAYS && scoredDomains >= SHADOW_GATE_MIN_SCORED,
+  };
 }

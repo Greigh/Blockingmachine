@@ -1,5 +1,5 @@
 import dnsPacket from 'dns-packet';
-import { decomposeDomain } from '@blockingmachine/core';
+import { decomposeDomain, isPublicHostname } from '@blockingmachine/core';
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { DnsVerdict } from '../types.js';
@@ -137,8 +137,15 @@ export class ObservationRecorder {
     this.now = opts.now ?? Date.now;
   }
 
-  /** Records one observation unless the domain was already recorded this window. */
+  /**
+   * Records one observation unless the domain was already recorded this window.
+   * Non-public names — mDNS/Bonjour chatter, PTR reverse zones, private suffixes,
+   * bare machine names — are dropped here rather than upstream: they carry no
+   * threat signal, and recording them would poison both the training corpus and
+   * the app's live-observation index.
+   */
   observe(obs: DnsObservation): void {
+    if (!isPublicHostname(obs.domain)) return;
     const at = this.now();
     const last = this.lastSeen.get(obs.domain);
     if (last !== undefined && at - last < this.dedupWindowMs) return;

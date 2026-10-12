@@ -18,6 +18,7 @@
  */
 const STABLE_PRE = 99;
 
+/** @param {string | undefined} pre the prerelease suffix, e.g. "rc.11" @returns {number} */
 function parsePrerelease(pre) {
   if (!pre) return STABLE_PRE;
   const m = pre.match(/(?:rc|beta|alpha)\.?(\d+)/i);
@@ -38,7 +39,10 @@ function versionToCode(version) {
   return M * 1_000_000 + mn * 10_000 + p * 100 + parsePrerelease(m[4]);
 }
 
-/** versionCode for a build: BM_ANDROID_VERSION_CODE override, else derived. */
+/** versionCode for a build: BM_ANDROID_VERSION_CODE override, else derived.
+ *  @param {string} version e.g. "1.0.0-rc.11"
+ *  @param {Record<string, string | undefined>} [env]
+ *  @returns {number} */
 function resolveVersionCode(version, env = process.env) {
   const raw = env.BM_ANDROID_VERSION_CODE;
   if (raw !== undefined && raw !== '') {

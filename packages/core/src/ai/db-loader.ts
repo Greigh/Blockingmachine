@@ -54,6 +54,7 @@ export interface DbLists {
   suspiciousAdTokens: string[];
   suspiciousTrackerTokens: string[];
   suspiciousConsentTokens: string[];
+  suspiciousLureTokens: string[];
   specificNetworkTokens: string[];
   highProfileBrands: string[];
   dictionaryExemptions: string[];
@@ -154,6 +155,7 @@ const LIST_KEYS: Array<keyof DbLists> = [
   'cdnSuffixes', 'iotTrusted', 'vendorSuffixes', 'platformSuffixes',
   'multiTenantPlatforms', 'untrustedHosting', 'cdnRoutingSuffixes',
   'suspiciousAdTokens', 'suspiciousTrackerTokens', 'suspiciousConsentTokens',
+  'suspiciousLureTokens',
   'specificNetworkTokens',
   'highProfileBrands', 'dictionaryExemptions', 'benignEndpointLabels', 'dnsSuffixes',
 ];
@@ -164,6 +166,7 @@ const LOWERCASE_KEYS = new Set<keyof DbLists>([
   'cdnSuffixes', 'iotTrusted', 'vendorSuffixes', 'platformSuffixes',
   'multiTenantPlatforms', 'untrustedHosting', 'cdnRoutingSuffixes',
   'suspiciousAdTokens', 'suspiciousTrackerTokens', 'suspiciousConsentTokens',
+  'suspiciousLureTokens',
   'specificNetworkTokens',
   'highProfileBrands', 'dictionaryExemptions', 'benignEndpointLabels', 'dnsSuffixes',
 ]);

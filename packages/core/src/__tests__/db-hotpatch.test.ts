@@ -440,9 +440,9 @@ describe('remote patch cache hygiene', () => {
 // ─── Base data sanity ────────────────────────────────────────────────────────
 
 describe('BASE_DB_LISTS snapshot', () => {
-  test('captures all nineteen list keys with real data', () => {
+  test('captures all twenty list keys with real data', () => {
     const keys = Object.keys(BASE_DB_LISTS);
-    expect(keys).toHaveLength(19);
+    expect(keys).toHaveLength(20);
     for (const key of keys) {
       expect((BASE_DB_LISTS as unknown as Record<string, string[]>)[key].length).toBeGreaterThan(0);
     }

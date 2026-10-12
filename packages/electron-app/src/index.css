@@ -1271,6 +1271,100 @@ input:checked + .mac-slider:before {
   color: var(--badge-text);
 }
 
+.setting-badge.success {
+  background: color-mix(in srgb, var(--success-color) 12%, transparent);
+  color: var(--success-color);
+}
+
+.setting-badge.warning {
+  background: color-mix(in srgb, var(--warning-color) 14%, transparent);
+  color: var(--warning-color);
+}
+
+/* v3 readiness readout — promotion-gate coverage in the Mini-AI subform. */
+.v3-readiness {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--overlay-2);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.v3-readiness-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.v3-readiness-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.v3-progress-row {
+  display: grid;
+  grid-template-columns: 96px 1fr 58px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.v3-progress-label {
+  font-size: 0.72rem;
+  color: var(--secondary-color);
+}
+
+.v3-progress-count {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-color);
+  text-align: right;
+}
+
+.v3-readiness-sources,
+.v3-readiness-note {
+  font-size: 0.7rem;
+  color: var(--secondary-color);
+  line-height: 1.4;
+  margin: 6px 0 0;
+}
+
+.v3-readiness-note {
+  opacity: 0.75;
+  font-style: italic;
+}
+
+/* Sub-sections inside a settings card — a divider and a mini header so a card
+   holding more than one concern reads as groups, not a running list. */
+.setting-subsection {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setting-subsection-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--heading-color);
+  margin: 0;
+}
+
+.setting-subsection-desc {
+  font-size: 0.75rem;
+  color: var(--secondary-color);
+  margin: 0;
+}
+
 .setting-message {
   font-size: 0.78rem;
   font-weight: 500;
@@ -3452,6 +3546,7 @@ input:checked + .mac-slider:before {
   white-space: normal;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
 }
 
@@ -5085,12 +5180,15 @@ input:checked + .mac-slider:before {
 
 .accent-palette-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  /* Fixed 4-up so the 7 swatches always lay out 4+3 — a lone orphan on the
+     last row and scroll-clipped labels both read as broken. */
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
 
 .accent-color-swatch {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
@@ -6198,6 +6296,129 @@ button.format-tile .format-target {
   background: color-mix(in srgb, var(--primary-color) 8%, transparent);
   border-color: color-mix(in srgb, var(--primary-color) 30%, transparent);
   color: var(--primary-color);
+}
+
+/* Network sinkhole panels — the Pi-hole / AdGuard / webhook mini-cards. Panels
+   top-align (align-items:start) so a short panel doesn't stretch empty to
+   match a taller sibling. */
+.sinkhole-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 14px;
+  align-items: start;
+}
+.sinkhole-panel {
+  background: var(--overlay-1);
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+.sinkhole-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.sinkhole-panel-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sinkhole-panel-title svg {
+  flex-shrink: 0;
+}
+.browse-button.sinkhole-test-btn {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.preset-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.preset-row-label {
+  font-size: 0.7rem;
+  opacity: 0.6;
+}
+.field-group {
+  margin-bottom: 10px;
+}
+.field-label {
+  font-size: 0.75rem;
+  opacity: 0.8;
+  display: block;
+  margin-bottom: 4px;
+}
+.field-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.field-hint {
+  font-size: 0.7rem;
+  opacity: 0.6;
+  margin: 4px 0 0;
+}
+.field-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.field-grid-url-port {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 8px;
+  align-items: end;
+}
+.secret-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.secret-toggle-btn {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.6;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0;
+}
+.secret-toggle-btn:hover {
+  opacity: 1;
+}
+.test-result {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+.test-result.ok {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+.test-result.err {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+.test-result-details {
+  margin-top: 4px;
+  opacity: 0.85;
+  font-size: 0.7rem;
 }
 
 /* Form Fields in Deploy Hub */
@@ -9807,6 +10028,68 @@ button.format-tile .format-target {
   border: 1px solid color-mix(in srgb, var(--tone-teal) 35%, transparent);
 }
 
+/* Evidence chips — which features pushed the local classifier's verdict. */
+.evidence-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.2px;
+  cursor: help;
+}
+
+.evidence-chip.threat {
+  background: color-mix(in srgb, var(--tone-danger) 12%, transparent);
+  color: var(--tone-danger);
+  border: 1px solid color-mix(in srgb, var(--tone-danger) 30%, transparent);
+}
+
+.evidence-chip.clean {
+  background: color-mix(in srgb, var(--tone-success) 12%, transparent);
+  color: var(--tone-success);
+  border: 1px solid color-mix(in srgb, var(--tone-success) 30%, transparent);
+}
+
+.evidence-chip.neutral {
+  background: color-mix(in srgb, var(--tone-slate) 12%, transparent);
+  color: var(--tone-slate);
+  border: 1px solid color-mix(in srgb, var(--tone-slate) 30%, transparent);
+}
+
+/* Live-services strip — the running parts of the hub under the DNS row. */
+.protection-live-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+.protection-live-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  min-width: 0;
+}
+
+.protection-live-name {
+  font-weight: 600;
+  color: var(--heading-color);
+  white-space: nowrap;
+}
+
+.protection-live-detail {
+  color: var(--secondary-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .verdict-chip.clean {
   background: color-mix(in srgb, var(--tone-success) 15%, transparent);
   color: var(--tone-success);
@@ -12413,6 +12696,11 @@ select.stream-select.sort-select,
   color: var(--secondary-color);
 }
 
+.tier-plan-baseline-note {
+  margin-top: -6px;
+  color: var(--tone-warning);
+}
+
 .tier-plan-card-empty,
 .tier-plan-card-error {
   margin: 0;
@@ -12440,40 +12728,99 @@ select.stream-select.sort-select,
   border-color: var(--primary-color);
 }
 
-.tier-plan-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 11px;
+/* Tiers lay out as tiles, three across — the card is half a pane wide and six stacked rows
+   read as a wall; two rows of tiles keep every tier's verdict in view at once. */
+.tier-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
   margin-bottom: 10px;
 }
 
-.tier-plan-table th,
-.tier-plan-table td {
-  padding: 5px 6px;
-  text-align: left;
-  border-bottom: 1px solid var(--border-color, color-mix(in srgb, var(--tone-slate) 15%, transparent));
+@media (max-width: 560px) {
+  .tier-plan-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-.tier-plan-table thead th {
-  font-size: 9.5px;
+.tier-plan-tile {
+  background: var(--overlay-1, color-mix(in srgb, var(--tone-slate) 6%, transparent));
+  border: 1px solid var(--border-color, color-mix(in srgb, var(--tone-slate) 20%, transparent));
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+/* Kept tiles carry a success-tinted edge so the plan's answer reads before the numbers do. */
+.tier-plan-tile.kept {
+  border-color: color-mix(in srgb, var(--tone-success) 35%, transparent);
+}
+
+.tier-plan-tile-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+
+.tier-plan-tile-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-color);
+  min-width: 0;
+}
+
+.tier-plan-tile-stats {
+  display: flex;
+  gap: 14px;
+}
+
+.tier-plan-stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.tier-plan-stat-value {
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-color);
+}
+
+.tier-plan-stat-label {
+  font-size: 8.5px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--secondary-color);
+}
+
+/* In-plan verdicts are pills: kept/dropped/excluded are different facts and read at a glance. */
+.tier-plan-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 9.5px;
   font-weight: 600;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--tone-slate) 12%, transparent);
+  color: var(--secondary-color);
 }
 
-.tier-plan-table tbody th {
-  font-weight: 500;
-  color: var(--text-color);
+.tier-plan-status.kept {
+  background: color-mix(in srgb, var(--tone-success) 14%, transparent);
+  color: var(--tone-success);
 }
 
-.tier-plan-row.kept th,
-.tier-plan-row.kept td {
-  color: var(--text-color);
+.tier-plan-status.dropped {
+  background: color-mix(in srgb, var(--tone-warning) 14%, transparent);
+  color: var(--tone-warning);
 }
 
-/* A row the plan dropped, and a tier the user has off, are different facts. */
-.tier-plan-row:not(.kept) td {
+/* A tile the plan dropped, and a tier the user has off, are different facts. */
+.tier-plan-tile:not(.kept) .tier-plan-stat-value,
+.tier-plan-tile:not(.kept) .tier-plan-tile-name {
   color: var(--secondary-color);
 }
 
@@ -12508,11 +12855,11 @@ select.stream-select.sort-select,
 }
 
 .tier-plan-why {
-  margin: 0;
+  margin: 4px 0 0;
   padding-left: 16px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .tier-plan-why li {
@@ -12541,12 +12888,17 @@ select.stream-select.sort-select,
 
 .tier-plan-link {
   background: none;
-  border: none;
-  padding: 0;
+  border: 1px solid var(--border-color, color-mix(in srgb, var(--tone-slate) 25%, transparent));
+  border-radius: 5px;
+  padding: 3px 10px;
   cursor: pointer;
   font-size: 10px;
   color: var(--primary-color);
-  text-decoration: underline;
+  text-decoration: none;
+}
+
+.tier-plan-link:hover {
+  border-color: var(--primary-color);
 }
 
 .tier-plan-ledger-missing {
@@ -12571,7 +12923,9 @@ summary:focus-visible {
   font: inherit;
 }
 
-/* Settings section index — sticky jump-nav for the long Preferences page. */
+/* Settings section index — sticky jump-nav for the long Preferences page.
+   Wraps to balanced rows (items stretch evenly) rather than hiding entries
+   behind a horizontal scroll — every section must stay visible. */
 .settings-index {
   position: sticky;
   top: -1px;
@@ -12588,6 +12942,10 @@ summary:focus-visible {
   border-radius: 12px;
 }
 .settings-index a {
+  flex: 1 1 auto;
+  min-width: fit-content;
+  text-align: center;
+  white-space: nowrap;
   font-size: 11.5px;
   font-weight: 600;
   padding: 5px 10px;

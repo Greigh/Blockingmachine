@@ -106,6 +106,8 @@ import {
   type ProbeResponse,
 } from './sinkholeIdentity';
 import { emptyUnblockedNotice, fetchAdguardQueryLog, separateAdguardUrls, type SinkholeUrlFields } from './queryLogScout';
+import { getLiveObservation, primeLiveObservations } from './liveObservations';
+import { appendUserLabel, effectiveUserLabels, userLabelsFilePath } from './userLabels';
 import {
   downloadAndParseSource,
   parseFilterList,
@@ -119,6 +121,7 @@ import {
   sanitizeDomain,
   isSafePublicWebUrl,
   isSafeLanEndpointUrl,
+  isPublicHostname,
   readBoundedJsonBody,
   isDomainCoveredByRules,
   globalMiniAiClassifier,
@@ -166,7 +169,7 @@ import type {
 import type { ThreatCategory } from '@blockingmachine/core';
 import { DaemonManager } from './daemonManager';
 import { TrayManager, type TraySharedState } from './trayManager';
-import { shadowScoreObservationFile, shadowScoreWatchdogDomains } from './learnedShadow';
+import { shadowReadiness, shadowScoreObservationFile, shadowScoreWatchdogDomains } from './learnedShadow';
 import {
   clearHeatForDomain,
   emptyRadarHeatMap,
@@ -584,6 +587,10 @@ const store = new Store<StoreSchema>({
       default: {},
     },
     launchOnStartup: {
+      type: 'boolean',
+      default: false,
+    },
+    menuBarAgent: {
       type: 'boolean',
       default: false,
     },
@@ -1147,6 +1154,7 @@ function setupAutoScheduleTimer(schedule: 'disabled' | '12h' | '24h' | 'weekly',
 let aiWatchdogTimer: NodeJS.Timeout | null = null;
 /** Periodic learned-shadow scorer over the daemon's DNS observation stream. */
 let observationScoreTimer: NodeJS.Timeout | null = null;
+let browserShadowTimer: NodeJS.Timeout | null = null;
 let sharedAiDetectorService: AiDetectorService | null = null;
 let sharedAiDetectorConfigKey = '';
 
@@ -1156,6 +1164,21 @@ function getSharedAiDetectorService(config: Partial<AiProviderConfig>): AiDetect
     sharedAiDetectorService = new AiDetectorService(config);
     sharedAiDetectorConfigKey = key;
   }
+  // Live-signal plumbing: the local screen sees what the daemon's resolver
+  // (dns-observations.jsonl, indexed by the shadow tail) and the browser's
+  // first-party fan-out ledger already observed for the name. Idempotent — the
+  // provider closes over the live structures, so re-setting on a cache hit is
+  // free and survives config-key reuse.
+  sharedAiDetectorService.setObservationProvider((domain) => {
+    const obs = getLiveObservation(domain);
+    const fan = browserFanout.get(domain);
+    if (!obs && !fan) return undefined;
+    return {
+      ...obs,
+      fanoutSites: fan ? fan.firstParties.size : (obs?.fanoutSites ?? 0),
+      fanoutHits: fan ? fan.hits : (obs?.fanoutHits ?? 0),
+    };
+  });
   return sharedAiDetectorService;
 }
 
@@ -1722,6 +1745,7 @@ function findTierRulesDir(): string | null {
     join(process.resourcesPath, 'assets', 'rules'),
     join(process.resourcesPath, 'rules'),
     join(app.getAppPath(), 'assets', 'rules'),
+    join(app.getAppPath(), '..', 'browser-extension', 'rules'),
     join(__dirname, '../../browser-extension/rules'),
     join(process.cwd(), 'packages/browser-extension/rules'),
     join(process.cwd(), 'rules'),
@@ -1810,7 +1834,10 @@ function createTray() {
     }
 
     trayManager = new TrayManager({
-      getMainWindow: () => mainWindow,
+      showMainWindow: () => showMainWindow(),
+      sendToWindow: (channel, ...args) => {
+        void sendToWindow(channel, ...args);
+      },
       getSavePath: () => {
         try {
           const p = store.get('savePath');
@@ -2260,6 +2287,14 @@ const browserTelemetryAggregator: BrowserTelemetryData = {
 };
 
 /**
+ * Last time an extension actually POSTed telemetry — null until the first
+ * heartbeat lands. `browserTelemetryAggregator.lastUpdated` can't serve this:
+ * it starts at app boot, so it can't tell "extension never reported" from
+ * "reported just now".
+ */
+let lastExtensionContactAt: string | null = null;
+
+/**
  * First-party fan-out aggregate (flag 43): per matched third-party host, the set of
  * registrable sites it was observed under — the embeddability signal the model is
  * missing. Pushed by extension deltas on `/v1/telemetry/browser`, unioned here, and
@@ -2269,6 +2304,22 @@ const browserTelemetryAggregator: BrowserTelemetryData = {
 const browserFanout = new Map<string, { firstParties: Set<string>; hits: number }>();
 const BROWSER_FANOUT_MAX_HOSTS = 5000;
 const BROWSER_FANOUT_MAX_FP = 128;
+
+/**
+ * Browser-observed hosts queued for the next shadow-score pass (flag 43). The
+ * telemetry payloads only ever carry rule-matched names — a fan-out edge is
+ * recorded for a *match*, and `trackers` is the match list — so every queued
+ * name carries an honest 'block' production reference. Drained on a timer so a
+ * flush burst never becomes a classify burst inside the HTTP handler.
+ */
+const pendingBrowserShadowDomains = new Set<string>();
+const PENDING_BROWSER_SHADOW_MAX = 5000;
+
+function queueBrowserShadowDomain(domain: string): void {
+  if (!isPublicHostname(domain)) return;
+  if (pendingBrowserShadowDomains.size >= PENDING_BROWSER_SHADOW_MAX) return;
+  pendingBrowserShadowDomains.add(domain);
+}
 
 function browserFanoutPath(): string {
   return join(app.getPath('userData'), 'browser-fanout.json');
@@ -2954,6 +3005,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
                   } else {
                     browserTelemetryAggregator.recentTrackers.unshift({ domain, count });
                   }
+                  queueBrowserShadowDomain(domain);
                 }
                 browserTelemetryAggregator.recentTrackers = browserTelemetryAggregator.recentTrackers.slice(0, 50);
               }
@@ -2970,9 +3022,11 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
                     fps,
                     typeof f.hits === 'number' && Number.isFinite(f.hits) ? f.hits : 0,
                   );
+                  queueBrowserShadowDomain(f.domain.trim().toLowerCase());
                 }
               }
               browserTelemetryAggregator.lastUpdated = new Date().toISOString();
+              lastExtensionContactAt = browserTelemetryAggregator.lastUpdated;
 
               res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
               res.end(JSON.stringify({ success: true, aggregated: browserTelemetryAggregator }));
@@ -3571,6 +3625,12 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     // the weights are absent, so a daemon that starts later is picked up on a tick.
     const observationsPath = daemonFeedFilePaths(store).observationsFilePath;
     if (observationsPath) {
+      // Cold-start the serving classifier's observation index from the file tail —
+      // the shadow tail below only sees bytes appended after its persisted offset.
+      const primed = primeLiveObservations(observationsPath);
+      if (primed > 0) {
+        console.log(`[Mini-AI] live observation index primed with ${primed} record(s)`);
+      }
       const scoreObservations = () => {
         try {
           const r = shadowScoreObservationFile(observationsPath, LEARNED_SHADOW_SAMPLE_RATE);
@@ -3587,6 +3647,27 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       observationScoreTimer = setInterval(scoreObservations, 5 * 60 * 1000);
       observationScoreTimer.unref?.();
     }
+
+    // The browser half of flag 43's corpus: hosts the extension saw matched under
+    // real first parties — real traffic, not list files. Every queued name was
+    // rule-matched, so the production reference is 'block'; the learned model's
+    // disagreements here are its misses. Runs without the daemon since telemetry
+    // reaches the feed server regardless.
+    const drainBrowserShadow = () => {
+      if (pendingBrowserShadowDomains.size === 0) return;
+      const domains = [...pendingBrowserShadowDomains];
+      pendingBrowserShadowDomains.clear();
+      try {
+        const r = shadowScoreWatchdogDomains(domains, () => 'block', LEARNED_SHADOW_SAMPLE_RATE);
+        if (r && r.evaluated > 0) {
+          console.log(`[Learned Shadow] browser tail: ${r.evaluated} scored (${r.disagreements} disagreements)`);
+        }
+      } catch (err) {
+        console.error('[Learned Shadow] browser tail failed:', err);
+      }
+    };
+    browserShadowTimer = setInterval(drainBrowserShadow, 5 * 60 * 1000);
+    browserShadowTimer.unref?.();
 
     // Re-judge the persisted quarantine against the current classifier once per launch. The
     // store accumulates verdicts across classifier versions and past gate bugs, and the
@@ -4848,12 +4929,53 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
     });
 
+    ipcMain.handle('get-menu-bar-agent', async () => {
+      return Boolean(store.get('menuBarAgent'));
+    });
+
+    ipcMain.handle('set-menu-bar-agent', async (_event, enabled: boolean) => {
+      try {
+        const val = Boolean(enabled);
+        store.set('menuBarAgent', val);
+        // Turning the agent off while the app sits hidden must not strand it in
+        // a state with neither a window nor a Dock icon — surface it again.
+        if (!val && process.platform === 'darwin') {
+          app.dock?.show();
+          const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+          if (win && !win.isVisible()) {
+            win.show();
+          }
+        }
+        return { success: true };
+      } catch (err: any) {
+        console.error('Failed to set menu bar agent:', err);
+        return { success: false, error: err?.message || String(err) };
+      }
+    });
+
     // ====================================================================
     // Local System DNS Daemon IPC Handlers
     // ====================================================================
     ipcMain.handle('daemon:get-status', async () => {
       return await daemonManager.getStatus();
     });
+
+    // One aggregate read for the dashboard's live-services strip — daemon,
+    // LAN feed, extension heartbeat, compile schedule. The extension has no
+    // persistent connection: `lastContactAt` is honestly null until a POST
+    // lands, and "live" is judged by report recency, never claimed connected.
+    ipcMain.handle('get-live-services', async () => ({
+      daemon: await daemonManager.getStatus(),
+      feed: getFeedServerStatus(),
+      extension: {
+        lastContactAt: lastExtensionContactAt,
+        trackersBlocked: browserTelemetryAggregator.trackersBlocked,
+        elementsHidden: browserTelemetryAggregator.elementsHidden,
+        threatsDetected: browserTelemetryAggregator.threatsDetected,
+        fanoutHosts: browserFanout.size,
+      },
+      autoSchedule: (store.get('autoSchedule') as string) || 'disabled',
+    }));
 
     ipcMain.handle('daemon:start', async () => {
       return await daemonManager.start(daemonFeedFilePaths(store));
@@ -5192,6 +5314,24 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           }
         }
 
+        // Baseline or compiled: a checkout ships the 118-rule curated tier files
+        // until `package-extension.mjs` recompiles them from the hub list, and
+        // `tierCounts.generated.ts` records which state the tree is in. Without
+        // this the card reports "118 shipped rules" — true of the file, a lie
+        // about the product, since the packaged extension carries the compiled plan.
+        let tierSource: 'curated-baseline' | 'compiled' | 'unknown' = 'unknown';
+        try {
+          const marker = await fs.readFile(
+            join(rulesDir, '..', 'src', 'shared', 'tierCounts.generated.ts'),
+            'utf8',
+          );
+          tierSource = /GENERATED_TIER_SOURCE[^=]*=\s*null\s*;/.test(marker)
+            ? 'curated-baseline'
+            : 'compiled';
+        } catch {
+          // No marker beside the rules dir — provenance honestly unknown.
+        }
+
         const result = computeTierPlan({
           files,
           ledger: ledgerText === null ? null : { text: ledgerText },
@@ -5206,6 +5346,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         return {
           ok: true as const,
           rulesDir,
+          tierSource,
           capacitySlots: result.capacitySlots,
           rows: result.rows,
           broken: result.broken,
@@ -5984,9 +6125,27 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       if (!domain || typeof domain !== 'string' || !['whitelist', 'block', 'reset'].includes(action)) {
         return { success: false, error: 'Invalid domain or action parameter' };
       }
+      // Capture the verdict being corrected before tuning changes it — that
+      // provenance rides into labels.db so training knows what was wrong.
+      const corrected = action === 'reset'
+        ? undefined
+        : (() => {
+          try {
+            const prior = globalMiniAiClassifier.classify(domain);
+            return { verdict: prior.verdict, category: prior.category };
+          } catch {
+            return undefined;
+          }
+        })();
       globalMiniAiClassifier.tuneDomainFeedback(domain, action);
       store.set('miniAiFeedback', globalMiniAiClassifier.exportFeedback());
-      return { success: true };
+      const labelRecorded = appendUserLabel(
+        app.getPath('userData'),
+        domain,
+        action === 'block' ? 'threat' : action === 'whitelist' ? 'safe' : 'reset',
+        corrected,
+      );
+      return { success: true, labelRecorded };
     });
 
     // Get Mini-AI Feedback Stats [Beta]
@@ -5997,6 +6156,26 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       };
     });
 
+    // User feedback labels — how many confirmed corrections are queued for the
+    // training pipeline's labels.db merge (labels.py --feedback-file).
+    ipcMain.handle('get-user-label-stats', async () => {
+      const userDataDir = app.getPath('userData');
+      const active = effectiveUserLabels(userDataDir).filter((r) => r.verdict !== 'reset');
+      return {
+        count: active.length,
+        filePath: userLabelsFilePath(userDataDir),
+      };
+    });
+
+    // Mini-AI v3 readiness — how much real traffic evidence the shadow corpus has
+    // accumulated against the promotion gate's coverage thresholds. Counted with
+    // the same rules gate.py/shadow.py enforce; `ready` means "enough evidence to
+    // evaluate", never "the model deserves promotion".
+    ipcMain.handle('ai-shadow-readiness', async () => {
+      const observationsPath = daemonFeedFilePaths(store).observationsFilePath;
+      return shadowReadiness(observationsPath ?? null, browserFanout.size);
+    });
+
     // Reset Mini-AI feedback for one domain (or its generalized zone) [Beta]
     ipcMain.handle('reset-mini-ai-feedback', async (_event, domain: string) => {
       if (!domain || typeof domain !== 'string') {
@@ -6005,6 +6184,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       const removed = globalMiniAiClassifier.deleteDomainFeedback(domain);
       if (removed) {
         store.set('miniAiFeedback', globalMiniAiClassifier.exportFeedback());
+        appendUserLabel(app.getPath('userData'), domain, 'reset');
       }
       return { success: removed };
     });
@@ -6128,6 +6308,16 @@ function setupDefaultFilterSources(): void {
 let mainWindow: BrowserWindow | null = null;
 
 /**
+ * True only once a real quit is underway (Cmd+Q, tray Quit, app.quit()). The window `close`
+ * interceptor consults it: with the menu-bar-agent toggle on, a user close hides to the
+ * status bar instead of tearing down — but a genuine quit must still be allowed through.
+ */
+let isQuitting = false;
+
+/** Whether the Settings toggle for running windowless in the status bar is on. */
+const menuBarAgentEnabled = () => Boolean(store.get('menuBarAgent'));
+
+/**
  * Messages queued while no main window exists, flushed once a fresh renderer reports it is
  * mounted. macOS keeps the app alive after the last window closes — the menu and tray are the
  * primary surface — so a menu click on a closed window's behalf must reopen the window, not
@@ -6149,6 +6339,9 @@ async function sendToWindow(channel: string, ...args: unknown[]): Promise<void> 
     if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
+    // A visible window without a Dock icon (menu-bar-agent hide) is the
+    // inconsistent state — every send is a user-initiated "show UI" intent.
+    if (process.platform === 'darwin') app.dock?.show();
     win.webContents.send(channel, ...args);
     return;
   }
@@ -6172,7 +6365,7 @@ declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 declare const __BM_BUILD_ID__: string;
 const BM_BUILD_ID: string = typeof __BM_BUILD_ID__ === 'string' ? __BM_BUILD_ID__ : 'unstamped';
 
-const createWindow = async () => {
+const createWindow = async (showOnReady = true) => {
   const preloadPath =
     typeof MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY !== 'undefined'
       ? MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY
@@ -6207,7 +6400,11 @@ const createWindow = async () => {
       contextIsolation: true,
       sandbox: true,
       preload: preloadPath,
-      backgroundThrottling: false,
+      // Deliberately no backgroundThrottling:false — the renderer's timers are
+      // display-only (status polls, clocks); compiles, schedules and watchdogs
+      // live in the main process and its worker threads. Menu-bar-agent mode
+      // leaves this window hidden for the whole session, and unthrottled
+      // timers would idle-burn CPU the entire time.
     },
     show: false,
   });
@@ -6221,6 +6418,21 @@ const createWindow = async () => {
   const thisWindow = mainWindow;
   thisWindow.on('closed', () => {
     if (mainWindow === thisWindow) mainWindow = null;
+  });
+  // Menu-bar agent (macOS, Settings toggle): closing the window hides it to the
+  // status bar instead of tearing down — the window, feed server, daemon and
+  // compile scheduler all keep running, and the Dock icon goes away while no
+  // window is visible. `isQuitting` (set by before-quit on Cmd+Q / tray Quit)
+  // and the toggle itself gate the interception; otherwise it is a plain close.
+  // `thisWindow` (not the mainWindow global) keeps this correct for a window that
+  // has already been superseded.
+  thisWindow.on('close', (event) => {
+    if (isQuitting || process.platform !== 'darwin' || !menuBarAgentEnabled()) {
+      return;
+    }
+    event.preventDefault();
+    thisWindow.hide();
+    app.dock?.hide();
   });
   thisWindow.webContents.on('did-start-loading', () => {
     rendererReady = false;
@@ -6276,8 +6488,32 @@ const createWindow = async () => {
     mainWindow.webContents.openDevTools();
   }
 
-  mainWindow.show();
+  // A login-item launch with the menu-bar agent on skips the show so the app
+  // starts unseen in the status bar; tray Open / activate / second-instance
+  // re-show it later via showMainWindow().
+  if (showOnReady) {
+    mainWindow.show();
+    if (process.platform === 'darwin') app.dock?.show();
+  }
 };
+
+/**
+ * Surfaces the main window — creating it when none is live, un-minimizing, and
+ * restoring the Dock icon. The tray, the app `activate` event, and a
+ * second-instance launch all land here; it's also the only path that undoes a
+ * menu-bar-agent hide.
+ */
+function showMainWindow(): void {
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  } else {
+    void createWindow();
+  }
+  if (process.platform === 'darwin') app.dock?.show();
+}
 
 async function initialize() {
   try {
@@ -6314,7 +6550,21 @@ async function initialize() {
       console.log(`[Main Process] Restored ${globalMiniAiClassifier.getFeedbackCount()} Mini-AI domain feedback tunings from persistent store.`);
     }
     registerIPCHandlers(store);
-    await createWindow();
+    // Menu-bar agent + login-item launch → start unseen in the status bar (no
+    // window flash, no Dock icon). `wasOpenedAtLogin` is macOS-only and false
+    // elsewhere, so a manual launch always shows the window.
+    let openedAtLogin = false;
+    try {
+      openedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin;
+    } catch {
+      openedAtLogin = false;
+    }
+    const startInMenuBar =
+      process.platform === 'darwin' && menuBarAgentEnabled() && openedAtLogin;
+    if (startInMenuBar) {
+      app.dock?.hide();
+    }
+    await createWindow(!startInMenuBar);
     createTray();
 
     // ─── Reputation DB hot-patch refresh ────────────────────────────────────
@@ -6383,6 +6633,9 @@ async function initialize() {
     }
 
     app.on('before-quit', () => {
+      // A genuine quit (Cmd+Q / tray Quit / app.quit()) — the close interceptor
+      // must stand down so windows may actually close instead of hiding.
+      isQuitting = true;
       stopFeedServer();
       if (autoScheduleTimer) {
         clearInterval(autoScheduleTimer);
@@ -6405,6 +6658,10 @@ async function initialize() {
         clearInterval(observationScoreTimer);
         observationScoreTimer = null;
       }
+      if (browserShadowTimer) {
+        clearInterval(browserShadowTimer);
+        browserShadowTimer = null;
+      }
       if (trayManager) {
         try {
           trayManager.destroy();
@@ -6422,9 +6679,9 @@ async function initialize() {
     });
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-      }
+      // Dock-click / Finder reopen — also the only recovery while a menu-bar
+      // agent window is hidden but still alive.
+      showMainWindow();
     });
 
     app.on('web-contents-created', (_event, contents) => {
@@ -6458,10 +6715,22 @@ async function initialize() {
   }
 }
 
-app
-  .whenReady()
-  .then(initialize)
-  .catch((error) => {
-    console.error('Failed to initialize app:', error);
-    app.quit();
+// A second launch (Spotlight, Finder, `open` while the app sits in the status
+// bar) must surface the existing instance — not race a second hub onto the
+// feed port and daemon socket.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    showMainWindow();
   });
+
+  app
+    .whenReady()
+    .then(initialize)
+    .catch((error) => {
+      console.error('Failed to initialize app:', error);
+      app.quit();
+    });
+}
