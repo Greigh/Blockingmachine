@@ -3,18 +3,7 @@
 
 # Blockingmachine
 
-[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.0.0--rc.11-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0-rc.11)
-[![GitHub Packages](https://img.shields.io/badge/GitHub_Packages-v1.0.0--rc.11-2ea44f.svg)](https://github.com/users/Greigh/packages?repo_name=Blockingmachine)
-[![Forgejo](https://img.shields.io/badge/Forgejo-git.greighstudios.com-ff6600.svg)](https://git.greighstudios.com/greighstudios/Blockingmachine)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/)
-[![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/)
-[![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/)
-[![Tests](<https://img.shields.io/badge/Tests-2%2C900%2B%20Passing%20(100%25)-brightgreen.svg>)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml)
-[![CI](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml)
-[![CodeQL Analysis](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml)
-[![HACS Validation](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml)
-[![Security Policy](https://img.shields.io/badge/Security_Policy-Active-green.svg)](SECURITY.md)
+[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE) [![Release](https://img.shields.io/badge/Release-v1.0.0--rc.11-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0-rc.11) [![GitHub Packages](https://img.shields.io/badge/GitHub_Packages-v1.0.0--rc.11-2ea44f.svg)](https://github.com/users/Greigh/packages?repo_name=Blockingmachine) [![Forgejo](https://img.shields.io/badge/Forgejo-git.greighstudios.com-ff6600.svg)](https://git.greighstudios.com/greighstudios/Blockingmachine) [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/) [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/) [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/) [![Tests](<https://img.shields.io/badge/Tests-2%2C900%2B%20Passing%20(100%25)-brightgreen.svg>)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml) [![CI](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml) [![CodeQL Analysis](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml) [![HACS Validation](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml) [![Security Policy](https://img.shields.io/badge/Security_Policy-Active-green.svg)](SECURITY.md)
 
 _A modern network defense suite and filter list compiler for AdGuard, uBlock Origin & EasyList. Features an Electron desktop app, MV3 extension, loopback DNS daemon, Home Assistant hub, an iOS/Android companion app, and embedded Mini-AI classification with intelligent rule deduplication, multi-format exports, and 100% local processing._
 
@@ -30,7 +19,7 @@ Designed for network engineers, homelab operators, and privacy advocates, Blocki
 
 ### Monorepo Workspaces
 
-- **Desktop Application (`@blockingmachine/electron-app`)**: Native macOS/Linux/Windows Electron suite featuring the **Unified Rule & AI Inspector**, **AI Defense Radar**, **Deploy & Sync Hub**, **Curated Defense Modules**, and **Compiled Rule Browser**.
+- **Desktop Application (`@blockingmachine/electron-app`)**: Native macOS/Linux/Windows Electron suite featuring the **Unified Rule & AI Inspector**, **AI Defense Radar**, **Deploy & Sync Hub**, **Curated Defense Modules**, and **Compiled Rule Browser**. The interface is width-adaptive and keyboard-first: a full sidebar down to 900 effective CSS px, a compact icon rail at 461–900px, and an accessible overlay navigation drawer below that — verified reflow-free at 200%/400% zoom (WCAG 2.2 SC 1.4.10), zero axe violations across all nine views in both themes, and dialog-grade focus management exercised against real VoiceOver output on macOS.
 - **Browser Extension (`@blockingmachine/browser-extension`)**: High-performance Manifest V3 extension featuring dynamic `declarativeNetRequest` (DNR) compilation, procedural anti-adblock scriptlet defusers (Admiral, Google Funding Choices), in-page visual **ElementPicker**, and live AI Radar inspection.
 - **System DNS Daemon (`@blockingmachine/system-daemon`)**: High-throughput loopback UDP/TCP DNS proxy on port 53/5353, powered by an in-memory reversed-label suffix trie for sub-microsecond $O(k)$ rule lookups, `$important` precedence resolution, upstream DNS-over-HTTPS (Quad9 default), and a local HTTP control API (`127.0.0.1:9292`).
 - **Core Engine (`@blockingmachine/core`)**: Zero-dependency rule parsing engine, hierarchy-aware subdomain deduplicator, multi-format export compiler, Shannon entropy analyzer, CNAME uncloaking resolver, and embedded Mini-AI classification neural model.
@@ -427,40 +416,13 @@ blockingmachine doctor
 
 ## Measured List Coverage
 
-A blocklist is judged by its size, but size is not the property that matters: what matters is how
-many of its rules ever fire, and how much of the blocking a small head is responsible for. The
-`coverage` command answers that from real traffic, either by replaying a captured request trace or
-by reading the rule-hit ledger the extension keeps, and it reports the list's hit rate, its dead
-weight, and the smallest head that reaches 95% and 99% of blocks.
+A blocklist is judged by its size, but size is not the property that matters: what matters is how many of its rules ever fire, and how much of the blocking a small head is responsible for. The `coverage` command answers that from real traffic, either by replaying a captured request trace or by reading the rule-hit ledger the extension keeps, and it reports the list's hit rate, its dead weight, and the smallest head that reaches 95% and 99% of blocks.
 
-It also reports the list *as the browser actually expresses it*, because a hit rate only means
-something against rules the tool can decide. A compiled browser export is four kinds of blocking
-rule: a blanket host block, an **initiator-scoped** rule (`$domain=`, compiled to DNR
-`initiatorDomains`), a **path-preserving** rule (a host anchor with a path suffix, compiled to a URL
-pattern), and a **request-scoped** rule (`$script`, `$popup`, `$replace=`, compiled to
-`resourceTypes` or a response rewrite). The command reports all four counts and measures the hit
-rate over the hostname-decidable bucket alone, which is the one set it evaluates exactly.
+It also reports the list *as the browser actually expresses it*, because a hit rate only means something against rules the tool can decide. A compiled browser export is four kinds of blocking rule: a blanket host block, an **initiator-scoped** rule (`$domain=`, compiled to DNR `initiatorDomains`), a **path-preserving** rule (a host anchor with a path suffix, compiled to a URL pattern), and a **request-scoped** rule (`$script`, `$popup`, `$replace=`, compiled to `resourceTypes` or a response rewrite). The command reports all four counts and measures the hit rate over the hostname-decidable bucket alone, which is the one set it evaluates exactly.
 
-**A full request URL decides the path bucket**, and that is the difference between deciding a rule
-and excluding it. Read from a hostname, a path-preserving rule is indistinguishable from a
-blanket block of its zone, so a replay credited it with every request to that host or wrote it off
-as undecidable — and the second failure runs in the flattering direction, because a rule nobody can
-credit is a rule nobody can blame for being dead weight. Given a URL, the matcher matches the path
-the request actually took, the path rule outranks the zone block for the requests it covers, and the
-zone block keeps only the rest. On the shipped list **6,230 of the 7,628** path-scoped rules (81.7%)
-are decidable this way; the 1,398 it refuses are `$replace=` / `$redirect=` response rewrites and
-rules qualified by request type or initiator, where the answer genuinely is not in the URL. An
-allowlist always wins over a path rule, because inventing a block the browser skipped is the one
-mistake a report cannot walk back. Decided path fires are reported in their own bucket rather than
-folded into the rate, since a path rule is decided for a fraction of the requests to its host and a
-hostname rule for all of them. `npm run check:path-decidability` gates the share at 80% — a list
-update that floods the bucket with undecidable shapes fails CI, not a review nobody ran.
+**A full request URL decides the path bucket**, and that is the difference between deciding a rule and excluding it. Read from a hostname, a path-preserving rule is indistinguishable from a blanket block of its zone, so a replay credited it with every request to that host or wrote it off as undecidable — and the second failure runs in the flattering direction, because a rule nobody can credit is a rule nobody can blame for being dead weight. Given a URL, the matcher matches the path the request actually took, the path rule outranks the zone block for the requests it covers, and the zone block keeps only the rest. On the shipped list **6,230 of the 7,628** path-scoped rules (81.7%) are decidable this way; the 1,398 it refuses are `$replace=` / `$redirect=` response rewrites and rules qualified by request type or initiator, where the answer genuinely is not in the URL. An allowlist always wins over a path rule, because inventing a block the browser skipped is the one mistake a report cannot walk back. Decided path fires are reported in their own bucket rather than folded into the rate, since a path rule is decided for a fraction of the requests to its host and a hostname rule for all of them. `npm run check:path-decidability` gates the share at 80% — a list update that floods the bucket with undecidable shapes fails CI, not a review nobody ran.
 
-Measured against the compiled browser export in this repository (**249,751 lines**: 118,379
-hostname-decidable blocking rules, 4,224 initiator-scoped, 7,628 path-scoped, 1,855 request-scoped,
-and 4,106 exceptions) across a real 11-page browsing session (Wikipedia, BBC News, GSMArena, The
-Guardian, CNN, Allrecipes, IMDb, Stack Overflow, Speedtest, Forbes, MDN; 232 requests over 178
-distinct hosts):
+Measured against the compiled browser export in this repository (**249,751 lines**: 118,379 hostname-decidable blocking rules, 4,224 initiator-scoped, 7,628 path-scoped, 1,855 request-scoped, and 4,106 exceptions) across a real 11-page browsing session (Wikipedia, BBC News, GSMArena, The Guardian, CNN, Allrecipes, IMDb, Stack Overflow, Speedtest, Forbes, MDN; 232 requests over 178 distinct hosts):
 
 | Measure | Result |
 | :--- | :--- |
@@ -471,75 +433,30 @@ distinct hosts):
 | Rules for 99% of blocks | **70** (0.059% of the list) |
 | Distinct hosts blocked | 86 of 178 (48.3%) |
 
-The split changes the answer rather than decorating it. The 71 are the hostname-decidable rules
-the rate counts; beside them one path-scoped rule won on 5 requests a hostname cannot settle —
-the scoped fire is reported next to the rate instead of inside it, and of the 133 blocked requests
-five are those scoped wins, counted as blocked but out of the rule rate.
+The split changes the answer rather than decorating it. The 71 are the hostname-decidable rules the rate counts; beside them one path-scoped rule won on 5 requests a hostname cannot settle — the scoped fire is reported next to the rate instead of inside it, and of the 133 blocked requests five are those scoped wins, counted as blocked but out of the rule rate.
 
-**And that first session could not exercise the URL path at all** — it recorded 232 bare
-hostnames and no paths, because the capture kept only the host of each resource-timing entry. A
-re-capture with [`scripts/capture-request-trace.js`](scripts/capture-request-trace.js)
-([`browsing-request-trace.txt`](packages/cli/src/__tests__/fixtures/browsing-request-trace.txt))
-records full request URLs, and the path bucket becomes real: **16 requests settled by 9
-path-scoped rules**, a decision class the hostname trace structurally cannot produce. The shipped
-hot set is derived from that URL trace (below), so the older hostname session is now a held-out
-measurement for it — a different session's traffic, which is exactly what "exact for the traffic
-it came from" does not cover.
+**And that first session could not exercise the URL path at all** — it recorded 232 bare hostnames and no paths, because the capture kept only the host of each resource-timing entry. A re-capture with [`scripts/capture-request-trace.js`](scripts/capture-request-trace.js) ([`browsing-request-trace.txt`](packages/cli/src/__tests__/fixtures/browsing-request-trace.txt)) records full request URLs, and the path bucket becomes real: **16 requests settled by 9 path-scoped rules**, a decision class the hostname trace structurally cannot produce. The shipped hot set is derived from that URL trace (below), so the older hostname session is now a held-out measurement for it — a different session's traffic, which is exactly what "exact for the traffic it came from" does not cover.
 
-The honest reading: against a six-figure list, a real browsing session touches a rounding error of
-it — so the list is best understood as a hot set in the low tens of rules (71 here) plus ~118,000
-lines of insurance. The one limit the tool cannot remove is stated rather than buried: **no replay,
-URL or not, can see the page that made a request.** Whether a request was third-party, and which
-domain initiated it, are facts about a page the trace does not carry — so 4,224 initiator-scoped
-rules stay undecidable however good the capture gets, which is exactly why the extension records the
-rule the browser *actually* matched and why `--hits` takes that ledger in preference to a replay.
+The honest reading: against a six-figure list, a real browsing session touches a rounding error of it — so the list is best understood as a hot set in the low tens of rules (71 here) plus ~118,000 lines of insurance. The one limit the tool cannot remove is stated rather than buried: **no replay, URL or not, can see the page that made a request.** Whether a request was third-party, and which domain initiated it, are facts about a page the trace does not carry — so 4,224 initiator-scoped rules stay undecidable however good the capture gets, which is exactly why the extension records the rule the browser *actually* matched and why `--hits` takes that ledger in preference to a replay.
 
-**Read the numbers as a floor, not a constant.** The session is eleven pages from one machine — a
-small, content-heavy sample — and the head of the list grows as coverage grows, so a longer or
-busier session fires more rules and the derived set grows with it. What that growth buys in
-coverage on traffic the set has not seen is a separate question — measured below, and it flattens.
-The trace also records each request as
-*attempted* rather than completed: the sandbox refused connections to several third-party hosts,
-and a refused connection still counts, which is exactly what a network blocker sees. None of that
-weakens the point the measurement makes — no single six-figure list can be right for every network —
-but it does mean ~70 is the floor this session reached, not a figure to hold up against another
-session or a busier one.
+**Read the numbers as a floor, not a constant.** The session is eleven pages from one machine — a small, content-heavy sample — and the head of the list grows as coverage grows, so a longer or busier session fires more rules and the derived set grows with it. What that growth buys in coverage on traffic the set has not seen is a separate question — measured below, and it flattens. The trace also records each request as *attempted* rather than completed: the sandbox refused connections to several third-party hosts, and a refused connection still counts, which is exactly what a network blocker sees. None of that weakens the point the measurement makes — no single six-figure list can be right for every network — but it does mean ~70 is the floor this session reached, not a figure to hold up against another session or a busier one.
 
 ### The Trimmed Hot Set
 
-`npm run build:hotlist` turns a measurement into a shippable list. It keeps the rules the
-measurement saw *fire* — the head the coverage curve already identifies — plus the exception rules
-that fired, so the trimmed list makes the same allow decisions the full one did, and writes
-[hotlist.txt](packages/cli/filters/output/hotlist.txt) with a header stating what it cost.
-`npm run check:hotlist` fails if the file drifts from a fresh derivation (CI runs it), and
-`blockingmachine coverage --hot` measures the trimmed list instead of the full export.
+`npm run build:hotlist` turns a measurement into a shippable list. It keeps the rules the measurement saw *fire* — the head the coverage curve already identifies — plus the exception rules that fired, so the trimmed list makes the same allow decisions the full one did, and writes [hotlist.txt](packages/cli/filters/output/hotlist.txt) with a header stating what it cost. `npm run check:hotlist` fails if the file drifts from a fresh derivation (CI runs it), and `blockingmachine coverage --hot` measures the trimmed list instead of the full export.
 
-The shipped `hotlist.txt` is derived from the URL-bearing re-capture
-[`browsing-request-trace.txt`](packages/cli/src/__tests__/fixtures/browsing-request-trace.txt) —
-the same eleven pages as the hostname session, re-collected in a live browser so path-scoped
-rules could actually be decided. On its derivation traffic it keeps **all 413 measured blocks
-(and all 10 fired exceptions) in 91 rules** — 71 hostname-decidable, 10 path-scoped, 10
-exceptions — with 132,005 never-fired rules left behind. Against the *older* hostname session, a
-held-out measurement from a different day, it keeps **128 of 133 blocks (96.2%)**:
+The shipped `hotlist.txt` is derived from the URL-bearing re-capture [`browsing-request-trace.txt`](packages/cli/src/__tests__/fixtures/browsing-request-trace.txt) — the same eleven pages as the hostname session, re-collected in a live browser so path-scoped rules could actually be decided. On its derivation traffic it keeps **all 413 measured blocks (and all 10 fired exceptions) in 91 rules** — 71 hostname-decidable, 10 path-scoped, 10 exceptions — with 132,005 never-fired rules left behind. Against the *older* hostname session, a held-out measurement from a different day, it keeps **128 of 133 blocks (96.2%)**:
 
 | List | Rules | Blocked on its own trace | Path-decided | Exceptions fired |
 | :--- | ---: | :--- | :--- | :--- |
 | compiled export | 249,751 lines (118,379 decidable) | **413 requests on 202 hosts** | 16 req / 9 rules | 10 |
 | `hotlist.txt` | **91 rules** | **413 requests on 202 hosts — identical** | 16 req / 9 rules | 10 |
 
-On its own derivation traffic the hot set holds no rule that did not fire — **0% dead weight** —
-and that is the only claim the header makes. The ledger-derived set it replaced kept 19 of 133
-blocks on the old hostname session (14.3%); the trace-derived set keeps 128 of 133 there, because
-a live browser's URL trace is simply a richer measurement of the same product's traffic. What the
-held-out gap means — and why extra sessions of the same kind do not shrink it — is measured two
-sections down.
+On its own derivation traffic the hot set holds no rule that did not fire — **0% dead weight** — and that is the only claim the header makes. The ledger-derived set it replaced kept 19 of 133 blocks on the old hostname session (14.3%); the trace-derived set keeps 128 of 133 there, because a live browser's URL trace is simply a richer measurement of the same product's traffic. What the held-out gap means — and why extra sessions of the same kind do not shrink it — is measured two sections down.
 
 ### The Measurement Can Be Real Usage
 
-A trace is one browsing session, sampled, from one machine. The better evidence is the matches the
-browser itself applied, and the build already had a `--hits` path for it — the honest one, since
-paths, request types and initiators were all resolved by the browser rather than replayed by us.
-What was missing was anything that produced such a file, and any record of what it covered:
+A trace is one browsing session, sampled, from one machine. The better evidence is the matches the browser itself applied, and the build already had a `--hits` path for it — the honest one, since paths, request types and initiators were all resolved by the browser rather than replayed by us. What was missing was anything that produced such a file, and any record of what it covered:
 
 ```bash
 npm run ledger:merge -- --in export-1.json --in export-2.json --out ledger-hits.txt
@@ -548,37 +465,17 @@ node scripts/build-hot-list.mjs --hits ledger-hits.txt --write   # or: npm run b
 
 The extension writes one JSON file per browsing session — open the popup's *Hub* tab and click **Export ledger** — and `ledger:merge` reduces any number of them. What that reduction is allowed to claim is where the care went:
 
-- **Durability is days, not hits.** One busy afternoon of one site can out-count a rule that quietly
-  fires every day for a month, so each rule carries its hit count *and* the distinct UTC days it
-  fired on, and `--min-days` is how you ask for rules that recur rather than rules that once
-  spiked. A session that crosses midnight is split in two, because one date for hits on two days
-  would understate the evidence.
-- **An exception is never counted as a block.** An `@@` rule that fired *allowed* a request;
-  tallying it with the blocks would build a hot set out of the rules that did the least work.
-- **A match whose rule cannot be named is counted, not guessed at.** The filter text needs a shipped
-  rule file loaded, which can fail — so those hits are reported as unattributable instead of being
-  invented into the list.
-- **The per-tier tally rides along on its own axis.** A session also reports which shipped tier each
-  block came from — a tier is credited whenever the browser names the winning ruleset, even when the
-  filter file could not be read, and one rule shipped in two tiers is one rule line and two tier
-  entries. The merge writes the split into the ledger's *header* rather than as rule lines, because
-  `tier_core 543` read back as a rule would be 543 rules named `tier_core`, and it says how many
-  sessions carried a split at all — a tally measured in one export of six must not read as six.
-- **Order must not matter.** The generated list is diff-checked, so the merge is commutative and
-  sorted deterministically; a build whose output depended on the order it read its files would fail
-  on the next machine.
+- **Durability is days, not hits.** One busy afternoon of one site can out-count a rule that quietly fires every day for a month, so each rule carries its hit count *and* the distinct UTC days it fired on, and `--min-days` is how you ask for rules that recur rather than rules that once spiked. A session that crosses midnight is split in two, because one date for hits on two days would understate the evidence.
+- **An exception is never counted as a block.** An `@@` rule that fired *allowed* a request; tallying it with the blocks would build a hot set out of the rules that did the least work.
+- **A match whose rule cannot be named is counted, not guessed at.** The filter text needs a shipped rule file loaded, which can fail — so those hits are reported as unattributable instead of being invented into the list.
+- **The per-tier tally rides along on its own axis.** A session also reports which shipped tier each block came from — a tier is credited whenever the browser names the winning ruleset, even when the filter file could not be read, and one rule shipped in two tiers is one rule line and two tier entries. The merge writes the split into the ledger's *header* rather than as rule lines, because `tier_core 543` read back as a rule would be 543 rules named `tier_core`, and it says how many sessions carried a split at all — a tally measured in one export of six must not read as six.
+- **Order must not matter.** The generated list is diff-checked, so the merge is commutative and sorted deterministically; a build whose output depended on the order it read its files would fail on the next machine.
 
-The provenance travels in the ledger's header, so the generated hot list says what it is based on —
-`12 sessions across 34 days (2026-08-01 to 2026-09-03)` — rather than leaving a reader to assume a
-week of real browsing. A hand-written `<count> <rule>` file still works and reports, honestly, that
-it carries no provenance.
+The provenance travels in the ledger's header, so the generated hot list says what it is based on — `12 sessions across 34 days (2026-08-01 to 2026-09-03)` — rather than leaving a reader to assume a week of real browsing. A hand-written `<count> <rule>` file still works and reports, honestly, that it carries no provenance.
 
 ### The Cut Is Re-Derived Weekly, From `ledger/`
 
-Which 30,000 of the hub's 122,801 hosts the extension ships is the whole packaging decision, and
-without evidence the compiler takes them in input order — which is a merged blocklist's
-concatenation order, not anyone's traffic. So the evidence is accumulated into a dropbox and
-re-derived on a schedule:
+Which 30,000 of the hub's 122,801 hosts the extension ships is the whole packaging decision, and without evidence the compiler takes them in input order — which is a merged blocklist's concatenation order, not anyone's traffic. So the evidence is accumulated into a dropbox and re-derived on a schedule:
 
 ```
 ledger/
@@ -594,35 +491,15 @@ npm run ledger:merge -- --from ~/Downloads      # merge a week of exports into t
 npm run tiers:weekly                            # re-derive and verify, exactly as CI does
 ```
 
-A weekly job (`.github/workflows/weekly-tier-compile.yml`, Mondays 04:17 UTC) re-runs that derivation,
-rebuilds the hot set from the derivation its header records (the URL trace today — whichever
-measurement it was last adopted from, not always the ledger), checks the compiled cut against
-Chrome's rule budget, and opens a PR with the regenerated artifacts. It is one script rather than
-a workflow of steps so that what CI runs weekly is what you run when a derivation looks wrong.
-Choosing *which* measurement the hot set is adopted from is a decision the script deliberately
-does not make — `build-hot-list.mjs --hits|--trace|--sessions … --write` by hand is how the
-default changes, and the weekly run then verifies that new derivation.
+A weekly job (`.github/workflows/weekly-tier-compile.yml`, Mondays 04:17 UTC) re-runs that derivation, rebuilds the hot set from the derivation its header records (the URL trace today — whichever measurement it was last adopted from, not always the ledger), checks the compiled cut against Chrome's rule budget, and opens a PR with the regenerated artifacts. It is one script rather than a workflow of steps so that what CI runs weekly is what you run when a derivation looks wrong. Choosing *which* measurement the hot set is adopted from is a decision the script deliberately does not make — `build-hot-list.mjs --hits|--trace|--sessions … --write` by hand is how the default changes, and the weekly run then verifies that new derivation.
 
-**The job cannot collect browsing data** — only the extension can, on someone's machine — so the
-weekly run is a re-derivation and a guard rather than a generator: it proves every week that what
-ships still matches its evidence, and opens the PR when the evidence moves. With an empty dropbox
-the ledger-derived steps are skipped and the rest still runs, which is the correct outcome rather
-than a failure.
+**The job cannot collect browsing data** — only the extension can, on someone's machine — so the weekly run is a re-derivation and a guard rather than a generator: it proves every week that what ships still matches its evidence, and opens the PR when the evidence moves. With an empty dropbox the ledger-derived steps are skipped and the rest still runs, which is the correct outcome rather than a failure.
 
-The committed ledger is `<count> <rule>` — a blocklist rule and how often the browser blocked with
-it. Not a browsing history: no URLs, titles, timestamps or initiators, because the merge reads rule
-text and counts out of each export and drops the rest. Even so, a real ledger says something about a
-person's browsing, so [`ledger/README.md`](ledger/README.md) also documents the local-only route.
+The committed ledger is `<count> <rule>` — a blocklist rule and how often the browser blocked with it. Not a browsing history: no URLs, titles, timestamps or initiators, because the merge reads rule text and counts out of each export and drops the rest. Even so, a real ledger says something about a person's browsing, so [`ledger/README.md`](ledger/README.md) also documents the local-only route.
 
-**It is not a general blocklist, and the measurement says so.** Deriving a hot set from half the
-session's pages and measuring it on the other half keeps only **38 of 93 blocks (40.9%)** — a
-per-session hot set is exact for the traffic it came from and loses most of what it has not seen.
-That is why it is chosen for a budget that cannot hold the full list, with the limitation printed in
-the file's own header, rather than presented as a replacement for the full export.
+**It is not a general blocklist, and the measurement says so.** Deriving a hot set from half the session's pages and measuring it on the other half keeps only **38 of 93 blocks (40.9%)** — a per-session hot set is exact for the traffic it came from and loses most of what it has not seen. That is why it is chosen for a budget that cannot hold the full list, with the limitation printed in the file's own header, rather than presented as a replacement for the full export.
 
-**And the loss is only part sample size, which is the useful thing to know before collecting a
-ledger.** `npm run measure:hotlist-generalisation` derives from the first *k* pages and holds out
-the rest, for every split:
+**And the loss is only part sample size, which is the useful thing to know before collecting a ledger.** `npm run measure:hotlist-generalisation` derives from the first *k* pages and holds out the rest, for every split:
 
 | derivation breadth | rules | held-out share |
 | :--- | ---: | ---: |
@@ -632,48 +509,19 @@ the rest, for every split:
 | 6 pages | 46 | 53.7% |
 | 9 pages (widest worth reading) | 62 | 56.7% |
 
-It rises steeply and then **flattens in the low-to-mid 50s**. Widening the derivation as far as
-this one session allows recovers about **16 points** of the loss; the remainder is structural —
-rules that fire *somewhere* are not rules that fire *here*, and no quantity of extra data changes
-that.
+It rises steeply and then **flattens in the low-to-mid 50s**. Widening the derivation as far as this one session allows recovers about **16 points** of the loss; the remainder is structural — rules that fire *somewhere* are not rules that fire *here*, and no quantity of extra data changes that.
 
-**The multi-session measurement has now been made, and the page-split curve was not a floor — it
-was an optimistic bound.** `ledger/ledger-hits.txt` holds four scripted sessions (158 pages on one
-day), and `measure:hotlist-generalisation --hits` derives a set from it and holds
-out the hostname session whole: **14.3% (19 of 133 blocks)**, *below* the 40.9% a same-session split
-predicts, because a hold-out that shares no traffic with the derivation is a harder question.
-(The shipped set no longer comes from that ledger — it is the URL-trace-derived 91-rule set above,
-which keeps 96.2% on the same held-out session; the ledger figure stays as the measurement of what
-a stranger's traffic buys you.) And
-the session axis is flat from the start: merging the ledger one session at a time grows it
-53 → 56 → 57 fired rules while the held-out share stays **14.3% at every prefix** — sessions of the
-same kind had stopped paying at the first one. The honest use of a ledger is breadth, not
-completeness: it should replace the full export for a constrained device, and it should not be
-sold as the same list, smaller.
+**The multi-session measurement has now been made, and the page-split curve was not a floor — it was an optimistic bound.** `ledger/ledger-hits.txt` holds four scripted sessions (158 pages on one day), and `measure:hotlist-generalisation --hits` derives a set from it and holds out the hostname session whole: **14.3% (19 of 133 blocks)**, *below* the 40.9% a same-session split predicts, because a hold-out that shares no traffic with the derivation is a harder question. (The shipped set no longer comes from that ledger — it is the URL-trace-derived 91-rule set above, which keeps 96.2% on the same held-out session; the ledger figure stays as the measurement of what a stranger's traffic buys you.) And the session axis is flat from the start: merging the ledger one session at a time grows it 53 → 56 → 57 fired rules while the held-out share stays **14.3% at every prefix** — sessions of the same kind had stopped paying at the first one. The honest use of a ledger is breadth, not completeness: it should replace the full export for a constrained device, and it should not be sold as the same list, smaller.
 
-Two caveats, both load-bearing. The *k* axis counts pages of **one** session and the ledger holds
-four scripted sessions of **one day** — so what neither measurement can speak to is the breadth a
-person's real browsing has, which is the remaining question the 40.9% is waiting on (open flag 16).
-`measure:hotlist-generalisation --hits <ledger>` is still that measurement the moment a real one
-lands: it derives from the browser's own ledger and holds out the whole session, which is a
-stricter hold-out than the page split because the ledger shares no session with it.
+Two caveats, both load-bearing. The *k* axis counts pages of **one** session and the ledger holds four scripted sessions of **one day** — so what neither measurement can speak to is the breadth a person's real browsing has, which is the remaining question the 40.9% is waiting on (open flag 16). `measure:hotlist-generalisation --hits <ledger>` is still that measurement the moment a real one lands: it derives from the browser's own ledger and holds out the whole session, which is a stricter hold-out than the page split because the ledger shares no session with it.
 
 ### Choosing the rule source automatically
 
-A client never picks between the full export and the hot set. `chooseRuleSource` in
-[dnrManager.ts](packages/browser-extension/src/background/dnrManager.ts) decides from the budget
-alone, and the rule is narrow enough to state in one sentence: **the full export when it fits, the
-measured hot set when it does not.** There is no flag, no setting, and no configuration.
+A client never picks between the full export and the hot set. `chooseRuleSource` in [dnrManager.ts](packages/browser-extension/src/background/dnrManager.ts) decides from the budget alone, and the rule is narrow enough to state in one sentence: **the full export when it fits, the measured hot set when it does not.** There is no flag, no setting, and no configuration.
 
-The alternative is not nothing — it is a trimmed full export: when the shipped tier files can rank
-any of the list, the cut spends the budget on the hosts they can vouch for and drops the unmeasured
-tail first; when they cannot, the cut is the file's own order, as before. The hot set keeps a
-measured subset of the deployment's own traffic. Both are less than the full list, and the hot set
-is the better answer because its loss is characterised rather than silent.
+The alternative is not nothing — it is a trimmed full export: when the shipped tier files can rank any of the list, the cut spends the budget on the hosts they can vouch for and drops the unmeasured tail first; when they cannot, the cut is the file's own order, as before. The hot set keeps a measured subset of the deployment's own traffic. Both are less than the full list, and the hot set is the better answer because its loss is characterised rather than silent.
 
-Which means this is the **default path, not an edge case**. The shipped export compiles to
-**127,820** dynamic rules against Chrome's **30,000**-rule cap, so essentially every browser
-overflows and every one of them now installs the hot set instead of a prefix:
+Which means this is the **default path, not an edge case**. The shipped export compiles to **127,820** dynamic rules against Chrome's **30,000**-rule cap, so essentially every browser overflows and every one of them now installs the hot set instead of a prefix:
 
 | budget | source | installed | pruned from the export |
 | :--- | :--- | ---: | ---: |
@@ -682,40 +530,15 @@ overflows and every one of them now installs the hot set instead of a prefix:
 | 100 (very constrained client) | hot | 17 | 127,720 |
 | — (no hot set served) | full, tier-trimmed | 1,500 | 126,320 |
 
-The 17 measured ABP lines compile to 17 DNR rules — every one is a bare `||host^` zone block, so
-nothing expands per-site. **The last row is what a deployment without a hot set gets** — and it is
-not a prefix either. The cut is ordered by measured tier benefit: the hosts the shipped tier files
-can vouch for keep their slots first, weighted by the deployment's own per-tier block tally
-(`bm_tier_hits`) and by the evidence rank each host earned inside its tier file at compile time. A
-deployment with no local measurement yet still gets the compiled order — the curated seeds and
-evidence-ranked hosts are measured evidence the package already carries — which beats a merge-order
-prefix that keeps whatever happened to be early in the file.
+The 17 measured ABP lines compile to 17 DNR rules — every one is a bare `||host^` zone block, so nothing expands per-site. **The last row is what a deployment without a hot set gets** — and it is not a prefix either. The cut is ordered by measured tier benefit: the hosts the shipped tier files can vouch for keep their slots first, weighted by the deployment's own per-tier block tally (`bm_tier_hits`) and by the evidence rank each host earned inside its tier file at compile time. A deployment with no local measurement yet still gets the compiled order — the curated seeds and evidence-ranked hosts are measured evidence the package already carries — which beats a merge-order prefix that keeps whatever happened to be early in the file.
 
-Two failure modes are handled rather than assumed away. If the hot set *also* overflows, the full
-export is kept and pruned — the hot set would then be not a smaller list but a differently-shaped
-one, and choosing it trades a truncation for a truncation. And when the full export fits, nothing is
-logged about the hot set at all, so that the one message that matters is the one that gets read.
+Two failure modes are handled rather than assumed away. If the hot set *also* overflows, the full export is kept and pruned — the hot set would then be not a smaller list but a differently-shaped one, and choosing it trades a truncation for a truncation. And when the full export fits, nothing is logged about the hot set at all, so that the one message that matters is the one that gets read.
 
-**Which list is running is a user-facing fact, not a log detail**: the popup's quota card carries a
-*Rule source* row — `full export` or `measured hot set`, with the hot case naming the pruned count
-it stands in for — read from the record the last successful apply left behind, so a rule count can
-never be mistaken for an answer it cannot give (a pruned export and a measured set both fit the
-quota). A browser that has not applied a list yet shows no row rather than guessing.
+**Which list is running is a user-facing fact, not a log detail**: the popup's quota card carries a *Rule source* row — `full export` or `measured hot set`, with the hot case naming the pruned count it stands in for — read from the record the last successful apply left behind, so a rule count can never be mistaken for an answer it cannot give (a pruned export and a measured set both fit the quota). A browser that has not applied a list yet shows no row rather than guessing.
 
-The same comparison is how a deployment catches a **stale hot set**. Every apply that is offered
-one measures it against the full export it was served beside — its own budget standing, and the
-count of rules the export no longer carries verbatim (the builder only ships rules the source
-list contains, so a nonzero count means the served pair is out of step). A stale set is warned in
-the log whichever source won, and the row shows `· N stale` alongside the source.
+The same comparison is how a deployment catches a **stale hot set**. Every apply that is offered one measures it against the full export it was served beside — its own budget standing, and the count of rules the export no longer carries verbatim (the builder only ships rules the source list contains, so a nonzero count means the served pair is out of step). A stale set is warned in the log whichever source won, and the row shows `· N stale` alongside the source.
 
-The hot set reaches the client from the feed. `blockingmachine serve` publishes it at
-`/v1/hotlist.txt` beside the full list, and the extension fetches it alongside the rules — from
-wherever the full list came from, with the filename swapped, so a deployment whose feed is not the
-local default is not asked to configure it twice. **A deployment with no hot set is a normal state,
-not a fault**: the endpoint answers `200` with an empty body, an unreachable one is skipped, and a
-failed hot-set fetch never fails the sync. A client that cannot reach it gets the full export
-trimmed by measured tier benefit, and it should not lose the full list to fix a resource that is
-only ever consulted when the export overflows.
+The hot set reaches the client from the feed. `blockingmachine serve` publishes it at `/v1/hotlist.txt` beside the full list, and the extension fetches it alongside the rules — from wherever the full list came from, with the filename swapped, so a deployment whose feed is not the local default is not asked to configure it twice. **A deployment with no hot set is a normal state, not a fault**: the endpoint answers `200` with an empty body, an unreachable one is skipped, and a failed hot-set fetch never fails the sync. A client that cannot reach it gets the full export trimmed by measured tier benefit, and it should not lose the full list to fix a resource that is only ever consulted when the export overflows.
 
 ---
 

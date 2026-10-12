@@ -36,10 +36,7 @@ Seventh release candidate for Blockingmachine 1.0 — the largest since the RC l
 
 ### Verification Checksums (SHA-256)
 
-These are the hashes of the **published** assets — the ones `SHA256SUMS.txt` on the
-release carries. (Earlier drafts of this block hashed the local build; the publish
-workflow's `--clobber` replaced most of those files with CI builds, so only the
-values below verify a real download.)
+These are the hashes of the **published** assets — the ones `SHA256SUMS.txt` on the release carries. (Earlier drafts of this block hashed the local build; the publish workflow's `--clobber` replaced most of those files with CI builds, so only the values below verify a real download.)
 
 ```text
 6c5f7d29e7540066c6b17c2e9286e7977576dabfce245e1165563de8c1d1e5b8  Blockingmachine-1.0.0-rc.7-arm64.dmg
@@ -56,8 +53,7 @@ f0196fbf9fef97694e5fdadc4e788f70f05b5c8608a2ead024de530c37ac1cf1  blockingmachin
 8c916fa7767825a24cde33b4aacbff86bd94321610086e55c6463f8f59d105c4  blockingmachine_1.0.0~rc.7_amd64.deb
 ```
 
-Prior-release hashes kept for reference — verify those downloads against their own
-release pages' checksums as well:
+Prior-release hashes kept for reference — verify those downloads against their own release pages' checksums as well:
 
 ```text
 aca1e094560ef1d9f32efe06b5a5fc52a27e1ab39f0991f613a22583e85ca867  Blockingmachine-1.0.0-rc.6-arm64.dmg

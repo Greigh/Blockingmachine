@@ -3,14 +3,7 @@
 
 # Blockingmachine
 
-[![GitHub Actions](https://github.com/greigh/blockingmachine-cli/workflows/CI/badge.svg)](https://github.com/greigh/blockingmachine-cli/actions)
-[![GitHub Release](https://img.shields.io/github/v/release/greigh/Blockingmachine-CLI)](https://github.com/greigh/Blockingmachine-CLI/releases)
-[![COMMITS](https://img.shields.io/github/commit-activity/m/greigh/Blockingmachine-CLI)](https://github.com/greigh/blockingmachine-cli/graphs/commit-activity)
-[![ISSUES](https://img.shields.io/github/issues/greigh/Blockingmachine-CLI)](https://github.com/greigh/blockingmachine-cli/issues)
-[![LICENSE](https://img.shields.io/github/license/greigh/Blockingmachine-CLI)](LICENSE)
-[![NPM VERSION](https://badge.fury.io/js/@blockingmachine%2Fcli.svg)](https://www.npmjs.com/package/@blockingmachine/cli)
-[![NPM DOWNLOADS](https://img.shields.io/npm/dt/@blockingmachine/cli)](https://www.npmjs.com/package/@blockingmachine/cli)
-[![CODE SIZE](https://img.shields.io/github/languages/code-size/greigh/blockingmachine-cli)](https://github.com/greigh/blockingmachine-cli)
+[![GitHub Actions](https://github.com/greigh/blockingmachine-cli/workflows/CI/badge.svg)](https://github.com/greigh/blockingmachine-cli/actions) [![GitHub Release](https://img.shields.io/github/v/release/greigh/Blockingmachine-CLI)](https://github.com/greigh/Blockingmachine-CLI/releases) [![COMMITS](https://img.shields.io/github/commit-activity/m/greigh/Blockingmachine-CLI)](https://github.com/greigh/blockingmachine-cli/graphs/commit-activity) [![ISSUES](https://img.shields.io/github/issues/greigh/Blockingmachine-CLI)](https://github.com/greigh/blockingmachine-cli/issues) [![LICENSE](https://img.shields.io/github/license/greigh/Blockingmachine-CLI)](LICENSE) [![NPM VERSION](https://badge.fury.io/js/@blockingmachine%2Fcli.svg)](https://www.npmjs.com/package/@blockingmachine/cli) [![NPM DOWNLOADS](https://img.shields.io/npm/dt/@blockingmachine/cli)](https://www.npmjs.com/package/@blockingmachine/cli) [![CODE SIZE](https://img.shields.io/github/languages/code-size/greigh/blockingmachine-cli)](https://github.com/greigh/blockingmachine-cli)
 
 </div>
 

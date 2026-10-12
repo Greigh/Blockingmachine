@@ -215,5 +215,4 @@ class CLIError extends Error {
 }
 ```
 
-For usage examples, see [EXAMPLES.md](./EXAMPLES.md).
-For configuration details, see [configuration.md](./guides/configuration.md).
+For usage examples, see [EXAMPLES.md](./EXAMPLES.md). For configuration details, see [configuration.md](./guides/configuration.md).

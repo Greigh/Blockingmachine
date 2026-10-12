@@ -2,14 +2,37 @@
 
 All notable changes to the **Blockingmachine** monorepo are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
 ## [Unreleased]
 
-## [1.0.0-rc.11] - 2026-10-10
+### Security
+
+- **Authentication-mode changes on the Home Assistant add-on now require a management credential (D-9).** `POST /v1/auth-mode` was reachable without credentials on open-mode installs — a LAN client could flip `open→required` with one request and cut off every existing subscriber (reproduced live). The endpoint is now gated by `.admin_token` — a 192-bit credential minted on *every* install (new and upgraded), stored `0600` in the data dir, printed once in the add-on Log — sent as `X-Admin-Token:` or `Authorization: Bearer` (never a query parameter). The feed token and the `bm_token` dashboard cookie deliberately do **not** satisfy it; forged `Origin`/`X-Ingress-Path`/`Host` headers don't either. The dashboard's LAN-authentication card gains an *Admin token* field (sessionStorage-scoped, header-only). Auth state and credentials now write atomically (tmp→rename), mints are create-if-absent (`wx`) for concurrent-boot determinism, mode flips serialize, and the credential persists *before* the mode that requires it — a crash can never leave `required` recorded without its token. Find the admin token via Terminal & SSH / Samba (`/data/blockingmachine/.admin_token`) or the first-boot Log line. See `audit/HA_ADMIN_AUTHORIZATION.md`.
+- **New installs are LAN-authenticated by default (D-1 + D-7).** A fresh desktop install now writes `lanAuthMode: 'required'` on first boot and mints a sealed 192-bit feed token — every LAN mutation *and* telemetry read requires `Authorization: Bearer`. A fresh Home Assistant add-on install mints `.feed_token` in its data dir, gates every endpoint, and serves the dashboard's unlock page (type the token once → `bm_token` session cookie) so ingress keeps working. **Existing installs are untouched:** newness is proven by prior on-disk state (config file / `Documents/Blockingmachine` on the desktop; prior feed/stat artifacts in the add-on's data dir) — never by token absence — so upgraded installs keep their exact posture until the user migrates: Settings → Local Feed Server → "Migrate to required" on the desktop, the dashboard's LAN-authentication card or `POST /v1/auth-mode` on the add-on. Compatibility mode (`'open'`) honours a stored token without requiring it; a corrupt mode record fails closed; "clear" under required mode rotates rather than leaves the surface bare; and tokens are echoed only to credential-proven callers (status payloads, mode-flip responses) — never minted into an unauthenticated response.
+- **`ai-crawl-url` page fetching is pinned against DNS rebinding** — the URL crawl used the global dispatcher, so a public-looking name that resolved to a private address connected straight through (and its post-flight redirect check could only reject after the request landed). The crawl now runs through the same resolver-pinned agent as filter-source fetches; every redirect hop is re-validated at dial time.
+- **The Home Assistant add-on's mutation endpoints can no longer be hit by a drive-by web page.** On tokenless installs (the add-on's documented default), the CORS preflight advertised POST and the mutation handlers parsed JSON regardless of `Content-Type` — so a `text/plain` "simple request" from any browser could pause protection or force a recompile. The preflight no longer offers POST, and every POST endpoint now requires `Content-Type: application/json` (415 otherwise) — a content type a cross-origin page cannot send without the preflight the server refuses. The dashboard (same-origin through ingress), the extension's telemetry reporter, and the mobile app already declare it. **Note for scripters:** a bare `curl -X POST` or a `rest_command` without `content_type` now needs `-H "Content-Type: application/json"` — see the add-on DOCS.md.
+- **The system daemon's DoH upstream path is bounded and pinned.** A poisoned or hijacked upstream could previously return an unbounded body on the per-query path (daemon memory) or redirect the DNS query to a resolver the admin never configured. Upstream responses now cap at 128 KiB (a wire message maxes at 64 KiB), redirects are refused instead of followed (they surface as SERVFAIL), and a configured upstream pointing at link-local / metadata addresses is a boot-time refusal — loopback and LAN DoH proxies remain supported.
+- **The add-on's hub→feed pull caps the response body at 32 MB** (streams enforce mid-flight), closing a LAN-MITM memory-pressure vector on the plaintext pull; a refused body keeps the existing published feed.
+- **The DNS daemon's control API had the same `.local` trust hole the hub had — with a bigger blast radius.** `isSafeOrigin` trusted any `*.local` origin, so a page served from a rogue `printer.local`-style mDNS host could `POST /v1/toggle` (pause DNS protection) or `POST /v1/quarantine` (inject arbitrary blocks into the *live resolver* — censoring any domain network-wide). `/v1/stats` additionally answered any origin — `recentQueries` is the complete DNS query log. The control API now applies the hub's origin set (loopback + extension schemes + no-Origin natives) to reads and mutations alike, stops advertising POST in the preflight, and requires `Content-Type: application/json` on all POSTs. The hub's `daemonManager` remains the only consumer and was updated where its reload POST was bodyless.
+- **The daemon's own feed pulls are body-bounded too** — `dns.txt` and `threats.txt` reads cap at 32 MB via the shared `readBoundedTextBody`, degrading to the next candidate URL or persisted snapshot on refusal.
+
+### Added
+
+- **Width-adaptive desktop navigation (WCAG 2.2 SC 1.4.10).** The Electron shell now adapts to effective CSS width instead of pinning a 230px sidebar: full sidebar ≥901px, a 62px icon rail at 461–900px (labels clip-rect-hidden so accessible names and Tab order survive), and an overlay navigation drawer ≤460px driven by a header hamburger (`aria-expanded`, `aria-controls`, labelled `Primary` nav landmark, `aria-current="page"` on the selected destination). The drawer shares the `useDialogFocus` hook for focus-in, Tab/Shift-Tab cycling, Escape/backdrop close and focus-restore; `prefers-reduced-motion` disables the slide transition. Verified on the real renderer at 200% zoom (600 CSS px) and 400% zoom (300 CSS px) on all nine views plus the five-step welcome tour — zero page-level horizontal overflow.
+- **Real assistive-technology coverage.** macOS VoiceOver and Android TalkBack sessions verified the navigation, dialog, tab-bar and Settings accessible-name contracts with real spoken output — and VoiceOver caught a defect automation could not: the transform-hidden closed drawer stayed in the keyboard/AT focus order (SC 2.4.3). Fixed with `visibility` management on the drawer (delayed visibility transition keeps the slide animation), then re-verified by keyboard, VoiceOver, and the axe/reflow sweeps.
+- **Status-message semantics (SC 4.1.3):** transient Settings confirmations and the update-check result render with `role="status"`; errors render `role="alert"`.
+
+### Fixed
+
+- **Electron accessibility sweep — zero axe violations across all nine views in both themes.** The reflow verification flushed out real pre-existing defects, all fixed rather than waived: `.deploy-btn.primary:hover` went invisible (1.08:1 — translucent hover background over white text), ~20 dark-theme contrast failures on muted/tinted text (token corrections + dark-scoped `color-mix` variants), an undersized AI Radar checkbox (enlarged to 24×24 per WCAG 2.2 SC 2.5.8), missing `lang`, title-only select labels, unlabeled numeric input, and h2→h4 heading jumps. Dialogs carry `role="dialog"`; the shared `useDialogFocus` hook now covers Presets and EntropyGuide too.
+- **Narrow-viewport clipping:** the dashboard hero row, output-path pills and both onboarding grids (`repeat(3,1fr)` / `repeat(2,1fr)` → responsive `auto-fit`/`minmax`) now reflow instead of clipping under `overflow-x: hidden`.
+
+### Added (release engineering)
+
+- **Mobile release signing and real version codes (flag 75→86).** `assembleRelease` previously debug-signed the APK and pinned `versionCode 1` — the shipped `mobile-v1.0.0-rc.9/10` APKs can never take an in-place upgrade. `packages/mobile/app.config.js` now derives a strictly increasing `versionCode` from `expo.version` on every prebuild (`1.0.0-rc.11` → `1000011`), `plugins/withReleaseSigning.js` injects a `signingConfigs.release` block into the generated `app/build.gradle` reading `BM_RELEASE_STORE_FILE` / `BM_RELEASE_KEY_ALIAS` / `BM_RELEASE_STORE_PASSWORD` / `BM_RELEASE_KEY_PASSWORD` (env or `gradle.properties` — never committed), and `BM_ANDROID_VERSION_CODE` bumps the code at gradle time for same-version rebuilds. **Any missing release credential fails the release build with a clear error — debug signing is never silently used** (debug builds unaffected). Verified end-to-end: two `expo prebuild` regenerations, release-signed APK (`apksigner` shows the release cert, not debug), `adb install -r` over the same-cert build at `versionCode=1000012` upgraded in place with app data intact on emulator-5554. **Known one-time break:** APKs already distributed were debug-signed — those installs must uninstall and re-pair; locally stored servers/tokens are lost on uninstall. Owner keystore lives off-repo at `~/.config/blockingmachine-mobile/`; backup + CI-secret instructions in `packages/mobile/README.md`.
 
 ### Security
 
@@ -23,30 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Mobile QR pairing**: the "Scan pairing QR" card could silently do nothing —
-  `requestPermission()` was awaited before entering QR mode, so a rejection (or a
-  permanently-denied permission, which resolves without a dialog) left the picker
-  screen dead with no prompt and no way back. The flow now enters QR mode first,
-  surfaces request failures as an error card, and offers an **Open Settings**
-  path when Android reports `canAskAgain: false`. `app.json` also declares
-  `NSCameraUsageDescription` (iOS) and `CAMERA` (Android) explicitly rather than
-  relying on the expo-camera plugin defaults, and drops `RECORD_AUDIO` /
-  `NSMicrophoneUsageDescription`, which the scanner never needed.
-- **Mobile floating tab bar**: icon+label sat pinned to the pill's top edge —
-  the bar reserved `insets.bottom` as internal padding *and* floated the pill
-  with margin, double-counting the safe area. The pill now lifts via
-  `marginBottom: insets.bottom + spacing` alone, drops the internal inset
-  padding, and centers items vertically.
-- **Mobile mDNS pairing**: "Find on network" found the hub but connect failed
-  `UnknownHostException` — the discovered `.local` hostname was fed to `fetch`,
-  and Android's resolver can't resolve `.local` for HTTP (mDNS only works
-  through NsdManager, which zeroconf uses but `fetch` doesn't). Discovered
-  servers now carry a `connectHost` — resolved IPv4 preferred, bracketed IPv6
-  next, hostname last — and the row dials it instead. (QR pairing was never
-  affected: the desktop emits literal LAN IPs.)
-- The regenerated APK (same `1.0.0-rc.10`) replaces the `mobile-v1.0.0-rc.10`
-  release asset and the Forgejo `generic/blockingmachine-mobile/1.0.0-rc.10`
-  package — reinstall it to pick up the fix.
+- **Mobile QR pairing**: the "Scan pairing QR" card could silently do nothing — `requestPermission()` was awaited before entering QR mode, so a rejection (or a permanently-denied permission, which resolves without a dialog) left the picker screen dead with no prompt and no way back. The flow now enters QR mode first, surfaces request failures as an error card, and offers an **Open Settings** path when Android reports `canAskAgain: false`. `app.json` also declares `NSCameraUsageDescription` (iOS) and `CAMERA` (Android) explicitly rather than relying on the expo-camera plugin defaults, and drops `RECORD_AUDIO` / `NSMicrophoneUsageDescription`, which the scanner never needed.
+- **Mobile floating tab bar**: icon+label sat pinned to the pill's top edge — the bar reserved `insets.bottom` as internal padding *and* floated the pill with margin, double-counting the safe area. The pill now lifts via `marginBottom: insets.bottom + spacing` alone, drops the internal inset padding, and centers items vertically.
+- **Mobile mDNS pairing**: "Find on network" found the hub but connect failed `UnknownHostException` — the discovered `.local` hostname was fed to `fetch`, and Android's resolver can't resolve `.local` for HTTP (mDNS only works through NsdManager, which zeroconf uses but `fetch` doesn't). Discovered servers now carry a `connectHost` — resolved IPv4 preferred, bracketed IPv6 next, hostname last — and the row dials it instead. (QR pairing was never affected: the desktop emits literal LAN IPs.)
+- The regenerated APK (same `1.0.0-rc.10`) replaces the `mobile-v1.0.0-rc.10` release asset and the Forgejo `generic/blockingmachine-mobile/1.0.0-rc.10` package — reinstall it to pick up the fix.
 
 ## [1.0.0-rc.10] - 2026-10-08
 

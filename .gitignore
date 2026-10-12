@@ -81,6 +81,11 @@ assets/*.p12
 assets/*.pfx
 assets/*.cert
 
+# Signing material — release keystores never live in the repo
+*.keystore
+*.jks
+signing.env
+
 *.backup
 *.tsbuildinfo
 
@@ -111,3 +116,6 @@ ledger/last-tier-plan.json
 # scratch captures here (including the URL-trace re-capture open flag 15 tracks).
 # It is per-machine output, not a shipped artifact.
 .playwright-mcp/
+# Audit working papers — session-scoped evidence reports, not product docs.
+# The durable record lives in AUDIT.md, docs/open-flags.md and CHANGELOG.md.
+audit/
