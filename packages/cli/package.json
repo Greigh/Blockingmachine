@@ -38,11 +38,11 @@
     "commander": "^15.0.0",
     "cosmiconfig": "^10.0.1",
     "dotenv": "^18.0.7",
-    "mongoose": "^9.11.1",
+    "mongoose": "^9.11.2",
     "node-fetch": "^3.3.2",
     "progress": "^2.0.3",
     "winston": "^3.19.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
