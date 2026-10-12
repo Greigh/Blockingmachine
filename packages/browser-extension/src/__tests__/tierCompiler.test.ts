@@ -102,6 +102,11 @@ function runCompiler(args: string[]): { stdout: string; status: number } {
         join(workDir, 'counts.ts'),
         '--catalogue-path',
         join(workDir, 'catalogue.ts'),
+        // A real hub's verdict file must not leak into the suite: `--security` discovery looks
+        // beside the developer's compiled lists, and a machine that has run the hub has one —
+        // the tier would claim its share and every capacity assertion below would depend on
+        // the machine, not the fixture. First, so a test's own `--security` still wins.
+        '--no-security',
         ...args,
       ],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },

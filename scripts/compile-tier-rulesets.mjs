@@ -136,7 +136,8 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve, relative, basename, join } from 'node:path';
+import { homedir } from 'node:os';
+import { resolve, relative, basename, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeJson } from './stdout.mjs';
 
@@ -866,8 +867,45 @@ export function normalizeTierName(value) {
   return TIER_IDS.includes(short) ? short : null;
 }
 
+/**
+ * Where the desktop hub writes its compiled lists — the directory its configured `savePath`
+ * points into, read from the app's own config so discovery finds the *live* outputs rather
+ * than only the copies that may sit inside the repository tree.
+ *
+ * The config is electron-store's `config.json` in the app's userData dir — the path differs
+ * per platform, and every form is tried because this script runs wherever a build runs. A
+ * machine that has never run the hub has no config and yields `null`, which simply leaves
+ * the repository candidates below to speak — the fresh-checkout state the fallbacks exist for.
+ */
+export function configuredOutputDir() {
+  const home = homedir();
+  const appName = 'Blockingmachine';
+  const configCandidates = [];
+  if (process.platform === 'darwin')
+    configCandidates.push(join(home, 'Library', 'Application Support', appName, 'config.json'));
+  if (process.platform === 'win32' && process.env.APPDATA)
+    configCandidates.push(join(process.env.APPDATA, appName, 'config.json'));
+  configCandidates.push(
+    join(process.env.XDG_CONFIG_HOME || join(home, '.config'), appName, 'config.json'),
+  );
+  for (const configPath of configCandidates) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      if (typeof config?.savePath === 'string' && config.savePath.trim() !== '')
+        return dirname(config.savePath);
+    } catch {
+      // No readable config at this candidate — keep looking; absence is not an error.
+    }
+  }
+  return null;
+}
+
 export function defaultInputCandidates(rootDir = ROOT_DIR) {
+  const out = configuredOutputDir();
   return [
+    // The hub's own output directory first — the live list it just compiled — then the
+    // copies a checkout may carry, which are only ever as fresh as their last drop.
+    ...(out ? [join(out, 'browser.txt'), join(out, 'adguardBrowser.txt')] : []),
     resolve(rootDir, 'packages/electron-app/filters/output/hosts.txt'),
     resolve(rootDir, 'packages/electron-app/filters/output/genericBrowserRules.txt'),
     resolve(rootDir, 'packages/electron-app/filters/output/adguardBrowser.txt'),
@@ -881,11 +919,16 @@ export function defaultInputCandidates(rootDir = ROOT_DIR) {
  * Beside the compiled lists, because that is where the desktop hub writes them: it already runs
  * the classifier over the same deduplicated hosts it writes `browser.txt` for, so the verdicts and
  * the blocklist they are verdicts *about* are produced in one pass from one input and cannot drift
- * apart. Discovered rather than required because a checkout with no hub run legitimately has none,
- * and the tier it feeds ships empty in that state.
+ * apart. "Beside the compiled lists" means the configured output directory the input candidates
+ * above resolve first — a verdict file that only lived under `filters/output/` would miss every
+ * hub that writes somewhere else, and the tier would ship empty beside a verdict file that was
+ * there all along. Discovered rather than required because a checkout with no hub run
+ * legitimately has none, and the tier it feeds ships empty in that state.
  */
 export function defaultSecurityCandidates(rootDir = ROOT_DIR) {
+  const out = configuredOutputDir();
   return [
+    ...(out ? [join(out, 'malware.txt'), join(out, 'tier-security.txt')] : []),
     resolve(rootDir, 'packages/electron-app/filters/output/malware.txt'),
     resolve(rootDir, 'packages/electron-app/filters/output/tier-security.txt'),
     resolve(rootDir, 'packages/cli/filters/output/malware.txt'),

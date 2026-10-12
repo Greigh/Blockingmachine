@@ -39,6 +39,12 @@ export interface TierPlanRow {
 export interface TierPlanResult {
   ok: true;
   rulesDir: string;
+  /**
+   * Which files the plan read: the checked-in curated baseline, or a plan
+   * `package-extension.mjs` compiled from the hub's synced list. A baseline
+   * plan's counts say nothing about a packaged extension — the card must say so.
+   */
+  tierSource?: 'curated-baseline' | 'compiled' | 'unknown';
   capacitySlots: number;
   rows: TierPlanRow[];
   broken: TierPlanRow[];
@@ -174,52 +180,74 @@ export const ExtensionTierPlanCard: React.FC<ExtensionTierPlanCardProps> = ({
       ) : (
         <>
           <p className="tier-plan-card-sub">
-            {plan.enabledRules.toLocaleString()} of {plan.totalRules.toLocaleString()} shipped rules fit{' '}
+            {plan.enabledRules.toLocaleString()} of {plan.totalRules.toLocaleString()}{' '}
+            {result.tierSource === 'curated-baseline' ? 'baseline' : 'shipped'} rules fit{' '}
             {capacitySlots.toLocaleString()} static slots
             {free > 0 ? ` · ${free.toLocaleString()} free` : ''}
           </p>
+          {result.tierSource === 'curated-baseline' && (
+            <p className="tier-plan-card-sub tier-plan-baseline-note">
+              These are the checked-in curated files — 118 hand-picked rules. A packaged
+              extension compiles the hub&apos;s synced list into these tiers instead, so a real
+              install&apos;s counts are far larger.
+            </p>
+          )}
 
-          <table className="tier-plan-table">
-            <thead>
-              <tr>
-                <th scope="col">Tier</th>
-                <th scope="col">Rules</th>
-                <th scope="col">Blocked</th>
-                <th scope="col">Already dynamic</th>
-                <th scope="col">In plan</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => {
-                const shipped = plan.enabled.includes(row.id);
-                return (
-                  <tr key={row.id} className={shipped ? 'tier-plan-row kept' : 'tier-plan-row'}>
-                    <th scope="row">
+          <div className="tier-plan-grid">
+            {rows.map((row) => {
+              const shipped = plan.enabled.includes(row.id);
+              return (
+                <div key={row.id} className={shipped ? 'tier-plan-tile kept' : 'tier-plan-tile'}>
+                  <div className="tier-plan-tile-head">
+                    <div className="tier-plan-tile-name">
                       {row.label}
                       <span className="tier-plan-tier-id">{STATE_BY_TIER[row.id] ?? row.id}</span>
-                    </th>
-                    <td>{row.rules.toLocaleString()}</td>
-                    <td>{row.hits === null ? '—' : row.hits.toLocaleString()}</td>
-                    {/* An em dash when no list was compared, because "nothing was compared" and
-                        "nothing was redundant" are different facts and the second one is the
-                        reassuring reading of an empty cell. */}
-                    <td className={redundantTiers.has(row.id) ? 'tier-plan-redundant-all' : undefined}>
-                      {row.redundant === null
-                        ? '—'
-                        : row.redundant.rules === 0
-                          ? '0'
-                          : `${row.redundant.rules.toLocaleString()} of ${row.rules.toLocaleString()}`}
-                    </td>
+                    </div>
                     {/* Three states, because they are three different facts: kept by the plan,
                         dropped from a tier that is currently on, and left out of a plan that never
                         had it on. Collapsing the last two is how a user's own choice ends up
                         looking like a recommendation against it. */}
-                    <td>{shipped ? 'Kept' : active.has(row.id) ? 'Dropped' : 'Not included'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                    <span
+                      className={`tier-plan-status ${
+                        shipped ? 'kept' : active.has(row.id) ? 'dropped' : 'excluded'
+                      }`}
+                    >
+                      {shipped ? 'Kept' : active.has(row.id) ? 'Dropped' : 'Not included'}
+                    </span>
+                  </div>
+                  <div className="tier-plan-tile-stats">
+                    <div className="tier-plan-stat">
+                      <span className="tier-plan-stat-value">{row.rules.toLocaleString()}</span>
+                      <span className="tier-plan-stat-label">rules</span>
+                    </div>
+                    <div className="tier-plan-stat">
+                      <span className="tier-plan-stat-value">
+                        {row.hits === null ? '—' : row.hits.toLocaleString()}
+                      </span>
+                      <span className="tier-plan-stat-label">blocked</span>
+                    </div>
+                    {/* An em dash when no list was compared, because "nothing was compared" and
+                        "nothing was redundant" are different facts and the second one is the
+                        reassuring reading of an empty cell. */}
+                    <div className="tier-plan-stat">
+                      <span
+                        className={`tier-plan-stat-value${
+                          redundantTiers.has(row.id) ? ' tier-plan-redundant-all' : ''
+                        }`}
+                      >
+                        {row.redundant === null
+                          ? '—'
+                          : row.redundant.rules === 0
+                            ? '0'
+                            : `${row.redundant.rules.toLocaleString()} of ${row.rules.toLocaleString()}`}
+                      </span>
+                      <span className="tier-plan-stat-label">dynamic</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
 
           {/* The basis is stated whether or not it is the interesting one. A plan that quietly
               ranked by rule count is otherwise indistinguishable from a plan that weighed the
