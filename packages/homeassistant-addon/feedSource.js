@@ -30,6 +30,45 @@ export function bodyLooksLikeFeed(body) {
     });
 }
 
+/** Feeds are MB-scale; anything past this is a hostile body, not a blocklist. */
+const MAX_FEED_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Reads a feed response with a hard byte ceiling. The LAN pull is plaintext by
+ * design, so the channel is MITM-able — the bound is what stands between a
+ * poisoned response and container memory. The stream is preferred so the cap
+ * trips mid-flight; test doubles that only expose `text()` get the same cap
+ * after the body lands.
+ */
+async function readFeedBody(res, maxBytes) {
+  const reader = res.body?.getReader?.();
+  if (reader) {
+    const decoder = new TextDecoder();
+    let total = 0;
+    let body = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.length;
+        if (total > maxBytes) {
+          throw new Error(`feed body exceeded ${maxBytes} bytes — refusing to buffer more`);
+        }
+        body += decoder.decode(value, { stream: true });
+      }
+      body += decoder.decode();
+      return body;
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+  }
+  const body = await res.text();
+  if (Buffer.byteLength(body) > maxBytes) {
+    throw new Error(`feed body exceeded ${maxBytes} bytes — refusing to keep it`);
+  }
+  return body;
+}
+
 /**
  * Fetches one feed file and writes it under dataDir.
  * @returns {Promise<{ file: string, bytes: number }>}
@@ -44,7 +83,7 @@ async function pullOne({ sourceUrl, token, dataDir, fileName, fetchImpl, timeout
   if (!res.ok) {
     throw new Error(`${fileName}: ${url} answered HTTP ${res.status}`);
   }
-  const body = await res.text();
+  const body = await readFeedBody(res, MAX_FEED_BYTES);
   if (!bodyLooksLikeFeed(body)) {
     throw new Error(`${fileName}: ${url} returned no usable rules — refusing to overwrite the published feed`);
   }

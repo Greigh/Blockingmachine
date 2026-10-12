@@ -785,14 +785,20 @@ export function planTierSelection(input: TierPlanInput): TierPlan {
     };
   }
 
-  // ── Which budget actually forced the decision ──────────────────────────────────
-  const allTiersSelected = selected.length === tiers.length;
-  let bindingConstraint: TierPlan['bindingConstraint'] = 'none';
-  if (tiers.length > 0 && !allTiersSelected) bindingConstraint = 'static';
-  else if (dynamic && !dynamic.withinWatermark) bindingConstraint = 'dynamic';
-
   const staticHeadroom = Math.max(0, staticCapacity - enabledRules);
   const overCapacity = enabledRules > staticCapacity;
+
+  // ── Which budget actually forced the decision ──────────────────────────────────
+  const allTiersSelected = selected.length === tiers.length;
+  // Capacity only "forced" the plan when an excluded tier genuinely would not fit.
+  // A tier dropped for carrying no rules — or less benefit per slot than its
+  // neighbours — did not lose to the budget, and calling the static budget binding
+  // there is what produced "118 rules no longer fit in 330,000 slots".
+  const capacityExcludedTier = disabled.some((entry) => (entry.shortfall ?? 0) > 0);
+  let bindingConstraint: TierPlan['bindingConstraint'] = 'none';
+  if (tiers.length > 0 && !allTiersSelected && (capacityExcludedTier || overCapacity)) bindingConstraint = 'static';
+  else if (dynamic && !dynamic.withinWatermark) bindingConstraint = 'dynamic';
+
   const currentEnabled = Array.isArray(input?.currentEnabled) ? [...input.currentEnabled] : null;
   const differsFromCurrent =
     currentEnabled === null
@@ -812,12 +818,23 @@ export function planTierSelection(input: TierPlanInput): TierPlan {
   );
 
   if (tiers.length > 0) {
-    explanation.push(
-      allTiersSelected
-        ? `All ${tiers.length} tiers fit: ${enabledRules.toLocaleString()} of ${totalRules.toLocaleString()} shipped rules can stay on.`
-        : `Keeping ${enabled.length} of ${tiers.length} tiers — ${enabledRules.toLocaleString()} rules — because ` +
+    if (allTiersSelected) {
+      explanation.push(
+        `All ${tiers.length} tiers fit: ${enabledRules.toLocaleString()} of ${totalRules.toLocaleString()} shipped rules can stay on.`,
+      );
+    } else if (capacityExcludedTier || overCapacity) {
+      explanation.push(
+        `Keeping ${enabled.length} of ${tiers.length} tiers — ${enabledRules.toLocaleString()} rules — because ` +
           `${totalRules.toLocaleString()} shipped rules no longer fit in ${staticCapacity.toLocaleString()} slots.`,
-    );
+      );
+    } else {
+      // The excluded tiers did not lose to the budget, so say what they actually lost to —
+      // otherwise "no longer fit" is asserted against a plan where everything already fits.
+      explanation.push(
+        `Keeping ${enabled.length} of ${tiers.length} tiers — ${enabledRules.toLocaleString()} rules. ` +
+          `Every tier left off shipped no rules, or delivered less blocking per slot than the tiers kept.`,
+      );
+    }
   }
 
   // What the plan was worth, in the units it was worth. Without this the reader cannot tell a plan

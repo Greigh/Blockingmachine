@@ -63,7 +63,12 @@ const publicOnlyAgents = {
   http: new http.Agent({ lookup: publicOnlyLookup }),
   https: new https.Agent({ lookup: publicOnlyLookup }),
 };
-const publicOnlyAgent = (parsedUrl: URL): http.Agent =>
+/**
+ * node-fetch `agent` callback that pins the connection to a DNS answer vetted
+ * by the public-range policy — exported for other outbound surfaces that must
+ * not be rebindable (e.g. the AI page crawler).
+ */
+export const publicOnlyAgent = (parsedUrl: URL): http.Agent =>
   parsedUrl.protocol === "https:" ? publicOnlyAgents.https : publicOnlyAgents.http;
 
 export interface FetchOptions {
@@ -79,10 +84,21 @@ export interface FetchOptions {
  * otherwise push an unbounded payload into the main process's heap and turn a
  * connectivity check into a memory event. The stream is cancelled on overflow.
  */
-export async function readBoundedJsonBody(
-  res: { body: unknown },
+/**
+ * Reads a response body to a Buffer with a hard byte cap — the shared
+ * machinery behind `readBoundedJsonBody` / `readBoundedTextBody`. Handles the
+ * web-stream (`getReader`) and Node async-iterable body shapes, and falls
+ * back to `res.text()` for stub responses that expose neither.
+ */
+async function readBoundedBuffer(
+  res: { body: unknown; text?: () => Promise<string> },
   maxBytes: number,
-): Promise<unknown> {
+): Promise<Buffer> {
+  const limitError = () =>
+    new NonRetryableFetchError(
+      `Response body exceeded ${Math.round(maxBytes / 1024)}KB limit`,
+      413,
+    );
   const body = res.body as { getReader?: () => ReadableStreamDefaultReader<Uint8Array> } | null;
   if (body && typeof body.getReader === "function") {
     const reader = body.getReader();
@@ -95,17 +111,14 @@ export async function readBoundedJsonBody(
         const buf = Buffer.isBuffer(value) ? value : Buffer.from(value);
         total += buf.length;
         if (total > maxBytes) {
-          throw new NonRetryableFetchError(
-            `AI endpoint response exceeded ${Math.round(maxBytes / 1024)}KB limit`,
-            413,
-          );
+          throw limitError();
         }
         chunks.push(buf);
       }
     } finally {
       reader.cancel().catch(() => {});
     }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return Buffer.concat(chunks);
   }
   // node-fetch and other Node-side clients expose an async-iterable Readable
   // instead of a web ReadableStream — bound it the same way rather than
@@ -118,16 +131,38 @@ export async function readBoundedJsonBody(
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += buf.length;
       if (total > maxBytes) {
-        throw new NonRetryableFetchError(
-          `AI endpoint response exceeded ${Math.round(maxBytes / 1024)}KB limit`,
-          413,
-        );
+        throw limitError();
       }
       chunks.push(buf);
     }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return Buffer.concat(chunks);
+  }
+  if (typeof res.text === "function") {
+    const buf = Buffer.from(await res.text(), "utf8");
+    if (buf.length > maxBytes) {
+      throw limitError();
+    }
+    return buf;
   }
   throw new Error("Response has no readable body");
+}
+
+export async function readBoundedJsonBody(
+  res: { body: unknown; text?: () => Promise<string> },
+  maxBytes: number,
+): Promise<unknown> {
+  return JSON.parse((await readBoundedBuffer(res, maxBytes)).toString("utf8"));
+}
+
+/**
+ * Bounded plain-text read for non-JSON consumers (feed pulls, text probes) —
+ * same cap machinery, without the parse.
+ */
+export async function readBoundedTextBody(
+  res: { body: unknown; text?: () => Promise<string> },
+  maxBytes: number,
+): Promise<string> {
+  return (await readBoundedBuffer(res, maxBytes)).toString("utf8");
 }
 
 export interface FetchResult {

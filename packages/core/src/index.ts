@@ -43,6 +43,7 @@ export {
   fetchContent,
   fetchWithConditionalCache,
   readBoundedJsonBody,
+  readBoundedTextBody,
   type FetchOptions,
   type FetchResult,
 } from "./fetch.js";

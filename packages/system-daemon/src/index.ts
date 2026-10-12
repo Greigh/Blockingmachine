@@ -1,9 +1,13 @@
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import fetch from 'node-fetch';
+import { readBoundedTextBody } from '@blockingmachine/core';
 import { DomainTrie } from './engine/domainTrie.js';
 import { DnsServer } from './server/dnsServer.js';
 import { DaemonConfig, DaemonStatusResponse } from './types.js';
+
+/** Feeds are MB-scale plaintext over the LAN — a body past this is a hostile pull. */
+const MAX_FEED_PULL_BYTES = 32 * 1024 * 1024;
 
 export const defaultConfig: DaemonConfig = {
   bindHost: '127.0.0.1',
@@ -42,7 +46,10 @@ export async function loadRulesFromFeeds(trie: DomainTrie, config: DaemonConfig)
       // A hung local feed must not park startup (or a /v1/reload) forever — answer after 8s.
       const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
       if (res.ok) {
-        const text = await res.text();
+        // The LAN pull is plaintext — bound it so a MITM/wedged feed cannot
+        // grow daemon memory. Oversize bodies throw and fall to the next
+        // candidate rather than poisoning the trie.
+        const text = await readBoundedTextBody(res, MAX_FEED_PULL_BYTES);
         const lines = text.split('\n');
         trie.clear();
         for (const line of lines) {
@@ -102,7 +109,7 @@ export async function loadRulesFromFeeds(trie: DomainTrie, config: DaemonConfig)
   let threatText: string | null = null;
   try {
     const threatRes = await fetch(threatsUrl, { signal: AbortSignal.timeout(8000) });
-    if (threatRes.ok) threatText = await threatRes.text();
+    if (threatRes.ok) threatText = await readBoundedTextBody(threatRes, MAX_FEED_PULL_BYTES);
   } catch {
     // Threat feed server not running or offline
   }
@@ -150,9 +157,11 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
 
   // HTTP Control API (127.0.0.1:9292)
   const controlServer = http.createServer(async (req, res) => {
-    // CORS headers for local control & dashboard access
+    // CORS headers for local control & dashboard access. POST is deliberately
+    // absent from the preflight: a cross-origin page cannot carry a JSON
+    // content type without preflighting, and this preflight now refuses it.
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') {
@@ -170,6 +179,54 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Bad Request: Malformed URL' }));
       return;
+    }
+
+    const originHeader = req.headers.origin || (typeof req.headers.referer === 'string' ? req.headers.referer : undefined);
+    // No-Origin native callers (the hub's daemonManager, curl) are trusted;
+    // browser origins must be loopback or an extension scheme. `.local` is
+    // deliberately NOT trusted — any LAN device can claim an mDNS name, and a
+    // page served from one can reach this loopback port from the same browser.
+    const isSafeOrigin = (): boolean => {
+      if (!originHeader) return true;
+      try {
+        const u = new URL(originHeader);
+        return (
+          u.hostname === 'localhost' ||
+          u.hostname === '127.0.0.1' ||
+          u.protocol === 'chrome-extension:' ||
+          u.protocol === 'moz-extension:'
+        );
+      } catch {
+        return false;
+      }
+    };
+
+    // Telemetry-bearing reads: /v1/stats carries recentQueries — the DNS query
+    // log is a browsing history — and /v1/status reports the upstream config.
+    // With ACAO:* an arbitrary same-host web page could read them.
+    if (!isSafeOrigin()) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
+      return;
+    }
+
+    // Every POST route consumes a JSON body (or none at all). A browser can
+    // only send application/json cross-origin through a preflight this server
+    // refuses — so this is the second wall against text/plain simple-request
+    // drive-bys alongside the origin check above.
+    if (req.method === 'POST') {
+      const contentType = String(req.headers['content-type'] || '')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+      if (contentType !== 'application/json') {
+        res.writeHead(415, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: false,
+          error: 'Unsupported Media Type — POST endpoints require Content-Type: application/json',
+        }));
+        return;
+      }
     }
 
     if (pathname === '/v1/status' || pathname === '/status') {
@@ -204,29 +261,7 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
       return;
     }
 
-    const originHeader = req.headers.origin || (typeof req.headers.referer === 'string' ? req.headers.referer : undefined);
-    const isSafeOrigin = (): boolean => {
-      if (!originHeader) return true;
-      try {
-        const u = new URL(originHeader);
-        return (
-          u.hostname === 'localhost' ||
-          u.hostname === '127.0.0.1' ||
-          u.hostname.endsWith('.local') ||
-          u.protocol === 'chrome-extension:' ||
-          u.protocol === 'moz-extension:'
-        );
-      } catch {
-        return false;
-      }
-    };
-
     if ((pathname === '/v1/reload' || pathname === '/reload') && req.method === 'POST') {
-      if (!isSafeOrigin()) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
-        return;
-      }
       console.log('[Daemon] Reload triggered via Control API...');
       const loadedCount = await loadRulesFromFeeds(trie, config);
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -235,11 +270,6 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
     }
 
     if ((pathname === '/v1/toggle' || pathname === '/toggle') && req.method === 'POST') {
-      if (!isSafeOrigin()) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
-        return;
-      }
       let body = '';
       req.on('data', (chunk) => {
         body += chunk;
@@ -267,11 +297,6 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
     }
 
     if ((pathname === '/v1/quarantine' || pathname === '/quarantine') && req.method === 'POST') {
-      if (!isSafeOrigin()) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: 'Forbidden' }));
-        return;
-      }
       let body = '';
       req.on('data', (chunk) => {
         body += chunk;
