@@ -316,4 +316,24 @@ describe('planTierSelection — explanation and edges', () => {
     ).toContain('fit 12,000 static slots');
     expect(formatTierPlan(planTierSelection({ tiers: COMPILED_TIERS }))).toContain('inside 30,000 static slots');
   });
+
+  test('does not blame capacity when a tier was dropped for carrying no rules', () => {
+    // The shape the audit caught: six tiers where two ship zero rules and the rest fit the
+    // pool with room to spare. "118 shipped rules no longer fit in 330,000 slots" reads as a
+    // capacity claim, and it was false — capacity never entered the decision.
+    const plan = planTierSelection({
+      tiers: [
+        tier('tier_core', 'Core shield', 40),
+        tier('tier_ads', 'Ad networks', 78),
+        tier('tier_privacy', 'Tracking & analytics', 0),
+        tier('tier_annoyances', 'Consent & nags', 0),
+      ],
+      enabledRuleCount: 0,
+      availableStaticRules: 330000,
+    });
+
+    expect(plan.bindingConstraint).toBe('none');
+    expect(plan.explanation.join(' ')).not.toContain('no longer fit');
+    expect(plan.explanation.join(' ')).toContain('Keeping 2 of 4 tiers');
+  });
 });

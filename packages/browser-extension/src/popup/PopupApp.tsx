@@ -176,6 +176,7 @@ export const PopupApp: React.FC = () => {
     autoSync: true,
   });
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [haExpanded, setHaExpanded] = useState(false);
 
   const flash = useCallback((text: string, tone: 'ok' | 'warn' = 'ok') => {
     setToast({ text, tone });
@@ -667,7 +668,7 @@ export const PopupApp: React.FC = () => {
     shieldStatus === 'active' ? 'ok' : shieldStatus === 'site-paused' ? 'warn' : 'off';
 
   return (
-    <div className="popup-container">
+    <div className={`popup-container${toast ? ' toast-open' : ''}`}>
       <header className="popup-header">
         <div className="brand-row">
           <span className={`status-dot ${statusTone}`} aria-hidden />
@@ -857,8 +858,11 @@ export const PopupApp: React.FC = () => {
           <section className="settings-card">
             <div className="card-title">
               <span>Hub connection</span>
-              <span className={`mini-status ${sseStatus === 'connected' ? 'ok' : 'off'}`}>
-                {sseStatus === 'connected' ? 'Live' : sseStatus}
+              <span
+                className={`mini-status ${sseStatus === 'connected' ? 'ok' : 'off'}`}
+                title="State of the live event stream — a rule sync can still have succeeded while this is offline"
+              >
+                {sseStatus === 'connected' ? 'Live' : sseStatus === 'connecting' ? 'Connecting…' : 'Offline'}
               </span>
             </div>
             <div className="kv-row">
@@ -993,11 +997,14 @@ export const PopupApp: React.FC = () => {
                     </div>
                     <div className="tier-plan-summary">{formatTierPlan(tierPlan)}</div>
                     {tierPlanBasis && <TierPlanBasis basis={tierPlanBasis} />}
-                    <ul className="tier-plan-why">
-                      {tierPlan.explanation.map((line) => (
-                        <li key={line}>{line}</li>
-                      ))}
-                    </ul>
+                    <details className="tier-plan-details">
+                      <summary>Why this plan</summary>
+                      <ul className="tier-plan-why">
+                        {tierPlan.explanation.map((line) => (
+                          <li key={line}>{line}</li>
+                        ))}
+                      </ul>
+                    </details>
                   </div>
                 )}
 
@@ -1078,13 +1085,20 @@ export const PopupApp: React.FC = () => {
           </section>
 
           <section className="settings-card">
-            <div className="card-title">
+            <button
+              className="collapse-head"
+              onClick={() => setHaExpanded((v) => !v)}
+              aria-expanded={haExpanded || haConfig.enabled}
+            >
               <span>Home Assistant bridge</span>
               <span className={`mini-status ${haConfig.enabled ? 'ok' : 'off'}`}>
                 {haConfig.enabled ? 'Enabled' : 'Disabled'}
               </span>
-            </div>
+              <span className={`caret ${haExpanded || haConfig.enabled ? 'open' : ''}`}>▾</span>
+            </button>
 
+            {(haExpanded || haConfig.enabled) && (
+              <>
             <div className="toggle-row">
               <span>Sync with Home Assistant</span>
               <label className="switch small">
@@ -1147,6 +1161,8 @@ export const PopupApp: React.FC = () => {
             >
               Test connection
             </button>
+              </>
+            )}
           </section>
 
           <section className="settings-card">
