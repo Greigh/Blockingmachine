@@ -65,6 +65,16 @@ gradle.taskGraph.whenReady { graph ->
 /** @type {import('@expo/config-plugins').ConfigPlugin} */
 module.exports = function withReleaseSigning(config) {
   return withAppBuildGradle(config, (cfg) => {
+    // AGP 9's built-in Kotlin registers the `kotlin` extension itself, so the
+    // template's explicit kotlin-android application throws "extension already
+    // registered" (the same conflict scripts/patch-react-native-rn087.cjs strips
+    // from expo-modules-core). The generated app module needs the same strip —
+    // kotlinOptions/KotlinCompile keep working through the AGP builtin.
+    cfg.modResults.contents = cfg.modResults.contents
+      .replace(/^apply plugin: ["']org\.jetbrains\.kotlin\.android["']\s*$/m, '')
+      .replace(/^\s*["']kotlin-android["']\s*$/m, '')
+      // AGP 9 rejects the legacy unoptimised proguard preset outright.
+      .replace(/proguard-android\.txt/g, 'proguard-android-optimize.txt');
     if (!cfg.modResults.contents.includes('Blockingmachine release signing')) {
       cfg.modResults.contents += GRADLE_SNIPPET;
     }
