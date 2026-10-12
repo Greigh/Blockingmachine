@@ -15,12 +15,32 @@
  * imported in a test, and "what goes in the TXT record" deserves a pinned answer.
  */
 
+import { hostname as osHostname } from 'os';
+
 export interface AdvertiseHandle {
   stop: () => void;
 }
 
 export const MDNS_SERVICE_TYPE = 'blockingmachine';
 export const MDNS_PROTOCOL = 'tcp';
+
+/**
+ * The hostname the advert's A/AAAA records claim on the wire.
+ *
+ * bonjour-service defaults `host` to `os.hostname()` — the machine's own
+ * LocalHostName — and unconditionally publishes A/AAAA records for it. That is a
+ * second responder claiming `Daniels-MacBook-Pro.local`: macOS re-verifies its
+ * hostname on wake/join, sees the advert answer for the name, declares a
+ * collision and renames the machine (`…-2.local`, then `-3`…). The advert must
+ * claim a dedicated name instead: `…-bm.local` still resolves to this machine's
+ * addresses for the SRV target, stays unique per machine, and never fights the
+ * system's own record.
+ */
+export function mdnsServiceHost(hostname: string = osHostname()): string {
+  const stripped = hostname.replace(/\.local\.?$/i, '').split('.')[0];
+  const safe = stripped.replace(/[^a-zA-Z0-9-]/g, '-').replace(/-{2,}/g, '-').replace(/^-|-$/g, '').slice(0, 55);
+  return `${safe || 'hub'}-bm.local`;
+}
 
 export interface AdvertiseOptions {
   /** Port the feed server listens on. */
@@ -31,6 +51,9 @@ export interface AdvertiseOptions {
   tokenRequired: boolean;
   /** Instance name override (tests). */
   name?: string;
+  /** Hostname for the advert's A/AAAA records — defaults to `mdnsServiceHost()`
+   * (never the machine's LocalHostName, which it must not claim). */
+  host?: string;
 }
 
 /** TXT record contents — exported so tests pin the wire contract. */
@@ -48,6 +71,7 @@ interface BonjourLike {
     type: string;
     protocol: string;
     port: number;
+    host?: string;
     txt: Record<string, string>;
   }) => { stop: () => void };
   destroy: () => void;
@@ -82,6 +106,7 @@ export function advertiseFeedServer(opts: AdvertiseOptions): AdvertiseHandle {
       type: MDNS_SERVICE_TYPE,
       protocol: MDNS_PROTOCOL,
       port: opts.port,
+      host: opts.host ?? mdnsServiceHost(),
       txt: advertiseTxt(opts),
     });
     let stopped = false;

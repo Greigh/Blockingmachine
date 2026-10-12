@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
-import { advertiseTxt, advertiseFeedServer } from '../mdnsAdvertiser';
+import { hostname as osHostname } from 'os';
+import { advertiseTxt, advertiseFeedServer, mdnsServiceHost } from '../mdnsAdvertiser';
 
 describe('advertiseTxt', () => {
   it('advertises api v1, the version, and an explicit token state', () => {
@@ -13,6 +14,31 @@ describe('advertiseTxt', () => {
       version: '1.0.0-rc.9',
       token: 'open',
     });
+  });
+});
+
+describe('mdnsServiceHost', () => {
+  it('never returns the machine LocalHostName — claiming it on the wire made macOS rename the host', () => {
+    const host = mdnsServiceHost('Daniels-MacBook-Pro.local');
+    expect(host).toBe('Daniels-MacBook-Pro-bm.local');
+    expect(host).not.toBe('Daniels-MacBook-Pro.local');
+  });
+
+  it('normalizes all os.hostname() shapes to a DNS-safe unique name', () => {
+    expect(mdnsServiceHost('My Mac.local')).toBe('My-Mac-bm.local');
+    expect(mdnsServiceHost('host.internal')).toBe('host-bm.local');
+    expect(mdnsServiceHost('workstation')).toBe('workstation-bm.local');
+    expect(mdnsServiceHost('')).toBe('hub-bm.local');
+    // The real hostname on this machine — whatever it is — must not round-trip.
+    const real = mdnsServiceHost();
+    expect(real.endsWith('-bm.local')).toBe(true);
+    expect(real.toLowerCase()).not.toBe(osHostname().toLowerCase().replace(/\.$/, ''));
+  });
+
+  it('keeps long hostnames inside the DNS label limit', () => {
+    const host = mdnsServiceHost(`${'a'.repeat(70)}.local`);
+    for (const label of host.split('.')) expect(label.length).toBeLessThanOrEqual(63);
+    expect(host.endsWith('-bm.local')).toBe(true);
   });
 });
 
