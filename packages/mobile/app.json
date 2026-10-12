@@ -16,6 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.blockingmachine.mobile",
+      "appleTeamId": "365KR8NF53",
       "infoPlist": {
         "NSBonjourServices": [
           "_blockingmachine._tcp."
