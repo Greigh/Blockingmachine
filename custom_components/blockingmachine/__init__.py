@@ -19,6 +19,7 @@ from .const import (
     SERVICE_CHECK_DOMAIN,
 )
 from .coordinator import BlockingmachineDataUpdateCoordinator
+from .events import BlockingmachineEventStream
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +29,15 @@ PLATFORMS: list[Platform] = [
     Platform.BUTTON,
     Platform.SWITCH,
 ]
+
+# SSE events that mutate fields /v1/status reports — each also triggers an
+# immediate coordinator refresh so entities track the push, not the 30s poll.
+_REFRESH_EVENTS = {
+    "protection_changed",
+    "compile_completed",
+    "rules_updated",
+    "quarantine_added",
+}
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -48,6 +58,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    # Push channel: /v1/events on the same hub. Every SSE event is fired onto
+    # the HA bus as `blockingmachine_<name>` — automations subscribe to e.g.
+    # `blockingmachine_remote_control` or `blockingmachine_protection_changed`
+    # instead of polling for the change. Best-effort: it reconnects on its own
+    # and the polling coordinator stays the source of truth while it is down.
+    async def _handle_sse_event(name: str, data: dict) -> None:
+        hass.bus.async_fire(f"{DOMAIN}_{name}", data)
+        if name in _REFRESH_EVENTS:
+            await coordinator.async_request_refresh()
+
+    event_stream = BlockingmachineEventStream(
+        base_url=coordinator.base_url,
+        session=coordinator.session,
+        headers={"Authorization": f"Bearer {token}"} if token else {},
+        on_event=_handle_sse_event,
+    )
+    event_stream.start()
+    entry.async_on_unload(event_stream.async_stop)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

@@ -7,7 +7,7 @@ AI-powered adblock compiler, segregated DNS/Browser feed server, and local netwo
 - **Ingress Web Dashboard**: A full hub UI in your Home Assistant sidebar — live rule statistics computed from the real feed files, a protection pause/resume switch, one-click copyable feed URLs, a searchable rule browser, and a diagnostics panel. The UI inherits Home Assistant's theme variables, so it matches light and dark modes.
 - **Real Statistics**: Total / DNS / Browser rule counts are computed from the actual feed files on disk at request time — no fake placeholder numbers. Compile history (count, timestamp, duration) persists across restarts.
 - **Protection Toggle**: Pause or resume network blocking state from the dashboard, the REST API, or a Home Assistant automation. Pauses can be time-boxed (`pauseMinutes`) and never survive an expired restart.
-- **Live Events (SSE)**: `GET /v1/events` streams `compile_completed` and `protection_changed` events for Home Assistant automations and instant dashboard refreshes.
+- **Live Events (SSE)**: `GET /v1/events` streams `compile_completed`, `protection_changed`, and `remote_control` events for Home Assistant automations and instant dashboard refreshes.
 - **LAN Authentication**: New installs mint a token and require it on every endpoint — feeds, REST API, dashboard — via `?token=`, `Bearer`, Basic auth, or the dashboard's session cookie. Upgraded installs keep open access until you flip the switch; a `feed_token` option always means required. See *Authentication*.
 - **Rule Browser**: `GET /v1/rules?q=...&limit=...&offset=...` returns the compiled rules with scope tags for inspection from scripts or Lovelace templates.
 - **Auto-Compile Scheduler**: Honors the `auto_compile_interval` add-on option (`12h`, `24h`, `weekly`, or `disabled`).
@@ -29,7 +29,9 @@ AI-powered adblock compiler, segregated DNS/Browser feed server, and local netwo
 | `/v1/protection` | POST | `{"enabled": true\|false}` or `{"pauseMinutes": 30}` — pause/resume blocking state. Requires `Content-Type: application/json` |
 | `/v1/check` | GET | `?domain=<host>` — the verdict a DNS consumer would get: longest-match against the live feed, so a child allow survives a blocked parent |
 | `/v1/rules` | GET | Rule browser: `?q=<substring>&limit=1..500&offset=N` |
-| `/v1/events` | GET | Server-Sent Events: `connected`, `compile_completed`, `protection_changed` |
+| `/v1/events` | GET | Server-Sent Events: `connected`, `compile_completed`, `protection_changed`, `remote_control` |
+| `/v1/control/cosmetics` | GET/POST | Broadcast `toggle_cosmetics` to browsers on `/v1/events` (hub-parity remote control) |
+| `/v1/control/reload` | POST | Broadcast `reload_rules` to browsers on `/v1/events` (hub-parity remote control) |
 | `/dns.txt` | GET | DNS-level feed (AdGuard Home / Pi-hole compatible) |
 | `/browser.txt` | GET | Browser-extension feed with cosmetic rules |
 | `/unbound.conf` | GET | Unbound `local-zone` feed (aliases: `/unbound.txt`, `/blockingmachine.conf`) |
@@ -64,11 +66,11 @@ One deliberate non-feature: the `X-Ingress-Path`/`X-Hass-Source` headers that ma
 4. Locate **Blockingmachine** and click **Install**.
 5. Enable **Show in sidebar** and click **Start**.
 
-If Start fails with *"port 5353 is already in use"* (a Supervisor *App port
-conflict* repair notice), another app on the host already owns mDNS — AdGuard
-Home is a common one. Remap it under **Configuration → Network**: set the
-`5353/udp` host port to any free port (e.g. `6843`) and start again. The feed
-API on `9191` is unaffected.
+The add-on publishes only `9191/tcp` — the feed server and REST API. It does
+**not** run a DNS resolver, so nothing binds `5353/udp`: blocking itself stays
+with the resolver that subscribes to the feeds (AdGuard Home, Pi-hole, Unbound,
+Shadowrocket), and no port on the host can collide with mDNS because none is
+claimed.
 
 ## Wiring into AdGuard Home Add-on
 
@@ -212,6 +214,24 @@ rest_command:
 All POST endpoints require `Content-Type: application/json` — a request with any other content type (or none) is refused with `415`. This is deliberate: browsers cannot send a JSON content type cross-origin without a CORS preflight that this server does not grant, which keeps a drive-by web page from toggling protection on an open-mode install. On a required-mode install add the token to the URL (`?token=…`) or an `Authorization: Bearer` header.
 
 Or subscribe to live compile events from any SSE-capable consumer at `http://homeassistant.local:9191/v1/events`.
+
+With the `blockingmachine` custom integration installed, the same stream arrives as **Home Assistant bus events** — the integration subscribes to `/v1/events` on whichever hub it is configured against (add-on or desktop) and re-fires each SSE event as `blockingmachine_<name>`: `blockingmachine_protection_changed`, `blockingmachine_compile_completed`, `blockingmachine_remote_control`, `blockingmachine_rules_updated`, `blockingmachine_quarantine_added`. Automations trigger on them directly:
+
+```yaml
+automation:
+  - alias: "Blockingmachine paused"
+    trigger:
+      - platform: event
+        event_type: blockingmachine_protection_changed
+        event_data:
+          enabled: false
+    action:
+      - service: notify.notify
+        data:
+          message: "Blockingmachine protection is paused"
+```
+
+Pushed events that change entity state (`protection_changed`, `compile_completed`, `rules_updated`, `quarantine_added`) also refresh the coordinator immediately — the 30-second poll remains the source of truth while the stream reconnects.
 
 ## How feeds are published
 

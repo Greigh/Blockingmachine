@@ -1,0 +1,16 @@
+# Development-only dependencies for IDE resolution and linting.
+#
+# The integration runs inside a Home Assistant instance, which already provides
+# `homeassistant` and `aiohttp` at runtime. This venv exists so the editor can
+# resolve `import homeassistant.*` / `import aiohttp` — the test suite still
+# mocks these modules and does not need this environment.
+#
+# Use Python 3.14 (`python3.14 -m venv`), not the system 3.15: HA's pinned
+# aiodns pulls pycares, which ships cp314 wheels but not cp315 — on 3.15 it
+# builds from source and needs CMake.
+#
+# Recreate:
+#   python3.14 -m venv .venv
+#   .venv/bin/pip install -r requirements-dev.txt
+aiohttp
+homeassistant

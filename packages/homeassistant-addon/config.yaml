@@ -1,6 +1,6 @@
 name: "Blockingmachine"
 description: "AI-powered adblock compiler, segregated DNS/Browser feed server, and local network defense hub."
-version: "1.1.0"
+version: "1.0.0"
 slug: "blockingmachine"
 url: "https://github.com/Greigh/Blockingmachine"
 init: false
@@ -13,16 +13,10 @@ ingress_port: 9191
 panel_icon: "mdi:shield-lock"
 ports:
   9191/tcp: 9191
-  5353/udp: 5353
 options:
   feed_port: 9191
   auto_compile_interval: "24h"
   enable_ai_radar: true
-  export_formats:
-    - adguard
-    - hosts
-    - domains
-    - unbound
   log_level: "info"
 schema:
   feed_port: int
@@ -31,6 +25,4 @@ schema:
   feed_source_token: password?
   auto_compile_interval: list(disabled|12h|24h|weekly)
   enable_ai_radar: bool
-  export_formats:
-    - list(adguard|hosts|domains|dnsmasq|unbound)
   log_level: list(info|debug|warning|error)

@@ -98,6 +98,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.venv/
 
 # Local agent/session scratch — never part of the product
 .freebuff/
