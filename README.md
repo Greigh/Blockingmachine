@@ -3,7 +3,7 @@
 
 # Blockingmachine
 
-[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE) [![Release](https://img.shields.io/badge/Release-v1.0.0--rc.11-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0-rc.11) [![GitHub Packages](https://img.shields.io/badge/GitHub_Packages-v1.0.0--rc.11-2ea44f.svg)](https://github.com/users/Greigh/packages?repo_name=Blockingmachine) [![Forgejo](https://img.shields.io/badge/Forgejo-git.greighstudios.com-ff6600.svg)](https://git.greighstudios.com/greighstudios/Blockingmachine) [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/) [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/) [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/) [![Tests](<https://img.shields.io/badge/Tests-2%2C900%2B%20Passing%20(100%25)-brightgreen.svg>)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml) [![CI](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml) [![CodeQL Analysis](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml) [![HACS Validation](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml) [![Security Policy](https://img.shields.io/badge/Security_Policy-Active-green.svg)](SECURITY.md)
+[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE) [![Release](https://img.shields.io/badge/Release-v1.0.0--rc.12-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0-rc.12) [![GitHub Packages](https://img.shields.io/badge/GitHub_Packages-v1.0.0--rc.12-2ea44f.svg)](https://github.com/users/Greigh/packages?repo_name=Blockingmachine) [![Forgejo](https://img.shields.io/badge/Forgejo-git.greighstudios.com-ff6600.svg)](https://git.greighstudios.com/greighstudios/Blockingmachine) [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/) [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/) [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/) [![Tests](<https://img.shields.io/badge/Tests-2%2C900%2B%20Passing%20(100%25)-brightgreen.svg>)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml) [![CI](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml) [![CodeQL Analysis](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml) [![HACS Validation](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml) [![Security Policy](https://img.shields.io/badge/Security_Policy-Active-green.svg)](SECURITY.md)
 
 _A modern network defense suite and filter list compiler for AdGuard, uBlock Origin & EasyList. Features an Electron desktop app, MV3 extension, loopback DNS daemon, Home Assistant hub, an iOS/Android companion app, and embedded Mini-AI classification with intelligent rule deduplication, multi-format exports, and 100% local processing._
 
@@ -38,9 +38,9 @@ The latest pre-release desktop application is cryptographically signed with an A
 
 | Package / Installer                        | Architecture                | Download                                                                                                                               |
 | ------------------------------------------ | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **Apple Silicon Disk Image (`.dmg`)**      | macOS `arm64` (M1/M2/M3/M4) | [Download `.dmg`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.11/Blockingmachine-1.0.0-rc.11-arm64.dmg)        |
-| **Standalone Application Bundle (`.zip`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.11/Blockingmachine-darwin-arm64-1.0.0-rc.11.zip) |
-| **SHA-256 Checksums**                      | All Platforms               | [Download `SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.11/SHA256SUMS.txt)                    |
+| **Apple Silicon Disk Image (`.dmg`)**      | macOS `arm64` (M1/M2/M3/M4) | [Download `.dmg`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.12/Blockingmachine-1.0.0-rc.12-arm64.dmg)        |
+| **Standalone Application Bundle (`.zip`)** | macOS `arm64` (M1/M2/M3/M4) | [Download `.zip`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.12/Blockingmachine-darwin-arm64-1.0.0-rc.12.zip) |
+| **SHA-256 Checksums**                      | All Platforms               | [Download `SHA256SUMS.txt`](https://github.com/Greigh/Blockingmachine/releases/download/v1.0.0-rc.12/SHA256SUMS.txt)                    |
 
 ### Mobile Companion (Android)
 
@@ -48,7 +48,7 @@ The signed Android APK is published on the Forgejo generic package registry:
 
 | Package / Installer | Platform | Download |
 | ------------------- | -------- | -------- |
-| **Android APK** (`.apk`) | Android 7.0+ (`minSdk 24`) | [Download `app-release.apk`](https://git.greighstudios.com/api/packages/greighstudios/generic/blockingmachine-mobile/1.0.0-rc.11/app-release.apk) |
+| **Android APK** (`.apk`) | Android 7.0+ (`minSdk 24`) | [Download `app-release.apk`](https://git.greighstudios.com/api/packages/greighstudios/generic/blockingmachine-mobile/1.0.0-rc.12/app-release.apk) |
 
 Built from `packages/mobile` with `expo prebuild` + `./gradlew assembleRelease`. The iOS build goes through the same Expo dev-client flow; an App Store/TestFlight artifact is not published yet.
 
@@ -78,26 +78,26 @@ npm install -g @blockingmachine/cli
 
 ```bash
 # Core Library
-npm install @greigh/blockingmachine-core@1.0.0-rc.11 --registry=https://npm.pkg.github.com
+npm install @greigh/blockingmachine-core@1.0.0-rc.12 --registry=https://npm.pkg.github.com
 
 # CLI Tool
-npm install -g @greigh/blockingmachine-cli@1.0.0-rc.11 --registry=https://npm.pkg.github.com
+npm install -g @greigh/blockingmachine-cli@1.0.0-rc.12 --registry=https://npm.pkg.github.com
 ```
 
 #### From Forgejo Package Registry (`git.greighstudios.com`)
 
 ```bash
 # Core Library
-npm install @blockingmachine/core@1.0.0-rc.11 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
+npm install @blockingmachine/core@1.0.0-rc.12 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
 
 # CLI Tool
-npm install -g @blockingmachine/cli@1.0.0-rc.11 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
+npm install -g @blockingmachine/cli@1.0.0-rc.12 --registry=https://git.greighstudios.com/api/packages/greighstudios/npm/
 ```
 
-Direct tarballs are also attached to [Release v1.0.0-rc.11](https://github.com/Greigh/Blockingmachine/releases/tag/v1.0.0-rc.11):
+Direct tarballs are also attached to [Release v1.0.0-rc.12](https://github.com/Greigh/Blockingmachine/releases/tag/v1.0.0-rc.12):
 
-- `blockingmachine-core-1.0.0-rc.11.tgz`
-- `blockingmachine-cli-1.0.0-rc.11.tgz`
+- `blockingmachine-core-1.0.0-rc.12.tgz`
+- `blockingmachine-cli-1.0.0-rc.12.tgz`
 
 ---
 
