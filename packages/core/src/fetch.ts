@@ -55,7 +55,15 @@ const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {
       callback(block, "", 4);
       return;
     }
-    callback(null, safe[0].address, safe[0].family);
+    // `all: true` callers — Node's autoSelectFamily (default since Node 20) —
+    // expect the full vetted address list, not a single pick. Returning one
+    // string makes their iteration read `.address` off each character and fail
+    // with `Invalid IP address: undefined` before any request is sent.
+    if (options.all) {
+      callback(null, safe);
+    } else {
+      callback(null, safe[0].address, safe[0].family);
+    }
   });
 };
 

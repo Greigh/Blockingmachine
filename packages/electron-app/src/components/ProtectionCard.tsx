@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { DaemonStatusInfo } from '../types';
+import type { DaemonStatusInfo, LiveServicesStatus } from '../types';
+import { formatRelativeTime } from '../aiDisplay';
 
 /**
  * DNS protection state on the main surface.
@@ -19,6 +20,7 @@ const POLL_MS = 10_000;
 
 export const ProtectionCard: React.FC<ProtectionCardProps> = ({ onNavigate }) => {
   const [status, setStatus] = useState<DaemonStatusInfo | null>(null);
+  const [live, setLive] = useState<LiveServicesStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const isMountedRef = useRef(true);
@@ -31,15 +33,30 @@ export const ProtectionCard: React.FC<ProtectionCardProps> = ({ onNavigate }) =>
     } catch {
       // status probe failures read as daemon-down through last-known state
     }
+    if (window.electron.getLiveServices) {
+      try {
+        const l = await window.electron.getLiveServices();
+        if (isMountedRef.current) setLive(l);
+      } catch {
+        // a live-services read failure leaves the last-known strip in place
+      }
+    }
   }, []);
 
   useEffect(() => {
     isMountedRef.current = true;
     void refresh();
     const timer = setInterval(() => void refresh(), POLL_MS);
+    // A hidden (menu-bar) window's interval is clamped by Chromium — refresh on
+    // resurface so the card never shows minute-stale daemon state.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       isMountedRef.current = false;
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [refresh]);
 
@@ -175,6 +192,39 @@ export const ProtectionCard: React.FC<ProtectionCardProps> = ({ onNavigate }) =>
           </button>
         </div>
       </div>
+
+      {live && (
+        <div className="protection-live-strip">
+          <div className="protection-live-cell" title={live.feed.isRunning ? `Serving at ${live.feed.lanUrl}` : 'The LAN feed server is not running'}>
+            <span className={`status-indicator-dot ${live.feed.isRunning ? 'active' : ''}`} />
+            <span className="protection-live-name">Feed Server</span>
+            <span className="protection-live-detail">
+              {live.feed.isRunning ? `:${live.feed.port} · ${live.feed.lanIp}` : 'Off'}
+            </span>
+          </div>
+          <div
+            className="protection-live-cell"
+            title={live.extension.lastContactAt
+              ? `Extension telemetry last reported ${new Date(live.extension.lastContactAt).toLocaleString()}`
+              : 'No extension has reported telemetry to this hub yet'}
+          >
+            <span className={`status-indicator-dot ${live.extension.lastContactAt ? 'active' : ''}`} />
+            <span className="protection-live-name">Browser Extension</span>
+            <span className="protection-live-detail">
+              {live.extension.lastContactAt
+                ? `last report ${formatRelativeTime(live.extension.lastContactAt)} · ${live.extension.trackersBlocked.toLocaleString()} blocked`
+                : 'No telemetry yet'}
+            </span>
+          </div>
+          <div className="protection-live-cell" title={live.autoSchedule === 'disabled' ? 'Scheduled compiles are off' : `Recompiles on a ${live.autoSchedule} cadence`}>
+            <span className={`status-indicator-dot ${live.autoSchedule !== 'disabled' ? 'active' : ''}`} />
+            <span className="protection-live-name">Auto-compile</span>
+            <span className="protection-live-detail">
+              {live.autoSchedule === 'disabled' ? 'Off' : `Every ${live.autoSchedule === 'weekly' ? 'week' : live.autoSchedule}`}
+            </span>
+          </div>
+        </div>
+      )}
 
       {message && (
         <div className="dashboard-alert error-banner" style={{ marginTop: '10px', marginBottom: 0 }}>

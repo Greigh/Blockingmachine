@@ -178,3 +178,37 @@ export function sanitizeDomain(input: string): string | null {
 
   return clean;
 }
+
+/**
+ * Suffixes that never name a public internet host — link-local discovery,
+ * reverse zones, RFC-reserved names, and the common private suffixes home
+ * gateways hand out. `.arpa` covers `in-addr.`/`ip6.`/`home.arpa` at once.
+ */
+const NON_PUBLIC_SUFFIXES = [
+  '.local',
+  '.localhost',
+  '.internal',
+  '.invalid',
+  '.example',
+  '.test',
+  '.arpa',
+  '.lan',
+  '.home',
+  '.corp',
+  '.localdomain',
+];
+
+/**
+ * True when the input names a public internet hostname — dotted, RFC 1123
+ * shaped, and outside the discovery/private/reverse suffix space. mDNS chatter
+ * (`_airplay._tcp.local`), PTR names, and machine names carry no threat signal;
+ * recording them as DNS observations would only poison the training corpus and
+ * the live-observation index. Underscored service names are excluded via
+ * `sanitizeDomain`'s label rules.
+ */
+export function isPublicHostname(input: string): boolean {
+  const clean = sanitizeDomain(input);
+  if (!clean || !clean.includes('.')) return false;
+  if (isValidIpv4(clean) || isValidIpv6(clean)) return false;
+  return !NON_PUBLIC_SUFFIXES.some((suffix) => clean.endsWith(suffix));
+}

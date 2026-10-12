@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const dns = require('node:dns') as { lookup: LookupFunction } & Record<string, unknown>;
 const realLookup = dns.lookup;
 
-const { fetchWithConditionalCache } = await import('../fetch.js');
+const { fetchWithConditionalCache, publicOnlyAgent } = await import('../fetch.js');
 
 let server: http.Server;
 let port = 0;
@@ -108,21 +108,41 @@ describe('DNS rebinding: resolve-time guard on outbound fetches', () => {
     expect(hitCount).toBe(1);
   });
 
-  it('attempts the connection for a public resolution — the guard does not fire', async () => {
-    // Public answer: the lookup guard must let it through; the socket then
-    // fails at TCP level (nothing listens), which is a different failure class
-    // than the policy block — proving the guard did not intercept it.
+  it('passes a public resolution through the lookup — the guard does not fire', async () => {
+    // Asserted at the lookup boundary rather than by a live socket: a public
+    // answer survives the filter and the socket is left to fail (or succeed) on
+    // its own terms. A live dial is how this used to be proven, but the address
+    // it reached was real — transport outcomes depended on the network instead
+    // of the policy, and the contract worth pinning is the callback shape:
+    // `all: true` callers (Node's autoSelectFamily) must receive the vetted
+    // array, single-result callers the first survivor.
     servePrivateResolver({
       'genuinely-public.example': [{ address: '8.8.8.8', family: 4 }],
     });
-    const result = await fetchWithConditionalCache(
-      `http://genuinely-public.example:${port}/list`,
+    const agent = publicOnlyAgent(
+      new URL(`http://genuinely-public.example:${port}`),
     );
-    // Retries on a refused connect are transient-retryable, so the final shape
-    // is a failed fetch — importantly NOT the 403 policy block.
-    expect(result.status).not.toBe(403);
-    expect(result.content).toBeNull();
-  }, 20000);
+    const lookup = agent.options.lookup as unknown as (
+      host: string,
+      opts: Record<string, unknown>,
+      cb: (err: Error | null, addr: unknown, fam?: number) => void,
+    ) => void;
+
+    const all = await new Promise<unknown>((resolve) =>
+      lookup('genuinely-public.example', { all: true }, (err, addr) =>
+        resolve(err ? null : addr),
+      ),
+    );
+    expect(all).toEqual([{ address: '8.8.8.8', family: 4 }]);
+
+    const single = await new Promise<unknown>((resolve) =>
+      lookup('genuinely-public.example', {}, (err, addr, fam) =>
+        resolve(err ? null : [addr, fam]),
+      ),
+    );
+    expect(single).toEqual(['8.8.8.8', 4]);
+    expect(hitCount).toBe(0);
+  });
 
   it('pins the ai-crawl-url page fetch — a rebinding hostname never reaches the socket', async () => {
     // crawlAndScanUrl takes a renderer-supplied URL: same SSRF shape as a filter

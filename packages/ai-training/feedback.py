@@ -16,6 +16,12 @@ Input: feedback.jsonl, one record per line:
     {"domain": "evil.example", "verdict": "threat", "at": "...",
      "reporter": "user-123"}
 
+The app's user-labels.jsonl is the same shape plus two extras:
+  * verdict "reset" — a Forget-Learn tombstone: deletes the stored
+    (domain, 'feedback') label and any pending rows for the domain.
+  * correctedVerdict / correctedCategory — provenance for auditing what
+    the correction overrode; ignored by the merge.
+
 Usage:
     .venv/bin/python feedback.py --db labels.db --feedback feedback.jsonl
 """
@@ -97,7 +103,7 @@ def main() -> None:
             except json.JSONDecodeError:
                 print(f"warning: line {i} not JSON, skipping", file=sys.stderr)
                 continue
-            if r.get("verdict") not in ("threat", "safe") or not r.get("domain"):
+            if r.get("verdict") not in ("threat", "safe", "reset") or not r.get("domain"):
                 print(f"warning: line {i} bad verdict/domain, skipping", file=sys.stderr)
                 continue
             records.append(r)
@@ -111,10 +117,26 @@ def main() -> None:
               f"their {sum(1 for r in records if r.get('reporter') in tripped)} records rejected")
     records = [r for r in records if r.get("reporter") not in tripped]
 
-    applied, pending, agreed = 0, 0, 0
+    applied, pending, agreed, forgotten = 0, 0, 0, 0
     to_apply: list[tuple[str, int, str, float]] = []
     for r in records:
         domain = r["domain"].lower()
+        if r["verdict"] == "reset":
+            # Forget-Learn tombstone: remove the feedback label and any
+            # un-agreed pending row. Other sources' labels are untouched —
+            # the effective label falls back to whatever they assert.
+            con.execute("DELETE FROM labels WHERE domain=? AND source='feedback'", (domain,))
+            con.execute("DELETE FROM feedback_pending WHERE domain=?", (domain,))
+            row = con.execute(
+                "SELECT label FROM labels WHERE domain=? ORDER BY label DESC LIMIT 1",
+                (domain,),
+            ).fetchone()
+            if row:
+                eff[domain] = row[0]
+            else:
+                eff.pop(domain, None)
+            forgotten += 1
+            continue
         label = 1 if r["verdict"] == "threat" else 0
         current = eff.get(domain)
         if current is None or current == label:
@@ -145,7 +167,8 @@ def main() -> None:
     if args.dry_run:
         con.rollback()
         print(f"dry run: {applied} would apply, {agreed} flips agreed, "
-              f"{pending} pending agreement, {len(tripped)} reporters quarantined")
+              f"{pending} pending agreement, {forgotten} resets, "
+              f"{len(tripped)} reporters quarantined")
     else:
         # Commit this connection's pending-table writes BEFORE ingest_rows
         # opens its own connection — otherwise the second writer blocks
@@ -154,6 +177,7 @@ def main() -> None:
         if to_apply:
             ingest_rows(db_path, to_apply)
         print(f"feedback: {applied} applied, {agreed} flips applied on agreement, "
+              f"{forgotten} resets, "
               f"{pending} held in feedback_pending, {len(tripped)} reporters quarantined")
     con.close()
 

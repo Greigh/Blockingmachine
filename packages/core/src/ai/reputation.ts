@@ -1,5 +1,5 @@
 import { normalizeHostname } from './hostname.js';
-export { normalizeHostname } from './hostname.js';
+export { normalizeHostname, isPublicHostname } from './hostname.js';
 export type {
   CorroborationAssessment,
   CorroborationTier,
@@ -193,6 +193,36 @@ export const SUSPICIOUS_CONSENT_TOKENS: string[] = mergeVocabularyTokens(
   HAND_WRITTEN_CONSENT_TOKENS,
   TIER_DERIVED_CONSENT_TOKENS,
 );
+
+/**
+ * Credential-lure action nouns — the vocabulary of phishing pages, hand-written
+ * because every entry is a word a legitimate host also uses (`account`,
+ * `login`, `billing`). There is no tier to derive these from: the shipped
+ * lists name tracker vendors, not lure wording, and that is precisely why the
+ * feature that consumes this list is *gated* — it reads zero on known-safe
+ * infrastructure and contributes to Malware/Phishing only, so `accounts.google.com`
+ * is protected by its reputation rather than by this list being polite.
+ *
+ * Boundary-matched like the other token lists (`hostnameHasToken`), so `updates`
+ * never matches `update` — which is also why `update`/`upgrade`/`support` are
+ * deliberately absent: they are canonical infrastructure labels, not lure words.
+ */
+export const HAND_WRITTEN_LURE_TOKENS = [
+  // Verification & sign-in ceremony — the credential-harvest verbs.
+  'verify', 'verification', 'validate', 'validation', 'confirm', 'confirmation',
+  'authenticate', 'authentication', 'login', 'log-in', 'signin', 'sign-in',
+  // The account surface a lure pretends to be.
+  'account', 'accounts', 'billing', 'invoice', 'payment', 'wallet', 'refund',
+  // Urgency & lockout framing — the pressure half of the lure.
+  'unlock', 'locked', 'suspend', 'suspended', 'expire', 'expired',
+  'recover', 'recovery', 'restore', 'unusual-activity',
+  // `secure` earns its place as a lure marker — the word a phish borrows; the
+  // safe-infra gate is what keeps `secure.example.com`-shaped hosts clean.
+  'secure',
+] as const;
+
+/** The classifier's lure vocabulary — hand-written only; no tier derives lure wording. */
+export const SUSPICIOUS_LURE_TOKENS: string[] = [...HAND_WRITTEN_LURE_TOKENS];
 
 /**
  * The classifier's ad vocabulary: the hand-written tokens above, plus the vendors derived from the
@@ -2868,6 +2898,7 @@ export const BASE_DB_LISTS: DbLists = {
   suspiciousAdTokens: [...SUSPICIOUS_AD_TOKENS],
   suspiciousTrackerTokens: [...SUSPICIOUS_TRACKER_TOKENS],
   suspiciousConsentTokens: [...SUSPICIOUS_CONSENT_TOKENS],
+  suspiciousLureTokens: [...SUSPICIOUS_LURE_TOKENS],
   specificNetworkTokens: [...SPECIFIC_NETWORK_TOKENS],
   highProfileBrands: [...HIGH_PROFILE_BRANDS],
   dictionaryExemptions: [...DICTIONARY_COMPOUND_EXEMPTIONS],
@@ -2899,6 +2930,7 @@ const LIVE_LIST_TARGETS: Readonly<Record<keyof DbLists, { type: 'set' | 'array';
   suspiciousAdTokens: { type: 'array', target: SUSPICIOUS_AD_TOKENS as unknown as string[] },
   suspiciousTrackerTokens: { type: 'array', target: SUSPICIOUS_TRACKER_TOKENS as unknown as string[] },
   suspiciousConsentTokens: { type: 'array', target: SUSPICIOUS_CONSENT_TOKENS as unknown as string[] },
+  suspiciousLureTokens: { type: 'array', target: SUSPICIOUS_LURE_TOKENS as unknown as string[] },
   specificNetworkTokens: { type: 'set', target: SPECIFIC_NETWORK_TOKENS },
   highProfileBrands: { type: 'array', target: HIGH_PROFILE_BRANDS as unknown as string[] },
   dictionaryExemptions: { type: 'set', target: DICTIONARY_COMPOUND_EXEMPTIONS as Set<string> },

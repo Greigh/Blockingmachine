@@ -115,8 +115,10 @@ jest.unstable_mockModule('electron', () => ({
     on: () => {},
     once: () => {},
     quit: () => {},
+    requestSingleInstanceLock: () => true,
     setLoginItemSettings: () => {},
-    dock: { setIcon: () => {} },
+    getLoginItemSettings: () => ({ openAtLogin: false, wasOpenedAtLogin: false }),
+    dock: { setIcon: () => {}, show: () => {}, hide: () => {} },
   },
   BrowserWindow: FakeBrowserWindow,
   ipcMain: {

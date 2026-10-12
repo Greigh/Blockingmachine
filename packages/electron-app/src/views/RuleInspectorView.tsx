@@ -28,6 +28,9 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
   const [allowlisted, setAllowlisted] = useState(false);
   const [feedbackTune, setFeedbackTune] = useState<'idle' | 'threat_confirmed' | 'safe_confirmed'>('idle');
   const [feedbackForgotten, setFeedbackForgotten] = useState<'idle' | 'forgot' | 'nothing'>('idle');
+  // Whether the last correction also landed in the training-labels file
+  // (user-labels.jsonl) — false when the name isn't a public hostname.
+  const [labelRecorded, setLabelRecorded] = useState<boolean | null>(null);
   const [activeDetailTab, setActiveDetailTab] = useState<'overview' | 'rules' | 'ai-heuristics'>('overview');
 
   // IPC answers can land after the view unmounts — every post-await setState goes
@@ -205,10 +208,11 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
   const handleTuneMiniAi = async (domain: string, action: 'block' | 'whitelist') => {
     if (!domain || !window.electron?.tuneMiniAiFeedback) return;
     try {
-      await window.electron.tuneMiniAiFeedback(domain, action);
+      const res = await window.electron.tuneMiniAiFeedback(domain, action);
       if (!isMountedRef.current) return;
       setFeedbackTune(action === 'block' ? 'threat_confirmed' : 'safe_confirmed');
       setFeedbackForgotten('idle');
+      setLabelRecorded(res?.labelRecorded === true);
     } catch (err) {
       console.error('Failed to tune Mini-AI feedback:', err);
     }
@@ -632,6 +636,33 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                       No malicious patterns, high entropy markers, or known tracker signatures detected.
                     </p>
                   )}
+                  {aiResult?.topContributions && aiResult.topContributions.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--secondary-color)', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                        Evidence
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {aiResult.topContributions.map((c, idx) => (
+                          <span
+                            key={idx}
+                            className={`evidence-chip ${c.impact}`}
+                            title={c.description}
+                          >
+                            {c.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {aiResult?.corroboration && (
+                    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--secondary-color)', opacity: 0.85 }}>
+                      {aiResult.corroboration === 'corroborated'
+                        ? 'Corroborated — multiple independent signals agree'
+                        : aiResult.corroboration === 'single-signal'
+                          ? 'Single-signal verdict — one evidence family only'
+                          : 'Lexical match only — name resemblance, no independent evidence'}
+                    </div>
+                  )}
                   {aiResult?.modelUsed && (
                     <div style={{ marginTop: 8, fontSize: 11, color: 'var(--secondary-color)', opacity: 0.8 }}>
                       Evaluated by: <strong>{aiResult.modelUsed}</strong>
@@ -945,6 +976,13 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 )}
               </div>
             </div>
+            {feedbackTune !== 'idle' && (
+              <div style={{ fontSize: 11, color: 'var(--secondary-color)', marginTop: 6 }}>
+                {labelRecorded
+                  ? 'Label recorded — it becomes a gold training label in the next model build (user-labels.jsonl).'
+                  : 'Applied locally — this name is not a public hostname, so it is not added to the training corpus.'}
+              </div>
+            )}
           </div>
         </div>
       )}

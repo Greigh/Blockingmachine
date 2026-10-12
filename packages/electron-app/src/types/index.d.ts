@@ -30,6 +30,9 @@ export type {
   SynthesisTarget,
   TriageOutcomeSummary,
   FalsePositiveGuardResult,
+  MiniAiFeatureContribution,
+  CorroborationTier,
+  EvidenceFamily,
 } from '@blockingmachine/core';
 export type ThemeType = 'light' | 'dark' | 'system';
 
@@ -291,6 +294,14 @@ export interface AiScanResult {
   generatedRules: string[];
   coveredByRule?: string;
   featureScores?: Record<string, number>;
+  /**
+   * The on-device classifier's explainable evidence — which features pushed the
+   * verdict and in which direction. Always describes the *local* read even when
+   * the cascade escalated (`modelUsed`/`triage.source` say who decided).
+   */
+  topContributions?: MiniAiFeatureContribution[];
+  corroboration?: CorroborationTier;
+  evidenceFamilies?: EvidenceFamily[];
   inferenceTimeMs?: number;
   provider: AiProviderType;
   modelUsed?: string;
@@ -433,6 +444,8 @@ export interface StoreSchema {
   adguardHomePasswordEncrypted?: string;
   haTokenEncrypted?: string;
   launchOnStartup?: boolean;
+  /** macOS menu-bar agent mode: window closes hide to the status bar (no Dock icon while hidden). */
+  menuBarAgent?: boolean;
   /** `host`, `host:port`, or a URL for the Unbound instance the reachability check queries. */
   unboundResolver?: string;
   /** A resolver that is *not* the one under test, used to confirm the canary exists upstream. */
@@ -475,6 +488,25 @@ export interface DaemonStatusInfo {
     allowedQueries: number;
     blockRatePercent: number;
   };
+}
+
+/**
+ * What the dashboard's live-services strip reads — every service the hub
+ * currently runs or hears from. `extension.lastContactAt` is null until the
+ * extension POSTs telemetry for the first time; it is a heartbeat, not a
+ * persistent connection.
+ */
+export interface LiveServicesStatus {
+  daemon: DaemonStatusInfo;
+  feed: FeedServerStatus;
+  extension: {
+    lastContactAt: string | null;
+    trackersBlocked: number;
+    elementsHidden: number;
+    threatsDetected: number;
+    fanoutHosts: number;
+  };
+  autoSchedule: string;
 }
 
 // Electron API interface
@@ -582,11 +614,27 @@ export interface ElectronAPI {
   setAiWatchdogConfig?: (config: Partial<AiWatchdogConfig>) => Promise<{ success: boolean }>;
   addCustomAllowlist?: (domain: string) => Promise<{ success: boolean; rule: string; error?: string }>;
   isDomainCoveredByRules?: (domain: string) => Promise<{ isCovered: boolean; coveringRule?: string }>;
-  tuneMiniAiFeedback?: (domain: string, action: 'whitelist' | 'block' | 'reset') => Promise<{ success: boolean }>;
+  tuneMiniAiFeedback?: (domain: string, action: 'whitelist' | 'block' | 'reset') => Promise<{ success: boolean; labelRecorded?: boolean }>;
   compactSubdomainRules?: (domains: string[], threshold?: number) => Promise<CompactionResult>;
   checkRuleConflict?: (rule: string) => Promise<RuleConflictResult>;
   getMiniAiFeedbackStats?: () => Promise<{ count: number; feedback: Record<string, number> }>;
+  getAiShadowReadiness?: () => Promise<{
+    days: number;
+    scoredDomains: number;
+    disagreementRecords: number;
+    sampleRecords: number;
+    firstAt: string | null;
+    lastAt: string | null;
+    unversionedScoredDomains: number;
+    modelVersions: number[];
+    dnsObservationRecords: number;
+    liveIndexEntries: number;
+    fanoutHosts: number;
+    target: { minDays: number; minScored: number };
+    ready: boolean;
+  }>;
   resetMiniAiFeedback?: (domain: string) => Promise<{ success: boolean }>;
+  getUserLabelStats?: () => Promise<{ count: number; filePath: string }>;
   getRadarHeatSummary?: () => Promise<import('./radarHeatMap').HeatSummary>;
   clearRadarHeatDomain?: (domain: string) => Promise<{ success: boolean; error?: string }>;
   ignoreRadarHeatDomain?: (domain: string) => Promise<{ success: boolean; error?: string }>;
@@ -648,9 +696,13 @@ export interface ElectronAPI {
   }>;
   getLaunchOnStartup?: () => Promise<boolean>;
   setLaunchOnStartup?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  getMenuBarAgent?: () => Promise<boolean>;
+  setMenuBarAgent?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
 
   // Local System DNS Daemon Integration
   getDaemonStatus?: () => Promise<DaemonStatusInfo>;
+  /** Aggregate live-services read for the dashboard strip. */
+  getLiveServices?: () => Promise<LiveServicesStatus>;
   startDaemonProcess?: () => Promise<{ success: boolean; message: string }>;
   stopDaemonProcess?: () => Promise<{ success: boolean; message: string }>;
   reloadDaemonRules?: () => Promise<{ success: boolean; rulesLoaded: number; message: string }>;

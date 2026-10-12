@@ -42,6 +42,7 @@ import {
 } from './triage.js';
 
 import { isSafePublicWebUrl, isSafeLanEndpointUrl, type SafeUrlCheckResult } from '../utils/urlSafety.js';
+import type { BehavioralObservation } from './learned/featurizer.js';
 export { isSafePublicWebUrl, isSafeLanEndpointUrl, type SafeUrlCheckResult };
 
 /** An AI provider's JSON answer is a small object — anything past this is an error or an attack. */
@@ -116,6 +117,13 @@ export class AiDetectorService {
   private readonly cacheTtlMs = 15 * 60 * 1000; // 15 minutes
   private cacheHits = 0;
   private cacheMisses = 0;
+  /**
+   * Process-level live-signal plumbing, set once by the host app: returns the
+   * resolver/browser observation recorded for a domain, if any. Not part of the
+   * config — `defaultConfig` round-trips through structuredClone, which cannot
+   * carry a function.
+   */
+  private observationProvider?: (domain: string) => BehavioralObservation | null | undefined;
 
   constructor(config?: Partial<AiProviderConfig>) {
     this.defaultConfig = {
@@ -134,6 +142,19 @@ export class AiDetectorService {
       // setting that is not named here silently never reaches a scan.
       cascade: config?.cascade ? { ...config.cascade } : undefined,
     };
+  }
+
+  /**
+   * Wire the live-observation index into the local screen. Once set, every
+   * `classifyDomainWithMiniAi` call inside scans also receives what the daemon's
+   * resolver and the browser's fan-out ledger already saw for the name — a
+   * foreign CNAME hop, a prior BLOCKED answer, wide site fan-out, NXDOMAIN
+   * churn — instead of scoring the string alone.
+   */
+  public setObservationProvider(
+    provider: ((domain: string) => BehavioralObservation | null | undefined) | undefined,
+  ): void {
+    this.observationProvider = provider;
   }
 
   public getCacheStats(): { size: number; maxEntries: number; hits: number; misses: number } {
@@ -335,6 +356,9 @@ export class AiDetectorService {
     let modelUsed: string | undefined;
     let featureScores: Record<string, number> | undefined;
     let inferenceTimeMs: number | undefined;
+    let localContributions: MiniAiPrediction['topContributions'] | undefined;
+    let localCorroboration: MiniAiPrediction['corroboration'];
+    let localEvidenceFamilies: MiniAiPrediction['evidenceFamilies'];
 
     /**
      * Runs the embedded classifier and adopts its verdict. Free (~0.05ms, no network),
@@ -346,6 +370,7 @@ export class AiDetectorService {
         hasCnameCloaking: cnameInfo.hasCnameCloaking,
         knownTrackerTarget: cnameInfo.knownTrackerTarget,
         allowlist: config.allowlist,
+        observations: this.observationProvider?.(cleanDomain) ?? undefined,
       });
 
       finalVerdict = miniPrediction.verdict;
@@ -362,6 +387,9 @@ export class AiDetectorService {
         confidence: miniPrediction.confidence,
         ...miniPrediction.classProbabilities,
       };
+      localContributions = miniPrediction.topContributions;
+      localCorroboration = miniPrediction.corroboration;
+      localEvidenceFamilies = miniPrediction.evidenceFamilies;
       return miniPrediction;
     };
 
@@ -513,6 +541,9 @@ export class AiDetectorService {
       generatedRules,
       coveredByRule,
       featureScores,
+      topContributions: localContributions,
+      corroboration: localCorroboration,
+      evidenceFamilies: localEvidenceFamilies,
       inferenceTimeMs,
       provider: config.provider,
       modelUsed,

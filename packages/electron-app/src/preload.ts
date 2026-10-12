@@ -118,6 +118,8 @@ contextBridge.exposeInMainWorld('electron', {
     }>,
   getLaunchOnStartup: () => ipcRenderer.invoke('get-launch-on-startup'),
   setLaunchOnStartup: (enabled: boolean) => ipcRenderer.invoke('set-launch-on-startup', enabled),
+  getMenuBarAgent: () => ipcRenderer.invoke('get-menu-bar-agent'),
+  setMenuBarAgent: (enabled: boolean) => ipcRenderer.invoke('set-menu-bar-agent', enabled),
   getModuleContent: (moduleName: string) => ipcRenderer.invoke('get-module-content', moduleName) as Promise<string | null>,
 
   // AI Radar Methods [Beta]
@@ -141,7 +143,9 @@ contextBridge.exposeInMainWorld('electron', {
   compactSubdomainRules: (domains: string[], threshold?: number) => ipcRenderer.invoke('compact-subdomain-rules', domains, threshold),
   checkRuleConflict: (rule: string) => ipcRenderer.invoke('check-rule-conflict', rule),
   getMiniAiFeedbackStats: () => ipcRenderer.invoke('get-mini-ai-feedback-stats'),
+  getAiShadowReadiness: () => ipcRenderer.invoke('ai-shadow-readiness'),
   resetMiniAiFeedback: (domain: string) => ipcRenderer.invoke('reset-mini-ai-feedback', domain),
+  getUserLabelStats: () => ipcRenderer.invoke('get-user-label-stats'),
   getRadarHeatSummary: () => ipcRenderer.invoke('get-radar-heat-summary'),
   clearRadarHeatDomain: (domain: string) => ipcRenderer.invoke('clear-radar-heat-domain', domain),
   ignoreRadarHeatDomain: (domain: string) => ipcRenderer.invoke('ignore-radar-heat-domain', domain),
@@ -247,6 +251,7 @@ contextBridge.exposeInMainWorld('electron', {
 
   // Local System DNS Daemon Integration
   getDaemonStatus: () => ipcRenderer.invoke('daemon:get-status'),
+  getLiveServices: () => ipcRenderer.invoke('get-live-services'),
   startDaemonProcess: () => ipcRenderer.invoke('daemon:start'),
   stopDaemonProcess: () => ipcRenderer.invoke('daemon:stop'),
   reloadDaemonRules: () => ipcRenderer.invoke('daemon:reload'),

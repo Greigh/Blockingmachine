@@ -292,6 +292,16 @@ export interface AiScanResult {
   generatedRules: string[];
   coveredByRule?: string;
   featureScores?: Record<string, number>;
+  /**
+   * The on-device classifier's explainable evidence — which features pushed the
+   * verdict and in which direction. These always describe the *local* read even
+   * when the cascade escalated (`modelUsed`/`triage.source` say who decided).
+   */
+  topContributions?: MiniAiFeatureContribution[];
+  /** Local corroboration tier, when the embedded classifier produced one. */
+  corroboration?: CorroborationTier;
+  /** Independent evidence families the local verdict rests on. */
+  evidenceFamilies?: EvidenceFamily[];
   inferenceTimeMs?: number;
   provider: AiProviderType;
   modelUsed?: string;
@@ -453,6 +463,16 @@ export interface DomainFeatureVector {
   numericSubdomain: number;
   userTuneBias: number;
   brandSpoofScore: number;
+  /**
+   * Credential-lure vocabulary at label boundaries — 0 on known-safe
+   * infrastructure, where `login.`/`accounts.` are endpoints, not lures.
+   */
+  lureTokenWeight: number;
+  /** Live-signal features — 0 when no daemon/browser observation exists for the name. */
+  obsCnameForeign: number;
+  obsBlockedBefore: number;
+  obsFanoutSites: number;
+  obsNxdomainRate: number;
 }
 
 export interface CnameResolutionResult {
