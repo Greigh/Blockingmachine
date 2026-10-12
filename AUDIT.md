@@ -23,22 +23,12 @@ All 5 critical and high findings have been **fully remediated directly in source
 **Overall Production-Readiness Verdict**: **READY** (remarshaled to production-grade after in-place security remediations, sandboxing, and checksum verification).
 
 > **Pass 2 addendum (2026-10-09):** a scoped follow-up audit of the Electron/TypeScript/React surface
-> re-verified all five findings below as still-remediated in current source, validated the in-flight
-> flag-77 DNS-daemon fix, and remediated seven new low-severity findings (quarantine feed-injection
-> screen, renderer store-payload validation incl. a `setInterval`-NaN busy-loop primitive, a dead
-> `hitsPath` file-read parameter, a floating interval, generated-service-script escaping, an
-> unbounded remote-content echo, and a React lifecycle gap). Full results:
-> `audit/REMEDIATION_RESULTS.md` and `audit/FINAL_VALIDATION.md`; ledger entry `docs/open-flags.md` #78.
+> re-verified all five findings below as still-remediated in current source, validated the in-flight flag-77 DNS-daemon fix, and remediated seven new low-severity findings (quarantine feed-injection screen, renderer store-payload validation incl. a `setInterval`-NaN busy-loop primitive, a dead `hitsPath` file-read parameter, a floating interval, generated-service-script escaping, an unbounded remote-content echo, and a React lifecycle gap). Full results: `audit/REMEDIATION_RESULTS.md` and `audit/FINAL_VALIDATION.md`; ledger entry `docs/open-flags.md` #78.
 >
 > **Pass 3 addendum (2026-10-09):** independent verification re-proved every Pass-2 fix
-> behaviorally (real IPC handlers under a mocked Electron, jsdom component tests, real HTTP
-> feed-server reads, `plutil` roundtrips, an `--expose-gc` heap profile, and a fresh packaged
-> binary launch+SIGTERM) — and found five completeness gaps, all since corrected: quarantine
-> domains are now screened at the feed **emit** boundary too (pre-fix poisoned stores could
-> still inject LAN feed lines), the observation timer is cleared on quit, one unguarded React
-> `.then` is guarded, newline-bearing paths can no longer break the launchd heredoc, and
-> `writeFileAtomic` tmp names no longer collide. Verdict: **CONDITIONALLY READY** — see
-> `audit/RELEASE_READINESS.md` for the attached conditions; ledger entry `docs/open-flags.md` #79.
+> behaviorally (real IPC handlers under a mocked Electron, jsdom component tests, real HTTP feed-server reads, `plutil` roundtrips, an `--expose-gc` heap profile, and a fresh packaged binary launch+SIGTERM) — and found five completeness gaps, all since corrected: quarantine domains are now screened at the feed **emit** boundary too (pre-fix poisoned stores could still inject LAN feed lines), the observation timer is cleared on quit, one unguarded React `.then` is guarded, newline-bearing paths can no longer break the launchd heredoc, and `writeFileAtomic` tmp names no longer collide. Verdict: **CONDITIONALLY READY** — see `audit/RELEASE_READINESS.md` for the attached conditions; ledger entry `docs/open-flags.md` #79.
+>
+> **UI/UX addendum (2026-10-10/11, flags 83–84):** a complete UI/UX and accessibility programme — audit, remediation, feature-coverage reconciliation, WCAG 2.2 SC 1.4.10 reflow remediation (width-adaptive navigation: full sidebar / icon rail / overlay drawer, verified reflow-free at 200% and 400% zoom on all nine views, zero axe violations in both themes) — closed with a real assistive-technology acceptance pass: live macOS VoiceOver verified the drawer/dialog/landmark spoken contract and caught one real defect (the closed drawer remained in the keyboard/AT focus order — SC 2.4.3 — fixed via `visibility` management and re-verified); Android TalkBack verified mobile labels and traversal on the release APK; the native tray menu was exercised through System Events. Final verdict: **READY WITHIN VERIFIED SCOPE** — `audit/UIUX_FINAL_RELEASE_ACCEPTANCE.md` is the authoritative current-status record, with explicit manual-acceptance procedures for the physical-device and non-macOS items that remain unverified; ledger entries `docs/open-flags.md` #83, #84, #85.
 
 ---
 
@@ -724,5 +714,4 @@ test("calculates and verifies SHA-256 checksums correctly", async () => {
 
 ### **READY**
 
-**Justification**:
-All confirmed vulnerabilities, resource leaks, missing systems, and boundary hardening requirements have been fully remediated and implemented directly in source code. 434 automated tests across all 8 workspaces pass with 0 failures, linting passes with 0 errors and 0 warnings, and cross-platform production packaging and builds compile cleanly. The system is certified production-ready.
+**Justification**: All confirmed vulnerabilities, resource leaks, missing systems, and boundary hardening requirements have been fully remediated and implemented directly in source code. 434 automated tests across all 8 workspaces pass with 0 failures, linting passes with 0 errors and 0 warnings, and cross-platform production packaging and builds compile cleanly. The system is certified production-ready.

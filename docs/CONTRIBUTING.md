@@ -47,8 +47,7 @@ If a website isn't working properly or something is blocked that shouldn't be:
      - Your ad blocker (uBlock Origin, AdGuard, etc.)
      - Screenshots if possible
 
-3. **Temporary Fix**
-   You can add a temporary exception while we investigate:
+3. **Temporary Fix** You can add a temporary exception while we investigate:
 
    - **For DNS-based blockers (AdGuard Home, Pi-hole):**
 
@@ -204,28 +203,18 @@ When contributing new filter rules:
 
 ## The Open Flags Ledger
 
-Known problems are recorded rather than remembered. When a change surfaces a defect, an honest
-limitation, or a trade-off it does not fix, the finding goes in
-[open-flags.md](open-flags.md) — the moment it is noticed, in the same change if practical —
-instead of living in a conversation or a review comment nobody can find later.
+Known problems are recorded rather than remembered. When a change surfaces a defect, an honest limitation, or a trade-off it does not fix, the finding goes in [open-flags.md](open-flags.md) — the moment it is noticed, in the same change if practical — instead of living in a conversation or a review comment nobody can find later.
 
-1. **Raising a flag.** Add `### N. <title>` under `## Open`, numbered with the next free integer.
-   Numbers are never reused, so gaps in the sequence are closed entries, not mistakes. An entry
-   states:
+1. **Raising a flag.** Add `### N. <title>` under `## Open`, numbered with the next free integer. Numbers are never reused, so gaps in the sequence are closed entries, not mistakes. An entry states:
    - **Where** — the file, symbol, and rough line a reader should start from.
    - **What** — the defect or limitation, stated as it behaves today.
    - **Why left** — why the change at hand did not fix it (scope, a design decision, missing data).
    - **Fix shape** — what a fix would take, as concretely as it was reasoned through.
    - **Verify** — how a fix can be proven: the test, the command, the observable difference.
 
-2. **Flags are never deleted — only moved.** An open entry may not be removed without its fix:
-   dropping the record would erase the one place the hole is written down. When a fix lands, the
-   entry moves to `## Closed` at the bottom of the file, retitled
-   `### N. <title> — closed by <what fixed it>` and the commit that carries it, with **What closed
-   it** and **Verified** notes added above the original entry text, which stays.
+2. **Flags are never deleted — only moved.** An open entry may not be removed without its fix: dropping the record would erase the one place the hole is written down. When a fix lands, the entry moves to `## Closed` at the bottom of the file, retitled `### N. <title> — closed by <what fixed it>` and the commit that carries it, with **What closed it** and **Verified** notes added above the original entry text, which stays.
 
-3. **Nothing there is scheduled.** The list exists so nothing is relied on silently — a recorded
-   hole is a decision anyone can revisit; an unrecorded one is a surprise.
+3. **Nothing there is scheduled.** The list exists so nothing is relied on silently — a recorded hole is a decision anyone can revisit; an unrecorded one is a surprise.
 
 ## Issue Templates
 

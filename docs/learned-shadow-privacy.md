@@ -1,19 +1,12 @@
 # What the shadow log records, and why the rate is a privacy decision
 
-The learned GBDT classifier ships in **shadow mode**: it scores every domain the Sentinel
-watchdog sweep looks at and writes what it thought next to what production did, and it
-never blocks, quarantines or enforces anything. That is the design, not a temporary state —
-see the promotion gate in [packages/ai-training/README.md](../packages/ai-training/README.md),
-where a model earns the right to act only after a human runs the gate and the gate passes.
+The learned GBDT classifier ships in **shadow mode**: it scores every domain the Sentinel watchdog sweep looks at and writes what it thought next to what production did, and it never blocks, quarantines or enforces anything. That is the design, not a temporary state — see the promotion gate in [packages/ai-training/README.md](../packages/ai-training/README.md), where a model earns the right to act only after a human runs the gate and the gate passes.
 
-This document is the privacy account of that log. It exists because the log is the one
-place in the app where the names of things you visited are written down for the purpose of
-improving a model, and "it's all local" is not an answer to "what exactly".
+This document is the privacy account of that log. It exists because the log is the one place in the app where the names of things you visited are written down for the purpose of improving a model, and "it's all local" is not an answer to "what exactly".
 
 ## Where the file is
 
-`<userData>/learned-shadow.jsonl` — one JSON object per line, appended, never rewritten.
-`<userData>` is Electron's per-user data directory:
+`<userData>/learned-shadow.jsonl` — one JSON object per line, appended, never rewritten. `<userData>` is Electron's per-user data directory:
 
 | platform | path |
 |---|---|
@@ -21,14 +14,11 @@ improving a model, and "it's all local" is not an answer to "what exactly".
 | Windows | `%APPDATA%\Blockingmachine\learned-shadow.jsonl` |
 | Linux | `~/.config/Blockingmachine/learned-shadow.jsonl` |
 
-Nothing else is written. There is no second copy, no rotation, and no upload: the file is
-read by `shadow.py` and `drift.py` on the same machine, by a person, deliberately. Deleting
-it costs nothing but the accumulated shadow window, and the next sweep recreates it empty.
+Nothing else is written. There is no second copy, no rotation, and no upload: the file is read by `shadow.py` and `drift.py` on the same machine, by a person, deliberately. Deleting it costs nothing but the accumulated shadow window, and the next sweep recreates it empty.
 
 ## What one record contains
 
-There are two shapes in the file. The **per-domain** records — disagreements and samples —
-have exactly seven fields, and no more:
+There are two shapes in the file. The **per-domain** records — disagreements and samples — have exactly seven fields, and no more:
 
 | field | what it is |
 |---|---|
@@ -50,74 +40,33 @@ The **summary** record has five, and holds no hostname:
 | `at` | ISO timestamp for the sweep's counters |
 | `modelVersion` | the promotion version of the weights that scored it, or `null` when they have no manifest |
 
-Both lists are not prose. They are pinned by test — `holds the documented fields and
-nothing else` and `carries no hostname at all` in
-[learnedShadowSampling.test.ts](../packages/electron-app/src/__tests__/learnedShadowSampling.test.ts)
-assert the key set of a real record of each shape equals exactly its set, so a field added
-for debugging convenience fails the suite rather than quietly widening the disclosure.
+Both lists are not prose. They are pinned by test — `holds the documented fields and nothing else` and `carries no hostname at all` in [learnedShadowSampling.test.ts](../packages/electron-app/src/__tests__/learnedShadowSampling.test.ts) assert the key set of a real record of each shape equals exactly its set, so a field added for debugging convenience fails the suite rather than quietly widening the disclosure.
 
-The summary is also how the promotion gate knows the app is running at all: a domain the
-model and production *agreed* about is never written down, so a log of disagreements alone
-cannot measure how much traffic passed through the model — and `gate.py` read `0 domains
-scored` however long the app had been running. That is why the one record kind in the file
-that says nothing about *which* sites you visited is the one that fills the coverage check.
+The summary is also how the promotion gate knows the app is running at all: a domain the model and production *agreed* about is never written down, so a log of disagreements alone cannot measure how much traffic passed through the model — and `gate.py` read `0 domains scored` however long the app had been running. That is why the one record kind in the file that says nothing about *which* sites you visited is the one that fills the coverage check.
 
 ## What it deliberately does not contain
 
-- **No URL, path or query string.** A DNS log has one of these per query; the sample keeps
-  the host and drops the rest. A path is personal in a way a hostname is not.
-- **No client identity** — no MAC address, no hostname of the device, no LAN name. The
-  watchdog's heat ledger knows which client sent a query; the shadow log is not told.
-- **No page content**, no referrer, no headers, no response bodies. The classifier reads
-  a hostname and nothing else, so there is nothing else to record.
-- **No human-readable browsing history.** This is the line that matters: the file is not a
-  log of what you did, it is a log of what a model guessed about a hostname. A hostname can
-  still be sensitive — a hostname can be someone's health portal, someone's employer, or
-  someone's search — which is why the rate below is a stated number and the file is local.
+- **No URL, path or query string.** A DNS log has one of these per query; the sample keeps the host and drops the rest. A path is personal in a way a hostname is not.
+- **No client identity** — no MAC address, no hostname of the device, no LAN name. The watchdog's heat ledger knows which client sent a query; the shadow log is not told.
+- **No page content**, no referrer, no headers, no response bodies. The classifier reads a hostname and nothing else, so there is nothing else to record.
+- **No human-readable browsing history.** This is the line that matters: the file is not a log of what you did, it is a log of what a model guessed about a hostname. A hostname can still be sensitive — a hostname can be someone's health portal, someone's employer, or someone's search — which is why the rate below is a stated number and the file is local.
 
 ## The rate, and why it is 1%
 
-`LEARNED_SHADOW_SAMPLE_RATE` in
-[shadowMode.ts](../packages/core/src/ai/learned/shadowMode.ts) is **0.01**: one percent of
-*all* scored domains is written as a `sample: true` record, independently of whether the
-model agreed with production. The hook states it
-([index.ts](../packages/electron-app/src/index.ts), `setupAiWatchdogTimer`) and
-`shadowScoreWatchdogDomains` takes the rate as a **required** argument with no default,
-because a default is how this went missing once already: the hook called it with two
-arguments, the parameter defaulted to 0, and the drift stage failed with *"no sample records
-in the shadow log"* while the app looked perfectly healthy. TypeScript now has to be told.
+`LEARNED_SHADOW_SAMPLE_RATE` in [shadowMode.ts](../packages/core/src/ai/learned/shadowMode.ts) is **0.01**: one percent of *all* scored domains is written as a `sample: true` record, independently of whether the model agreed with production. The hook states it ([index.ts](../packages/electron-app/src/index.ts), `setupAiWatchdogTimer`) and `shadowScoreWatchdogDomains` takes the rate as a **required** argument with no default, because a default is how this went missing once already: the hook called it with two arguments, the parameter defaulted to 0, and the drift stage failed with *"no sample records in the shadow log"* while the app looked perfectly healthy. TypeScript now has to be told.
 
 The two per-domain kinds of record answer different questions, and that is why both exist:
 
-- **Disagreements** are where this model differs from the lists. Useful for finding breakage
-  risk, useless for measuring the traffic distribution — a population of exceptions tells
-  you nothing about what normal looks like.
-- **Samples** are a random slice of *everything* scored, which is what the drift stage
-  needs: PSI over production traffic against the training baseline, so a change in how
-  advertisers name their infrastructure shows up before it breaks anything.
+- **Disagreements** are where this model differs from the lists. Useful for finding breakage risk, useless for measuring the traffic distribution — a population of exceptions tells you nothing about what normal looks like.
+- **Samples** are a random slice of *everything* scored, which is what the drift stage needs: PSI over production traffic against the training baseline, so a change in how advertisers name their infrastructure shows up before it breaks anything.
 
-The **summary** is not a disclosure at all: it is the per-sweep arithmetic, written once per
-sweep that scored at least one domain, and it is the only record the gate's coverage check
-can read. Its `modelVersion` is the promotion version from
-[manifest.json](../packages/core/ai-weights/README.md) when the shipped weights carry one
-and `null` when they do not — which is the current state, since the shipped export predates
-the promotion ceremony. `shadow.py` reports the unversioned portion of coverage beside the
-total so a gate report cannot present a count as though it identified a model.
+The **summary** is not a disclosure at all: it is the per-sweep arithmetic, written once per sweep that scored at least one domain, and it is the only record the gate's coverage check can read. Its `modelVersion` is the promotion version from [manifest.json](../packages/core/ai-weights/README.md) when the shipped weights carry one and `null` when they do not — which is the current state, since the shipped export predates the promotion ceremony. `shadow.py` reports the unversioned portion of coverage beside the total so a gate report cannot present a count as though it identified a model.
 
-One percent is not a privacy dial set to "as low as still works". PSI bins each feature into
-ten buckets and compares production proportions against the baseline, so the smallest
-bucket needs enough observations to be worth comparing at all; `gate.py` is sized at
-`min_shadow_days: 7` and `min_shadow_scored: 1000`. A lower rate does not make the app more
-private, it makes the bin empty and the gate un-runnable — so the honest privacy answer is
-"one percent, on this device, in a file you can delete", not "as little as possible". A
-higher rate buys nothing the smallest bin cannot already see.
+One percent is not a privacy dial set to "as low as still works". PSI bins each feature into ten buckets and compares production proportions against the baseline, so the smallest bucket needs enough observations to be worth comparing at all; `gate.py` is sized at `min_shadow_days: 7` and `min_shadow_scored: 1000`. A lower rate does not make the app more private, it makes the bin empty and the gate un-runnable — so the honest privacy answer is "one percent, on this device, in a file you can delete", not "as little as possible". A higher rate buys nothing the smallest bin cannot already see.
 
 ## A second file: the daemon's DNS observation stream
 
-Since flag 43's pipeline work there is also `<userData>/dns-observations.jsonl`, written by
-the DNS daemon (`observationRecorder.ts`) — one JSON line per deduped query, capped by a
-10-minute per-domain dedup window, a 50k-domain recency map, and rotation to a single `.1`
-sibling at 8 MB. One record holds:
+Since flag 43's pipeline work there is also `<userData>/dns-observations.jsonl`, written by the DNS daemon (`observationRecorder.ts`) — one JSON line per deduped query, capped by a 10-minute per-domain dedup window, a 50k-domain recency map, and rotation to a single `.1` sibling at 8 MB. One record holds:
 
 | field | what it is |
 |---|---|
@@ -127,34 +76,16 @@ sibling at 8 MB. One record holds:
 | `cname_depth`, `cname_hosts`, `cname_foreign` | the CNAME chain upstream returned, and whether it crossed the name's registrable origin — the cloaking signal |
 | `ttl_min`, `answer_count`, `latency_ms` | response shape |
 
-Same rules as the shadow log: no client identity, no URL, no upload, deletable at will.
-The same `learned-shadow.jsonl` tails it — `shadowScoreObservationFile` reads each new
-record, feeds its DNS fields to the model as the v3 observation tail, and writes the same
-two record shapes (disagreement/sample/summary), so this file is *input*, not a second
-disclosure. `obs_ingest.py` merges it into `live_observations.db` for training.
+Same rules as the shadow log: no client identity, no URL, no upload, deletable at will. The same `learned-shadow.jsonl` tails it — `shadowScoreObservationFile` reads each new record, feeds its DNS fields to the model as the v3 observation tail, and writes the same two record shapes (disagreement/sample/summary), so this file is *input*, not a second disclosure. `obs_ingest.py` merges it into `live_observations.db` for training.
 
 ## A third file: the browser's first-party fan-out ledger
 
-The browser extension keeps a local tally (`fanoutLedger.ts`) of which third-party
-hostnames it matched under which first-party sites — a hostname, a count of distinct
-registrable sites, a hit count, first/last seen. The telemetry upload sends only the delta
-to the hub, which persists the union as `<userData>/browser-fanout.json`; `obs_ingest.py`
-reads that file too. It contains hostnames and counts — never a URL, a page path, or a
-client identifier — and it is the other half of the v3 feature tail.
+The browser extension keeps a local tally (`fanoutLedger.ts`) of which third-party hostnames it matched under which first-party sites — a hostname, a count of distinct registrable sites, a hit count, first/last seen. The telemetry upload sends only the delta to the hub, which persists the union as `<userData>/browser-fanout.json`; `obs_ingest.py` reads that file too. It contains hostnames and counts — never a URL, a page path, or a client identifier — and it is the other half of the v3 feature tail.
 
 ## Turning it off, and what stopping it costs
 
-The sample slice is not a setting, and that is deliberate: a toggle would be a second place
-for the rate to live, and the number in the code, the number in this document and the number
-in the log have to be the same number. To stop the log entirely, stop the app from sweeping
-(disable the AI watchdog in Settings), or delete the file. Deleting it resets the M5 shadow
-window to zero, which means the promotion gate starts its 7 days over — it does not promote
-anything on less.
+The sample slice is not a setting, and that is deliberate: a toggle would be a second place for the rate to live, and the number in the code, the number in this document and the number in the log have to be the same number. To stop the log entirely, stop the app from sweeping (disable the AI watchdog in Settings), or delete the file. Deleting it resets the M5 shadow window to zero, which means the promotion gate starts its 7 days over — it does not promote anything on less.
 
 ## If you would rather it did not exist
 
-That is a legitimate position and the honest answer is that the M5 drift stage would then
-have no input, so the promotion gate could not run on real traffic and the model would stay
-in shadow mode indefinitely. The trade is: 1% of resolved hostnames, by name, to a local
-file, in exchange for a model that can be checked against reality before it is trusted to
-break a site.
+That is a legitimate position and the honest answer is that the M5 drift stage would then have no input, so the promotion gate could not run on real traffic and the model would stay in shadow mode indefinitely. The trade is: 1% of resolved hostnames, by name, to a local file, in exchange for a model that can be checked against reality before it is trusted to break a site.

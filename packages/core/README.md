@@ -7,13 +7,7 @@ Core functionality for Blockingmachine, providing robust filter list processing 
 
 </div>
 
-[![LICENSE: BSD-3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
-[![GitHub Actions](https://github.com/greigh/blockingmachine-cli/workflows/CI/badge.svg)](https://github.com/greigh/blockingmachine-cli/actions)
-[![GitHub Release](https://img.shields.io/github/v/release/greigh/Blockingmachine-CLI)](https://github.com/greigh/Blockingmachine-core/releases)
-[![NPM VERSION](https://badge.fury.io/js/@blockingmachine%2Fcore.svg)](https://www.npmjs.com/package/@blockingmachine/core)
-[![NPM DOWNLOADS](https://img.shields.io/npm/dt/@blockingmachine/core)](https://www.npmjs.com/package/@blockingmachine/core)
-[![CODE SIZE](https://img.shields.io/github/languages/code-size/greigh/blockingmachine-core)](https://github.com/greigh/blockingmachine-core)
-[![COMMITS](https://img.shields.io/github/commit-activity/m/greigh/blockingmachine-core)](https://github.com/greigh/blockingmachine-core/graphs/commit-activity)
+[![LICENSE: BSD-3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause) [![GitHub Actions](https://github.com/greigh/blockingmachine-cli/workflows/CI/badge.svg)](https://github.com/greigh/blockingmachine-cli/actions) [![GitHub Release](https://img.shields.io/github/v/release/greigh/Blockingmachine-CLI)](https://github.com/greigh/Blockingmachine-core/releases) [![NPM VERSION](https://badge.fury.io/js/@blockingmachine%2Fcore.svg)](https://www.npmjs.com/package/@blockingmachine/core) [![NPM DOWNLOADS](https://img.shields.io/npm/dt/@blockingmachine/core)](https://www.npmjs.com/package/@blockingmachine/core) [![CODE SIZE](https://img.shields.io/github/languages/code-size/greigh/blockingmachine-core)](https://github.com/greigh/blockingmachine-core) [![COMMITS](https://img.shields.io/github/commit-activity/m/greigh/blockingmachine-core)](https://github.com/greigh/blockingmachine-core/graphs/commit-activity)
 
 ## Related Projects
 
@@ -365,21 +359,18 @@ const fetchWithRateLimit = async (urls: string[]) => {
 
 ### General Questions
 
-**Q: What types of filter lists are supported?**
-A: We support AdGuard-style filter lists, including:
+**Q: What types of filter lists are supported?** A: We support AdGuard-style filter lists, including:
 
 - Domain-based rules (`||example.com^`)
 - Basic pattern rules (`/ads/`)
 - Comment lines (`! This is a comment`)
 - AdGuard Home specific syntax
 
-**Q: How large of a filter list can this handle?**
-A: The library is optimized for large lists and can handle millions of rules when used with proper memory management practices (see Performance Tips section).
+**Q: How large of a filter list can this handle?** A: The library is optimized for large lists and can handle millions of rules when used with proper memory management practices (see Performance Tips section).
 
 ### Performance
 
-**Q: Why is processing taking longer than expected?**
-A: Several factors can affect processing speed:
+**Q: Why is processing taking longer than expected?** A: Several factors can affect processing speed:
 
 - Large number of rules
 - Complex pattern matching
@@ -418,8 +409,7 @@ const excludeDomains = (rules: string[], excludeList: string[]) => {
 
 ### Troubleshooting
 
-**Q: Why am I getting timeout errors?**
-A: Remote lists might be slow to respond. Try:
+**Q: Why am I getting timeout errors?** A: Remote lists might be slow to respond. Try:
 
 ```typescript
 const content = await fetchContent(url, {
@@ -429,8 +419,7 @@ const content = await fetchContent(url, {
 });
 ```
 
-**Q: How do I handle invalid rules?**
-A: Use the parsing options to skip problematic rules:
+**Q: How do I handle invalid rules?** A: Use the parsing options to skip problematic rules:
 
 ```typescript
 const rules = await parseFilterList(content, {
@@ -443,8 +432,7 @@ const rules = await parseFilterList(content, {
 
 ### Integration
 
-**Q: Can I use this with Express.js?**
-A: Yes, here's a basic example:
+**Q: Can I use this with Express.js?** A: Yes, here's a basic example:
 
 ```typescript
 import express from "express";
@@ -464,8 +452,7 @@ app.post("/process-rules", async (req, res) => {
 });
 ```
 
-**Q: How do I save processed rules to a file?**
-A: Use the built-in file system functions:
+**Q: How do I save processed rules to a file?** A: Use the built-in file system functions:
 
 ```typescript
 import { promises as fs } from "fs";
@@ -477,16 +464,14 @@ const saveRules = async (rules: string[], filepath: string) => {
 
 ### Updates and Maintenance
 
-**Q: How often should I update my filter lists?**
-A: Best practices suggest:
+**Q: How often should I update my filter lists?** A: Best practices suggest:
 
 - Daily updates for actively maintained lists
 - Weekly updates for stable lists
 - Implement rate limiting when fetching multiple lists
 - Use the `If-Modified-Since` header (supported by `fetchContent`)
 
-**Q: How do I handle updates efficiently?**
-A: Use the incremental update feature:
+**Q: How do I handle updates efficiently?** A: Use the incremental update feature:
 
 ```typescript
 const updateRules = async (existingRules: string[], newContent: string) => {

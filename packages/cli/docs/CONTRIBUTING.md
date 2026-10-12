@@ -47,8 +47,7 @@ If a website isn't working properly or something is blocked that shouldn't be:
      - Your ad blocker (uBlock Origin, AdGuard, etc.)
      - Screenshots if possible
 
-3. **Temporary Fix**
-   You can add a temporary exception while we investigate:
+3. **Temporary Fix** You can add a temporary exception while we investigate:
 
    - **For DNS-based blockers (AdGuard Home, Pi-hole):**
 

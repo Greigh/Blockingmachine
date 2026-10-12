@@ -5,9 +5,7 @@
   <img src="https://raw.githubusercontent.com/Greigh/Blockingmachine/main/assets/Blockingmachine.png" width="160" alt="Blockingmachine Logo" />
 </div>
 
-[![Auto Update](https://github.com/greigh/blockingmachine-db/actions/workflows/update-filters.yml/badge.svg)](https://github.com/greigh/blockingmachine-db/actions/workflows/update-filters.yml)
-[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
-[![Last Commit](https://img.shields.io/github/last-commit/greigh/blockingmachine-db)](https://github.com/greigh/blockingmachine-db/commits/main)
+[![Auto Update](https://github.com/greigh/blockingmachine-db/actions/workflows/update-filters.yml/badge.svg)](https://github.com/greigh/blockingmachine-db/actions/workflows/update-filters.yml) [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE) [![Last Commit](https://img.shields.io/github/last-commit/greigh/blockingmachine-db)](https://github.com/greigh/blockingmachine-db/commits/main)
 
 > **Blockingmachine Database** is a fully automated, production-grade collection of filter lists for ad-blocking, privacy, and security. Powered by [Blockingmachine CLI](https://github.com/greigh/blockingmachine-cli), it aggregates, deduplicates, and exports rules from the best sources—plus your own custom rules—into every major format, updated daily.
 
