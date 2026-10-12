@@ -66,6 +66,15 @@ export const ProtectionCard: React.FC<ProtectionCardProps> = ({ onNavigate }) =>
   const paused = status?.status === 'paused';
   const stopped = !status || status.status === 'stopped';
 
+  const formatUptime = (s: number): string => {
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  };
+
   const pill = running ? (
     <span className="deploy-pane-status-pill">
       <span className="status-indicator-dot active" />
@@ -85,7 +94,10 @@ export const ProtectionCard: React.FC<ProtectionCardProps> = ({ onNavigate }) =>
 
   const detail = running
     ? `Filtering on ${status?.port ?? 5353}/UDP · ${status?.rulesLoaded?.toLocaleString() ?? '0'} rules loaded` +
-      (status?.stats ? ` · ${status.stats.blockRatePercent}% of ${status.stats.totalQueries.toLocaleString()} queries blocked` : '')
+      (status?.uptimeSeconds ? ` · up ${formatUptime(status.uptimeSeconds)}` : '') +
+      (status?.stats
+        ? ` · ${status.stats.blockedQueries.toLocaleString()} of ${status.stats.totalQueries.toLocaleString()} queries blocked (${status.stats.blockRatePercent}%)`
+        : '')
     : paused
       ? `Daemon is up on ${status?.port ?? 5353}/UDP but blocking is paused.`
       : 'The filtering daemon is not running — start it to protect this machine\'s loopback resolver.';
@@ -159,7 +171,7 @@ export const ProtectionCard: React.FC<ProtectionCardProps> = ({ onNavigate }) =>
             className="deploy-btn"
             onClick={() => onNavigate?.('deploy')}
           >
-            Deploy &amp; Sync →
+            Deploy rules to devices →
           </button>
         </div>
       </div>

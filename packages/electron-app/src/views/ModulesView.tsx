@@ -446,6 +446,7 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
         <div className="modules-category-select-wrapper">
           <select
             className="modules-category-select"
+            aria-label="Filter modules by category"
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
           >

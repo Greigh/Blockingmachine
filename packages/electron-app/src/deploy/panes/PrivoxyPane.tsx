@@ -59,7 +59,7 @@ export const PrivoxyPane: React.FC<PrivoxyPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">🧱</span>
             <div>
-              <h3 className="deploy-pane-title">Privoxy Action File</h3>
+              <h2 className="deploy-pane-title">Privoxy Action File</h2>
               <p className="deploy-pane-subtitle">Privoxy on Linux, BSD, macOS and router packages</p>
             </div>
           </div>
@@ -153,7 +153,7 @@ export const PrivoxyPane: React.FC<PrivoxyPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📋</span>
             <div>
-              <h3 className="deploy-pane-title">Privoxy Setup Recipe</h3>
+              <h2 className="deploy-pane-title">Privoxy Setup Recipe</h2>
               <p className="deploy-pane-subtitle">A local file, a config line, a restart</p>
             </div>
           </div>
@@ -164,7 +164,7 @@ export const PrivoxyPane: React.FC<PrivoxyPaneProps> = ({
             <div className="stepper-step" key={step.id}>
               <div className="stepper-num">{index + 1}</div>
               <div className="stepper-content">
-                <h4>{step.title}</h4>
+                <h3>{step.title}</h3>
                 <p>
                   {step.detail}
                   {step.id === 'copy' && (

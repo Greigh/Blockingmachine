@@ -18,6 +18,11 @@ type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
 const handlers = new Map<string, Handler>();
 const tmpUserData = mkdtempSync(join(tmpdir(), 'bm-ipc-test-'));
+// An existing config file is what marks this boot as an *existing install* —
+// `installHadPriorState` keys on it (never on token absence), so the harness
+// exercises the legacy token-optional posture by default and the secured
+// modes are flipped explicitly per test.
+writeFileSync(join(tmpUserData, 'config.json'), '{}');
 
 /** Minimal in-memory stand-in for electron-store: defaults come from the real schema. */
 class FakeStore {
@@ -51,6 +56,12 @@ class FakeStore {
   snapshot() {
     return new Map(this.data);
   }
+  // electron-store's own `path` — `installHadPriorState` existsSync's it at
+  // construction. Pointed at the config.json seeded above so this harness is
+  // an *existing* install.
+  get path() {
+    return join(tmpUserData, 'config.json');
+  }
 }
 
 /** The store instance captured from the module under test. */
@@ -67,10 +78,7 @@ jest.unstable_mockModule('electron-store', () => ({
   },
 }));
 
-jest.unstable_mockModule('electron-is-dev', () => ({
-  __esModule: true,
-  default: false,
-}));
+jest.unstable_mockModule('electron-is-dev', () => ({ __esModule: true, default: false }));
 
 const fakeWebContents = () => ({
   on: () => {},
@@ -190,7 +198,7 @@ describe('IPC boundary — behavioral', () => {
   test('handlers actually registered under a mocked Electron boot', () => {
     expect(handlers.size).toBeGreaterThan(80);
     for (const ch of [
-      'set-filter-sources',
+      'save-sources',
       'save-custom-rules',
       'add-threat-quarantine',
       'start-live-radar-session',
@@ -323,9 +331,9 @@ describe('IPC boundary — behavioral', () => {
 
   // --- F-06: malformed store payloads --------------------------------------------------
 
-  test('F-06: set-filter-sources rejects non-boolean enabled without persisting', async () => {
+  test('F-06: save-sources rejects non-boolean enabled without persisting', async () => {
     const before = capturedStoreRef.current!.get('filterSources');
-    const res = await invoke('set-filter-sources', [{ name: 'x', url: 'https://x', enabled: 'yes' }]);
+    const res = await invoke('save-sources', [{ name: 'x', url: 'https://x', enabled: 'yes' }]);
     expect(res.success).toBe(false);
     expect(capturedStoreRef.current!.get('filterSources')).toEqual(before);
   });
@@ -440,7 +448,7 @@ describe('IPC boundary — behavioral', () => {
 
   test('non-object/null/undefined payloads fail cleanly rather than throwing', async () => {
     for (const bad of [null, undefined, 'x', 42]) {
-      for (const ch of ['set-filter-sources', 'set-ai-watchdog-config', 'set-sinkhole-config']) {
+      for (const ch of ['save-sources', 'set-ai-watchdog-config', 'set-sinkhole-config']) {
         const res = await invoke(ch, bad);
         expect(res.success).not.toBe(true);
       }
@@ -459,7 +467,7 @@ describe('IPC boundary — behavioral', () => {
   });
 
   test('empty arrays are semantically valid for list channels and refused by object channels', async () => {
-    expect((await invoke('set-filter-sources', [])).success).toBe(true);
+    expect((await invoke('save-sources', [])).success).toBe(true);
     expect((await invoke('set-ai-watchdog-config', [])).success).not.toBe(true);
     expect((await invoke('set-sinkhole-config', [])).success).not.toBe(true);
   });
@@ -920,5 +928,107 @@ describe('IPC boundary — behavioral', () => {
       expect(res.success).toBe(true);
       expect(res.message).toContain('ready');
     });
+  });
+});
+
+// --- D-1: lanAuthMode — secured default for new installs, explicit compat otherwise ---------
+
+describe('LAN auth modes (D-1)', () => {
+  test('an existing install boots in the legacy posture — lanAuthMode is never auto-written', async () => {
+    // The harness seeded a config file, so `installHadPriorState` marked this an
+    // existing install at store construction: no mode write, no token mint — the
+    // exact compat guarantee the upgrade path must keep.
+    expect(capturedStoreRef.current!.get('lanAuthMode')).toBeUndefined();
+    const res = await invoke('get-feed-token');
+    expect(res.mode).toBe('legacy');
+  });
+
+  test('set-lan-auth-mode validates, persists, and mints only when required needs it', async () => {
+    const bad = await invoke('set-lan-auth-mode', 'sometimes');
+    expect(bad.success).toBe(false);
+    expect(capturedStoreRef.current!.get('lanAuthMode')).not.toBe('sometimes');
+
+    const open = await invoke('set-lan-auth-mode', 'open');
+    expect(open.success).toBe(true);
+    expect(open.tokenMinted).toBe(false);
+    expect(capturedStoreRef.current!.get('lanAuthMode')).toBe('open');
+
+    const req = await invoke('set-lan-auth-mode', 'required');
+    expect(req.success).toBe(true);
+    expect(req.tokenMinted).toBe(true);
+    const minted = capturedStoreRef.current!.get('feedToken') as string;
+    expect(minted).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    const reported = await invoke('get-feed-token');
+    expect(reported).toEqual({ configured: true, mode: 'required' });
+  });
+
+  test('required mode over the wire: natives need the bearer, telemetry reads too, nothing leaks the token', async () => {
+    const token = capturedStoreRef.current!.get('feedToken') as string;
+    const started = await invoke('start-feed-server', 19200);
+    expect(started.isRunning).toBe(true);
+    try {
+      const post = (headers: Record<string, string>) =>
+        fetch('http://127.0.0.1:19200/v1/protection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify({ enabled: true }),
+        });
+      // Native client without credentials — refused (Origin absence is not a bypass).
+      expect((await post({})).status).toBe(401);
+      // Native client properly authenticated without an Origin header — the
+      // mobile/HA/curl shape that must keep working.
+      const nativeOk = await post({ Authorization: `Bearer ${token}` });
+      expect(nativeOk.status).not.toBe(401);
+      expect(nativeOk.status).not.toBe(403);
+      // Telemetry-bearing reads gate the same way.
+      expect((await fetch('http://127.0.0.1:19200/v1/status')).status).toBe(401);
+      const authed = await fetch('http://127.0.0.1:19200/v1/status', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(authed.status).toBe(200);
+      // The credential must not appear in a status payload — it is write-only.
+      expect(JSON.stringify(await authed.json())).not.toContain(token);
+      // A forbidden browser origin is still refused even with the right bearer.
+      const evil = await post({
+        Origin: 'https://evil.example',
+        Authorization: `Bearer ${token}`,
+      });
+      expect(evil.status).toBe(403);
+    } finally {
+      await invoke('stop-feed-server');
+    }
+  });
+
+  test('clear-feed-token under required mode rotates — the surface is never left without a credential', async () => {
+    const before = capturedStoreRef.current!.get('feedToken') as string;
+    const res = await invoke('clear-feed-token');
+    expect(res.success).toBe(true);
+    expect(res.rotated).toBe(true);
+    const after = capturedStoreRef.current!.get('feedToken') as string;
+    expect(after).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(after).not.toBe(before);
+    expect((await invoke('get-feed-token')).configured).toBe(true);
+  });
+
+  test('open mode suppresses enforcement while a stored token stays honoured', async () => {
+    const open = await invoke('set-lan-auth-mode', 'open');
+    expect(open.success).toBe(true);
+    const started = await invoke('start-feed-server', 19201);
+    expect(started.isRunning).toBe(true);
+    try {
+      // Compat contract: no credential demanded anywhere — reads and mutations.
+      expect((await fetch('http://127.0.0.1:19201/v1/status')).status).toBe(200);
+      const post = await fetch('http://127.0.0.1:19201/v1/protection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+      });
+      expect(post.status).not.toBe(401);
+    } finally {
+      await invoke('stop-feed-server');
+    }
+    // Restore the legacy posture so nothing that runs after inherits a mode.
+    capturedStoreRef.current!.delete('lanAuthMode');
+    capturedStoreRef.current!.set('feedToken', '');
   });
 });

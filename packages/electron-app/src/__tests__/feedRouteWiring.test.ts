@@ -57,8 +57,11 @@ describe('the /v1/events route', () => {
   test('the read guard itself enforces origin plus configured-token bearer', () => {
     const guard = blockFrom('const rejectUnauthorisedRead');
     expect(guard).toContain('rejectCrossOrigin');
-    expect(guard).toContain('configuredToken &&');
-    expect(guard).toContain('feedTokenAuthorised');
+    expect(guard).toContain('(lanAuthRequired || enforcedToken)');
+    expect(guard).toContain('bearerOk()');
+    // …which delegates to the shared helper, where the exact-match check lives.
+    const bearer = blockFrom('const bearerOk');
+    expect(bearer).toContain('feedTokenAuthorised');
   });
 });
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import type { HubPaneProps } from './paneProps';
+import { ExtensionTierPlanCard } from '../../components/ExtensionTierPlanCard';
 
 /**
  * The browser extension: the install that lives inside the page.
@@ -34,6 +35,12 @@ export const browserExtensionPaneKeys = [
   'copiedKey',
   'serverStatus',
   'feedTokenConfigured',
+  'tierPlanState',
+  'tierPlan',
+  'tierPlanError',
+  'loadTierPlan',
+  'chooseTierLedger',
+  'clearTierLedger',
 ] as const satisfies readonly (keyof HubPaneProps)[];
 
 export type BrowserExtensionPaneProps = Pick<
@@ -54,6 +61,12 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
   copiedKey,
   serverStatus,
   feedTokenConfigured,
+  tierPlanState,
+  tierPlan,
+  tierPlanError,
+  loadTierPlan,
+  chooseTierLedger,
+  clearTierLedger,
 }) => {
   // Same machine, so the loopback feed — the LAN URL is for devices that are not this one.
   const feedUrl = serverStatus?.localUrl
@@ -66,7 +79,7 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">🧩</span>
             <div>
-              <h3 className="deploy-pane-title">Browser Extension Package</h3>
+              <h2 className="deploy-pane-title">Browser Extension Package</h2>
               <p className="deploy-pane-subtitle">
                 Chrome, Edge, Brave, Arc — and Firefox
               </p>
@@ -81,8 +94,9 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
         </p>
 
         <div className="deploy-field-group" style={{ margin: '10px 0' }}>
-          <label className="deploy-field-label">Browser:</label>
+          <label htmlFor="extensionBrowser" className="deploy-field-label">Browser:</label>
           <select
+            id="extensionBrowser"
             className="deploy-field-input"
             value={extensionBrowser}
             onChange={(e) => setExtensionBrowser(e.target.value as 'chromium' | 'firefox' | 'both')}
@@ -117,7 +131,7 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
             style={{
               fontSize: '12px',
               margin: 0,
-              color: extensionMessage.type === 'error' ? 'var(--danger-color, #ff6b6b)' : '#10b981',
+              color: extensionMessage.type === 'error' ? 'var(--danger-color, #ff6b6b)' : 'var(--tone-success)',
             }}
           >
             {extensionMessage.text}
@@ -142,7 +156,7 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📋</span>
             <div>
-              <h3 className="deploy-pane-title">Load it in the browser</h3>
+              <h2 className="deploy-pane-title">Load it in the browser</h2>
               <p className="deploy-pane-subtitle">
                 The browser holds the install button — these are the clicks
               </p>
@@ -155,7 +169,7 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
             <div className="stepper-step">
               <div className="stepper-num">1</div>
               <div className="stepper-content">
-                <h4>Chromium — Chrome, Edge, Brave, Arc</h4>
+                <h3>Chromium — Chrome, Edge, Brave, Arc</h3>
                 <p>
                   Open <code>chrome://extensions</code>, switch on{' '}
                   <strong>Developer mode</strong>, choose{' '}
@@ -169,7 +183,7 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
             <div className="stepper-step">
               <div className="stepper-num">{extensionBrowser === 'both' ? 2 : 1}</div>
               <div className="stepper-content">
-                <h4>Firefox</h4>
+                <h3>Firefox</h3>
                 <p>
                   Open <code>about:debugging#/runtime/this-firefox</code>, choose{' '}
                   <strong>Load Temporary Add-on…</strong> and select <code>manifest.json</code>{' '}
@@ -183,7 +197,7 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">{extensionBrowser === 'both' ? 3 : 2}</div>
             <div className="stepper-content">
-              <h4>Point it at this hub</h4>
+              <h3>Point it at this hub</h3>
               <p>
                 In the popup's <strong>Hub &amp; Home Assistant</strong> section, set the feed URL
                 to <code>{feedUrl}</code>
@@ -198,12 +212,28 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
         </div>
       </div>
 
+      {/* Extension static tier capacity — the four tier rulesets the extension
+          ships, whether they fit, and what the plan is worth. Lives in the
+          browser pane because it is about this deploy target: the extension
+          popup answers the same question against a live grant the hub cannot
+          see, so this card asks for a capacity explicitly rather than
+          reporting Chrome's guaranteed floor as though it were the real one. */}
+      <ExtensionTierPlanCard
+        state={tierPlanState}
+        result={tierPlan}
+        error={tierPlanError}
+        enabled={[]}
+        onRefresh={loadTierPlan}
+        onChooseLedger={chooseTierLedger}
+        onClearLedger={clearTierLedger}
+      />
+
       <div className="deploy-info-card deploy-info-card-wide">
         <div className="deploy-pane-header">
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">🗂</span>
             <div>
-              <h3 className="deploy-pane-title">Everywhere else it installs</h3>
+              <h2 className="deploy-pane-title">Everywhere else it installs</h2>
               <p className="deploy-pane-subtitle">
                 The same protection, for the places a browser does not reach
               </p>

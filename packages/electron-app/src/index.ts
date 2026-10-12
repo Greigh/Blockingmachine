@@ -568,6 +568,12 @@ const store = new Store<StoreSchema>({
       type: 'string',
       default: '',
     },
+    lanAuthMode: {
+      type: 'string',
+      enum: ['required', 'open'],
+      // No default: absence is the legacy posture signal — it means this install
+      // predates the mode decision, not that a choice was made.
+    },
     deployRefreshReports: {
       type: 'object',
       default: {},
@@ -578,6 +584,16 @@ const store = new Store<StoreSchema>({
     },
   },
 }) as unknown as ElectronStore<StoreSchema>;
+
+// Whether this machine has run a Blockingmachine install before — decided at
+// construction time, before the first store write. Token ABSENCE is not proof of
+// newness (a legacy install may simply never have set one): the signal is prior
+// on-disk state — the persisted config itself, or the output directory a
+// compile would have produced. An existing install keeps its legacy
+// token-optional posture; a genuinely new one is secured by default.
+const installHadPriorState =
+  existsSync(store.path) ||
+  existsSync(join(app.getPath('documents'), 'Blockingmachine'));
 
 // Concurrency pool helper for fast parallel downloads
 async function mapConcurrent<T, R>(
@@ -988,6 +1004,7 @@ interface GitHubReleaseAsset {
 interface GitHubRelease {
   tag_name?: string;
   draft?: boolean;
+  html_url?: string;
   assets?: GitHubReleaseAsset[];
 }
 
@@ -1031,6 +1048,32 @@ async function findExtensionRelease(): Promise<GitHubRelease | null> {
   }
   const list = (await fetchGitHubJson(`${GITHUB_RELEASES_API}?per_page=10`)) as GitHubRelease[];
   return list.find((rel) => !rel.draft && releaseHasExtensionAssets(rel)) ?? null;
+}
+
+/**
+ * Loose semver compare for `X.Y.Z` tags with an optional `-rc.N` prerelease —
+ * the shape the release pipeline publishes. Returns >0 when a is newer.
+ * A stable release outranks a prerelease on the same base.
+ */
+function compareVersions(a: string, b: string): number {
+  const parse = (v: string) => {
+    const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-(?:rc|beta|alpha)\.?(\d+))?/.exec(v.trim());
+    if (!m) return null;
+    return {
+      core: [Number(m[1]), Number(m[2]), Number(m[3])],
+      pre: m[4] === undefined ? null : Number(m[4]),
+    };
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  if (!pa || !pb) return 0;
+  for (let i = 0; i < 3; i++) {
+    if (pa.core[i] !== pb.core[i]) return pa.core[i] - pb.core[i];
+  }
+  if (pa.pre === null && pb.pre === null) return 0;
+  if (pa.pre === null) return 1;
+  if (pb.pre === null) return -1;
+  return pa.pre - pb.pre;
 }
 
 // Global cache of latest compiled rules for real-time inspection
@@ -2616,6 +2659,32 @@ function stopUnboundWatch(): void {
   }
 }
 
+/**
+ * The token the LAN gates actually enforce right now, plus whether the install
+ * is in `'required'` mode. `'open'` is the explicit compatibility posture: a
+ * stored token is still honoured when a client sends it, but never required —
+ * even while present. `'required'` means a token must exist (one is minted at
+ * first secured boot and on every subsequent boot while absent), and a request
+ * that lands in the gap before minting must fail *closed*, not silently open.
+ */
+function enforcedFeedToken(storeRef: ElectronStore<StoreSchema>): { token: string; requiredMode: boolean } {
+  const mode = storeRef.get('lanAuthMode');
+  const token = readSecret(storeRef, safeStorage, 'feedToken').trim();
+  if (mode === 'open') return { token: '', requiredMode: false };
+  return { token, requiredMode: mode === 'required' };
+}
+
+/**
+ * Mints and seals a fresh feed token — used by the secured first boot, by
+ * `set-lan-auth-mode required`, and by rotate-in-place. Never logged or
+ * echoed to the renderer outside the one pairing/generate display path.
+ */
+function mintFeedToken(storeRef: ElectronStore<StoreSchema>): string {
+  const token = randomBytes(24).toString('base64url');
+  writeSecret(storeRef, safeStorage, 'feedToken', token);
+  return token;
+}
+
 async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>) {
   if (feedHttpServer && feedHttpServer.listening) {
     return getFeedServerStatus();
@@ -2685,7 +2754,13 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         // The optional second gate on mutations, resolved once per request — the semantics live
         // in `feedAuth.ts`. Returns true after writing the rejection, so a guarded endpoint is
         // one line; read-only queries keep the origin-only guard via `rejectCrossOrigin`.
-        const configuredToken = readSecret(storeRef, safeStorage, 'feedToken').trim();
+        const { token: enforcedToken, requiredMode: lanAuthRequired } = enforcedFeedToken(storeRef);
+        const bearerOk = (): boolean => {
+          // 'required' with no token means the boot mint has not run or failed —
+          // refuse rather than silently open the surface (fail-closed).
+          if (lanAuthRequired && !enforcedToken) return false;
+          return feedTokenAuthorised(enforcedToken, req.headers.authorization);
+        };
         const rejectCrossOrigin = (crossOriginError: string): boolean => {
           if (!isSafeClientOrigin()) {
             res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -2696,7 +2771,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         };
         const rejectUnauthorisedMutation = (crossOriginError: string): boolean => {
           if (rejectCrossOrigin(crossOriginError)) return true;
-          if (!feedTokenAuthorised(configuredToken, req.headers.authorization)) {
+          if (!bearerOk()) {
             res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ success: false, error: 'Unauthorised — a valid feed token is required' }));
             return true;
@@ -2704,13 +2779,13 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           return false;
         };
         // Telemetry-bearing reads get the same gate `/v1/events` always had: origin, plus
-        // the token when one is configured. Paired clients (mobile, HA, extension) send
-        // the bearer on every request, so this changes nothing for them — but an
-        // arbitrary web page can no longer `fetch` browsing-derived telemetry thanks to
-        // the blanket `Access-Control-Allow-Origin: *` above.
+        // the token when one is configured (or 'required' mode demands it). Paired clients
+        // (mobile, HA, extension) send the bearer on every request, so this changes nothing
+        // for them — but an arbitrary web page can no longer `fetch` browsing-derived
+        // telemetry thanks to the blanket `Access-Control-Allow-Origin: *` above.
         const rejectUnauthorisedRead = (crossOriginError: string): boolean => {
           if (rejectCrossOrigin(crossOriginError)) return true;
-          if (configuredToken && !feedTokenAuthorised(configuredToken, req.headers.authorization)) {
+          if ((lanAuthRequired || enforcedToken) && !bearerOk()) {
             res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ success: false, error: 'Unauthorised — a valid feed token is required' }));
             return true;
@@ -3404,10 +3479,13 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
         // can discover the hub without an address. Best-effort: a publish failure
         // must not fail the listen.
         feedMdnsHandle?.stop();
+        const enforced = enforcedFeedToken(storeRef);
         feedMdnsHandle = advertiseFeedServer({
           port: feedServerPort,
           version: typeof app?.getVersion === 'function' ? app.getVersion() : '0.0.0',
-          tokenRequired: readSecret(storeRef, safeStorage, 'feedToken').trim().length > 0,
+          // What clients actually need to send: required mode, or a configured
+          // token in the legacy/open-token posture — suppressed in 'open' mode.
+          tokenRequired: enforced.requiredMode || enforced.token.length > 0,
         });
         resolve(getFeedServerStatus());
       });
@@ -3562,10 +3640,6 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       return sources;
     });
 
-    ipcMain.handle('get-filter-sources', async (_event: IpcMainInvokeEvent) => {
-      return store.get('filterSources') || [];
-    });
-
     ipcMain.handle(
       'save-sources',
       async (_event: IpcMainInvokeEvent, sources: FilterSource[]) => {
@@ -3578,22 +3652,6 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           return { success: true };
         } catch (error) {
           console.error('[IPC Main] Error saving sources:', error);
-          const message =
-            error instanceof Error ? error.message : String(error);
-          return { success: false, error: message };
-        }
-      }
-    );
-
-    ipcMain.handle(
-      'set-filter-sources',
-      async (_event: IpcMainInvokeEvent, sources: FilterSource[]) => {
-        try {
-          const parsed = sanitizeFilterSources(sources);
-          if (!parsed.ok) return { success: false, error: parsed.error };
-          store.set('filterSources', parsed.value);
-          return { success: true };
-        } catch (error) {
           const message =
             error instanceof Error ? error.message : String(error);
           return { success: false, error: message };
@@ -4636,10 +4694,37 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     // Whether a token is configured is returned alongside — the settings card needs to render
     // "required" or "optional" before the user types anything, and a blank read cannot show that.
+    // `mode` is the LAN auth posture: 'required' (new-install secured default or explicit opt-in),
+    // 'open' (explicit compatibility), or 'legacy' (unset — the pre-mode posture, which enforces
+    // a token only when one happens to be configured).
     ipcMain.handle('get-feed-token', async () => {
       const token = readSecret(store, safeStorage, 'feedToken').trim();
+      const mode = store.get('lanAuthMode');
       // Presence only — the token is write-only like the sinkhole credentials.
-      return { configured: token.length > 0 };
+      return { configured: token.length > 0, mode: mode ?? 'legacy' };
+    });
+
+    /**
+     * The LAN authentication posture. 'required' mints a token when none exists
+     * (a secured install must never sit one bad store-read away from fail-open);
+     * 'open' is the explicit compatibility opt-out — a stored token is still
+     * honoured when sent but never required.
+     */
+    ipcMain.handle('set-lan-auth-mode', async (_event, mode: unknown) => {
+      try {
+        if (mode !== 'required' && mode !== 'open') {
+          return { success: false, error: 'Mode must be "required" or "open"' };
+        }
+        store.set('lanAuthMode', mode);
+        let minted = false;
+        if (mode === 'required' && !readSecret(store, safeStorage, 'feedToken').trim()) {
+          mintFeedToken(store);
+          minted = true;
+        }
+        return { success: true, mode, tokenMinted: minted };
+      } catch (err: any) {
+        return { success: false, error: err?.message || String(err) };
+      }
     });
 
     ipcMain.handle('set-feed-token', async (_event, token: unknown) => {
@@ -4685,6 +4770,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     ipcMain.handle('clear-feed-token', async () => {
       try {
+        // In 'required' mode the surface must never sit without a credential —
+        // "clear" is really "rotate": mint a fresh token rather than leave the
+        // gates fail-closed (or the user without a pairing path). Explicit
+        // compatibility is the 'open' mode switch, not token deletion.
+        if (store.get('lanAuthMode') === 'required') {
+          mintFeedToken(store);
+          return { success: true, rotated: true };
+        }
         writeSecret(store, safeStorage, 'feedToken', '');
         return { success: true };
       } catch (err: any) {
@@ -4963,6 +5056,31 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     ipcMain.handle('get-app-version', async () => {
       return app.getVersion();
+    });
+
+    // Update check: compares the running version against the newest published
+    // GitHub release. There is no in-app downloader — an available update is
+    // surfaced so the user can open the release page themselves.
+    // `/releases/latest` is deliberately not used: it 404s while every release
+    // is a prerelease, which is exactly the track this project ships on.
+    ipcMain.handle('check-for-updates', async () => {
+      try {
+        const list = (await fetchGitHubJson(`${GITHUB_RELEASES_API}?per_page=10`)) as GitHubRelease[];
+        const rel = list.find((r) => !r.draft);
+        const latest = (rel?.tag_name ?? '').replace(/^v/, '');
+        if (!latest) {
+          return { ok: false as const, current: app.getVersion(), error: 'Release check returned no version' };
+        }
+        return {
+          ok: true as const,
+          current: app.getVersion(),
+          latest,
+          updateAvailable: compareVersions(latest, app.getVersion()) > 0,
+          url: rel?.html_url ?? 'https://github.com/Greigh/Blockingmachine/releases/latest',
+        };
+      } catch (error) {
+        return { ok: false as const, current: app.getVersion(), error: error instanceof Error ? error.message : String(error) };
+      }
     });
 
     ipcMain.handle('get-theme', async (): Promise<ThemeType> => {
@@ -6219,6 +6337,23 @@ async function initialize() {
       }
     } catch (err) {
       console.warn('[Reputation DB] Initial refresh failed:', err);
+    }
+
+    // LAN auth posture — resolved once, here, so every later read sees the
+    // persisted decision. A genuinely new install (no prior config file or
+    // output dir — `installHadPriorState` was captured at store construction)
+    // gets secured-by-default; an existing install keeps whatever it had, and
+    // an explicit 'open'/'required' choice is honoured forever after.
+    if (!installHadPriorState && !store.get('lanAuthMode')) {
+      store.set('lanAuthMode', 'required');
+      console.log('[Feed Server] New install — LAN mutations are token-authenticated by default (Settings → Local Feed Server).');
+    }
+    if (store.get('lanAuthMode') === 'required' && !readSecret(store, safeStorage, 'feedToken').trim()) {
+      // Mint-on-demand covers the secured first boot, a wiped config on a
+      // secured install, and the upgrade path where a legacy install opted in.
+      // The token itself is never logged — Settings shows it on demand.
+      mintFeedToken(store);
+      console.log('[Feed Server] Generated a feed token for the required LAN auth mode.');
     }
 
     // Auto-start local HTTP feed server if enabled in settings

@@ -200,7 +200,7 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
       >
         <div className="bulk-header-row">
           <div>
-            <h3 className="card-section-title">Paste or Drop Filter Feed URLs</h3>
+            <h2 className="card-section-title">Paste or Drop Filter Feed URLs</h2>
             <p className="card-section-subtitle">
               Enter one filter list URL per line, or drag and drop a <code>.txt</code> or <code>.json</code> file.
               Duplicate URLs are automatically detected and skipped.
@@ -277,7 +277,7 @@ export const BulkImportView: React.FC<BulkImportViewProps> = ({
       <div className="desktop-card bulk-quick-templates-card">
         <div className="bulk-templates-header">
           <div>
-            <h4 className="bulk-templates-title">Quick-Insert Well-Known Feeds</h4>
+            <h3 className="bulk-templates-title">Quick-Insert Well-Known Feeds</h3>
             <span className="bulk-templates-sub">Click to append popular filter lists directly into your import queue</span>
           </div>
           <div className="engine-feature-pills">

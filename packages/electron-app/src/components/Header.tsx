@@ -4,12 +4,16 @@ interface HeaderProps {
   currentView: string;
   savePath: string;
   handleRevealOutputFolder: () => void;
+  navOpen?: boolean;
+  onOpenNav?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   currentView,
   savePath,
   handleRevealOutputFolder,
+  navOpen,
+  onOpenNav,
 }) => {
   const getHeaderMeta = () => {
     switch (currentView) {
@@ -92,6 +96,27 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="main-header">
       <div className="header-left">
+        {onOpenNav && (
+          <button
+            type="button"
+            className="nav-menu-btn"
+            onClick={onOpenNav}
+            aria-label="Open navigation"
+            aria-expanded={Boolean(navOpen)}
+            aria-controls="app-sidebar-nav"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+            </svg>
+          </button>
+        )}
         <div className="header-category-breadcrumb">{category}</div>
         <h1 className="view-title">
           {title}

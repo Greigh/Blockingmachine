@@ -55,7 +55,7 @@ export const ShadowrocketPane: React.FC<ShadowrocketPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📱</span>
             <div>
-              <h3 className="deploy-pane-title">Shadowrocket Rule Set Feed</h3>
+              <h2 className="deploy-pane-title">Shadowrocket Rule Set Feed</h2>
               <p className="deploy-pane-subtitle">iPhone, iPad, Apple-silicon Mac — and Surge</p>
             </div>
           </div>
@@ -117,7 +117,7 @@ export const ShadowrocketPane: React.FC<ShadowrocketPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📋</span>
             <div>
-              <h3 className="deploy-pane-title">Shadowrocket Setup Recipe</h3>
+              <h2 className="deploy-pane-title">Shadowrocket Setup Recipe</h2>
               <p className="deploy-pane-subtitle">Serve it here, subscribe on the device</p>
             </div>
           </div>
@@ -128,7 +128,7 @@ export const ShadowrocketPane: React.FC<ShadowrocketPaneProps> = ({
             <div className="stepper-step" key={step.id}>
               <div className="stepper-num">{index + 1}</div>
               <div className="stepper-content">
-                <h4>{step.title}</h4>
+                <h3>{step.title}</h3>
                 <p>
                   {step.detail}
                   {step.id === 'subscribe' && (

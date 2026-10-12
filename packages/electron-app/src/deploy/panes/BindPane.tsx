@@ -67,7 +67,7 @@ export const BindPane: React.FC<BindPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">🗄️</span>
             <div>
-              <h3 className="deploy-pane-title">BIND Response Policy Zone</h3>
+              <h2 className="deploy-pane-title">BIND Response Policy Zone</h2>
               <p className="deploy-pane-subtitle">named 9.8 and later, on Linux and BSD</p>
               <div className="deploy-actions-row" style={{ marginTop: 8 }}>
                 {BIND_MECHANISMS.map((option) => (
@@ -196,7 +196,7 @@ export const BindPane: React.FC<BindPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📋</span>
             <div>
-              <h3 className="deploy-pane-title">BIND Setup Recipe</h3>
+              <h2 className="deploy-pane-title">BIND Setup Recipe</h2>
               <p className="deploy-pane-subtitle">Local zone file, then a reload per compile</p>
             </div>
           </div>
@@ -207,7 +207,7 @@ export const BindPane: React.FC<BindPaneProps> = ({
             <div className="stepper-step" key={step.id}>
               <div className="stepper-num">{index + 1}</div>
               <div className="stepper-content">
-                <h4>{step.title}</h4>
+                <h3>{step.title}</h3>
                 <p>
                   {step.detail}
                   {step.id === 'namedconf' && (bindMechanism === 'rpz' ? (

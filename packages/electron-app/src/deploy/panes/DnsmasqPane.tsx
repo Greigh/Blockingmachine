@@ -55,7 +55,7 @@ export const DnsmasqPane: React.FC<DnsmasqPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">🌐</span>
             <div>
-              <h3 className="deploy-pane-title">Network DNS Stream URL</h3>
+              <h2 className="deploy-pane-title">Network DNS Stream URL</h2>
               <p className="deploy-pane-subtitle">Technitium, dnsmasq, pfSense, OPNsense</p>
             </div>
           </div>
@@ -95,7 +95,7 @@ export const DnsmasqPane: React.FC<DnsmasqPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📋</span>
             <div>
-              <h3 className="deploy-pane-title">Router Setup Recipes</h3>
+              <h2 className="deploy-pane-title">Router Setup Recipes</h2>
               <p className="deploy-pane-subtitle">A subscription, or a fetch into a hosts file</p>
             </div>
           </div>
@@ -106,7 +106,7 @@ export const DnsmasqPane: React.FC<DnsmasqPaneProps> = ({
             <div className="stepper-step" key={step.id}>
               <div className="stepper-num">{index + 1}</div>
               <div className="stepper-content">
-                <h4>{step.title}</h4>
+                <h3>{step.title}</h3>
                 <p>
                   {step.detail}
                   {step.id === 'openwrt' && (

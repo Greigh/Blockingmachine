@@ -74,7 +74,7 @@ export const SystemDaemonPane: React.FC<SystemDaemonPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">🖥️</span>
             <div>
-              <h3 className="deploy-pane-title">Local DNS Filtering Proxy</h3>
+              <h2 className="deploy-pane-title">Local DNS Filtering Proxy</h2>
               <p className="deploy-pane-subtitle">
                 Zero-latency, on-device loopback filtering for all system apps and network traffic
               </p>
@@ -195,8 +195,9 @@ export const SystemDaemonPane: React.FC<SystemDaemonPaneProps> = ({
             </p>
 
             <div className="deploy-field-group" style={{ marginBottom: '10px' }}>
-              <label className="deploy-field-label">Network Interface:</label>
+              <label htmlFor="daemonNetworkService" className="deploy-field-label">Network Interface:</label>
               <select
+                id="daemonNetworkService"
                 className="deploy-field-input"
                 value={selectedService}
                 onChange={(e) => setSelectedService(e.target.value)}
@@ -251,7 +252,7 @@ export const SystemDaemonPane: React.FC<SystemDaemonPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📊</span>
             <div>
-              <h3 className="deploy-pane-title">DNS Telemetry &amp; Service Setup</h3>
+              <h2 className="deploy-pane-title">DNS Telemetry &amp; Service Setup</h2>
               <p className="deploy-pane-subtitle">
                 Live loopback traffic metrics and OS background daemon configuration
               </p>
@@ -297,9 +298,9 @@ export const SystemDaemonPane: React.FC<SystemDaemonPaneProps> = ({
           {/* OS Background Service Installation */}
           <div className="deploy-instructions-box" style={{ marginTop: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h4 className="deploy-instructions-title" style={{ margin: 0 }}>
+              <h3 className="deploy-instructions-title" style={{ margin: 0 }}>
                 Install as OS Background Service (Port 53)
-              </h4>
+              </h3>
               <button
                 type="button"
                 className="deploy-tool-btn"

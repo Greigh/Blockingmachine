@@ -108,7 +108,7 @@ export const CustomRulesView: React.FC<CustomRulesViewProps> = ({
       <div className="desktop-card">
         <div className="rules-header-row">
           <div>
-            <h3 className="card-section-title">Author Custom Rules</h3>
+            <h2 className="card-section-title">Author Custom Rules</h2>
             <p className="card-section-subtitle">
               Add your own local overrides, whitelist exceptions, or custom network blocks. Custom rules always take priority over remote feeds.
             </p>
@@ -210,7 +210,7 @@ export const CustomRulesView: React.FC<CustomRulesViewProps> = ({
       {/* Syntax Quick Reference Card */}
       <div className="desktop-card syntax-ref-card">
         <div className="syntax-header-row">
-          <h4 className="syntax-card-title">Adblock & DNS Syntax Reference</h4>
+          <h3 className="syntax-card-title">Adblock & DNS Syntax Reference</h3>
           <span className="syntax-card-sub">Click any template to append to your rules</span>
         </div>
         <div className="syntax-grid">

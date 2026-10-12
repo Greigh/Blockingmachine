@@ -411,6 +411,17 @@ export interface StoreSchema {
    */
   feedToken?: string;
   /**
+   * The LAN authentication posture, once a decision has been taken.
+   *
+   * `undefined` is the legacy posture — "token enforced when configured" — and is only
+   * ever left in place on installs that predate this key. `'required'` means a feed
+   * token must exist (one is minted at first secured boot) and every mutation and
+   * telemetry-bearing read demands its bearer. `'open'` is the explicit
+   * compatibility mode: a stored token is still honoured when sent but never
+   * required, even while present.
+   */
+  lanAuthMode?: 'required' | 'open';
+  /**
    * What each deploy target's scheduled refresh has reported back, keyed by target id
    * (`unbound`, `bind`, …). The refresh command in the recipe POSTs its result to
    * `/v1/deploy-report`; this record is what survives the window where the hub was closed,
@@ -478,9 +489,6 @@ export interface ElectronAPI {
   setTheme: (theme: ThemeType) => Promise<{ success: boolean; error?: string }>;
   getSources: () => Promise<FilterSource[]>;
   saveSources: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
-  getFilterSources?: () => Promise<FilterSource[]>;
-  setFilterSources?: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
-  setSources?: (sources: FilterSource[]) => Promise<{ success: boolean; error?: string }>;
   getCustomRules: () => Promise<string>;
   setCustomRules: (rules: string) => Promise<{ success: boolean; error?: string }>;
   getExportFormat: () => Promise<FilterFormat>;
@@ -620,12 +628,17 @@ export interface ElectronAPI {
   receive?: (channel: string, func: (...args: any[]) => void) => (() => void) | void;
   removeAllListeners?: (channel: string) => void;
   getAppVersion?: () => Promise<string>;
+  checkForUpdates?: () => Promise<
+    | { ok: true; current: string; latest: string; updateAvailable: boolean; url: string }
+    | { ok: false; current: string; error: string }
+  >;
   getAutoStartFeedServer?: () => Promise<boolean>;
   setAutoStartFeedServer?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
-  getFeedToken?: () => Promise<{ configured: boolean }>;
+  getFeedToken?: () => Promise<{ configured: boolean; mode: 'required' | 'open' | 'legacy' }>;
   setFeedToken?: (token: string) => Promise<{ success: boolean; unchanged?: boolean; error?: string }>;
   generateFeedToken?: () => Promise<{ success: boolean; token?: string; error?: string }>;
-  clearFeedToken?: () => Promise<{ success: boolean; error?: string }>;
+  clearFeedToken?: () => Promise<{ success: boolean; rotated?: boolean; error?: string }>;
+  setLanAuthMode?: (mode: 'required' | 'open') => Promise<{ success: boolean; mode?: string; tokenMinted?: boolean; error?: string }>;
   getFeedPairingPayload?: () => Promise<{
     success: boolean;
     running: boolean;

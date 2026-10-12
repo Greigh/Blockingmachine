@@ -31,7 +31,7 @@ export const HostsPane: React.FC<HostsPaneProps> = ({ handleCopy, copiedKey, sav
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📄</span>
             <div>
-              <h3 className="deploy-pane-title">System /etc/hosts Export</h3>
+              <h2 className="deploy-pane-title">System /etc/hosts Export</h2>
               <p className="deploy-pane-subtitle">Apply DNS sinkhole directly to local machine OS</p>
             </div>
           </div>
@@ -74,7 +74,7 @@ export const HostsPane: React.FC<HostsPaneProps> = ({ handleCopy, copiedKey, sav
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">⚙️</span>
             <div>
-              <h3 className="deploy-pane-title">Manual Installation</h3>
+              <h2 className="deploy-pane-title">Manual Installation</h2>
               <p className="deploy-pane-subtitle">Safe application instructions</p>
             </div>
           </div>
@@ -84,7 +84,7 @@ export const HostsPane: React.FC<HostsPaneProps> = ({ handleCopy, copiedKey, sav
           <div className="stepper-step">
             <div className="stepper-num">1</div>
             <div className="stepper-content">
-              <h4>Backup Existing Hosts File</h4>
+              <h3>Backup Existing Hosts File</h3>
               <p>In Terminal: <code>sudo cp /etc/hosts /etc/hosts.bak</code></p>
             </div>
           </div>
@@ -92,7 +92,7 @@ export const HostsPane: React.FC<HostsPaneProps> = ({ handleCopy, copiedKey, sav
           <div className="stepper-step">
             <div className="stepper-num">2</div>
             <div className="stepper-content">
-              <h4>Overwrite or Append</h4>
+              <h3>Overwrite or Append</h3>
               <p>Copy compiled output over <code>/etc/hosts</code> using the command on the left.</p>
             </div>
           </div>
@@ -100,7 +100,7 @@ export const HostsPane: React.FC<HostsPaneProps> = ({ handleCopy, copiedKey, sav
           <div className="stepper-step">
             <div className="stepper-num">3</div>
             <div className="stepper-content">
-              <h4>Flush DNS Cache</h4>
+              <h3>Flush DNS Cache</h3>
               <p>
                 macOS: <code>sudo killall -HUP mDNSResponder</code>. Linux has no system DNS cache
                 to flush — where <code>systemd-resolved</code> runs it is{' '}

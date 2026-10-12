@@ -70,6 +70,31 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, []);
 
+  type UpdateCheck =
+    | { status: 'idle' }
+    | { status: 'checking' }
+    | { status: 'latest'; latest: string }
+    | { status: 'available'; latest: string; url: string }
+    | { status: 'error'; message: string };
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheck>({ status: 'idle' });
+
+  const runUpdateCheck = async () => {
+    if (!window.electron?.checkForUpdates) return;
+    setUpdateCheck({ status: 'checking' });
+    try {
+      const res = await window.electron.checkForUpdates();
+      if (!res.ok) {
+        setUpdateCheck({ status: 'error', message: res.error });
+      } else if (res.updateAvailable) {
+        setUpdateCheck({ status: 'available', latest: res.latest, url: res.url });
+      } else {
+        setUpdateCheck({ status: 'latest', latest: res.latest });
+      }
+    } catch (err) {
+      setUpdateCheck({ status: 'error', message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
   // Existing state variables
   const [exportFormat, setExportFormat] = useState('');
   const [isLoadingFormat, setIsLoadingFormat] = useState(true);
@@ -146,6 +171,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [startupMessage, setStartupMessage] = useState('');
   const [feedToken, setFeedToken] = useState('');
   const [feedTokenConfigured, setFeedTokenConfigured] = useState(false);
+  const [lanAuthMode, setLanAuthMode] = useState<'required' | 'open' | 'legacy'>('legacy');
   const [feedTokenMessage, setFeedTokenMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [generatedFeedToken, setGeneratedFeedToken] = useState('');
   const [pairingPayload, setPairingPayload] = useState<{ url: string; payload: string; running: boolean; tokenConfigured: boolean } | null>(null);
@@ -216,11 +242,12 @@ const Settings: React.FC<SettingsProps> = ({
 
     window.electron.getSinkholeConfig().then((cfg) => {
       if (isMounted && cfg) {
-        setSinkholeConfig({
+        setSinkholeConfig((prev) => ({
+          ...prev,
           ...cfg,
           adguardDirectPort: normalizeAdguardDirectPort(cfg.adguardDirectPort),
           allowInsecureLocalTls: Boolean(cfg.allowInsecureLocalTls),
-        });
+        }));
         if (typeof cfg.encryptionAvailable === 'boolean') setSecretStorageAvailable(cfg.encryptionAvailable);
       }
     }).catch(console.error);
@@ -228,7 +255,7 @@ const Settings: React.FC<SettingsProps> = ({
     if (window.electron?.getAiConfig) {
       window.electron.getAiConfig().then((cfg) => {
         if (isMounted && cfg) {
-          setAiConfig(cfg);
+          setAiConfig((prev) => ({ ...prev, ...cfg }));
           if (typeof cfg.encryptionAvailable === 'boolean') setSecretStorageAvailable(cfg.encryptionAvailable);
         }
       }).catch(console.error);
@@ -236,7 +263,7 @@ const Settings: React.FC<SettingsProps> = ({
 
     if (window.electron?.getAiWatchdogConfig) {
       window.electron.getAiWatchdogConfig().then((wCfg) => {
-        if (isMounted && wCfg) setWatchdogConfig(wCfg);
+        if (isMounted && wCfg) setWatchdogConfig((prev) => ({ ...prev, ...wCfg }));
       }).catch(console.error);
     }
 
@@ -248,7 +275,7 @@ const Settings: React.FC<SettingsProps> = ({
 
     if (window.electron?.getRadarDisplayConfig) {
       window.electron.getRadarDisplayConfig().then((cfg) => {
-        if (isMounted && cfg) setRadarDisplayConfig(cfg);
+        if (isMounted && cfg) setRadarDisplayConfig((prev) => ({ ...prev, ...cfg }));
       }).catch(console.error);
     }
 
@@ -267,7 +294,10 @@ const Settings: React.FC<SettingsProps> = ({
     if (window.electron?.getFeedToken) {
       window.electron.getFeedToken().then((res) => {
         // Write-only like the sinkhole secrets — presence flag, never the value.
-        if (isMounted && res) setFeedTokenConfigured(res.configured);
+        if (isMounted && res) {
+          setFeedTokenConfigured(res.configured);
+          setLanAuthMode(res.mode ?? 'legacy');
+        }
       }).catch(console.error);
     }
 
@@ -333,15 +363,43 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
+  const handleSetLanAuthMode = async (mode: 'required' | 'open') => {
+    if (!window.electron?.setLanAuthMode) return;
+    try {
+      const res = await window.electron.setLanAuthMode(mode);
+      if (res?.success) {
+        setLanAuthMode(mode);
+        if (res.tokenMinted) setFeedTokenConfigured(true);
+        setFeedTokenMessage({
+          text: mode === 'required'
+            ? 'Required mode on — every LAN mutation and telemetry read now needs Authorization: Bearer'
+            : 'Compatibility mode on — a token is still honoured when sent, but never required',
+          type: 'success',
+        });
+      } else {
+        setFeedTokenMessage({ text: res?.error || 'Failed to set LAN auth mode', type: 'error' });
+      }
+      safeSetTimeout(() => setFeedTokenMessage(null), 4000);
+    } catch {
+      setFeedTokenMessage({ text: 'Failed to set LAN auth mode', type: 'error' });
+    }
+  };
+
   const handleClearFeedToken = async () => {
     if (!window.electron?.clearFeedToken) return;
     try {
       const res = await window.electron.clearFeedToken();
       if (res?.success) {
-        setFeedTokenConfigured(false);
+        if (res.rotated) {
+          // Required mode: "clear" is a rotation — the surface never sits without a credential.
+          setFeedTokenConfigured(true);
+          setGeneratedFeedToken('');
+          setFeedTokenMessage({ text: 'Feed token rotated — clients need the new token (show the pairing QR to re-pair)', type: 'success' });
+        } else {
+          setFeedTokenConfigured(false);
+          setFeedTokenMessage({ text: 'Feed token cleared — mutations are guarded by origin only', type: 'success' });
+        }
         setFeedToken('');
-        setGeneratedFeedToken('');
-        setFeedTokenMessage({ text: 'Feed token cleared — mutations are guarded by origin only', type: 'success' });
       } else {
         setFeedTokenMessage({ text: res?.error || 'Failed to clear feed token', type: 'error' });
       }
@@ -694,18 +752,29 @@ const Settings: React.FC<SettingsProps> = ({
 
   return (
     <div className="settings-container">
+      <nav className="settings-index" aria-label="Settings sections">
+        <a href="#settings-appearance">Appearance</a>
+        <a href="#settings-export">Export Format</a>
+        <a href="#settings-location">Save Location</a>
+        <a href="#settings-automation">Automation</a>
+        <a href="#settings-startup">Startup & Services</a>
+        <a href="#settings-network">Network & Pairing</a>
+        <a href="#settings-ai">AI Engine</a>
+        <a href="#about-community">About & Updates</a>
+        <a href="#settings-tour">Tour</a>
+      </nav>
       <div className="settings-grid">
         {/* Onboarding & Guide Setting Card */}
-        <div className="setting-card">
+        <div className="setting-card" id="settings-tour">
           <div className="setting-card-header">
-            <h3>
+            <h2>
               <span className="setting-icon-svg">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
                 </svg>
               </span>
               Welcome & Onboarding Tour
-            </h3>
+            </h2>
             <span className="setting-badge">Guide</span>
           </div>
           <p>
@@ -725,44 +794,53 @@ const Settings: React.FC<SettingsProps> = ({
         </div>
 
         {/* Theme Setting */}
-        <div className="setting-card">
+        <div className="setting-card" id="settings-appearance">
           <div className="setting-card-header">
-            <h3>
+            <h2>
               <span className="setting-icon-svg">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.098 19.902a3.75 3.75 0 005.304 0l6.401-6.402M6.75 21A3.75 3.75 0 013 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 003.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008z" />
                 </svg>
               </span>
               Theme Appearance
-            </h3>
+            </h2>
             <span className="setting-badge secondary">Display</span>
           </div>
           <p>Choose how Blockingmachine appears on your system</p>
 
-          <div className="theme-preview-container">
-            <div
+          <div className="theme-preview-container" role="radiogroup" aria-label="Theme appearance">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={currentTheme === 'light'}
               className={`theme-preview theme-preview-light ${currentTheme === 'light' ? 'selected' : ''}`}
               onClick={() => onThemeChange('light')}
             >
               <div className="theme-preview-label">Light</div>
-            </div>
-            <div
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={currentTheme === 'dark'}
               className={`theme-preview theme-preview-dark ${currentTheme === 'dark' ? 'selected' : ''}`}
               onClick={() => onThemeChange('dark')}
             >
               <div className="theme-preview-label">Dark</div>
-            </div>
-            <div
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={currentTheme === 'system'}
               className={`theme-preview theme-preview-system ${currentTheme === 'system' ? 'selected' : ''}`}
               onClick={() => onThemeChange('system')}
             >
               <div className="theme-preview-label">System</div>
-            </div>
+            </button>
           </div>
 
           {/* Accent Color Palette Customizer */}
           <div className="accent-palette-section">
-            <h4 className="accent-palette-title">Accent Color Palette</h4>
+            <h3 className="accent-palette-title">Accent Color Palette</h3>
             <p className="accent-palette-subtitle">
               Choose an accent tint to customize highlights, active controls, and focus glows.
             </p>
@@ -787,16 +865,16 @@ const Settings: React.FC<SettingsProps> = ({
         </div>
 
         {/* Export Format Setting */}
-        <div className="setting-card">
+        <div className="setting-card" id="settings-export">
           <div className="setting-card-header">
-            <h3>
+            <h2>
               <span className="setting-icon-svg">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
                 </svg>
               </span>
               Default Export Format
-            </h3>
+            </h2>
             <span className="setting-badge secondary">Output</span>
           </div>
           <p>Select how rules and modifiers are formatted during compilation</p>
@@ -811,6 +889,7 @@ const Settings: React.FC<SettingsProps> = ({
               <div className="select-container">
                 <select
                   className="styled-select"
+                  aria-label="Default export format"
                   value={exportFormat}
                   onChange={handleFormatChange}
                   disabled={isSavingFormat}
@@ -830,7 +909,7 @@ const Settings: React.FC<SettingsProps> = ({
               </div>
 
               {formatMessage.text && (
-                <div className={`setting-message ${formatMessage.type}`}>
+                <div className={`setting-message ${formatMessage.type}`} role={formatMessage.type === 'error' ? 'alert' : 'status'}>
                   {formatMessage.text}
                 </div>
               )}
@@ -875,16 +954,16 @@ const Settings: React.FC<SettingsProps> = ({
         </div>
 
         {/* Save Path Setting */}
-        <div className="setting-card">
+        <div className="setting-card" id="settings-location">
           <div className="setting-card-header">
-            <h3>
+            <h2>
               <span className="setting-icon-svg">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.227 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
                 </svg>
               </span>
               Save Location
-            </h3>
+            </h2>
             <span className="setting-badge primary">File System</span>
           </div>
           <p>Choose where to save generated filter lists and export logs</p>
@@ -923,7 +1002,7 @@ const Settings: React.FC<SettingsProps> = ({
                 )}
               </div>
 
-              {pathMessage && <p className="setting-message success">{pathMessage}</p>}
+              {pathMessage && <p className="setting-message success" role="status">{pathMessage}</p>}
 
               <p className="setting-help-text">
                 Output files (<code className="inline-code">hosts.txt</code>, <code className="inline-code">adguard.txt</code>, <code className="inline-code">dnsmasq.txt</code>) are written directly to this directory.
@@ -933,24 +1012,25 @@ const Settings: React.FC<SettingsProps> = ({
         </div>
 
         {/* Automation & Background Scheduling */}
-        <div className="setting-card">
+        <div className="setting-card" id="settings-automation">
           <div className="setting-card-header">
-            <h3>
+            <h2>
               <span className="setting-icon-svg">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </span>
               Automation & Scheduling
-            </h3>
+            </h2>
             <span className="setting-badge secondary">Background Tasks</span>
           </div>
           <p>Keep your network blocklists up-to-date automatically</p>
 
           <div className="setting-control-group">
-            <label className="setting-label">Automatic Compilation Schedule</label>
+            <label htmlFor="autoSchedule" className="setting-label">Automatic Compilation Schedule</label>
             <div className="select-container">
               <select
+                id="autoSchedule"
                 className="setting-select"
                 value={autoSchedule}
                 onChange={handleScheduleChange}
@@ -984,7 +1064,7 @@ const Settings: React.FC<SettingsProps> = ({
                 {isSavingWebhook ? 'Saving…' : 'Save'}
               </button>
             </div>
-            {webhookMessage && <p className="setting-message success">{webhookMessage}</p>}
+            {webhookMessage && <p className="setting-message success" role="status">{webhookMessage}</p>}
             <p className="setting-help-text">
               Sends an HTTP POST payload with compilation statistics whenever blocklists are updated, allowing Pi-hole, AdGuard Home, or DNS servers to reload automatically.
             </p>
@@ -992,16 +1072,16 @@ const Settings: React.FC<SettingsProps> = ({
         </div>
 
         {/* Startup & Background Services Card */}
-        <div className="setting-card">
+        <div className="setting-card" id="settings-startup">
           <div className="setting-card-header">
-            <h3>
+            <h2>
               <span className="setting-icon-svg">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </span>
               Startup & Background Services
-            </h3>
+            </h2>
             <span className="setting-badge">System</span>
           </div>
 
@@ -1037,14 +1117,36 @@ const Settings: React.FC<SettingsProps> = ({
             </label>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Feed Mutation Token (optional)</span>
-              <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
-                The feed server listens on every LAN interface and its read endpoints are open by design. Control calls
-                (/v1/control, /v1/compile, telemetry) are guarded by request origin only — a client that sends no Origin
-                header is trusted, which suits a LAN you control. Set a token and every mutation must present
-                <code> Authorization: Bearer</code> — the boundary for a LAN you do not fully trust.
-                {feedTokenConfigured ? ' A token is currently required.' : ' No token is currently required.'}
+              <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>
+                LAN Authentication{' '}
+                {lanAuthMode === 'required'
+                  ? '(required — secured default)'
+                  : lanAuthMode === 'open'
+                    ? '(explicit compatibility mode)'
+                    : '(legacy posture)'}
               </span>
+              <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                {lanAuthMode === 'required'
+                  ? 'Secured default: every LAN mutation and telemetry read requires Authorization: Bearer, and this install has a generated token. Native clients pair via QR below; use compatibility mode only on a LAN you fully trust.'
+                  : lanAuthMode === 'open'
+                    ? 'Compatibility mode: a stored token is honoured when sent but never required — mutations and reads rely on the origin guard alone.'
+                    : 'Legacy posture: a token is enforced only while one is configured. New installs default to required; migrate to get the same behaviour here.'}
+                {feedTokenConfigured ? ' A token is currently configured.' : ''}
+              </span>
+              {(lanAuthMode === 'legacy' || lanAuthMode === 'open') && (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '2px' }}>
+                  <button type="button" className="browse-button secondary" onClick={() => void handleSetLanAuthMode('required')}>
+                    {lanAuthMode === 'legacy' ? 'Migrate to required (recommended)' : 'Re-enable required auth'}
+                  </button>
+                </div>
+              )}
+              {lanAuthMode === 'required' && (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '2px' }}>
+                  <button type="button" className="browse-button secondary" onClick={() => void handleSetLanAuthMode('open')}>
+                    Compatibility mode (no token required)
+                  </button>
+                </div>
+              )}
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <input
                   type="password"
@@ -1063,7 +1165,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </button>
                 {feedTokenConfigured && (
                   <button type="button" className="browse-button secondary" onClick={() => void handleClearFeedToken()}>
-                    Clear
+                    {lanAuthMode === 'required' ? 'Rotate' : 'Clear'}
                   </button>
                 )}
               </div>
@@ -1080,7 +1182,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               )}
               {feedTokenMessage && (
-                <p className={`setting-message ${feedTokenMessage.type}`} style={{ marginTop: '2px' }}>
+                <p className={`setting-message ${feedTokenMessage.type}`} role={feedTokenMessage.type === 'error' ? 'alert' : 'status'} style={{ marginTop: '2px' }}>
                   {feedTokenMessage.text}
                 </p>
               )}
@@ -1102,7 +1204,7 @@ const Settings: React.FC<SettingsProps> = ({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
                   {!pairingPayload.running && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <p className="setting-message error" style={{ marginTop: '2px' }}>
+                      <p className="setting-message error" role="alert" style={{ marginTop: '2px' }}>
                         The feed server is not running — the app can't reach this Mac until it is.
                       </p>
                       <div>
@@ -1134,26 +1236,26 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           </div>
 
-          {startupMessage && <p className="setting-message success" style={{ marginTop: '10px' }}>{startupMessage}</p>}
+          {startupMessage && <p className="setting-message success" role="status" style={{ marginTop: '10px' }}>{startupMessage}</p>}
         </div>
 
         {/* Network Sinkholes & DNS Integration Card */}
-        <div className="setting-card">
+        <div className="setting-card" id="settings-network">
           <div className="setting-card-header">
-            <h3>
+            <h2>
               <span className="setting-icon-svg">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-.778.099-1.533.284-2.253" />
                 </svg>
               </span>
               Network Sinkholes (Pi-hole & AdGuard Home)
-            </h3>
+            </h2>
             <span className="setting-badge primary">DNS Sync</span>
           </div>
           <p>Automatically push compiled blocklists and trigger gravity updates on local DNS appliances</p>
 
           {secretStorageAvailable === false && (
-            <p className="setting-message error" style={{ marginTop: '10px' }}>
+            <p className="setting-message error" role="alert" style={{ marginTop: '10px' }}>
               OS keychain encryption is unavailable in this session — the credentials below are
               stored as plaintext on disk rather than sealed.
             </p>
@@ -1386,9 +1488,10 @@ const Settings: React.FC<SettingsProps> = ({
                       value={sinkholeConfig.adguardHomeUrl}
                       onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardHomeUrl: e.target.value, adguardDirectUrl: e.target.value })}
                     />
-                    <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', margin: '8px 0 4px' }}>AdGuard API port</label>
+                    <label htmlFor="adguardDirectPort" style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', margin: '8px 0 4px' }}>AdGuard API port</label>
                     <input
                       type="number"
+                      id="adguardDirectPort"
                       min={1}
                       max={65535}
                       className="path-input"
@@ -1733,7 +1836,7 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
 
           {sinkholeMessage && (
-            <p className="setting-message success" style={{ marginTop: '10px' }}>
+            <p className="setting-message success" role="status" style={{ marginTop: '10px' }}>
               {sinkholeMessage}
             </p>
           )}
@@ -1743,7 +1846,7 @@ const Settings: React.FC<SettingsProps> = ({
               {syncResults.map((r, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: i < syncResults.length - 1 ? '6px' : 0 }}>
                   <span style={{ fontWeight: 600 }}>{r.service}:</span>
-                  <span style={{ color: r.status === 'success' ? '#10b981' : r.status === 'error' ? '#ef4444' : r.status === 'warning' ? 'var(--warning-color)' : 'inherit', opacity: r.status === 'skipped' ? 0.6 : 1 }}>
+                  <span style={{ color: r.status === 'success' ? 'var(--tone-success)' : r.status === 'error' ? 'var(--tone-danger)' : r.status === 'warning' ? 'var(--warning-color)' : 'inherit', opacity: r.status === 'skipped' ? 0.6 : 1 }}>
                     {r.message}
                   </span>
                 </div>
@@ -1753,16 +1856,16 @@ const Settings: React.FC<SettingsProps> = ({
         </div>
 
         {/* AI & Threat Intelligence Engine Card */}
-        <div className="setting-card">
+        <div className="setting-card" id="settings-ai">
           <div className="setting-card-header">
-            <h3>
+            <h2>
               <span className="setting-icon-svg">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
                 </svg>
               </span>
               AI & Threat Intelligence Engine
-            </h3>
+            </h2>
             <span className="setting-badge primary">Intelligence</span>
           </div>
           <p>
@@ -2039,7 +2142,7 @@ const Settings: React.FC<SettingsProps> = ({
                     placeholder={aiConfig.apiKeySet ? `Configured ${aiConfig.apiKeyHint} — enter to replace` : 'sk-...'}
                   />
                   {secretStorageAvailable === false && (
-                    <p className="setting-message error" style={{ marginTop: '6px' }}>
+                    <p className="setting-message error" role="alert" style={{ marginTop: '6px' }}>
                       OS keychain encryption is unavailable — this key is stored as plaintext on disk.
                     </p>
                   )}
@@ -2159,8 +2262,9 @@ const Settings: React.FC<SettingsProps> = ({
             {watchdogConfig.enabled && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div>
-                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Sweep Interval</label>
+                  <label htmlFor="watchdogInterval" style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Sweep Interval</label>
                   <select
+                    id="watchdogInterval"
                     className="styled-select"
 
                     value={watchdogConfig.intervalMinutes}
@@ -2176,8 +2280,9 @@ const Settings: React.FC<SettingsProps> = ({
                   </select>
                 </div>
                 <div>
-                  <label style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Sinkhole Query Target</label>
+                  <label htmlFor="watchdogService" style={{ fontSize: '0.75rem', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Sinkhole Query Target</label>
                   <select
+                    id="watchdogService"
                     className="styled-select"
 
                     value={watchdogConfig.service}
@@ -2294,7 +2399,7 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
 
           {aiMessage.text && (
-            <p className={`setting-message ${aiMessage.type}`} style={{ marginTop: '10px' }}>
+            <p className={`setting-message ${aiMessage.type}`} role={aiMessage.type === 'error' ? 'alert' : 'status'} style={{ marginTop: '10px' }}>
               {aiMessage.text}
             </p>
           )}
@@ -2303,14 +2408,14 @@ const Settings: React.FC<SettingsProps> = ({
         {/* About & Contact Section */}
         <div className="setting-card" id="about-community">
           <div className="setting-card-header">
-            <h3>
+            <h2>
               <span className="setting-icon-svg">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
                 </svg>
               </span>
               About & Community
-            </h3>
+            </h2>
             <span className="setting-badge secondary">v{appVersion}</span>
           </div>
 
@@ -2319,9 +2424,36 @@ const Settings: React.FC<SettingsProps> = ({
               <BrandLogo size={36} glow />
             </div>
             <div className="about-app-meta">
-              <h4>Blockingmachine</h4>
+              <h3>Blockingmachine</h3>
               <p>High-performance adblock compiler and DNS rule deduplicator. Developed by Greigh Studios LLC.</p>
             </div>
+          </div>
+
+          <div className="update-check-row">
+            <button
+              type="button"
+              className="browse-button secondary"
+              onClick={() => void runUpdateCheck()}
+              disabled={updateCheck.status === 'checking'}
+            >
+              {updateCheck.status === 'checking' ? 'Checking…' : 'Check for updates'}
+            </button>
+            {updateCheck.status === 'latest' && (
+              <span className="update-check-status" role="status">You are on the latest release (v{updateCheck.latest}).</span>
+            )}
+            {updateCheck.status === 'available' && (
+              <a
+                href={updateCheck.url}
+                className="update-check-status update-check-link" role="status"
+                onClick={(e) => handleExternalLink(e, updateCheck.url)}
+                rel="noopener noreferrer"
+              >
+                v{updateCheck.latest} is available — open the release ↗
+              </a>
+            )}
+            {updateCheck.status === 'error' && (
+              <span className="update-check-status update-check-error" role="alert">Could not check: {updateCheck.message}</span>
+            )}
           </div>
 
           <div className="about-links-grid">
@@ -2393,7 +2525,7 @@ const Settings: React.FC<SettingsProps> = ({
               className="about-link-item"
             >
               <div className="about-link-left">
-                <span className="about-link-icon" style={{ color: '#10b981' }}>
+                <span className="about-link-icon" style={{ color: 'var(--tone-success)' }}>
                   <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                     <rect x="2" y="4" width="20" height="16" rx="2" />
                     <path d="M22 6l-10 7L2 6" />

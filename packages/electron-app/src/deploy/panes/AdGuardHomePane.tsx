@@ -107,7 +107,7 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">⚡</span>
             <div>
-              <h3 className="deploy-pane-title">Live API Automation</h3>
+              <h2 className="deploy-pane-title">Live API Automation</h2>
               <p className="deploy-pane-subtitle">
                 Automate zero-touch reloads when compiling rules
               </p>
@@ -199,7 +199,7 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
         {/* Credentials & Endpoint Form */}
         <div className="deploy-form-fields-grid">
           {secretStorageAvailable === false && (
-            <p className="setting-message error" style={{ gridColumn: '1 / -1', marginTop: 0 }}>
+            <p className="setting-message error" role="alert" style={{ gridColumn: '1 / -1', marginTop: 0 }}>
               OS keychain encryption is unavailable — the secrets on this pane are stored as plaintext on disk.
             </p>
           )}
@@ -339,9 +339,10 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
                   />
                 </div>
                 <div className="deploy-field-group" style={{ flex: 1 }}>
-                  <label className="deploy-field-label">API Port</label>
+                  <label htmlFor="adguardPaneApiPort" className="deploy-field-label">API Port</label>
                   <input
                     type="number"
+                    id="adguardPaneApiPort"
                     className="deploy-field-input"
                     min={1}
                     max={65535}
@@ -488,7 +489,7 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📡</span>
             <div>
-              <h3 className="deploy-pane-title">Feed Subscription & Setup</h3>
+              <h2 className="deploy-pane-title">Feed Subscription & Setup</h2>
               <p className="deploy-pane-subtitle">
                 Subscribe inside AdGuard Home web console
               </p>
@@ -564,7 +565,7 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">1</div>
             <div className="stepper-content">
-              <h4>Open AdGuard Home Web Interface</h4>
+              <h3>Open AdGuard Home Web Interface</h3>
               <p>
                 {adguardEnv === 'homeassistant'
                   ? `Open Home Assistant > AdGuard Home, or navigate directly to http://homeassistant.local:${directPort}`
@@ -578,7 +579,7 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">2</div>
             <div className="stepper-content">
-              <h4>Navigate to DNS Blocklists</h4>
+              <h3>Navigate to DNS Blocklists</h3>
               <p>In the top navigation menu, click on <strong>Filters</strong>, then choose <strong>DNS blocklists</strong>.</p>
             </div>
           </div>
@@ -586,7 +587,7 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">3</div>
             <div className="stepper-content">
-              <h4>Add Custom Blocklist & Paste Feed URL</h4>
+              <h3>Add Custom Blocklist & Paste Feed URL</h3>
               <p>
                 Click <strong>Add blocklist → Add a custom list</strong>. Name it <code>Blockingmachine Compiled</code> and paste the copied LAN URL above.
               </p>
