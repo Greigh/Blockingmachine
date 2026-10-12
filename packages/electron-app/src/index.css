@@ -1,24 +1,26 @@
 :root {
   /* Base variables (Light Theme - macOS Cupertino inspired) */
-  --primary-color: #007aff;
-  --primary-color-hover: #0062cc;
-  --secondary-color: #86868b;
-  --secondary-color-hover: #6e6e73;
-  --success-color: #34c759;
-  --warning-color: #ff9500;
-  --danger-color: #ff3b30;
+  --primary-color: #0055d4;
+  --primary-color-hover: #0048b8;
+  --secondary-color: #636366;
+  --secondary-color-hover: #55555c;
+  /* Status hues double as text on tinted chips in light mode, so these are
+     the AA-measured dark shades rather than the vivid fills. */
+  --success-color: #157534;
+  --warning-color: #9a5700;
+  --danger-color: #b91c1c;
   
   --background-color: #f5f5f7;
   --main-bg: #ffffff;
   --sidebar-bg: rgba(246, 246, 248, 0.88);
   --sidebar-hover-bg: rgba(0, 0, 0, 0.04);
   --sidebar-active-bg: color-mix(in srgb, var(--primary-color) 12%, transparent);
-  --sidebar-active-text: #007aff;
+  --sidebar-active-text: #0055d4;
   --header-bg: rgba(255, 255, 255, 0.85);
   
   --text-color: #1d1d1f;
   --heading-color: #1d1d1f;
-  --muted-text: #86868b;
+  --muted-text: #636366;
   --border-color: rgba(0, 0, 0, 0.08);
   --border-radius: 8px;
   --card-radius: 12px;
@@ -33,9 +35,9 @@
   --input-bg-disabled: #f2f2f7;
   
   --badge-bg: rgba(0, 0, 0, 0.05);
-  --badge-text: #6e6e73;
+  --badge-text: #636366;
   --badge-primary-bg: color-mix(in srgb, var(--primary-color) 10%, transparent);
-  --badge-primary-text: #007aff;
+  --badge-primary-text: #0048b8;
   
   --scrollbar-thumb: rgba(0, 0, 0, 0.18);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
@@ -51,10 +53,10 @@
      The light-theme values are the AA-measured shades: amber needs the 800
      step, the rest sit at 700, to stay legible on a tinted chip over white. */
   --tone-danger: #b91c1c;
-  --tone-success: #047857;
+  --tone-success: #065f46;
   --tone-warning: #92400e;
-  --tone-info: #0369a1;
-  --tone-purple: #7c3aed;
+  --tone-info: #0c4a6e;
+  --tone-purple: #5b21b6;
   --tone-indigo: #4338ca;
   --tone-teal: #0f766e;
   --tone-orange: #c2410c;
@@ -78,9 +80,9 @@
 /* Dark theme variables */
 .dark-theme {
   --primary-color: #0a84ff;
-  --primary-color-hover: #0071e3;
-  --secondary-color: #98989d;
-  --secondary-color-hover: #aeaeb2;
+  --primary-color-hover: #0062cc;
+  --secondary-color: #b8b8bd;
+  --secondary-color-hover: #c7c7cc;
   --success-color: #30d158;
   --warning-color: #ffd60a;
   --danger-color: #ff453a;
@@ -269,7 +271,6 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--secondary-color);
-  opacity: 0.85;
   padding: 14px 10px 4px 10px;
 }
 
@@ -367,7 +368,6 @@ body {
   font-size: 10px;
   font-family: var(--font-mono);
   color: var(--secondary-color);
-  opacity: 0.45;
   margin-left: auto;
   letter-spacing: -0.02em;
   transition: opacity 0.15s ease, color 0.15s ease;
@@ -375,7 +375,7 @@ body {
 
 .sidebar-nav-item:hover .sidebar-shortcut,
 .sidebar-nav-item.active .sidebar-shortcut {
-  opacity: 0.85;
+  color: var(--text-color);
 }
 
 /* Sidebar Footer */
@@ -551,7 +551,6 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--secondary-color);
-  opacity: 0.7;
   white-space: nowrap;
   flex-shrink: 0;
   display: inline-flex;
@@ -1243,7 +1242,7 @@ input:checked + .mac-slider:before {
   margin-bottom: 6px;
 }
 
-.setting-card-header h3 {
+.setting-card-header h2 {
   margin: 0;
   font-size: 14.5px;
   font-weight: 600;
@@ -1496,6 +1495,33 @@ input:checked + .mac-slider:before {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 10px;
+}
+
+.update-check-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.update-check-status {
+  font-size: 12.5px;
+  color: var(--secondary-color);
+}
+
+.update-check-link {
+  color: var(--primary-color);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.update-check-link:hover {
+  text-decoration: underline;
+}
+
+.update-check-error {
+  color: var(--danger-color, #f87171);
 }
 
 @media (max-width: 820px) {
@@ -3422,6 +3448,13 @@ input:checked + .mac-slider:before {
   text-overflow: ellipsis;
 }
 
+.delta-card .summary-label {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 .delta-card.pos {
   border-color: color-mix(in srgb, var(--success-color) 25%, transparent);
 }
@@ -4298,9 +4331,9 @@ input:checked + .mac-slider:before {
 }
 
 .scope-filter-pill.active {
-  background: var(--primary-color);
+  background: var(--primary-color-hover);
   color: var(--on-accent);
-  border-color: var(--primary-color);
+  border-color: var(--primary-color-hover);
   font-weight: 600;
   box-shadow: 0 2px 6px color-mix(in srgb, var(--primary-color) 35%, transparent);
 }
@@ -4572,7 +4605,7 @@ input:checked + .mac-slider:before {
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--overlay-2);
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -5274,7 +5307,7 @@ input:checked + .mac-slider:before {
 
 .onboarding-highlights-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: 12px;
   margin-top: 10px;
 }
@@ -5491,7 +5524,7 @@ input:checked + .mac-slider:before {
 
 .onboarding-format-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: 10px;
 }
 
@@ -6277,6 +6310,8 @@ button.format-tile .format-target {
 }
 
 .deploy-btn.primary:hover:not(:disabled) {
+  background: var(--primary-color-hover);
+  border-color: var(--primary-color-hover);
   opacity: 0.9;
 }
 
@@ -8492,7 +8527,7 @@ button.format-tile .format-target {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: var(--primary-color);
+  background: var(--primary-color-hover);
   color: var(--on-accent);
   border: none;
   border-radius: 8px;
@@ -9225,10 +9260,9 @@ button.format-tile .format-target {
 
 .radar-top-desc {
   font-size: 11.5px;
-  color: var(--secondary-color);
+  color: var(--secondary-color-hover);
   margin: 0;
   line-height: 1.35;
-  opacity: 0.9;
 }
 
 .radar-top-watchdog {
@@ -9264,16 +9298,15 @@ button.format-tile .format-target {
 
 .watchdog-last-run {
   font-size: 10.5px;
-  color: var(--secondary-color);
+  color: var(--secondary-color-hover);
   white-space: nowrap;
 }
 
 .watchdog-desc {
   font-size: 11px;
   line-height: 1.35;
-  color: var(--secondary-color);
+  color: var(--secondary-color-hover);
   margin: 0;
-  opacity: 0.9;
 }
 
 .watchdog-top-controls {
@@ -9298,7 +9331,6 @@ button.format-tile .format-target {
   font-size: 10.5px;
   line-height: 1.35;
   color: var(--secondary-color);
-  opacity: 0.85;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -9311,7 +9343,7 @@ button.format-tile .format-target {
   gap: 5px;
   font-size: 10.5px;
   font-weight: 600;
-  color: var(--secondary-color);
+  color: var(--secondary-color-hover);
   white-space: nowrap;
 }
 
@@ -9372,8 +9404,8 @@ button.format-tile .format-target {
   align-items: center;
   gap: 10px;
   padding: 6px 12px;
-  background: rgba(0, 0, 0, 0.28);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--overlay-2);
+  border: 1px solid var(--overlay-border);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -9401,7 +9433,7 @@ button.format-tile .format-target {
 .provider-label-small {
   font-size: 9.5px;
   text-transform: uppercase;
-  color: var(--secondary-color);
+  color: var(--secondary-color-hover);
   letter-spacing: 0.5px;
 }
 
@@ -10644,7 +10676,7 @@ button.format-tile .format-target {
 
 .watchdog-desc {
   font-size: 12px;
-  color: var(--secondary-color);
+  color: var(--secondary-color-hover);
   margin: 0;
 }
 
@@ -11403,7 +11435,7 @@ button.format-tile .format-target {
 
 .custom-duration-input {
   width: 54px;
-  padding: 4px 6px;
+  padding: 6px 6px;
   font-size: 12px;
   font-weight: 600;
   background: rgba(0, 0, 0, 0.3);
@@ -12177,7 +12209,6 @@ select.stream-select.sort-select,
 .heat-title-note {
   font-size: 0.68rem;
   color: var(--secondary-color);
-  opacity: 0.85;
   white-space: nowrap;
 }
 
@@ -12520,4 +12551,410 @@ select.stream-select.sort-select,
 
 .tier-plan-ledger-missing {
   color: var(--tone-danger);
+}
+
+/* Keyboard focus indicator for interactive elements that don't carry a custom
+   box-shadow ring (sidebar nav, theme swatches, palette buttons, links). */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[role="radio"]:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+/* Theme swatches are real buttons now — neutralise UA chrome without touching
+   the established card styling. */
+.theme-preview {
+  appearance: none;
+  font: inherit;
+}
+
+/* Settings section index — sticky jump-nav for the long Preferences page. */
+.settings-index {
+  position: sticky;
+  top: -1px;
+  z-index: 40;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px;
+  margin: -6px 0 4px;
+  background: color-mix(in srgb, var(--background-color) 82%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+}
+.settings-index a {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 999px;
+  color: var(--secondary-color);
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.settings-index a:hover {
+  color: var(--primary-color);
+  border-color: var(--primary-color);
+  background: color-mix(in srgb, var(--primary-color) 8%, transparent);
+}
+.main-content-scroll {
+  scroll-behavior: smooth;
+}
+.setting-card {
+  scroll-margin-top: 70px;
+}
+
+.summary-card:has(.delta-history) {
+  flex-wrap: wrap;
+}
+.delta-history {
+  flex-basis: 100%;
+  margin-top: 6px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 6px;
+}
+.delta-history summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--secondary-color);
+  list-style: none;
+}
+.delta-history summary::-webkit-details-marker {
+  display: none;
+}
+.delta-history summary::before {
+  content: '▸ ';
+}
+.delta-history[open] summary::before {
+  content: '▾ ';
+}
+.delta-history-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.delta-history-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11px;
+}
+.delta-history-date {
+  color: var(--secondary-color);
+  font-variant-numeric: tabular-nums;
+}
+.delta-history-counts {
+  color: var(--text-color);
+}
+
+/* ==========================================================================
+   Reflow — narrow effective viewports (high zoom or small windows)
+   WCAG 2.2 SC 1.4.10: content must remain usable down to 320 CSS px without
+   page-level horizontal scrolling.
+   ========================================================================== */
+
+/* The header menu button exists in the DOM at all widths but only appears in
+   drawer mode — keeping it out of the layout (and the tab order) at widths
+   where the persistent sidebar is visible. */
+.nav-menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  border: 1px solid var(--border-color);
+  background: var(--control-bg-color);
+  color: var(--text-color);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.nav-menu-btn:hover {
+  background: color-mix(in srgb, var(--primary-color) 10%, transparent);
+  border-color: var(--primary-color);
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.38);
+  z-index: 60;
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Rail mode — 461px..900px effective width: the sidebar collapses to an icon
+   rail. Labels are visually clipped (not display:none) so accessible names
+   survive and every destination stays one Tab stop away.
+   -------------------------------------------------------------------------- */
+@media (min-width: 461px) and (max-width: 900px) {
+  .app-sidebar {
+    width: 62px;
+    min-width: 62px;
+    max-width: 62px;
+  }
+  .sidebar-brand {
+    justify-content: center;
+    padding: 0 0 12px 0;
+  }
+  .brand-info {
+    display: none;
+  }
+  .sidebar-nav {
+    padding: 8px 6px 12px;
+  }
+  .sidebar-section-label {
+    font-size: 0;
+    padding: 10px 8px 0;
+    margin-bottom: 4px;
+    border-top: 1px solid var(--border-color);
+  }
+  .sidebar-section-label:first-child {
+    border-top: none;
+    padding-top: 4px;
+  }
+  .sidebar-nav-item {
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 8px 4px;
+  }
+  .sidebar-icon {
+    margin-right: 0;
+  }
+  .sidebar-label,
+  .sidebar-shortcut,
+  .sidebar-badge-inline,
+  .sidebar-radar-live-pill {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .sidebar-nav-item {
+    position: relative;
+  }
+  .sidebar-badge {
+    position: static;
+    font-size: 9.5px;
+    padding: 0 4px;
+  }
+  .sidebar-nav-item > div {
+    gap: 0;
+  }
+  .update-dot {
+    position: absolute;
+    top: 3px;
+    right: 6px;
+    font-size: 8px;
+  }
+  .sidebar-footer {
+    padding: 10px 6px 12px;
+    align-items: center;
+  }
+  .sidebar-meta-row {
+    display: none;
+  }
+  .engine-status-label,
+  .engine-status-badge {
+    display: none;
+  }
+}
+
+/* Output path pill — a long filesystem path in a fixed pill; ellipsize it as
+   soon as the effective width stops being generous (rail and drawer modes).
+   The full path stays available via the title tooltip and Settings ▸ Save
+   Location. */
+@media (max-width: 900px) {
+  .output-path-pill {
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .output-path-pill > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .meta-strip-item {
+    min-width: 0;
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .hero-meta-strip {
+    flex-wrap: wrap;
+  }
+  .hero-content-wrapper {
+    flex-wrap: wrap;
+    row-gap: 12px;
+  }
+  .hero-text-col {
+    flex: 1 1 100%;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Drawer mode — ≤460px effective width: the sidebar leaves the flow and
+   becomes an overlay drawer revealed by the header menu button.
+   -------------------------------------------------------------------------- */
+@media (max-width: 460px) {
+  .nav-menu-btn {
+    display: inline-flex;
+  }
+  .sidebar-backdrop {
+    display: block;
+  }
+  .app-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 232px;
+    min-width: 232px;
+    max-width: 232px;
+    z-index: 70;
+    transform: translateX(-105%);
+    /* Closed drawer must leave both the Tab order and the accessibility tree —
+       an invisible but focusable nav is a 2.4.3 focus-order violation. The
+       delayed visibility transition keeps it hidden until the slide-out ends
+       on close, while showing instantly on open. */
+    visibility: hidden;
+    transition: transform 0.18s ease, visibility 0s linear 0.18s;
+    box-shadow: 8px 0 30px rgba(0, 0, 0, 0.28);
+  }
+  .app-sidebar.nav-open {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform 0.18s ease, visibility 0s;
+  }
+  .main-header {
+    padding: 0 12px;
+    gap: 10px;
+  }
+  .header-left {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .view-subtitle {
+    display: none;
+  }
+  .header-category-breadcrumb {
+    display: none;
+  }
+  .main-content-scroll {
+    padding: 16px 12px 32px;
+  }
+
+  /* Content clamps — the few fixed min-widths that still overflow a
+     ~300px pane. Everything keeps its size at normal widths. */
+  .modules-hero-left,
+  .guide-hero-text,
+  .inline-feed-alert-text,
+  .search-input-wrapper,
+  .quarantine-search-input,
+  .inline-field-group.url-field,
+  .server-url-label,
+  .output-path-pill {
+    min-width: 0;
+  }
+  select.stream-select.status-select,
+  .stream-select.status-select,
+  select.stream-select.sort-select,
+  .stream-select.sort-select {
+    min-width: 0 !important;
+  }
+  .output-path-pill {
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .output-path-pill > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ai-radar-nav-tabs {
+    flex-wrap: wrap;
+  }
+  .radar-session-config-bar .config-bar-row {
+    flex-wrap: wrap;
+  }
+  .duration-pill-group,
+  .interval-pill-group {
+    flex-wrap: wrap;
+  }
+  .scout-action-group {
+    flex-wrap: wrap;
+    min-width: 0;
+    flex-shrink: 1;
+  }
+  .scout-action-group > button {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .hero-meta-strip {
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar {
+    transition: none;
+  }
+}
+
+/* Dark-theme tint badges: the semi-transparent tone tint over card bg measured
+   just under AA for the small badge text — blending toward black keeps the hue
+   while giving the tone colour real contrast. Light theme keeps the plain tint. */
+.dark-theme .radar-live-badge-mini {
+  background: color-mix(in srgb, var(--tone-success) 15%, rgba(0, 0, 0, 0.45));
+}
+.dark-theme .title-beta-badge,
+.dark-theme .module-card-beta-badge {
+  background: color-mix(in srgb, var(--primary-color) 20%, rgba(0, 0, 0, 0.45));
+}
+
+/* Dark theme: accent/danger-coloured text on tinted surfaces — lighten the
+   hue rather than switching tokens, so the accent stays recognisably the
+   user's chosen colour while clearing 4.5:1 on the dark tints. */
+.dark-theme .syntax-pill.active-total,
+.dark-theme .deploy-format-pill,
+.dark-theme .deploy-server-toggle-btn,
+.dark-theme .platform-tab-btn.active,
+.dark-theme .deploy-pane-status-pill.primary,
+.dark-theme .deploy-tool-btn.primary {
+  color: color-mix(in srgb, var(--primary-color) 62%, #ffffff);
+}
+.dark-theme .syntax-pill.pill-block {
+  color: color-mix(in srgb, var(--danger-color) 62%, #ffffff);
+}
+
+/* Onboarding summary rows reuse .summary-label's nowrap ellipsis — inside the
+   tour the truncated value has no tooltip, so let it wrap instead. */
+.onboarding-step-panel .summary-label {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-word;
 }

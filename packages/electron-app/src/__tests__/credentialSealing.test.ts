@@ -29,7 +29,7 @@ function blockFrom(anchor: string, length = 2000): string {
 
 describe('feed token sealing', () => {
   test('the feed server resolves the token through the secret store', () => {
-    const auth = blockFrom('const configuredToken', 300);
+    const auth = blockFrom('function enforcedFeedToken', 600);
     expect(auth).toContain("readSecret(storeRef, safeStorage, 'feedToken')");
     expect(auth).not.toContain("storeRef.get('feedToken')");
   });

@@ -16,7 +16,7 @@ const running: DaemonStatusInfo = {
   status: 'running',
   port: 5353,
   rulesLoaded: 120_000,
-  stats: { totalQueries: 1234, blockRatePercent: 7 },
+  stats: { totalQueries: 1234, blockedQueries: 86, allowedQueries: 1148, blockRatePercent: 7 },
 } as DaemonStatusInfo;
 
 const stopped: DaemonStatusInfo = { status: 'stopped' } as DaemonStatusInfo;

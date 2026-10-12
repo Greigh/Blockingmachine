@@ -73,7 +73,7 @@ export const PiholePane: React.FC<PiholePaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">⚡</span>
             <div>
-              <h3 className="deploy-pane-title">Pi-hole Gravity Automation</h3>
+              <h2 className="deploy-pane-title">Pi-hole Gravity Automation</h2>
               <p className="deploy-pane-subtitle">
                 Automate Pi-hole Gravity updates (`pihole -g`) over API
               </p>
@@ -127,7 +127,7 @@ export const PiholePane: React.FC<PiholePaneProps> = ({
           </div>
 
           {secretStorageAvailable === false && (
-            <p className="setting-message error" style={{ gridColumn: '1 / -1', marginTop: 0 }}>
+            <p className="setting-message error" role="alert" style={{ gridColumn: '1 / -1', marginTop: 0 }}>
               OS keychain encryption is unavailable — this token is stored as plaintext on disk.
             </p>
           )}
@@ -217,7 +217,7 @@ export const PiholePane: React.FC<PiholePaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📡</span>
             <div>
-              <h3 className="deploy-pane-title">Feed Subscription & Setup</h3>
+              <h2 className="deploy-pane-title">Feed Subscription & Setup</h2>
               <p className="deploy-pane-subtitle">
                 Add subscription in Pi-hole Admin Console
               </p>
@@ -248,7 +248,7 @@ export const PiholePane: React.FC<PiholePaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">1</div>
             <div className="stepper-content">
-              <h4>Open Pi-hole Admin Console</h4>
+              <h3>Open Pi-hole Admin Console</h3>
               <p>Open your browser to <code>http://pi.hole/admin</code> or your Pi-hole device IP.</p>
             </div>
           </div>
@@ -256,7 +256,7 @@ export const PiholePane: React.FC<PiholePaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">2</div>
             <div className="stepper-content">
-              <h4>Navigate to Adlists</h4>
+              <h3>Navigate to Adlists</h3>
               <p>In the left sidebar menu, click on <strong>Adlists</strong> (or <strong>Lists</strong> in v6).</p>
             </div>
           </div>
@@ -264,7 +264,7 @@ export const PiholePane: React.FC<PiholePaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">3</div>
             <div className="stepper-content">
-              <h4>Add Subscription Address & Update Gravity</h4>
+              <h3>Add Subscription Address & Update Gravity</h3>
               <p>
                 Paste the LAN URL into the <strong>Address</strong> field and click <strong>Add</strong>. Then run Gravity update:
               </p>

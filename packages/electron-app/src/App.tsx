@@ -53,6 +53,14 @@ function App() {
   const [compileNonce, setCompileNonce] = useState<number>(0);
   const [inspectorInitialDomain, setInspectorInitialDomain] = useState<string>('');
   const [liveRadarSession, setLiveRadarSession] = useState<LiveRadarSession | null>(null);
+  // Drawer-mode sidebar (≤460px effective width): opened via the header menu
+  // button, dismissed by item selection, backdrop click, or Escape.
+  const [navOpen, setNavOpen] = useState<boolean>(false);
+
+  const handleNavSelect = useCallback((view: string) => {
+    setCurrentView(view);
+    setNavOpen(false);
+  }, []);
 
   useEffect(() => {
     if (window.electron?.getLiveRadarSession) {
@@ -387,13 +395,15 @@ function App() {
         {/* Native macOS Sidebar */}
         <Sidebar
           currentView={currentView}
-          setCurrentView={setCurrentView}
+          setCurrentView={handleNavSelect}
           enabledSourcesCount={sources.filter((s) => s.enabled).length}
           totalSourcesCount={sources.length}
           updateAvailable={updateAvailable}
           handleExternalLink={handleExternalLink}
-          onLaunchOnboarding={() => setIsOnboardingOpen(true)}
+          onLaunchOnboarding={() => { setIsOnboardingOpen(true); setNavOpen(false); }}
           isRadarScanning={Boolean(liveRadarSession?.active)}
+          navOpen={navOpen}
+          onCloseNav={() => setNavOpen(false)}
         />
 
         {/* Main Workspace Pane */}
@@ -402,6 +412,8 @@ function App() {
             currentView={currentView}
             savePath={savePath}
             handleRevealOutputFolder={handleRevealOutputFolder}
+            navOpen={navOpen}
+            onOpenNav={() => setNavOpen(true)}
           />
 
           <div className={`main-content-scroll view-${currentView}`}>

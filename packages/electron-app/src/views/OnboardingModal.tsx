@@ -288,12 +288,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        aria-label="Getting started tour"
       >
         {/* Top Header & Step Progress Bar */}
         <div className="onboarding-header">
           <div className="onboarding-stepper">
             {ONBOARDING_STEPS.map((step) => (
-              <div
+              <button
+                type="button"
                 key={step.id}
                 className={`onboarding-step-pill ${
                   currentStep === step.id
@@ -302,11 +304,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                       ? 'completed'
                       : ''
                 }`}
+                aria-current={currentStep === step.id ? 'step' : undefined}
                 onClick={() => setCurrentStep(step.id)}
               >
                 <span className="step-number">{currentStep > step.id ? '✓' : step.id}</span>
                 <span className="step-label">{step.label}</span>
-              </div>
+              </button>
             ))}
           </div>
           <button

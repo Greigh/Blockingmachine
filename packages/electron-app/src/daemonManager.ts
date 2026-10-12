@@ -209,6 +209,8 @@ export class DaemonManager {
     try {
       const res = await fetch(`http://${this.bindHost}:${this.controlPort}/v1/reload`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
       });
       if (res.ok) {
         const data = await res.json();

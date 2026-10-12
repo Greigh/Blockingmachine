@@ -1,5 +1,4 @@
 import React from 'react';
-import { ExtensionTierPlanCard } from '../../components/ExtensionTierPlanCard';
 import type { HubPaneProps } from './paneProps';
 
 /**
@@ -42,12 +41,6 @@ export const homeAssistantPaneKeys = [
   'haApiPreview',
   'isTestingHaApi',
   'handleInspectHaApi',
-  'tierPlanState',
-  'tierPlan',
-  'tierPlanError',
-  'loadTierPlan',
-  'chooseTierLedger',
-  'clearTierLedger',
   'secretStorageAvailable',
 ] as const satisfies readonly (keyof HubPaneProps)[];
 
@@ -73,12 +66,6 @@ export const HomeAssistantPane: React.FC<HomeAssistantPaneProps> = ({
   haApiPreview,
   isTestingHaApi,
   handleInspectHaApi,
-  tierPlanState,
-  tierPlan,
-  tierPlanError,
-  loadTierPlan,
-  chooseTierLedger,
-  clearTierLedger,
   secretStorageAvailable,
 }) => {
   // The five endpoint addresses, named once: the input shows the constant and the copy button
@@ -97,7 +84,7 @@ export const HomeAssistantPane: React.FC<HomeAssistantPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">🏠</span>
             <div>
-              <h3 className="deploy-pane-title">Home Assistant Hub Connection</h3>
+              <h2 className="deploy-pane-title">Home Assistant Hub Connection</h2>
               <p className="deploy-pane-subtitle">
                 Control AdGuard & Pi-hole Add-ons via Home Assistant REST or Webhook
               </p>
@@ -169,7 +156,7 @@ export const HomeAssistantPane: React.FC<HomeAssistantPaneProps> = ({
                   Generate in Home Assistant: Profile &gt; Long-Lived Access Tokens
                 </span>
                 {secretStorageAvailable === false && (
-                  <p className="setting-message error" style={{ marginTop: 6 }}>
+                  <p className="setting-message error" role="alert" style={{ marginTop: 6 }}>
                     OS keychain encryption is unavailable — this token is stored as plaintext on disk.
                   </p>
                 )}
@@ -191,7 +178,7 @@ export const HomeAssistantPane: React.FC<HomeAssistantPaneProps> = ({
                 Triggers your Home Assistant automation to reload AdGuard or Pi-hole
               </span>
               {secretStorageAvailable === false && (
-                <p className="setting-message error" style={{ marginTop: 6 }}>
+                <p className="setting-message error" role="alert" style={{ marginTop: 6 }}>
                   OS keychain encryption is unavailable — this URL is stored as plaintext on disk.
                 </p>
               )}
@@ -255,7 +242,7 @@ export const HomeAssistantPane: React.FC<HomeAssistantPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">🧩</span>
             <div>
-              <h3 className="deploy-pane-title">Integration & Add-on Endpoints</h3>
+              <h2 className="deploy-pane-title">Integration & Add-on Endpoints</h2>
               <p className="deploy-pane-subtitle">
                 Expose live metrics, sensors, and controls into your Home Assistant dashboards
               </p>
@@ -387,23 +374,6 @@ export const HomeAssistantPane: React.FC<HomeAssistantPaneProps> = ({
             </div>
           </div>
 
-          {/* Extension static tier capacity.
-
-              Sits with the browser extension's own endpoints because that is what it is about:
-              the four tier rulesets the extension ships, whether they fit, and what the plan
-              is worth. The extension popup answers the same question against a live grant the
-              hub cannot see, so this one asks for a capacity explicitly rather than reporting
-              Chrome's guaranteed floor as though it were the real one. */}
-          <ExtensionTierPlanCard
-            state={tierPlanState}
-            result={tierPlan}
-            error={tierPlanError}
-            enabled={[]}
-            onRefresh={loadTierPlan}
-            onChooseLedger={chooseTierLedger}
-            onClearLedger={clearTierLedger}
-          />
-
           {/* Live Status Inspector */}
           <div className="deploy-tool-box">
             <div className="deploy-tool-box-header">
@@ -424,7 +394,7 @@ export const HomeAssistantPane: React.FC<HomeAssistantPaneProps> = ({
 
           {/* Setup Guide */}
           <div className="deploy-instructions-box">
-            <h4 className="deploy-instructions-title">Quick Setup in Home Assistant:</h4>
+            <h3 className="deploy-instructions-title">Quick Setup in Home Assistant:</h3>
             <ol className="deploy-instructions-list">
               <li>
                 Copy <code>packages/homeassistant-integration/custom_components/blockingmachine</code> into your HA <code>config/custom_components/</code> folder (or install via HACS).

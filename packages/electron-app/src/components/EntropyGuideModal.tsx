@@ -1,4 +1,5 @@
-import React, { useEffect } from 'react';
+import React, { useRef } from 'react';
+import { useDialogFocus } from './useDialogFocus';
 
 interface EntropyGuideModalProps {
   isOpen: boolean;
@@ -6,27 +7,24 @@ interface EntropyGuideModalProps {
 }
 
 export const EntropyGuideModal: React.FC<EntropyGuideModalProps> = ({ isOpen, onClose }) => {
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, isOpen, onClose);
 
   if (!isOpen) return null;
 
   return (
-    <div className="ai-modal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="ai-modal-card entropy-guide-card" onClick={(e) => e.stopPropagation()}>
+    <div className="ai-modal-backdrop" onClick={onClose}>
+      <div
+        ref={dialogRef}
+        className="ai-modal-card entropy-guide-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="entropy-guide-title"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="ai-modal-header">
           <div className="ai-modal-title-col">
-            <h4 className="ai-modal-title">
+            <h4 className="ai-modal-title" id="entropy-guide-title">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M4 22h16" />
                 <path d="M7 17l4-8 4 6 5-11" />

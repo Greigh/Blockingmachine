@@ -211,7 +211,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   })();
 
   const adblockRatingGrade = adblockRatingScore >= 95 ? 'A+' : adblockRatingScore >= 88 ? 'A' : adblockRatingScore >= 80 ? 'B+' : adblockRatingScore >= 70 ? 'B' : adblockRatingScore >= 58 ? 'C' : adblockRatingScore >= 40 ? 'D' : 'F';
-  const adblockRatingColor = adblockRatingGrade.startsWith('A') ? '#10b981' : adblockRatingGrade.startsWith('B') ? '#22d3ee' : adblockRatingGrade === 'C' ? '#f59e0b' : '#ef4444';
+  const adblockRatingColor = adblockRatingGrade.startsWith('A') ? 'var(--tone-success)' : adblockRatingGrade.startsWith('B') ? '#22d3ee' : adblockRatingGrade === 'C' ? 'var(--tone-warning)' : 'var(--tone-danger)';
   const adblockRatingLabel = adblockRatingGrade.startsWith('A') ? 'Excellent' : adblockRatingGrade.startsWith('B') ? 'Good' : adblockRatingGrade === 'C' ? 'Fair' : adblockRatingGrade === 'D' ? 'Weak' : 'No Shield';
 
   return (
@@ -365,6 +365,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="summary-num">{dashboardStats.lastProcessedTime ? dashboardStats.lastProcessedTime.split(',')[0] : 'Never'}</span>
             <span className="summary-label">Last Compilation</span>
           </div>
+          {history.length > 1 && (
+            <details className="delta-history">
+              <summary>Recent compiles</summary>
+              <ul className="delta-history-list">
+                {history.slice(0, 5).map((snap, i) => (
+                  <li key={snap.timestamp ?? i} className="delta-history-row">
+                    <span className="delta-history-date">{snap.timestamp}</span>
+                    <span className="delta-history-counts">
+                      {snap.uniqueRuleCount?.toLocaleString()} rules
+                      {typeof snap.duplicatesRemoved === 'number' && snap.duplicatesRemoved > 0
+                        ? ` · ${snap.duplicatesRemoved.toLocaleString()} dupes`
+                        : ''}
+                      {Array.isArray(snap.exportFormats) && snap.exportFormats.length > 0
+                        ? ` · ${snap.exportFormats.join(' + ')}`
+                        : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
 
         {ruleDeltaText && (

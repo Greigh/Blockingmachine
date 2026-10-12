@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BrandLogo } from './BrandLogo';
+import { useDialogFocus } from './useDialogFocus';
 
 interface SidebarProps {
   currentView: string;
@@ -13,6 +14,8 @@ interface SidebarProps {
   ) => void;
   onLaunchOnboarding?: () => void;
   isRadarScanning?: boolean;
+  navOpen?: boolean;
+  onCloseNav?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -24,6 +27,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   handleExternalLink,
   onLaunchOnboarding,
   isRadarScanning,
+  navOpen,
+  onCloseNav,
 }) => {
   const [version, setVersion] = useState<string>(() => {
     return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.0';
@@ -40,8 +45,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   }, []);
 
+  // Drawer mode (≤460px effective width): the aside is an overlay — focus
+  // moves into it on open, Tab cycles inside, Escape closes, focus returns to
+  // the header menu button. At wider widths navOpen stays false and the hook
+  // never engages, so the persistent rail keeps normal Tab flow.
+  const asideRef = useRef<HTMLElement>(null);
+  useDialogFocus(asideRef, Boolean(navOpen), onCloseNav ?? (() => {}));
+
   return (
-    <aside className="app-sidebar">
+    <>
+      {navOpen && (
+        <div
+          className="sidebar-backdrop"
+          aria-hidden="true"
+          onClick={onCloseNav}
+        />
+      )}
+    <aside ref={asideRef} className={`app-sidebar${navOpen ? ' nav-open' : ''}`}>
       {/* Top window drag region & traffic light spacer */}
       <div className="sidebar-traffic-lights" />
 
@@ -57,11 +77,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Sidebar Navigation Items */}
-      <nav className="sidebar-nav">
+      <nav className="sidebar-nav" id="app-sidebar-nav" aria-label="Primary">
         {/* OVERVIEW */}
         <div className="sidebar-section-label">Overview</div>
         <button
           className={`sidebar-nav-item ${currentView === 'process' ? 'active' : ''}`}
+          aria-current={currentView === 'process' ? 'page' : undefined}
           onClick={() => setCurrentView('process')}
           title="Dashboard & Filter Processor (Cmd+1)"
         >
@@ -89,6 +110,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="sidebar-section-label">Rules & Feeds</div>
         <button
           className={`sidebar-nav-item ${currentView === 'sources' ? 'active' : ''}`}
+          aria-current={currentView === 'sources' ? 'page' : undefined}
           onClick={() => setCurrentView('sources')}
           title="Filter Feeds & Subscriptions (Cmd+2)"
         >
@@ -119,6 +141,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         <button
           className={`sidebar-nav-item ${currentView === 'modules' ? 'active' : ''}`}
+          aria-current={currentView === 'modules' ? 'page' : undefined}
           onClick={() => setCurrentView('modules')}
           title="Defense Modules (First-Party Curated Shields) (Cmd+3)"
         >
@@ -147,6 +170,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         <button
           className={`sidebar-nav-item ${currentView === 'custom' ? 'active' : ''}`}
+          aria-current={currentView === 'custom' ? 'page' : undefined}
           onClick={() => setCurrentView('custom')}
           title="Custom Rules Editor (Cmd+4)"
         >
@@ -174,6 +198,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="sidebar-section-label">Tools & AI</div>
         <button
           className={`sidebar-nav-item ${currentView === 'inspector' ? 'active' : ''}`}
+          aria-current={currentView === 'inspector' ? 'page' : undefined}
           onClick={() => setCurrentView('inspector')}
           title="Rule & AI Inspector (Cmd+5)"
         >
@@ -199,6 +224,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         <button
           className={`sidebar-nav-item ${currentView === 'browser' ? 'active' : ''}`}
+          aria-current={currentView === 'browser' ? 'page' : undefined}
           onClick={() => setCurrentView('browser')}
           title="Compiled Rules Browser (Cmd+6)"
         >
@@ -224,6 +250,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         <button
           className={`sidebar-nav-item ${currentView === 'ai-radar' ? 'active' : ''}`}
+          aria-current={currentView === 'ai-radar' ? 'page' : undefined}
           onClick={() => setCurrentView('ai-radar')}
           title="AI Ad & Tracker Discovery Radar [Beta] (Cmd+7)"
         >
@@ -260,6 +287,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="sidebar-section-label">Distribution</div>
         <button
           className={`sidebar-nav-item ${currentView === 'deploy' ? 'active' : ''}`}
+          aria-current={currentView === 'deploy' ? 'page' : undefined}
           onClick={() => setCurrentView('deploy')}
           title="Deploy & Sinkhole Sync (Cmd+8)"
         >
@@ -286,6 +314,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         <button
           className={`sidebar-nav-item ${currentView === 'settings' ? 'active' : ''}`}
+          aria-current={currentView === 'settings' ? 'page' : undefined}
           onClick={() => setCurrentView('settings')}
           title="Settings (Cmd+,)"
         >
@@ -348,7 +377,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Native macOS Sidebar Footer */}
       <footer className="sidebar-footer">
-        <div className="sidebar-status-row">
+        <div className="sidebar-status-row" title="Core Engine: Ready">
           <div className="engine-status-indicator">
             <span className="status-dot pulse" />
             <span className="engine-status-label">Core Engine</span>
@@ -405,5 +434,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </footer>
     </aside>
+    </>
   );
 };

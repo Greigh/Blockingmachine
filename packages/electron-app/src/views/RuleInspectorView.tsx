@@ -585,13 +585,13 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, marginBottom: 18 }}>
                 {/* Left Card: Rule Details */}
                 <div style={{ padding: 14, borderRadius: 8, background: 'var(--overlay-2)', border: '1px solid var(--border-color)' }}>
-                  <h4 style={{ margin: '0 0 10px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <h3 style={{ margin: '0 0 10px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="3" width="18" height="18" rx="2" />
                       <path d="M9 12l2 2 4-4" />
                     </svg>
                     Filter List Attribution
-                  </h4>
+                  </h3>
                   {ruleResult?.matchingRule ? (
                     <div>
                       <div className="rule-code-block" style={{ marginBottom: 8 }}>
@@ -615,12 +615,12 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
 
                 {/* Right Card: AI Findings */}
                 <div style={{ padding: 14, borderRadius: 8, background: 'var(--overlay-2)', border: '1px solid var(--border-color)' }}>
-                  <h4 style={{ margin: '0 0 10px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <h3 style={{ margin: '0 0 10px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
                     </svg>
                     AI Threat Evidence
-                  </h4>
+                  </h3>
                   {aiResult && aiResult.reasons.length > 0 ? (
                     <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.6, color: 'var(--text-color)' }}>
                       {aiResult.reasons.map((r, idx) => (
@@ -689,7 +689,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
               {/* CNAME Chain visualizer */}
               {aiResult?.cnames && aiResult.cnames.length > 0 && (
                 <div className="evidence-section" style={{ marginBottom: 14 }}>
-                  <h5 style={{ fontSize: 13, marginBottom: 6 }}>CNAME Uncloaking Chain Trace</h5>
+                  <h4 style={{ fontSize: 13, marginBottom: 6 }}>CNAME Uncloaking Chain Trace</h4>
                   <p style={{ fontFamily: 'ui-monospace, monospace', color: 'var(--primary-color)', fontSize: 13, background: 'rgba(0,0,0,0.2)', padding: '8px 12px', borderRadius: 6 }}>
                     {aiResult.domain} → {aiResult.cnames.join(' → ')}
                   </p>
@@ -699,7 +699,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
               {/* Feature Scores Breakdown */}
               {aiResult?.featureScores && Object.keys(aiResult.featureScores).length > 0 && (
                 <div style={{ marginBottom: 14 }}>
-                  <h5 style={{ fontSize: 13, marginBottom: 6 }}>Mini-AI Feature Weight Breakdown</h5>
+                  <h4 style={{ fontSize: 13, marginBottom: 6 }}>Mini-AI Feature Weight Breakdown</h4>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 8 }}>
                     {Object.entries(aiResult.featureScores).map(([feature, score], idx) => (
                       <div key={idx} style={{ padding: '8px 10px', borderRadius: 6, background: 'var(--control-bg-color, rgba(255,255,255,0.03))', border: '1px solid var(--border-color)', fontSize: 12 }}>
@@ -734,7 +734,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 <span title="Shannon Entropy: 0.0 to 5.0 scale measuring character randomness. Scores >= 3.8 indicate machine-generated tracking tokens or DGA.">
                   Shannon Entropy: {aiResult?.entropy !== undefined ? `${aiResult.entropy.toFixed(2)} / 5.0` : '0.00 / 5.0'}
                 </span>
-                <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10b981', fontWeight: 600 }}>
+                <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--tone-success)', fontWeight: 600 }}>
                   100% In-Memory Air-Gapped
                 </span>
               </div>
@@ -965,7 +965,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 </svg>
               </div>
               <div className="stage-number-badge">Stage 1</div>
-              <h4 className="stage-title">Network &amp; Filter List Matching</h4>
+              <h3 className="stage-title">Network &amp; Filter List Matching</h3>
               <p className="stage-desc">
                 Tests domain against compiled <code>||domain.com^</code> rules, host IPs (<code>0.0.0.0</code>), and allowlists across all subscribed feeds.
               </p>
@@ -978,7 +978,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 </svg>
               </div>
               <div className="stage-number-badge">Stage 2</div>
-              <h4 className="stage-title">AI Heuristics &amp; DGA Analysis</h4>
+              <h3 className="stage-title">AI Heuristics &amp; DGA Analysis</h3>
               <p className="stage-desc">
                 Computes Shannon entropy, Levenshtein distance against top tracker signatures, and brand impersonation patterns using embedded Mini-AI.
               </p>
@@ -993,7 +993,7 @@ export const RuleInspectorView: React.FC<RuleInspectorViewProps> = ({
                 </svg>
               </div>
               <div className="stage-number-badge">Stage 3</div>
-              <h4 className="stage-title">CNAME Uncloaking &amp; Rule Synthesis</h4>
+              <h3 className="stage-title">CNAME Uncloaking &amp; Rule Synthesis</h3>
               <p className="stage-desc">
                 Resolves disguised first-party CNAME tracker hops and automatically synthesizes blocking rules in Universal, AdGuard, or Pi-hole format.
               </p>

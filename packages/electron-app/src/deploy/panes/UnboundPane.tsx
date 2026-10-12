@@ -89,7 +89,7 @@ export const UnboundPane: React.FC<UnboundPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">🧭</span>
             <div>
-              <h3 className="deploy-pane-title">Unbound Local-Zone Feed</h3>
+              <h2 className="deploy-pane-title">Unbound Local-Zone Feed</h2>
               <p className="deploy-pane-subtitle">OPNsense, pfSense, Linux, OpenWrt</p>
             </div>
           </div>
@@ -183,7 +183,7 @@ export const UnboundPane: React.FC<UnboundPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📋</span>
             <div>
-              <h3 className="deploy-pane-title">Unbound Setup Recipes</h3>
+              <h2 className="deploy-pane-title">Unbound Setup Recipes</h2>
               <p className="deploy-pane-subtitle">Drop-in file first, then a scheduled refresh</p>
             </div>
           </div>
@@ -194,7 +194,7 @@ export const UnboundPane: React.FC<UnboundPaneProps> = ({
             <div className="stepper-step" key={target.id}>
               <div className="stepper-num">{index + 1}</div>
               <div className="stepper-content">
-                <h4>{target.name}</h4>
+                <h3>{target.name}</h3>
                 <p>
                   {target.includePlacement} — the line is{' '}
                   <code>{unboundIncludeDirective(target.configPath)}</code> — then schedule this
@@ -215,7 +215,7 @@ export const UnboundPane: React.FC<UnboundPaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">4</div>
             <div className="stepper-content">
-              <h4>Keep the hub address stable</h4>
+              <h3>Keep the hub address stable</h3>
               <p>
                 Leave <strong>Auto-start on launch</strong> on so the feed answers at the same
                 address after a restart, and turn on <strong>Launch on computer startup</strong>{' '}

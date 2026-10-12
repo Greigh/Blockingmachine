@@ -41,7 +41,7 @@ export const AdGuardDesktopPane: React.FC<AdGuardDesktopPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">💻</span>
             <div>
-              <h3 className="deploy-pane-title">Local Subscription Endpoints</h3>
+              <h2 className="deploy-pane-title">Local Subscription Endpoints</h2>
               <p className="deploy-pane-subtitle">Direct file:// or HTTP subscription for AdGuard Desktop</p>
             </div>
           </div>
@@ -85,7 +85,7 @@ export const AdGuardDesktopPane: React.FC<AdGuardDesktopPaneProps> = ({
           <div className="deploy-pane-title-group">
             <span className="deploy-pane-icon-badge">📖</span>
             <div>
-              <h3 className="deploy-pane-title">Setup in AdGuard for Mac / Windows</h3>
+              <h2 className="deploy-pane-title">Setup in AdGuard for Mac / Windows</h2>
               <p className="deploy-pane-subtitle">Steps to add custom filter list</p>
             </div>
           </div>
@@ -95,7 +95,7 @@ export const AdGuardDesktopPane: React.FC<AdGuardDesktopPaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">1</div>
             <div className="stepper-content">
-              <h4>Open Preferences / Settings</h4>
+              <h3>Open Preferences / Settings</h3>
               <p>Launch AdGuard and open <strong>Settings</strong> (or press <code>⌘,</code> on macOS).</p>
             </div>
           </div>
@@ -103,7 +103,7 @@ export const AdGuardDesktopPane: React.FC<AdGuardDesktopPaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">2</div>
             <div className="stepper-content">
-              <h4>Navigate to Filters → Custom</h4>
+              <h3>Navigate to Filters → Custom</h3>
               <p>Select the <strong>Filters</strong> tab, scroll down to <strong>Custom</strong>, and click <strong>Add custom filter</strong>.</p>
             </div>
           </div>
@@ -111,7 +111,7 @@ export const AdGuardDesktopPane: React.FC<AdGuardDesktopPaneProps> = ({
           <div className="stepper-step">
             <div className="stepper-num">3</div>
             <div className="stepper-content">
-              <h4>Paste URL & Subscribe</h4>
+              <h3>Paste URL & Subscribe</h3>
               <p>
                 Paste the copied <code>file://</code> or <code>http://localhost:9191</code> URL
                 into the address field and click <strong>Subscribe</strong>. The{' '}

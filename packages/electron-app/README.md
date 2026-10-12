@@ -3,9 +3,7 @@
 
 # Blockingmachine Desktop
 
-[![LICENSE](https://img.shields.io/github/license/greigh/Blockingmachine)](LICENSE)
-[![ELECTRON](https://img.shields.io/badge/built%20with-Electron-blue.svg)](https://www.electronjs.org/)
-[![TYPESCRIPT](https://img.shields.io/badge/written%20in-TypeScript-3178c6.svg)](https://www.typescriptlang.org/)
+[![LICENSE](https://img.shields.io/github/license/greigh/Blockingmachine)](LICENSE) [![ELECTRON](https://img.shields.io/badge/built%20with-Electron-blue.svg)](https://www.electronjs.org/) [![TYPESCRIPT](https://img.shields.io/badge/written%20in-TypeScript-3178c6.svg)](https://www.typescriptlang.org/)
 
 _Modern, lightweight ad-blocking filter management tool for your desktop_
 

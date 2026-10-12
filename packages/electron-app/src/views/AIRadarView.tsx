@@ -996,6 +996,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             <div className="watchdog-action-group">
               <select
                 className="watchdog-select-compact"
+                aria-label="Watchdog background run interval"
                 value={watchdogConfig.intervalMinutes || 60}
                 onChange={(e) => handleChangeWatchdogInterval(parseInt(e.target.value, 10))}
                 title="Watchdog background run interval"
@@ -1029,7 +1030,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 alignItems: 'center',
                 gap: '8px',
                 fontSize: '0.75rem',
-                color: 'var(--secondary-color)',
+                color: 'var(--secondary-color-hover)',
                 cursor: 'pointer',
                 userSelect: 'none',
               }}
@@ -1038,10 +1039,19 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 type="checkbox"
                 checked={watchdogConfig.autoQuarantineEntropyDga !== false}
                 onChange={(e) => handleToggleAutoQuarantineDga(e.target.checked)}
-                style={{ cursor: 'pointer', accentColor: 'var(--primary-color)' }}
+                style={{ cursor: 'pointer', accentColor: 'var(--primary-color)', width: '24px', height: '24px', flexShrink: 0 }}
               />
               <span>Auto-quarantine zero-day DGA / high-entropy domains</span>
             </label>
+            <button
+              type="button"
+              className="entropy-guide-badge-btn"
+              style={{ marginLeft: '10px' }}
+              onClick={() => setIsEntropyModalOpen(true)}
+              title="Understand Shannon Entropy and the 0.0 – 5.0 randomness scale"
+            >
+              <span>Entropy Guide</span>
+            </button>
           </div>
         </div>
       </div>
@@ -1440,6 +1450,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                 <div className="stream-aux-controls">
                   <select
                     className="stream-select status-select"
+                    aria-label="Filter by block status"
                     value={streamStatusFilter}
                     onChange={(e) => setStreamStatusFilter(e.target.value as any)}
                     title="Filter by block status"
@@ -1451,6 +1462,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
 
                   <select
                     className="stream-select sort-select"
+                    aria-label="Sort order"
                     value={streamSortBy}
                     onChange={(e) => setStreamSortBy(e.target.value as any)}
                     title="Sort order"
@@ -1860,6 +1872,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                         type="number"
                         min={1}
                         max={1440}
+                        aria-label="Custom sweep duration in minutes"
                         disabled={Boolean(liveRadarSession?.active)}
                         className="custom-duration-input"
                         value={customMinutesInput}
@@ -2500,7 +2513,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                     </svg>
                     Learned Domains: {learnedFeedbackCount} saved to disk
                   </span>
-                  <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10b981', fontWeight: 600 }}>
+                  <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--tone-success)', fontWeight: 600 }}>
                     100% In-Memory Air-Gapped
                   </span>
                 </div>
@@ -2587,7 +2600,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
                             padding: '3px 8px',
                             borderRadius: 6,
                             background: 'rgba(16, 185, 129, 0.15)',
-                            color: '#10b981',
+                            color: 'var(--tone-success)',
                             border: '1px solid rgba(16, 185, 129, 0.3)',
                             fontWeight: 600,
                           }}

@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import type { FilterSource, SourceScope } from '../types';
+import { useDialogFocus } from '../components/useDialogFocus';
 
 export interface PresetItem {
   name: string;
@@ -489,6 +490,8 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedScope, setSelectedScope] = useState<'all' | SourceScope>('all');
   const [search, setSearch] = useState<string>('');
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, isOpen, onClose);
 
   if (!isOpen) return null;
 
@@ -570,10 +573,17 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-dialog presets-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className="modal-dialog presets-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="presets-modal-title"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
           <div className="modal-title-wrap">
-            <h2 className="modal-title">Recommended Filter Feeds & Packs</h2>
+            <h2 className="modal-title" id="presets-modal-title">Recommended Filter Feeds & Packs</h2>
             <p className="modal-subtitle">
               Quickly subscribe to curated, high-reputation adblock and privacy blocklists with full layer & scope intelligence.
             </p>

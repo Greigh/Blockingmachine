@@ -31,10 +31,7 @@ contextBridge.exposeInMainWorld('electron', {
       .invoke('copy-to-clipboard', text)
       .catch((error) => ({ success: false, error: String(error) }));
   },
-  getFilterSources: () => ipcRenderer.invoke('get-sources') as Promise<FilterSource[]>,
-  setFilterSources: (sources: FilterSource[]) => ipcRenderer.invoke('save-sources', sources),
   getSources: () => ipcRenderer.invoke('get-sources') as Promise<FilterSource[]>,
-  setSources: (sources: FilterSource[]) => ipcRenderer.invoke('save-sources', sources),
   saveSources: (sources: FilterSource[]) => ipcRenderer.invoke('save-sources', sources),
   getCustomRules: () => ipcRenderer.invoke('get-custom-rules'),
   setCustomRules: (rules: string) => ipcRenderer.invoke('save-custom-rules', rules),
@@ -99,12 +96,18 @@ contextBridge.exposeInMainWorld('electron', {
   getTheme: () => ipcRenderer.invoke('get-theme'),
   setTheme: (theme: ThemeType) => ipcRenderer.invoke('set-theme', theme),
   getAppVersion: () => ipcRenderer.invoke('get-app-version') as Promise<string>,
+  checkForUpdates: () =>
+    ipcRenderer.invoke('check-for-updates') as Promise<
+      | { ok: true; current: string; latest: string; updateAvailable: boolean; url: string }
+      | { ok: false; current: string; error: string }
+    >,
   getAutoStartFeedServer: () => ipcRenderer.invoke('get-auto-start-feed-server'),
   setAutoStartFeedServer: (enabled: boolean) => ipcRenderer.invoke('set-auto-start-feed-server', enabled),
-  getFeedToken: () => ipcRenderer.invoke('get-feed-token') as Promise<{ configured: boolean }>,
+  getFeedToken: () => ipcRenderer.invoke('get-feed-token') as Promise<{ configured: boolean; mode: 'required' | 'open' | 'legacy' }>,
   setFeedToken: (token: string) => ipcRenderer.invoke('set-feed-token', token) as Promise<{ success: boolean; unchanged?: boolean; error?: string }>,
   generateFeedToken: () => ipcRenderer.invoke('generate-feed-token') as Promise<{ success: boolean; token?: string; error?: string }>,
-  clearFeedToken: () => ipcRenderer.invoke('clear-feed-token') as Promise<{ success: boolean; error?: string }>,
+  clearFeedToken: () => ipcRenderer.invoke('clear-feed-token') as Promise<{ success: boolean; rotated?: boolean; error?: string }>,
+  setLanAuthMode: (mode: 'required' | 'open') => ipcRenderer.invoke('set-lan-auth-mode', mode) as Promise<{ success: boolean; mode?: string; tokenMinted?: boolean; error?: string }>,
   getFeedPairingPayload: () =>
     ipcRenderer.invoke('get-feed-pairing-payload') as Promise<{
       success: boolean;
