@@ -60,6 +60,20 @@ describe('hub extension tier plan card', () => {
     expect(markup).toContain('11,565 free');
   });
 
+  it('labels a curated-baseline plan as baseline — never "shipped"', () => {
+    // A checkout's rules/ dir holds 118 curated rules while the packaged extension carries the
+    // compiled plan. "118 shipped rules" is a true sentence about the file and a false one about
+    // the product, so the card distinguishes the two sources explicitly.
+    const baseline = render({ result: { ...RESULT, tierSource: 'curated-baseline' } });
+    expect(baseline).toContain('baseline rules');
+    expect(baseline).not.toContain('shipped rules');
+    expect(baseline).toContain('tier-plan-baseline-note');
+
+    const compiled = render({ result: { ...RESULT, tierSource: 'compiled' } });
+    expect(compiled).toContain('shipped rules');
+    expect(compiled).not.toContain('tier-plan-baseline-note');
+  });
+
   it('shows the measured blocks beside the rules each tier costs', () => {
     const markup = render();
     // The whole reason the card exists: 23,523 rules against 12 measured blocks, visible in one
@@ -130,8 +144,8 @@ describe('hub extension tier plan card', () => {
     // Scoped to the one row, because another tier's "0" in the redundancy column would otherwise
     // satisfy a whole-table negative assertion and mask a real zero in the blocked column.
     const coreRow = markup.slice(markup.indexOf('Core shield'), markup.indexOf('Ad networks'));
-    expect(coreRow).toContain('<td>—</td>');
-    expect(coreRow).not.toContain('<td>0</td>');
+    expect(coreRow).toContain('tier-plan-stat-value">—</span>');
+    expect(coreRow).not.toContain('tier-plan-stat-value">0</span>');
   });
 
   it('names the tier the synced list already blocks entirely', () => {

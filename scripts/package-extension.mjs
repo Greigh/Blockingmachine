@@ -11,6 +11,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, cpSync, r
 import { resolve, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { parseArgvOrExit } from './argv.mjs';
+import { configuredOutputDir } from './compile-tier-rulesets.mjs';
 import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -53,12 +54,27 @@ if (skipTiers) {
   console.log('⏭️  [1/6] Skipping tier compilation (--skip-tiers): shipping the curated baseline.');
 } else {
   const ranked = ledgerHasHits();
+  // The hub's attribution manifest lives beside its compiled lists, when a hub has run here —
+  // the compiler deliberately takes `--attribution` only when an operator names it, so this
+  // script is the operator that names it: discovered, reported, and loudly absent rather than
+  // silently skipped into vocabulary placement.
+  const outputDir = configuredOutputDir();
+  const attributionDir =
+    outputDir && existsSync(resolve(outputDir, 'categories', 'manifest.json'))
+      ? resolve(outputDir, 'categories')
+      : null;
   console.log('🗂️  [1/6] Compiling static ruleset tiers from the desktop hub blocklist...');
   if (ranked) console.log('     Ranking the cut by the accumulated browser ledger (ledger/ledger-hits.txt).');
+  if (attributionDir) console.log(`     Attributing hosts by the hub's category manifest (${attributionDir}).`);
+  else console.log('     No hub attribution manifest found — unclaimed hosts fall back to vocabulary.');
   try {
     execFileSync(
       'node',
-      ['scripts/compile-tier-rulesets.mjs', ...(ranked ? ['--hits', LEDGER] : [])],
+      [
+        'scripts/compile-tier-rulesets.mjs',
+        ...(ranked ? ['--hits', LEDGER] : []),
+        ...(attributionDir ? ['--attribution', attributionDir] : []),
+      ],
       {
         cwd: ROOT_DIR,
         stdio: 'inherit',

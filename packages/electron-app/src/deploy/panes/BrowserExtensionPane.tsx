@@ -218,15 +218,17 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
           popup answers the same question against a live grant the hub cannot
           see, so this card asks for a capacity explicitly rather than
           reporting Chrome's guaranteed floor as though it were the real one. */}
-      <ExtensionTierPlanCard
-        state={tierPlanState}
-        result={tierPlan}
-        error={tierPlanError}
-        enabled={[]}
-        onRefresh={loadTierPlan}
-        onChooseLedger={chooseTierLedger}
-        onClearLedger={clearTierLedger}
-      />
+      <div className="deploy-info-card-wide">
+        <ExtensionTierPlanCard
+          state={tierPlanState}
+          result={tierPlan}
+          error={tierPlanError}
+          enabled={[]}
+          onRefresh={loadTierPlan}
+          onChooseLedger={chooseTierLedger}
+          onClearLedger={clearTierLedger}
+        />
+      </div>
 
       <div className="deploy-info-card deploy-info-card-wide">
         <div className="deploy-pane-header">
