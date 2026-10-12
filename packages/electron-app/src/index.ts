@@ -492,6 +492,11 @@ Menu.setApplicationMenu(menu);
 
 // Initialize store with proper typing
 const store = new Store<StoreSchema>({
+  // electron-store 12 / conf 16: keep the parsed config in memory instead of
+  // re-reading the file on every `.get()`. The cached tree is frozen — every
+  // write path here already rebuilds ({...}, map, filter) rather than mutating
+  // a `.get()` result, which is exactly what the freeze contract requires.
+  cache: true,
   schema: {
     filterSources: {
       type: 'array',
