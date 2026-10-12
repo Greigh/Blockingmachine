@@ -36,6 +36,9 @@ mkdir -p "$DATA_DIR"
 echo "[Blockingmachine Add-on] Initialized on port $FEED_PORT with $AUTO_COMPILE compilation schedule."
 if [ -n "$FEED_TOKEN" ]; then
     echo "[Blockingmachine Add-on] Feed token is set — every endpoint requires it."
+else
+    echo "[Blockingmachine Add-on] No feed_token option — the server resolves its LAN posture on first boot"
+    echo "  (new installs get a generated token in \$DATA_DIR/.feed_token; existing installs keep open mode)."
 fi
 if [ -n "$FEED_SOURCE_URL" ]; then
     echo "[Blockingmachine Add-on] Compiles will sync feeds from $FEED_SOURCE_URL"

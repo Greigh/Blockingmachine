@@ -123,4 +123,27 @@ describe('DNS rebinding: resolve-time guard on outbound fetches', () => {
     expect(result.status).not.toBe(403);
     expect(result.content).toBeNull();
   }, 20000);
+
+  it('pins the ai-crawl-url page fetch — a rebinding hostname never reaches the socket', async () => {
+    // crawlAndScanUrl takes a renderer-supplied URL: same SSRF shape as a filter
+    // source. The crawler used to fetch with the global dispatcher, so a public
+    // name answering loopback connected straight through. It now goes through
+    // node-fetch + the pinned agent — the private answer is refused at lookup.
+    const { AiDetectorService } = await import('../ai/AiDetectorService.js');
+    servePrivateResolver({
+      'rebind.crawler.example': [{ address: '127.0.0.1', family: 4 }],
+    });
+    const service = new AiDetectorService({ provider: 'mini-ai' });
+    const result = await service.crawlAndScanUrl(`http://rebind.crawler.example:${port}/page`);
+    expect(result.extractedHosts).toEqual([]);
+    expect(hitCount).toBe(0);
+  });
+
+  it('still refuses a literal private crawl target at the lexical layer', async () => {
+    const { AiDetectorService } = await import('../ai/AiDetectorService.js');
+    const service = new AiDetectorService({ provider: 'mini-ai' });
+    await expect(service.crawlAndScanUrl(`http://192.168.4.9:${port}/page`))
+      .rejects.toThrow('SSRF Guard');
+    expect(hitCount).toBe(0);
+  });
 });

@@ -61,6 +61,42 @@ test('a non-OK response reports an error and writes nothing', async () => {
   await assert.rejects(fs.stat(join(dataDir, 'browser.txt')));
 });
 
+test('an oversized body is refused — the bound trips before the feed is touched', async () => {
+  const dataDir = tmpDir();
+  const existing = '0.0.0.0 keepme.example.com\n';
+  await fs.writeFile(join(dataDir, 'dns.txt'), existing, 'utf8');
+  // 33 MB of otherwise feed-shaped bytes — the cap is 32 MB. A LAN MITM or a
+  // wedged upstream answering an unbounded body must fail, not be buffered.
+  const huge = '0.0.0.0 example.com\n'.repeat(2 * 1024 * 1024);
+  const { impl } = fakeFetch({ 'dns.txt': huge, 'browser.txt': SAMPLE_BROWSER });
+  const res = await pullFeeds({ sourceUrl: 'http://hub.local:9191', dataDir, fetchImpl: impl });
+  assert.deepEqual(res.pulled, ['browser.txt']);
+  assert.equal(res.errors.length, 1);
+  assert.match(res.errors[0], /exceeded \d+ bytes/);
+  assert.equal(await fs.readFile(join(dataDir, 'dns.txt'), 'utf8'), existing);
+});
+
+test('the stream path enforces the same bound mid-flight', async () => {
+  const dataDir = tmpDir();
+  // A web-stream-shaped body (what undici really returns) that lies — each
+  // chunk alone is feed-shaped, the sum is not.
+  const chunk = Buffer.alloc(20 * 1024 * 1024, 0x30);
+  const streamBody = {
+    getReader: () => {
+      let sent = 0;
+      return {
+        read: async () => (sent++ < 2 ? { done: false, value: chunk } : { done: true }),
+        cancel: async () => {},
+      };
+    },
+  };
+  const impl = async () => ({ ok: true, status: 200, body: streamBody, text: async () => '' });
+  const res = await pullFeeds({ sourceUrl: 'http://hub.local:9191', dataDir, fetchImpl: impl });
+  assert.deepEqual(res.pulled, []);
+  assert.equal(res.errors.length, FEED_FILES.length);
+  assert.match(res.errors[0], /exceeded \d+ bytes/);
+});
+
 test('an HTML error page is refused — the published feed is not overwritten', async () => {
   const dataDir = tmpDir();
   const existing = '0.0.0.0 keepme.example.com\n';

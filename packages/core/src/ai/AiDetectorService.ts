@@ -4,7 +4,8 @@ import { resolveCnameChain, isBenignCnameTarget } from './cnameResolver.js';
 import { analyzeQueryBehavior, escalateRiskWithBehavior, type BehavioralDomainInsight } from './behavioral.js';
 import { sanitizeDomain, synthesizeRules, isDomainCoveredByRules } from './ruleSynthesizer.js';
 import { classifyDomainWithMiniAi, globalMiniAiClassifier } from './MiniAiClassifier.js';
-import { readBoundedJsonBody } from '../fetch.js';
+import nodeFetch from 'node-fetch';
+import { readBoundedJsonBody, publicOnlyAgent } from '../fetch.js';
 import {
   getDbLists,
   classifyInfrastructure,
@@ -1050,7 +1051,11 @@ Respond ONLY with a valid JSON object matching this schema:
     timeout?.unref?.();
 
     try {
-      const res = await fetch(pageUrl, {
+      // node-fetch + the pinned agent: every redirect hop resolves inside the
+      // connection and private answers are refused at dial time — the same
+      // rebind guard filter-source fetches carry. The renderer-supplied URL here
+      // is exactly the SSRF shape that pinning exists for.
+      const res = await nodeFetch(pageUrl, {
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
@@ -1058,11 +1063,13 @@ Respond ONLY with a valid JSON object matching this schema:
         },
         signal: controller.signal,
         redirect: 'follow',
+        agent: publicOnlyAgent,
       });
 
       if (!res.ok) return [];
 
-      // Open redirect guard: check final destination URL
+      // Open redirect guard: lexical check on the final destination URL —
+      // defense in depth alongside the per-hop resolver pin above.
       if (res.url && !isSafePublicWebUrl(res.url).isSafe) {
         return [];
       }
@@ -1070,22 +1077,18 @@ Respond ONLY with a valid JSON object matching this schema:
       // Memory-safe stream reading capped at 2MB to prevent DoS / OOM crashes
       let html = '';
       if (res.body) {
-        const reader = res.body.getReader();
         const decoder = new TextDecoder('utf-8');
         let totalBytes = 0;
         const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2 MB limit
 
-        try {
-          while (totalBytes < MAX_HTML_BYTES) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value) {
-              totalBytes += value.length;
-              html += decoder.decode(value, { stream: true });
-            }
-          }
-        } finally {
-          reader.cancel().catch(() => {});
+        // node-fetch bodies are Node streams (async-iterable), not web streams —
+        // breaking out destroys the socket back-pressure cleanly. Chunks may be
+        // string or Buffer depending on encoding; normalize before decoding.
+        for await (const chunk of res.body) {
+          const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+          totalBytes += buf.length;
+          if (totalBytes > MAX_HTML_BYTES) break;
+          html += decoder.decode(buf, { stream: true });
         }
       }
 

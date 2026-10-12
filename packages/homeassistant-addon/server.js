@@ -20,7 +20,7 @@
 import { createServer } from 'node:http';
 import { promises as fs, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { renderUnboundFeed, rulesToUnboundZones } from './unboundFeed.js';
 import { renderShadowrocketFeed, shadowrocketHostCount } from './shadowrocketFeed.js';
 import { renderPrivoxyFeed, privoxyPatternCount } from './privoxyFeed.js';
@@ -55,24 +55,221 @@ const STARTED_AT = Date.now();
  * a client sends for a `http://user:token@host/` userinfo URL, so AdGuard Home, Pi-hole and curl
  * all work without special-casing.
  */
-const FEED_TOKEN = (process.env.FEED_TOKEN || '').trim();
+// ─── LAN authentication state ──────────────────────────────────────────────────
+//
+// Two credential sources, one posture decision:
+//
+//  - `FEED_TOKEN` env (the add-on's `feed_token` option) — user-managed. When set
+//    it is the enforced credential, always.
+//  - A minted token persisted in DATA_DIR (`.feed_token`, 0600) — the secured
+//    default every *new* install gets. A first boot that finds a data dir with
+//    prior artifacts (feeds, stats — proof an older version ran here) records
+//    mode 'open' and stays compatible instead; token absence alone is never
+//    proof of newness.
+//
+// The persisted `.lan-auth.json` is the explicit mode record: 'required' means
+// every endpoint demands the credential; 'open' is the deliberate compatibility
+// posture — a token is still honoured when sent, never required.
+
+const ENV_FEED_TOKEN = (process.env.FEED_TOKEN || '').trim();
+const AUTH_STATE_PATH = join(DATA_DIR, '.lan-auth.json');
+const MINTED_TOKEN_PATH = join(DATA_DIR, '.feed_token');
+const ADMIN_TOKEN_PATH = join(DATA_DIR, '.admin_token');
+const AUTH_COOKIE = 'bm_token';
+// Any of these in DATA_DIR means an earlier version ran here — the upgrade path.
+const LEGACY_STATE_FILES = [
+  'dns.txt', 'browser.txt', 'filter-list.txt', 'unbound.conf',
+  'hub-stats.json', 'protection.json', 'browser-telemetry.json',
+];
+
+let mintedFeedToken = '';
+let adminToken = '';
+let lanAuthMode = 'open'; // refined by initLanAuth() before the server listens
+let authPersistenceOk = true; // false when DATA_DIR writes fail — status surfaces it
+// Serializes every state/credential mutation so concurrent admin calls (or a
+// flip racing a heal) can never interleave writes into a torn state.
+let authOpChain = Promise.resolve();
+function serializeAuthOp(work) {
+  const run = authOpChain.then(work, work);
+  authOpChain = run.then(() => {}, () => {});
+  return run;
+}
+
+function currentToken() {
+  return ENV_FEED_TOKEN || mintedFeedToken;
+}
+
+// ─── Durable writes ───────────────────────────────────────────────────────────
+// Auth state and credentials write tmp-then-rename: a crash mid-write can never
+// leave a truncated JSON or a half-written credential — the reader sees either
+// the complete old file or the complete new one. The tmp name is unique per
+// write, and `rm` first clears a planted symlink at that name.
+
+let authWriteSeq = 0;
+async function atomicWriteFile(filePath, content, mode = 0o600) {
+  const tmp = `${filePath}.tmp-${process.pid}-${authWriteSeq++}`;
+  await fs.rm(tmp, { force: true });
+  await fs.writeFile(tmp, content, { mode });
+  await fs.rename(tmp, filePath);
+}
+
+async function writeAuthState(mode) {
+  try {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    await atomicWriteFile(AUTH_STATE_PATH, JSON.stringify({ version: 2, mode }, null, 2));
+    authPersistenceOk = true;
+  } catch (err) {
+    authPersistenceOk = false;
+    console.error('[Add-on Hub] Failed to persist auth mode:', err);
+  }
+}
+
+/**
+ * Writes a credential create-if-absent (`wx`): on a concurrent-boot race the
+ * first writer's value wins and the loser re-reads it — both end up using the
+ * same durable credential. A present-but-empty file is an interrupted earlier
+ * write and is atomically replaced. On an unwritable dir the in-memory value is
+ * still used (persistence flagged broken) — the next boot re-mints and re-logs.
+ */
+async function mintCredential(filePath) {
+  const candidate = randomBytes(24).toString('base64url');
+  try {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    try {
+      await fs.writeFile(filePath, candidate, { mode: 0o600, flag: 'wx' });
+      return candidate;
+    } catch (err) {
+      if (err && err.code === 'EEXIST') {
+        const existing = (await fs.readFile(filePath, 'utf8')).trim();
+        if (existing) return existing;
+        await atomicWriteFile(filePath, candidate);
+        return candidate;
+      }
+      throw err;
+    }
+  } catch (err) {
+    authPersistenceOk = false;
+    console.error(`[Add-on Hub] Failed to persist credential ${filePath}:`, err);
+    return candidate;
+  }
+}
+
+async function mintToken() {
+  mintedFeedToken = await mintCredential(MINTED_TOKEN_PATH);
+}
+
+/**
+ * First-boot posture resolution. Runs before the server starts listening so the
+ * very first request sees the decided mode.
+ *
+ *  - Env token configured          → required, user-managed credential.
+ *  - Persisted mode 'required'     → required; mints if the token file is gone
+ *                                    (fail-closed heal, same as the desktop).
+ *  - Persisted mode 'open'         → explicit compatibility.
+ *  - Corrupt/unreadable state file → treated as required (a read failure must
+ *                                    never silently downgrade a secured install).
+ *  - No state file, prior artifacts→ upgrade: record 'open', stay compatible.
+ *  - No state file, empty data dir → new install: 'required' + minted token.
+ *    (Ambiguous: a wiped legacy install looks identical — it gets the secured
+ *    default plus the same admin recovery paths, never a silent open.)
+ *
+ * The admin credential is minted on EVERY install, new and existing — it gates
+ * only `/v1/auth-mode`, so creating it changes no client's data-plane access.
+ */
+async function initLanAuth() {
+  if (existsSync(ADMIN_TOKEN_PATH)) {
+    try {
+      adminToken = (await fs.readFile(ADMIN_TOKEN_PATH, 'utf8')).trim();
+    } catch (err) {
+      // Unreadable or unexpected file type — treat as absent and re-mint.
+      console.error('[Add-on Hub] Could not read .admin_token — re-minting:', err);
+    }
+  }
+  if (!adminToken) {
+    adminToken = await mintCredential(ADMIN_TOKEN_PATH);
+    // The add-on's Log tab is the HA-admin-only credential-recovery path —
+    // the same deliberate-disclosure boundary as the desktop's pairing QR.
+    console.log(`[Blockingmachine Add-on] Generated LAN admin token: ${adminToken}`);
+    console.log('[Blockingmachine Add-on] Needed once for authentication-mode changes — also stored at .admin_token in the add-on data dir.');
+  }
+
+  if (ENV_FEED_TOKEN) {
+    lanAuthMode = 'required';
+    console.log('[Blockingmachine Add-on] Feed token configured via options — every endpoint requires it.');
+    return;
+  }
+  if (existsSync(AUTH_STATE_PATH)) {
+    try {
+      const raw = JSON.parse(await fs.readFile(AUTH_STATE_PATH, 'utf8'));
+      lanAuthMode = raw && raw.mode === 'required' ? 'required' : 'open';
+    } catch {
+      lanAuthMode = 'required'; // fail-closed on a corrupt or unreadable record
+    }
+  } else {
+    const hasPriorArtifacts = LEGACY_STATE_FILES.some((f) => existsSync(join(DATA_DIR, f)));
+    lanAuthMode = hasPriorArtifacts ? 'open' : 'required';
+    await writeAuthState(lanAuthMode);
+    if (!hasPriorArtifacts) {
+      console.log('[Blockingmachine Add-on] New install — LAN authentication is required by default.');
+    } else {
+      console.log('[Blockingmachine Add-on] Existing data detected — keeping open compatibility mode (the dashboard can migrate it).');
+    }
+  }
+  // A persisted minted token is honoured in EITHER mode when a client sends it
+  // — required mode demands it; open mode accepts it without demanding.
+  if (existsSync(MINTED_TOKEN_PATH)) {
+    try {
+      mintedFeedToken = (await fs.readFile(MINTED_TOKEN_PATH, 'utf8')).trim();
+    } catch (err) {
+      // Unreadable or unexpected file type — treated as absent; a required
+      // mode then re-mints (heal), an open mode runs tokenless as recorded.
+      console.error('[Add-on Hub] Could not read .feed_token — treating as absent:', err);
+    }
+  }
+  if (lanAuthMode === 'required' && !mintedFeedToken) {
+    await mintToken();
+    console.log(`[Blockingmachine Add-on] Generated LAN feed token: ${mintedFeedToken}`);
+    console.log('[Blockingmachine Add-on] Keep it out of places you would not put a password; it is also stored at .feed_token in the add-on data dir.');
+  }
+}
 
 /** Constant-time comparison — the token is a credential, not a label. */
 function tokenMatches(candidate) {
-  if (!candidate || !FEED_TOKEN) return false;
+  const token = currentToken();
+  if (!candidate || !token) return false;
   const a = Buffer.from(String(candidate));
-  const b = Buffer.from(FEED_TOKEN);
+  const b = Buffer.from(token);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function isAuthorized(req, url) {
-  if (!FEED_TOKEN) return true;
-  if (tokenMatches(url.searchParams.get('token'))) return true;
+function cookieToken(req) {
+  const header = req.headers.cookie || '';
+  for (const part of header.split(';')) {
+    const [name, ...rest] = part.trim().split('=');
+    if (name === AUTH_COOKIE) return rest.join('=').trim();
+  }
+  return '';
+}
+
+/**
+ * Authz for one request.
+ * @returns {{ok: boolean, credentialed: boolean, viaQuery: boolean}}
+ *   `credentialed` = the request proved it knows the token (query, header or
+ *   cookie) — vs merely being allowed through open mode. Status payloads gate
+ *   token echo on it so an open-mode unauthenticated probe can't exfiltrate the
+ *   stored credential.
+ */
+function authorizeRequest(req, url) {
+  const required = ENV_FEED_TOKEN ? true : lanAuthMode === 'required';
+  const viaQuery = tokenMatches(url.searchParams.get('token'));
+  if (viaQuery) return { ok: true, credentialed: true, viaQuery: true };
 
   const header = req.headers.authorization || '';
   // `/^Bearer\s/` then index-slice: the `+`-anchored form rescans a space run quadratically.
   const bearerPrefix = /^Bearer\s/i.exec(header);
-  if (bearerPrefix && tokenMatches(header.slice(bearerPrefix[0].length).trim())) return true;
+  if (bearerPrefix && tokenMatches(header.slice(bearerPrefix[0].length).trim())) {
+    return { ok: true, credentialed: true, viaQuery: false };
+  }
 
   const basic = /^Basic\s+([A-Za-z0-9+/=]+)$/i.exec(header);
   if (basic) {
@@ -80,18 +277,97 @@ function isAuthorized(req, url) {
     // `user:token` is the standard shape; a bare `token` or `token:` is accepted because some
     // fetchers hand the credential over without a username.
     const password = decoded.includes(':') ? decoded.slice(decoded.indexOf(':') + 1) : decoded;
-    if (tokenMatches(password) || tokenMatches(decoded)) return true;
+    if (tokenMatches(password) || tokenMatches(decoded)) {
+      return { ok: true, credentialed: true, viaQuery: false };
+    }
   }
-  return false;
+
+  if (tokenMatches(cookieToken(req))) return { ok: true, credentialed: true, viaQuery: false };
+
+  return { ok: !required, credentialed: false, viaQuery: false };
 }
 
-/** Rejects with a Basic challenge so browsers, curl and feed fetchers can answer it. */
-function rejectUnauthorized(res) {
+// ─── Administrative authorization ────────────────────────────────────────────
+// Mode changes are privileged: the feed token is a *data-plane* credential — a
+// mobile client holding it is not entitled to reconfigure the install's trust
+// posture. A separate credential, minted on every install and recoverable only
+// through the add-on's own Log / `.admin_token` (the HA-admin boundary), is the
+// sole proof of administrative authority. It travels header-only — never in a
+// URL — so it can never leak into a subscriber link, referrer, or proxy log.
+
+/** Constant-time comparison — the admin credential is a secret, not a label. */
+function adminTokenMatches(candidate) {
+  if (!candidate || !adminToken) return false;
+  const a = Buffer.from(String(candidate));
+  const b = Buffer.from(adminToken);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * Administrative authority = possession of the management credential, sent as
+ * `X-Admin-Token:` or `Authorization: Bearer <admin>`. Deliberately NOT:
+ * the feed token (data-plane), the bm_token cookie (feed-scoped session),
+ * Origin/Referer/Host/X-Ingress-Path (spoofable), or Origin absence.
+ */
+function isAdminRequest(req) {
+  const header = req.headers['x-admin-token'];
+  if (adminTokenMatches(Array.isArray(header) ? header[0] : header)) return true;
+  const auth = req.headers.authorization || '';
+  const bearerPrefix = /^Bearer\s/i.exec(auth);
+  return Boolean(bearerPrefix && adminTokenMatches(auth.slice(bearerPrefix[0].length).trim()));
+}
+
+function rejectAdminRequired(res) {
+  res.writeHead(403, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: 'Admin credential required',
+    hint: 'Pass the management token as X-Admin-Token — find it in the add-on Log or .admin_token in the add-on data dir',
+  }));
+}
+
+/**
+ * The unlock page for browser/ingress visits to the dashboard. A form GET drops
+ * the token on `/?token=…`, which authorizes and sets the session cookie — no
+ * endpoint of its own, and the token never leaves the request the user typed.
+ */
+function unlockPage() {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Blockingmachine — Unlock</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font-family:system-ui,sans-serif;background:#10151f;color:#dfe7f3;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+.card{background:#1a2332;border-radius:12px;padding:28px 32px;max-width:420px;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+h1{font-size:1.15rem;margin:0 0 10px}
+p{font-size:.85rem;opacity:.75;line-height:1.45}
+input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #33415c;background:#10151f;color:inherit;font:inherit;margin:14px 0 10px}
+button{width:100%;padding:10px;border:0;border-radius:8px;background:#3b82f6;color:#fff;font:inherit;font-weight:600;cursor:pointer}
+</style></head><body><form class="card" method="get" action="">
+<h1>🔒 Blockingmachine is locked</h1>
+<p>This install requires its feed token before the dashboard, feeds or API answer.
+Find it in the add-on's <b>Log</b> tab (printed once at first boot), in
+<code>.feed_token</code> in the add-on data directory, or re-pair from the desktop app's QR.</p>
+<input name="token" type="password" placeholder="Feed token" autocomplete="current-password" autofocus>
+<button type="submit">Unlock</button>
+<p style="font-size:.72rem">The token is stored as a session cookie on this browser only.</p>
+</form></body></html>`;
+}
+
+/**
+ * Rejects with a Basic challenge so curl and feed fetchers can answer it — and,
+ * for a browser visiting the dashboard itself, with the unlock page so Home
+ * Assistant ingress users get a real login form instead of a blank 401.
+ */
+function rejectUnauthorized(res, pathname, wantsHtml) {
+  if (wantsHtml && (pathname === '/' || pathname === '/index.html')) {
+    res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(unlockPage());
+    return;
+  }
   res.writeHead(401, {
     'Content-Type': 'application/json; charset=utf-8',
     'WWW-Authenticate': 'Basic realm="Blockingmachine feeds", charset="UTF-8"',
   });
-  res.end(JSON.stringify({ error: 'Unauthorized — a feed token is configured on this add-on' }));
+  res.end(JSON.stringify({ error: 'Unauthorized — a feed token is required on this add-on' }));
 }
 
 /**
@@ -99,9 +375,16 @@ function rejectUnauthorized(res) {
  * The page itself is behind the same check, so anyone who can read the rendered URL already knows
  * the token — and a copied URL that lacks it would simply fail to fetch.
  */
-function feedUrl(path) {
+/**
+ * The URL the dashboard should print for a feed path. The token rides along
+ * only for a viewer that already proved it — on an open-mode dashboard served
+ * unauthenticated, embedding the stored credential would leak it to anyone
+ * who can reach the page (and that viewer's URLs work unauthenticated anyway).
+ */
+function feedUrl(path, disclose) {
   const base = `http://homeassistant.local:${PORT}${path}`;
-  return FEED_TOKEN ? `${base}?token=${encodeURIComponent(FEED_TOKEN)}` : base;
+  const token = currentToken();
+  return token && disclose ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
 // ─── Baseline fallback protection ─────────────────────────────────────────────
@@ -354,7 +637,14 @@ function startAutoCompileScheduler() {
 
 // ─── Ingress dashboard UI ─────────────────────────────────────────────────────
 
-function renderDashboard(dns, browser) {
+function authModeLabel() {
+  if (ENV_FEED_TOKEN) return 'token required on every endpoint (from add-on options)';
+  return lanAuthMode === 'required'
+    ? 'token required on every endpoint (generated default)'
+    : 'open (LAN trust — a token is honoured when sent, never required)';
+}
+
+function renderDashboard(dns, browser, auth) {
   const upSec = Math.floor((Date.now() - STARTED_AT) / 1000);
   const uptime = upSec >= 3600
     ? `${Math.floor(upSec / 3600)}h ${Math.floor((upSec % 3600) / 60)}m`
@@ -372,13 +662,15 @@ function renderDashboard(dns, browser) {
   const dnsRulesPreview = dns.rules.slice(0, 60).map((r) => escapeHtml(r));
   const browserRulesPreview = browser.rules.slice(0, 60).map((r) => escapeHtml(r));
 
-  const inlineRules = JSON.stringify([...dns.rules, ...browser.rules].slice(0, 5000)).replace(/</g, '\\u003c');
+  const inlineDnsRules = JSON.stringify(dns.rules.slice(0, 5000)).replace(/</g, '\\u003c');
+  const inlineBrowserRules = JSON.stringify(browser.rules.slice(0, 5000)).replace(/</g, '\\u003c');
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E">
 <title>Blockingmachine Hub — Home Assistant</title>
 <style>
   :root { color-scheme: dark light; }
@@ -402,11 +694,20 @@ function renderDashboard(dns, browser) {
   .stat-card { display: flex; flex-direction: column; gap: 2px; padding: 16px; margin-bottom: 0; }
   .stat-val { font-size: 30px; font-weight: 800; color: var(--accent-color, #38bdf8); font-variant-numeric: tabular-nums; }
   .stat-label { font-size: 12.5px; color: var(--secondary-text-color, #94a3b8); }
+  /* Phone widths: two compact tile columns instead of eight full-width cards,
+     so the Protection control is not three viewports of scroll away. */
+  @media (max-width: 520px) {
+    body { padding: 12px; }
+    .grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .stat-card { padding: 10px 12px; }
+    .stat-val { font-size: 20px; }
+    .stat-label { font-size: 11px; }
+  }
   h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
   .muted { color: var(--secondary-text-color, #94a3b8); font-size: 13px; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
   .btn {
-    background: var(--accent-color, #0284c7); color: var(--card-background-color, #fff); border: none;
+    background: var(--accent-color, #0369a1); color: #fff; border: none;
     padding: 10px 18px; border-radius: 10px; font-weight: 700; cursor: pointer; font-size: 13.5px;
     display: inline-flex; align-items: center; gap: 7px; transition: opacity .15s ease;
     text-decoration: none;
@@ -456,6 +757,7 @@ function renderDashboard(dns, browser) {
 </style>
 </head>
 <body>
+  <main>
   <header class="hub">
     <span class="logo">🛡️</span>
     <div>
@@ -509,14 +811,14 @@ function renderDashboard(dns, browser) {
   <div class="card">
     <h2>📡 Local Feed Endpoints</h2>
     <p class="muted">Wire these into Home Assistant's AdGuard Home or Pi-hole add-on, into an Unbound resolver, or into a phone on this LAN:</p>
-    <div class="feed"><span class="tag">DNS Feed</span><code>${feedUrl('/dns.txt')}</code><button data-copy="${feedUrl('/dns.txt')}">Copy</button></div>
-    <div class="feed"><span class="tag">Browser Feed</span><code>${feedUrl('/browser.txt')}</code><button data-copy="${feedUrl('/browser.txt')}">Copy</button></div>
-    <div class="feed"><span class="tag">Unbound Feed</span><code>${feedUrl('/unbound.conf')}</code><button data-copy="${feedUrl('/unbound.conf')}">Copy</button></div>
-    <div class="feed"><span class="tag">Shadowrocket Feed</span><code>${feedUrl('/shadowrocket.conf')}</code><button data-copy="${feedUrl('/shadowrocket.conf')}">Copy</button></div>
-    <div class="feed"><span class="tag">Privoxy Feed</span><code>${feedUrl('/privoxy.action')}</code><button data-copy="${feedUrl('/privoxy.action')}">Copy</button></div>
-    <div class="feed"><span class="tag">BIND RPZ Feed</span><code>${feedUrl('/db.blockingmachine.rpz')}</code><button data-copy="${feedUrl('/db.blockingmachine.rpz')}">Copy</button></div>
-    <div class="feed"><span class="tag">REST Status</span><code>${feedUrl('/v1/status')}</code><button data-copy="${feedUrl('/v1/status')}">Copy</button></div>
-    <div class="feed"><span class="tag">Live Events</span><code>${feedUrl('/v1/events')}</code><button data-copy="${feedUrl('/v1/events')}">Copy</button></div>${FEED_TOKEN ? '\n    <p class="muted">A feed token is configured — the URLs above carry it, so they work as pasted. Keep them out of places you would not put a password.</p>' : ''}
+    <div class="feed"><span class="tag">DNS Feed</span><code>${feedUrl('/dns.txt', auth.credentialed)}</code><button data-copy="${feedUrl('/dns.txt', auth.credentialed)}">Copy</button></div>
+    <div class="feed"><span class="tag">Browser Feed</span><code>${feedUrl('/browser.txt', auth.credentialed)}</code><button data-copy="${feedUrl('/browser.txt', auth.credentialed)}">Copy</button></div>
+    <div class="feed"><span class="tag">Unbound Feed</span><code>${feedUrl('/unbound.conf', auth.credentialed)}</code><button data-copy="${feedUrl('/unbound.conf', auth.credentialed)}">Copy</button></div>
+    <div class="feed"><span class="tag">Shadowrocket Feed</span><code>${feedUrl('/shadowrocket.conf', auth.credentialed)}</code><button data-copy="${feedUrl('/shadowrocket.conf', auth.credentialed)}">Copy</button></div>
+    <div class="feed"><span class="tag">Privoxy Feed</span><code>${feedUrl('/privoxy.action', auth.credentialed)}</code><button data-copy="${feedUrl('/privoxy.action', auth.credentialed)}">Copy</button></div>
+    <div class="feed"><span class="tag">BIND RPZ Feed</span><code>${feedUrl('/db.blockingmachine.rpz', auth.credentialed)}</code><button data-copy="${feedUrl('/db.blockingmachine.rpz', auth.credentialed)}">Copy</button></div>
+    <div class="feed"><span class="tag">REST Status</span><code>${feedUrl('/v1/status', auth.credentialed)}</code><button data-copy="${feedUrl('/v1/status', auth.credentialed)}">Copy</button></div>
+    <div class="feed"><span class="tag">Live Events</span><code>${feedUrl('/v1/events', auth.credentialed)}</code><button data-copy="${feedUrl('/v1/events', auth.credentialed)}">Copy</button></div>${auth.credentialed && currentToken() ? '\n    <p class="muted">A feed token is configured — the URLs above carry it, so they work as pasted. Keep them out of places you would not put a password.</p>' : ''}
   </div>
 
   <div class="card">
@@ -527,12 +829,12 @@ function renderDashboard(dns, browser) {
       <span class="pill" id="filter-count">${compileStats.totalRules} rules</span>
     </div>
     <details class="rules" open>
-      <summary>DNS-level rules (first ${Math.min(60, dns.rules.length)} of ${dns.rules.length})</summary>
-      <pre>${dnsRulesPreview.join('\n') || '(empty)'}</pre>
+      <summary id="sum-dns">DNS-level rules (first ${Math.min(60, dns.rules.length)} of ${dns.rules.length})</summary>
+      <pre id="pre-dns">${dnsRulesPreview.join('\n') || '(empty)'}</pre>
     </details>
     <details class="rules">
-      <summary>Browser rules (first ${Math.min(60, browser.rules.length)} of ${browser.rules.length})</summary>
-      <pre>${browserRulesPreview.join('\n') || '(empty)'}</pre>
+      <summary id="sum-browser">Browser rules (first ${Math.min(60, browser.rules.length)} of ${browser.rules.length})</summary>
+      <pre id="pre-browser">${browserRulesPreview.join('\n') || '(empty)'}</pre>
     </details>
   </div>
 
@@ -542,7 +844,7 @@ function renderDashboard(dns, browser) {
       <span class="k">Service</span><span>Blockingmachine Home Assistant Add-on</span>
       <span class="k">Version</span><span>1.1.0</span>
       <span class="k">Port</span><span>${PORT}</span>
-      <span class="k">Feed auth</span><span>${FEED_TOKEN ? 'token required on every endpoint' : 'open (LAN trust)'}</span>
+      <span class="k">Feed auth</span><span>${authModeLabel()}</span>
       <span class="k">Data directory</span><span>${escapeHtml(DATA_DIR)}</span>
       <span class="k">DNS feed</span><span>${dns.source === 'file' ? 'published dns.txt' : 'baseline fallback'}</span>
       <span class="k">Browser feed</span><span>${browser.source === 'file' ? 'published browser.txt' : 'baseline fallback'}</span>
@@ -552,6 +854,30 @@ function renderDashboard(dns, browser) {
       <span class="k">BIND RPZ feed</span><span>${rpzCount} policy records rendered from the same ${dns.source === 'file' ? 'published dns.txt' : 'baseline fallback'}</span>
     </div>
     <div class="meta-line"><a class="btn secondary" id="status-link" href="v1/status" target="_blank" rel="noopener">Open raw status JSON</a></div>
+  </div>
+
+  <div class="card">
+    <h2>🔐 LAN authentication</h2>
+    <div class="kv">
+      <span class="k">Mode</span><span id="auth-mode">${lanAuthMode === 'required' ? 'required' : 'open (compatibility)'}${ENV_FEED_TOKEN ? ' — overridden by the feed_token option' : ''}</span>
+      <span class="k">Credential</span><span>${auth.credentialed && currentToken()
+        ? `<code>${escapeHtml(currentToken())}</code> <button class="btn secondary" data-copy="${escapeHtml(currentToken())}">Copy</button>`
+        : auth.credentialed ? 'none stored' : 'hidden — unlock with the token to reveal it'}</span>
+    </div>
+    <p class="muted">Required mode demands the token on every endpoint — feeds, API and this dashboard.
+    Compatibility mode is for installs whose feed subscribers cannot carry a token.</p>
+    <p class="muted">Changing mode is an admin operation: enter the management token (add-on Log or
+    <code>.admin_token</code> in the data dir). It is used for this tab only, sent as a header, and never stored.</p>
+    <form id="admin-form" autocomplete="off">
+      <div class="meta-line">
+        <input id="admin-token" name="admin-token" type="password" placeholder="Admin token" autocomplete="current-password"
+          style="flex:1;min-width:200px;padding:9px 12px;border-radius:10px;border:1px solid #334;background:#0d1117;color:#e6edf3;font:inherit">
+      </div>
+      <div class="meta-line">
+        <button class="btn secondary" id="auth-required" type="submit" value="required">Require token (recommended)</button>
+        <button class="btn secondary" id="auth-open" type="submit" value="open">Compatibility mode</button>
+      </div>
+    </form>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -613,7 +939,11 @@ function renderDashboard(dns, browser) {
   compileBtn.addEventListener('click', function () {
     compileBtn.disabled = true;
     compileBtn.textContent = 'Compiling…';
-    fetch(apiBase + 'v1/compile' + apiQuery, { method: 'POST' })
+    fetch(apiBase + 'v1/compile' + apiQuery, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    })
       .then(function (res) { return res.json(); })
       .then(function (data) {
         if (data.success) {
@@ -629,6 +959,43 @@ function renderDashboard(dns, browser) {
         compileBtn.textContent = '⚡ Compile Rules Now';
       });
   });
+
+  // The admin credential lives in sessionStorage — tab-scoped, cleared on close,
+  // never persisted to disk, sent header-only (never on the URL).
+  function adminToken() {
+    try { return sessionStorage.getItem('bm_admin') || ''; } catch (e) { return ''; }
+  }
+  var adminField = document.getElementById('admin-token');
+  if (adminField) {
+    try { adminField.value = sessionStorage.getItem('bm_admin') || ''; } catch (e) {}
+    adminField.addEventListener('input', function () {
+      try { sessionStorage.setItem('bm_admin', adminField.value.trim()); } catch (e) {}
+    });
+  }
+
+  function setAuthMode(mode) {
+    var headers = { 'Content-Type': 'application/json' };
+    if (adminToken()) headers['X-Admin-Token'] = adminToken();
+    fetch(apiBase + 'v1/auth-mode' + apiQuery, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ mode: mode })
+    })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (!data.success) throw new Error(data.error + (data.hint ? ' — ' + data.hint : '') || 'Mode change failed');
+        toast(data.message || 'Auth mode updated');
+        window.setTimeout(function () { window.location.reload(); }, 900);
+      })
+      .catch(function (err) { toast(String(err), true); });
+  }
+  var adminForm = document.getElementById('admin-form');
+  if (adminForm) {
+    adminForm.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      setAuthMode(ev.submitter && ev.submitter.value === 'open' ? 'open' : 'required');
+    });
+  }
 
   var protectionToggle = document.getElementById('protection-toggle');
   protectionToggle.addEventListener('change', function () {
@@ -652,14 +1019,27 @@ function renderDashboard(dns, browser) {
     });
   });
 
-  var allRules = ${inlineRules};
+  var dnsRules = ${inlineDnsRules};
+  var browserRules = ${inlineBrowserRules};
+  var PREVIEW_CAP = 60;
   var filterInput = document.getElementById('rule-filter');
   var filterCount = document.getElementById('filter-count');
+  var preDns = document.getElementById('pre-dns');
+  var preBrowser = document.getElementById('pre-browser');
+  var sumDns = document.getElementById('sum-dns');
+  var sumBrowser = document.getElementById('sum-browser');
+  function renderGroup(pre, sum, name, rules, q) {
+    var matches = q ? rules.filter(function (r) { return r.toLowerCase().indexOf(q) !== -1; }) : rules;
+    pre.textContent = matches.slice(0, PREVIEW_CAP).join('\\n') || '(empty)';
+    sum.textContent = name + ' (' + (q ? '' : 'first ') + Math.min(PREVIEW_CAP, matches.length) + ' of ' + matches.length + (q ? ' matching' : '') + ')';
+    return matches.length;
+  }
   filterInput.addEventListener('input', function () {
     var q = filterInput.value.trim().toLowerCase();
-    if (!q) { filterCount.textContent = allRules.length + ' rules'; return; }
-    var matches = allRules.filter(function (r) { return r.toLowerCase().indexOf(q) !== -1; });
-    filterCount.textContent = matches.length + ' match' + (matches.length === 1 ? '' : 'es');
+    var dnsMatches = renderGroup(preDns, sumDns, 'DNS-level rules', dnsRules, q);
+    var browserMatches = renderGroup(preBrowser, sumBrowser, 'Browser rules', browserRules, q);
+    var total = dnsMatches + browserMatches;
+    filterCount.textContent = q ? total + ' match' + (total === 1 ? '' : 'es') : (dnsRules.length + browserRules.length) + ' rules';
   });
 
   // Live updates: refresh when a compile or protection change lands anywhere
@@ -679,6 +1059,7 @@ function renderDashboard(dns, browser) {
   }
 })();
 </script>
+</main>
 </body>
 </html>`;
 }
@@ -687,7 +1068,11 @@ function renderDashboard(dns, browser) {
 
 const server = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  // POST is deliberately absent: a cross-origin fetch carrying a JSON content
+  // type must preflight, and a preflight that doesn't offer POST never becomes
+  // a real request. The dashboard's calls are same-origin (through ingress or
+  // direct), so they never consult this header — only a drive-by page's would.
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('X-Content-Type-Options', 'nosniff');
 
@@ -708,21 +1093,60 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // Everything is gated when a feed token is configured — feeds, API and the dashboard alike,
-  // because the dashboard embeds rule previews and the feed URLs. The token is deliberately the
-  // only credential: an `X-Ingress-Path` header marks a request that came through Home
-  // Assistant's ingress proxy, but the same header is trivially set by anything that can reach
-  // this port directly, so it cannot be the trust boundary on a network that is not trusted.
-  if (!isAuthorized(req, reqUrl)) {
-    rejectUnauthorized(res);
+  // Everything is gated while a token is enforced ('required' mode or a
+  // configured `feed_token` option) — feeds, API and the dashboard alike, because
+  // the dashboard embeds rule previews and the feed URLs. The token is
+  // deliberately the only credential: an `X-Ingress-Path` header marks a request
+  // that came through Home Assistant's ingress proxy, but the same header is
+  // trivially set by anything that can reach this port directly, so it cannot be
+  // the trust boundary on a network that is not trusted.
+  const auth = authorizeRequest(req, reqUrl);
+  // The admin credential is a control-plane secret, not a data-plane one — but
+  // it is the STRONGER credential, so it satisfies the request gate for the one
+  // endpoint that needs it (otherwise a required-mode install would demand the
+  // feed token just to reach its own admin switch).
+  const adminAuthorized = pathname === '/v1/auth-mode' && isAdminRequest(req);
+  if (!auth.ok && !adminAuthorized) {
+    const wantsHtml = (req.headers.accept || '').includes('text/html');
+    rejectUnauthorized(res, pathname, wantsHtml);
     return;
+  }
+  // A browser that unlocked by typing the token gets a session cookie so the
+  // dashboard keeps working without the ?token= query hanging around — and so
+  // the URL (which lands in proxy/history logs) carries the credential once,
+  // not on every click. HttpOnly + SameSite=Strict; no Secure flag so plain-HTTP
+  // LAN installs still work (HA ingress re-encrypts externally when configured).
+  if (auth.viaQuery) {
+    res.setHeader('Set-Cookie',
+      `${AUTH_COOKIE}=${encodeURIComponent(currentToken())}; Path=/; HttpOnly; SameSite=Strict`);
+  }
+
+  // Every POST endpoint here consumes a JSON body (compile takes {} now).
+  // A browser cannot send `Content-Type: application/json` cross-origin without
+  // a successful preflight — and the preflight no longer offers POST — so this
+  // check is the wall against "simple request" (text/plain / form) drive-bys
+  // from arbitrary web pages on installs running without a feed token. The
+  // dashboard, the extension's telemetry reporter, and the mobile app all
+  // declare application/json already.
+  if (req.method === 'POST') {
+    const contentType = String(req.headers['content-type'] || '')
+      .split(';')[0]
+      .trim()
+      .toLowerCase();
+    if (contentType !== 'application/json') {
+      res.writeHead(415, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        error: 'Unsupported Media Type — POST endpoints require Content-Type: application/json',
+      }));
+      return;
+    }
   }
 
   // 1. Ingress UI / Dashboard (when accessed from the Home Assistant sidebar)
   if (pathname === '/' || pathname === '/index.html') {
     const { dns, browser } = await recomputeStats();
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(renderDashboard(dns, browser));
+    res.end(renderDashboard(dns, browser, auth));
     return;
   }
 
@@ -748,14 +1172,25 @@ const server = createServer(async (req, res) => {
       aiRadar: { enabled: ENABLE_AI },
       feedServer: {
         port: PORT,
-        requiresAuth: Boolean(FEED_TOKEN),
-        dnsFeedUrl: feedUrl('/dns.txt'),
-        browserFeedUrl: feedUrl('/browser.txt'),
-        unboundFeedUrl: feedUrl('/unbound.conf'),
-        shadowrocketFeedUrl: feedUrl('/shadowrocket.conf'),
-        privoxyFeedUrl: feedUrl('/privoxy.action'),
-        bindRpzFeedUrl: feedUrl('/db.blockingmachine.rpz'),
-        eventsUrl: feedUrl('/v1/events'),
+        requiresAuth: ENV_FEED_TOKEN ? true : lanAuthMode === 'required',
+        authMode: ENV_FEED_TOKEN ? 'required' : lanAuthMode,
+        envToken: Boolean(ENV_FEED_TOKEN),
+        // Management credential is write-only — presence + proof only, never
+        // the value, and never via a query parameter (admin creds stay out of URLs).
+        adminConfigured: Boolean(adminToken),
+        adminAuthorized: isAdminRequest(req),
+        authPersisted: authPersistenceOk,
+        // Deliberate credential disclosure to a caller that already proved it —
+        // the unlocked dashboard uses it for the copy buttons. An open-mode
+        // unauthenticated probe gets '' so the stored secret can't exfiltrate.
+        feedToken: auth.credentialed ? currentToken() : '',
+        dnsFeedUrl: feedUrl('/dns.txt', auth.credentialed),
+        browserFeedUrl: feedUrl('/browser.txt', auth.credentialed),
+        unboundFeedUrl: feedUrl('/unbound.conf', auth.credentialed),
+        shadowrocketFeedUrl: feedUrl('/shadowrocket.conf', auth.credentialed),
+        privoxyFeedUrl: feedUrl('/privoxy.action', auth.credentialed),
+        bindRpzFeedUrl: feedUrl('/db.blockingmachine.rpz', auth.credentialed),
+        eventsUrl: feedUrl('/v1/events', auth.credentialed),
       },
       protection: {
         enabled: protection.enabled && !paused,
@@ -844,6 +1279,71 @@ const server = createServer(async (req, res) => {
       console.log(`[Add-on Hub] Protection ${protection.enabled && protection.pausedUntil === null ? 'resumed' : 'paused'}`);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ success: true, protection }));
+    });
+    return;
+  }
+
+  // 4b. LAN auth mode — the migration/opt-out switch. Privileged: this endpoint
+  // changes the install's trust posture, so it demands the admin credential in
+  // BOTH modes — never the feed token, never the session cookie, never a header
+  // an attacker can set. Check precedes any body parse or state touch, so a
+  // refused request provably changes nothing.
+  if (pathname === '/v1/auth-mode') {
+    if (!isAdminRequest(req)) {
+      rejectAdminRequired(res);
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+      return;
+    }
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 1e4) req.destroy();
+    });
+    req.on('end', async () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body || '{}');
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: 'Request body must be JSON' }));
+        return;
+      }
+      if (parsed.mode !== 'required' && parsed.mode !== 'open') {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: 'Mode must be "required" or "open"' }));
+        return;
+      }
+      // Serialized and ordered: the credential is persisted BEFORE the mode
+      // that requires it, so a crash between the two writes can never leave
+      // 'required' recorded without its credential on disk.
+      const result = await serializeAuthOp(async () => {
+        let tokenMinted = false;
+        if (parsed.mode === 'required' && !currentToken()) {
+          await mintToken();
+          tokenMinted = true;
+        }
+        lanAuthMode = parsed.mode;
+        await writeAuthState(lanAuthMode);
+        return { tokenMinted };
+      });
+      console.log(`[Add-on Hub] LAN auth mode set to '${lanAuthMode}'${ENV_FEED_TOKEN ? ' (feed_token option still enforces its own credential)' : ''}`);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        success: true,
+        mode: lanAuthMode,
+        tokenMinted: result.tokenMinted,
+        envToken: Boolean(ENV_FEED_TOKEN),
+        // Only an admin reached this point — echoing the current feed token is
+        // safe and is what the caller needs to re-pair its clients after a flip.
+        token: currentToken(),
+        message: lanAuthMode === 'required'
+          ? 'Required mode on — every endpoint now needs the token'
+          : 'Compatibility mode on — a token is honoured when sent, never required',
+      }));
     });
     return;
   }
@@ -1088,6 +1588,8 @@ setInterval(() => {
 
 await loadPersistedState();
 await recomputeStats();
+// LAN auth posture resolves before the first accepted connection — never after.
+await initLanAuth();
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[Blockingmachine Add-on] Hub listening on http://0.0.0.0:${PORT}`);
