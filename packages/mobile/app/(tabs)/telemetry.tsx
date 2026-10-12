@@ -113,6 +113,12 @@ export default function TelemetryScreen() {
         <ErrorBanner {...describeError(telemetry.error)} onRetry={() => void telemetry.refetch()} />
       ) : null}
 
+      {telemetry.error && data ? (
+        <Text style={styles.meta}>
+          Last refreshed {relativeTime(telemetry.dataUpdatedAt) || 'recently'} — reconnect to the hub to update.
+        </Text>
+      ) : null}
+
       {!client ? (
         <Card>
           <Text style={styles.meta}>Add a server in Settings first.</Text>

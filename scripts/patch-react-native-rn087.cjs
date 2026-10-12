@@ -79,10 +79,51 @@ if (!fs.existsSync(registryPkg)) {
   fs.writeFileSync(
     path.join(registryPkg, 'registry.js'),
     "// Patched in by scripts/patch-react-native-rn087.cjs — RN 0.87 hosts the registry at\n" +
-      "// react-native/asset-registry (exposed via its package exports).\n" +
-      "module.exports = require('react-native/asset-registry');\n",
+      "// react-native/src/private/assets/AssetRegistry. The deep path matters: the\n" +
+      "// package-exports alias ('react-native/asset-registry') bundles as a *second*\n" +
+      "// module record under Metro, which split the registry into two arrays and\n" +
+      "// broke Asset.fromModule with 'Cannot read property uri of null'.\n" +
+      "module.exports = require('react-native/src/private/assets/AssetRegistry');\n",
   );
   console.log('patched react-native: wrote @react-native/assets-registry stub package');
+}
+
+// Belt-and-braces for a split-brain registry observed empirically on RN 0.87 +
+// expo 57 dev builds: `@expo/cli`'s resolver intercepts
+// `@react-native/assets-registry/registry` and substitutes a *virtual polyfill
+// module* with its own `assets` array (withMetroMultiPlatform.js), while RN's
+// own resolveAssetSource reads src/private/assets/AssetRegistry.js. Two arrays
+// meant `Asset.fromModule` resolved meta but got `uri of null` downstream —
+// every expo-font/vector-icons load red-boxed. Back BOTH stores with one
+// globalThis singleton so the module records converge regardless.
+const ASSET_REGISTRY_FILE = resolveInNm('react-native/src/private/assets/AssetRegistry.js');
+if (fs.existsSync(ASSET_REGISTRY_FILE)) {
+  const source = fs.readFileSync(ASSET_REGISTRY_FILE, 'utf8');
+  if (source.includes('const assets: Array<PackagerAsset> = [];')) {
+    const patched = source.replace(
+      'const assets: Array<PackagerAsset> = [];',
+      "// Patched in by scripts/patch-react-native-rn087.cjs — global singleton because\n" +
+        '// @expo/cli virtual-polyfills the registry under a separate module record.\n' +
+        'const assets: Array<PackagerAsset> = (globalThis.__bmAssetRegistry ||= []);',
+    );
+    fs.writeFileSync(ASSET_REGISTRY_FILE, patched);
+    console.log('patched react-native AssetRegistry: singleton asset array');
+  }
+}
+const EXPO_CLI_MMP = resolveInNm('@expo/cli/build/src/start/server/metro/withMetroMultiPlatform.js');
+if (fs.existsSync(EXPO_CLI_MMP)) {
+  const source = fs.readFileSync(EXPO_CLI_MMP, 'utf8');
+  const needle =
+    'const ASSET_REGISTRY_SRC = `const assets=[];module.exports={registerAsset:s=>assets.push(s),getAssetByID:s=>assets[s-1]};`;';
+  if (source.includes(needle)) {
+    const patched = source.replace(
+      needle,
+      'const ASSET_REGISTRY_SRC = `const assets=globalThis.__bmAssetRegistry||(globalThis.__bmAssetRegistry=[]);' +
+        "module.exports={registerAsset:s=>assets.push(s),getAssetByID:s=>assets[s-1]};`; // singleton shared with react-native/src/private/assets/AssetRegistry — patched by scripts/patch-react-native-rn087.cjs",
+    );
+    fs.writeFileSync(EXPO_CLI_MMP, patched);
+    console.log('patched @expo/cli asset-registry polyfill: singleton asset array');
+  }
 }
 
 // Every expo-* package ships a tsconfig.json extending "expo-module-scripts/tsconfig.base",
@@ -424,5 +465,102 @@ if (fs.existsSync(APP_BUILD_GRADLE)) {
   if (patched !== source) {
     fs.writeFileSync(APP_BUILD_GRADLE, patched);
     console.log('patched packages/mobile/android/app/build.gradle: kotlin-android apply / proguard default');
+  }
+}
+
+// Sixth break, on the iOS side: RN 0.87 dropped the bridge-era members
+// (newArchEnabled, createRootView(with:moduleName:initProps:), createBridge,
+// loadSource(for:onProgress:onComplete:), extraModules(for:),
+// extraLazyModuleClasses(for:), bridge(_:didNotFindModule:)) from the public
+// surface of RCTDefaultReactNativeFactoryDelegate / RCTReactNativeFactoryDelegate
+// — the new architecture is the only path left. Expo SDK 57's
+// ExpoReactNativeFactory.createRCTRootViewFactory still calls every one of them,
+// so the Expo pod target fails to compile. The rewrite below keeps Expo's
+// ExpoReactRootViewFactory (its reactDelegate wiring feeds expo-dev-client) and
+// customizeRootView fan-out, but builds the configuration exactly as
+// RN 0.87's own RCTReactNativeFactory.mm does: designated initializer with
+// newArchEnabled fixed YES, bridge blocks left unset, extraModulesForBridge
+// still honoured dynamically via respondsToSelector for any delegate that
+// implements it.
+const EXPO_FACTORY_SWIFT = 'expo/ios/AppDelegates/ExpoReactNativeFactory.swift';
+const expoFactoryPath = resolveInNm(EXPO_FACTORY_SWIFT);
+if (fs.existsSync(expoFactoryPath)) {
+  const OLD_FACTORY_CONFIG = `    let configuration = RCTRootViewFactoryConfiguration(
+      bundleURLBlock: bundleUrlBlock,
+      newArchEnabled: weakDelegate.newArchEnabled()
+    )
+
+    configuration.createRootViewWithBridge = { bridge, moduleName, initProps in
+      return weakDelegate.createRootView(with: bridge, moduleName: moduleName, initProps: initProps)
+    }
+
+    configuration.jsRuntimeConfiguratorDelegate = delegate
+
+    configuration.createBridgeWithDelegate = { delegate, launchOptions in
+      weakDelegate.createBridge(with: delegate, launchOptions: launchOptions)
+    }
+
+    configuration.customizeRootView = { rootView in
+      weakDelegate.customize(rootView)
+    }
+
+    // NOTE(kudo): \`sourceURLForBridge\` is not referenced intentionally because it does not support New Architecture.
+    configuration.sourceURLForBridge = nil
+
+    configuration.loadSourceForBridgeWithProgress = { bridge, onProgress, onComplete in
+      weakDelegate.loadSource(for: bridge, onProgress: onProgress, onComplete: onComplete)
+    }
+
+    if weakDelegate.responds(to: #selector(RCTReactNativeFactoryDelegate.extraModules(for:))) {
+      configuration.extraModulesForBridge = { bridge in
+        weakDelegate.extraModules(for: bridge)
+      }
+    }
+
+    if weakDelegate.responds(to: #selector(RCTReactNativeFactoryDelegate.extraLazyModuleClasses(for:))) {
+      configuration.extraLazyModuleClassesForBridge = { bridge in
+        weakDelegate.extraLazyModuleClasses(for: bridge)
+      }
+    }
+
+    if weakDelegate.responds(to: #selector(RCTReactNativeFactoryDelegate.bridge(_:didNotFindModule:))) {
+      configuration.bridgeDidNotFindModule = { bridge, moduleName in
+        weakDelegate.bridge(bridge, didNotFindModule: moduleName)
+      }
+    }
+`;
+  const NEW_FACTORY_CONFIG = `    // Patched by scripts/patch-react-native-rn087.cjs — RN 0.87 removed the
+    // bridge-era delegate members; the new architecture is the only path, so the
+    // configuration mirrors RCTReactNativeFactory.mm's own implementation.
+    let configuration = RCTRootViewFactoryConfiguration(
+      bundleURLBlock: bundleUrlBlock,
+      newArchEnabled: true
+    )
+
+    configuration.jsRuntimeConfiguratorDelegate = delegate
+
+    configuration.customizeRootView = { rootView in
+      weakDelegate.customize(rootView)
+    }
+
+    // NOTE(kudo): \`sourceURLForBridge\` is not referenced intentionally because it does not support New Architecture.
+    configuration.sourceURLForBridge = nil
+
+    // extraModulesForBridge: left the delegate protocol but is still honoured
+    // dynamically, matching RCTReactNativeFactory.mm's respondsToSelector path.
+    let extraModulesSel = NSSelectorFromString("extraModulesForBridge:")
+    if weakDelegate.responds(to: extraModulesSel) {
+      configuration.extraModulesForBridge = { bridge in
+        (weakDelegate.perform(extraModulesSel, with: bridge)?.takeUnretainedValue() as? [RCTBridgeModule]) ?? []
+      }
+    }
+`;
+  let source = fs.readFileSync(expoFactoryPath, 'utf8');
+  if (source.includes(OLD_FACTORY_CONFIG)) {
+    source = source.replace(OLD_FACTORY_CONFIG, NEW_FACTORY_CONFIG);
+    fs.writeFileSync(expoFactoryPath, source);
+    console.log('patched expo: ExpoReactNativeFactory.swift createRCTRootViewFactory for RN 0.87');
+  } else if (!source.includes('Patched by scripts/patch-react-native-rn087.cjs')) {
+    console.warn('patch-react-native-rn087: ExpoReactNativeFactory.swift shape changed — manual review needed');
   }
 }

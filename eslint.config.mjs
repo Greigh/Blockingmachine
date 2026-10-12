@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/*.d.ts',
       '**/*.config.*',
       '**/scripts/**',
+      '**/plugins/**',
       '**/coverage/**',
     ],
   },

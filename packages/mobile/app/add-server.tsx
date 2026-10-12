@@ -182,6 +182,8 @@ export default function AddServerScreen() {
       <ScrollView
         style={styles.scroll}
       contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
+      keyboardShouldPersistTaps="handled"
+      automaticallyAdjustKeyboardInsets
     >
       {pending ? (
         <Card>
