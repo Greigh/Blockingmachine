@@ -26,7 +26,7 @@ COPY . /app
 RUN chmod a+x /etc/s6-overlay/s6-rc.d/blockingmachine/run
 
 # Expose ports
-EXPOSE 9191 5353/udp
+EXPOSE 9191
 
 LABEL \
   io.hass.version="1.0.0" \

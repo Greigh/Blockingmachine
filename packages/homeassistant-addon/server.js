@@ -39,6 +39,17 @@ const FEED_SOURCE_URL = (process.env.FEED_SOURCE_URL || '').trim().replace(/\/+$
 const FEED_SOURCE_TOKEN = (process.env.FEED_SOURCE_TOKEN || '').trim();
 const STARTED_AT = Date.now();
 
+// The `log_level` option (info|debug|warning|error) gates chatter, never failures:
+// error lines print under every level. `debug` has no dedicated call sites yet — it
+// currently selects the same verbosity as `info` and leaves room for finer traces.
+const LOG_LEVEL = (process.env.LOG_LEVEL || 'info').toLowerCase();
+const LOG_RANK = { debug: 0, info: 1, warning: 2, error: 3 };
+const logLevelRank = LOG_RANK[LOG_LEVEL] ?? LOG_RANK.info;
+const log = (level, ...args) => {
+  if ((LOG_RANK[level] ?? LOG_RANK.info) < logLevelRank) return;
+  (level === 'error' || level === 'warning' ? console.error : console.log)(...args);
+};
+
 // ─── Feed authentication ──────────────────────────────────────────────────────
 
 /**
@@ -120,7 +131,7 @@ async function writeAuthState(mode) {
     authPersistenceOk = true;
   } catch (err) {
     authPersistenceOk = false;
-    console.error('[Add-on Hub] Failed to persist auth mode:', err);
+    log('error', '[Add-on Hub] Failed to persist auth mode:', err);
   }
 }
 
@@ -149,7 +160,7 @@ async function mintCredential(filePath) {
     }
   } catch (err) {
     authPersistenceOk = false;
-    console.error(`[Add-on Hub] Failed to persist credential ${filePath}:`, err);
+    log('error', `[Add-on Hub] Failed to persist credential ${filePath}:`, err);
     return candidate;
   }
 }
@@ -182,20 +193,20 @@ async function initLanAuth() {
       adminToken = (await fs.readFile(ADMIN_TOKEN_PATH, 'utf8')).trim();
     } catch (err) {
       // Unreadable or unexpected file type — treat as absent and re-mint.
-      console.error('[Add-on Hub] Could not read .admin_token — re-minting:', err);
+      log('error', '[Add-on Hub] Could not read .admin_token — re-minting:', err);
     }
   }
   if (!adminToken) {
     adminToken = await mintCredential(ADMIN_TOKEN_PATH);
     // The add-on's Log tab is the HA-admin-only credential-recovery path —
     // the same deliberate-disclosure boundary as the desktop's pairing QR.
-    console.log(`[Blockingmachine Add-on] Generated LAN admin token: ${adminToken}`);
-    console.log('[Blockingmachine Add-on] Needed once for authentication-mode changes — also stored at .admin_token in the add-on data dir.');
+    log('info', `[Blockingmachine Add-on] Generated LAN admin token: ${adminToken}`);
+    log('info', '[Blockingmachine Add-on] Needed once for authentication-mode changes — also stored at .admin_token in the add-on data dir.');
   }
 
   if (ENV_FEED_TOKEN) {
     lanAuthMode = 'required';
-    console.log('[Blockingmachine Add-on] Feed token configured via options — every endpoint requires it.');
+    log('info', '[Blockingmachine Add-on] Feed token configured via options — every endpoint requires it.');
     return;
   }
   if (existsSync(AUTH_STATE_PATH)) {
@@ -210,9 +221,9 @@ async function initLanAuth() {
     lanAuthMode = hasPriorArtifacts ? 'open' : 'required';
     await writeAuthState(lanAuthMode);
     if (!hasPriorArtifacts) {
-      console.log('[Blockingmachine Add-on] New install — LAN authentication is required by default.');
+      log('info', '[Blockingmachine Add-on] New install — LAN authentication is required by default.');
     } else {
-      console.log('[Blockingmachine Add-on] Existing data detected — keeping open compatibility mode (the dashboard can migrate it).');
+      log('info', '[Blockingmachine Add-on] Existing data detected — keeping open compatibility mode (the dashboard can migrate it).');
     }
   }
   // A persisted minted token is honoured in EITHER mode when a client sends it
@@ -223,13 +234,13 @@ async function initLanAuth() {
     } catch (err) {
       // Unreadable or unexpected file type — treated as absent; a required
       // mode then re-mints (heal), an open mode runs tokenless as recorded.
-      console.error('[Add-on Hub] Could not read .feed_token — treating as absent:', err);
+      log('error', '[Add-on Hub] Could not read .feed_token — treating as absent:', err);
     }
   }
   if (lanAuthMode === 'required' && !mintedFeedToken) {
     await mintToken();
-    console.log(`[Blockingmachine Add-on] Generated LAN feed token: ${mintedFeedToken}`);
-    console.log('[Blockingmachine Add-on] Keep it out of places you would not put a password; it is also stored at .feed_token in the add-on data dir.');
+    log('info', `[Blockingmachine Add-on] Generated LAN feed token: ${mintedFeedToken}`);
+    log('info', '[Blockingmachine Add-on] Keep it out of places you would not put a password; it is also stored at .feed_token in the add-on data dir.');
   }
 }
 
@@ -456,7 +467,7 @@ async function persistJson(path, value) {
     await fs.mkdir(DATA_DIR, { recursive: true });
     await fs.writeFile(path, JSON.stringify(value, null, 2), 'utf8');
   } catch (err) {
-    console.error(`[Add-on Hub] Failed to persist ${path}:`, err);
+    log('error', `[Add-on Hub] Failed to persist ${path}:`, err);
   }
 }
 
@@ -501,7 +512,7 @@ async function loadPersistedState() {
       }
     }
   } catch (err) {
-    console.error('[Add-on Hub] Failed to load persisted state:', err);
+    log('error', '[Add-on Hub] Failed to load persisted state:', err);
   }
 }
 
@@ -525,7 +536,7 @@ async function loadFeed(fileName, baseline) {
       if (lines.length > 0) return { rules: lines, source: 'file' };
     }
   } catch (err) {
-    console.error(`[Add-on Hub] Failed to read ${feedPath}:`, err);
+    log('error', `[Add-on Hub] Failed to read ${feedPath}:`, err);
   }
   return { rules: [...baseline], source: 'baseline' };
 }
@@ -610,7 +621,7 @@ async function runCompile() {
       durationMs: compileStats.lastCompileMs || 0,
     };
   } catch (err) {
-    console.error('[Add-on Hub] Compile failed:', err);
+    log('error', '[Add-on Hub] Compile failed:', err);
     return { success: false, message: `Compilation failed: ${err instanceof Error ? err.message : String(err)}` };
   } finally {
     isCompiling = false;
@@ -626,13 +637,13 @@ function startAutoCompileScheduler() {
   if (!periodHours) return;
   const intervalMs = periodHours * 60 * 60 * 1000;
   const timer = setInterval(() => {
-    console.log(`[Add-on Hub] Auto-compile tick (${AUTO_COMPILE} schedule)`);
+    log('info', `[Add-on Hub] Auto-compile tick (${AUTO_COMPILE} schedule)`);
     runCompile()
-      .then((res) => console.log(`[Add-on Hub] Auto-compile: ${res.message}`))
+      .then((res) => log('info', `[Add-on Hub] Auto-compile: ${res.message}`))
       .catch(() => {});
   }, intervalMs);
   timer.unref?.();
-  console.log(`[Add-on Hub] Auto-compile scheduled every ${periodHours}h`);
+  log('info', `[Add-on Hub] Auto-compile scheduled every ${periodHours}h`);
 }
 
 // ─── Ingress dashboard UI ─────────────────────────────────────────────────────
@@ -1157,7 +1168,7 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify({
       status: 'online',
       service: 'Blockingmachine Home Assistant Add-on',
-      version: '1.1.0',
+      version: '1.0.0',
       uptimeSeconds: Math.floor(process.uptime()),
       rules: {
         total: compileStats.totalRules,
@@ -1276,7 +1287,7 @@ const server = createServer(async (req, res) => {
       }
       await persistJson(PROTECTION_PATH, protection);
       broadcastSse('protection_changed', protection);
-      console.log(`[Add-on Hub] Protection ${protection.enabled && protection.pausedUntil === null ? 'resumed' : 'paused'}`);
+      log('info', `[Add-on Hub] Protection ${protection.enabled && protection.pausedUntil === null ? 'resumed' : 'paused'}`);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ success: true, protection }));
     });
@@ -1330,7 +1341,7 @@ const server = createServer(async (req, res) => {
         await writeAuthState(lanAuthMode);
         return { tokenMinted };
       });
-      console.log(`[Add-on Hub] LAN auth mode set to '${lanAuthMode}'${ENV_FEED_TOKEN ? ' (feed_token option still enforces its own credential)' : ''}`);
+      log('info', `[Add-on Hub] LAN auth mode set to '${lanAuthMode}'${ENV_FEED_TOKEN ? ' (feed_token option still enforces its own credential)' : ''}`);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({
         success: true,
@@ -1345,6 +1356,62 @@ const server = createServer(async (req, res) => {
           : 'Compatibility mode on — a token is honoured when sent, never required',
       }));
     });
+    return;
+  }
+
+  // 4c. Browser remote control — the same routes and the same `remote_control` SSE
+  // contract the desktop hub serves, so an extension pointed at this add-on (and a
+  // Home Assistant entity or the mobile app doing the pointing) can toggle cosmetic
+  // filtering and force a rules reload without telling which server it is talking to.
+  // The action lands on every browser subscribed to /v1/events.
+  if (pathname === '/v1/control/cosmetics' || pathname === '/api/control/cosmetics') {
+    // The hub's status query is an origin-gated stub; here the auth gate upstream
+    // already decided who may ask, so the read is the same stub, same shape.
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: true, message: 'Cosmetics status query' }));
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use POST.' }));
+      return;
+    }
+    let controlBody = '';
+    req.on('data', (chunk) => {
+      controlBody += chunk;
+      if (controlBody.length > 1e4) req.destroy();
+    });
+    req.on('end', () => {
+      let enabled = true;
+      try {
+        const data = JSON.parse(controlBody || '{}');
+        if (typeof data.enabled === 'boolean') enabled = data.enabled;
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
+        return;
+      }
+      broadcastSse('remote_control', { action: 'toggle_cosmetics', enabled });
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: true, action: 'toggle_cosmetics', enabled }));
+    });
+    return;
+  }
+
+  if (pathname === '/v1/control/reload' || pathname === '/api/control/reload') {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use POST.' }));
+      return;
+    }
+    broadcastSse('remote_control', { action: 'reload_rules' });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      success: true,
+      action: 'reload_rules',
+      message: 'Reload signal broadcast to connected browsers',
+    }));
     return;
   }
 
@@ -1592,7 +1659,7 @@ await recomputeStats();
 await initLanAuth();
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[Blockingmachine Add-on] Hub listening on http://0.0.0.0:${PORT}`);
-  console.log(`[Blockingmachine Add-on] Serving ${compileStats.totalRules} rules (${compileStats.dnsRules} DNS / ${compileStats.browserRules} browser)`);
+  log('info', `[Blockingmachine Add-on] Hub listening on http://0.0.0.0:${PORT}`);
+  log('info', `[Blockingmachine Add-on] Serving ${compileStats.totalRules} rules (${compileStats.dnsRules} DNS / ${compileStats.browserRules} browser)`);
   startAutoCompileScheduler();
 });
