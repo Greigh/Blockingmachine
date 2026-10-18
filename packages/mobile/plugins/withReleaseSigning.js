@@ -71,10 +71,26 @@ module.exports = function withReleaseSigning(config) {
     // from expo-modules-core). The generated app module needs the same strip —
     // kotlinOptions/KotlinCompile keep working through the AGP builtin.
     cfg.modResults.contents = cfg.modResults.contents
-      .replace(/^apply plugin: ["']org\.jetbrains\.kotlin\.android["']\s*$/m, '')
-      .replace(/^\s*["']kotlin-android["']\s*$/m, '')
+      // AGP 9 built-in Kotlin registers `kotlin` itself, so an unconditional
+      // kotlin-android apply throws "extension already registered" — but the
+      // Expo 58 template emits `android.builtInKotlin=false`, where the app
+      // module (MainActivity.kt/MainApplication.kt) NEEDS the external plugin.
+      // Gate the apply on the property so it is correct under either regime.
+      .replace(
+        /^\s*apply plugin: ["'](?:org\.jetbrains\.kotlin\.)?kotlin-android["']\s*$/m,
+        "if (!((findProperty('android.builtInKotlin') ?: 'true') as String).toBoolean()) { apply plugin: 'org.jetbrains.kotlin.android' }",
+      )
       // AGP 9 rejects the legacy unoptimised proguard preset outright.
       .replace(/proguard-android\.txt/g, 'proguard-android-optimize.txt');
+    // The template no longer emits the kotlin-android apply at all — inject the
+    // gated form after the react plugin when it is absent entirely.
+    if (!/kotlin-android|org\.jetbrains\.kotlin\.android/.test(cfg.modResults.contents)) {
+      cfg.modResults.contents = cfg.modResults.contents.replace(
+        /apply plugin: "com\.facebook\.react"\s*\n/,
+        'apply plugin: "com.facebook.react"\n\n' +
+          "if (!((findProperty('android.builtInKotlin') ?: 'true') as String).toBoolean()) { apply plugin: 'org.jetbrains.kotlin.android' }\n",
+      );
+    }
     if (!cfg.modResults.contents.includes('Blockingmachine release signing')) {
       cfg.modResults.contents += GRADLE_SNIPPET;
     }

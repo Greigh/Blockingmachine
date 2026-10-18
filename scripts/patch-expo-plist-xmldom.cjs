@@ -40,12 +40,14 @@ if (!target) {
   process.exit(0);
 }
 const source = fs.readFileSync(target, 'utf8');
-const unpatched = 'new xmldom_1.DOMParser({ errorHandler() { } }).parseFromString(xml)';
-const patched = "new xmldom_1.DOMParser({ errorHandler() { } }).parseFromString(xml.trimStart(), 'text/xml')";
-if (source.includes(patched)) {
+// SDK ≤57 emitted `new xmldom_1.DOMParser(...)`; SDK 58 moved to
+// `new (_xmldom()).DOMParser(...)`. Same fix either way: trim the input and pass
+// the plist MIME type so @xmldom/xmldom 0.9 accepts the call.
+const UNPATCHED_RE = /\.parseFromString\(xml\)/;
+if (source.includes("parseFromString(xml.trimStart()")) {
   console.log('patch-expo-plist-xmldom: already patched');
-} else if (source.includes(unpatched)) {
-  fs.writeFileSync(target, source.replace(unpatched, patched));
+} else if (UNPATCHED_RE.test(source)) {
+  fs.writeFileSync(target, source.replace(UNPATCHED_RE, ".parseFromString(xml.trimStart(), 'text/xml')"));
   console.log('patched @expo/plist: parseFromString now trims input and passes text/xml');
 } else {
   console.warn('patch-expo-plist-xmldom: call site not recognised, no change made');

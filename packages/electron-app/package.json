@@ -41,7 +41,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "css-loader": "^7.1.5",
-    "electron": "^44.7.0",
+    "electron": "^44.9.0",
     "electron-devtools-installer": "^4.0.0",
     "extract-zip": "npm:@electron-internal/extract-zip@^1.0.5",
     "get-package-info": "^1.0.0",
@@ -51,7 +51,7 @@
     "style-loader": "^4.0.0",
     "ts-loader": "^9.6.2",
     "typescript": "~5.8.3",
-    "webpack": "^5.111.1",
+    "webpack": "^5.112.0",
     "webpack-cli": "^7.2.3"
   },
   "dependencies": {
@@ -61,8 +61,8 @@
     "electron-store": "^12.0.0",
     "jszip": "^3.10.2",
     "qrcode.react": "^4.2.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "recharts": "^3.10.1"
   },
   "repository": {

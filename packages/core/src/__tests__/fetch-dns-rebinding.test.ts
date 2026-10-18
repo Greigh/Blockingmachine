@@ -122,7 +122,8 @@ describe('DNS rebinding: resolve-time guard on outbound fetches', () => {
     const agent = publicOnlyAgent(
       new URL(`http://genuinely-public.example:${port}`),
     );
-    const lookup = agent.options.lookup as unknown as (
+    const lookup = (agent as http.Agent & { options: http.AgentOptions }).options
+      .lookup as unknown as (
       host: string,
       opts: Record<string, unknown>,
       cb: (err: Error | null, addr: unknown, fam?: number) => void,

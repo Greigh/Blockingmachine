@@ -209,22 +209,62 @@ const KOTLIN_ANDROID_APPLY_SITES = [
   'react-native-reanimated/android/build.gradle.kts',
   'react-native-worklets/android/build.gradle.kts',
 ];
-const KOTLIN_APPLY_RE = /^(\s*)(?:apply plugin:\s*["']kotlin-android["']|plugins\.apply\("kotlin-android"\)|apply\(plugin = "org\.jetbrains\.kotlin\.android"\))\s*$/gm;
+// RN 0.88 / Expo SDK 58 templates emit `android.builtInKotlin=false` and gate their
+// own applies on `if (!builtInKotlin)` — the apply must run there, not be stripped.
+// So every bare/stripped apply becomes an explicitly gated apply: applies when
+// built-in Kotlin is off, skips when AGP owns 'kotlin'. Both already-stripped
+// marker lines and any surviving live applies are rewritten in one pass.
+const KOTLIN_APPLY_OR_STRIP_RE =
+  /^(\s*)(?:apply plugin:\s*["'](?:org\.jetbrains\.kotlin\.)?kotlin-android["']|plugins\.apply\("(?:org\.jetbrains\.kotlin\.)?kotlin-android"\)|apply\(plugin = "org\.jetbrains\.kotlin\.android"\)|\/\/ kotlin-android apply (?:removed|gated) by scripts\/patch-react-native-rn087\.cjs[^\n]*)\s*$/gm;
 for (const rel of KOTLIN_ANDROID_APPLY_SITES) {
   const filePath = resolveInNm(rel);
   if (!fs.existsSync(filePath)) continue;
   const source = fs.readFileSync(filePath, 'utf8');
-  const patched = source.replace(
-    KOTLIN_APPLY_RE,
-    '$1// kotlin-android apply removed by scripts/patch-react-native-rn087.cjs — AGP 9 built-in Kotlin',
-  );
+  if (source.includes('apply gated by scripts/patch-react-native-rn087.cjs')) continue;
+  const isKts = rel.endsWith('.kts') || rel.endsWith('.kt');
+  const gated = isKts
+    ? '$1// kotlin-android apply gated by scripts/patch-react-native-rn087.cjs — AGP 9 built-in Kotlin registers `kotlin` itself\n' +
+      '$1if (!((findProperty("android.builtInKotlin") as? String)?.toBoolean() ?: true)) {\n' +
+      '$1    plugins.apply("org.jetbrains.kotlin.android")\n' +
+      '$1}'
+    : '$1// kotlin-android apply gated by scripts/patch-react-native-rn087.cjs — AGP 9 built-in Kotlin registers `kotlin` itself\n' +
+      "$1if (!((project.findProperty('android.builtInKotlin') ?: 'true') as String).toBoolean()) {\n" +
+      "$1    apply plugin: 'org.jetbrains.kotlin.android'\n" +
+      '$1}';
+  const patched = source.replace(KOTLIN_APPLY_OR_STRIP_RE, gated);
   if (patched !== source) {
     fs.writeFileSync(filePath, patched);
-    console.log(`patched ${rel}: removed kotlin-android plugin application`);
+    console.log(`patched ${rel}: gated kotlin-android application on builtInKotlin`);
   }
 }
 
-// Fifth break: the expo gradle plugins were compiled against AGP-8 types. AGP 9
+// Companion restore: under a tree where built-in Kotlin IS enabled the Swmansion
+// scripts' unconditional `extensions.configure<KotlinAndroidProjectExtension>` can
+// still die (the external plugin never applies). Gate it the same way so the block
+// is correct under either `android.builtInKotlin` value.
+const KGP_EXTENSION_CONFIG_RE =
+  /if \(project != rootProject\) \{\s*\n\s*extensions\.configure<org\.jetbrains\.kotlin\.gradle\.dsl\.KotlinAndroidProjectExtension> \{\s*\n\s*compilerOptions \{\s*\n\s*jvmTarget = JvmTarget\.fromTarget\("([^"]+)"\)\s*\n\s*\}\s*\n\s*\}\s*\n\}/g;
+for (const rel of ['react-native-reanimated/android/build.gradle.kts', 'react-native-worklets/android/build.gradle.kts']) {
+  const filePath = resolveInNm(rel);
+  if (!fs.existsSync(filePath)) continue;
+  const source = fs.readFileSync(filePath, 'utf8');
+  const patched = source.replace(
+    KGP_EXTENSION_CONFIG_RE,
+    '// KGP-extension configure gated by scripts/patch-react-native-rn087.cjs — the\n' +
+      '// extension only exists when kotlin-android applied (builtInKotlin=false).\n' +
+      'if (project != rootProject && (findProperty("android.builtInKotlin") as? String)?.toBoolean() == false) {\n' +
+      '    extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension> {\n' +
+      '        compilerOptions {\n' +
+      '            jvmTarget = JvmTarget.fromTarget("$1")\n' +
+      '        }\n' +
+      '    }\n' +
+      '}',
+  );
+  if (patched !== source) {
+    fs.writeFileSync(filePath, patched);
+    console.log(`patched ${rel}: gated KotlinAndroidProjectExtension configure on builtInKotlin`);
+  }
+}
 // moved the public DSL to com.android.build.api.dsl — the old com.android.build.gradle
 // package types either vanished (BaseExtension) or are no longer what the registered
 // extension implements (LibraryExtension → LibraryExtensionImpl). Import swaps plus
@@ -432,6 +472,14 @@ if (fs.existsSync(APP_GRADLE_PROPERTIES)) {
   fs.writeFileSync(APP_GRADLE_PROPERTIES, source);
 }
 
+// The gated apply line shared by the app-module injections below and
+// plugins/withReleaseSigning.js — under AGP 9 built-in Kotlin the AGP builtin
+// registers `kotlin` itself (reapplying throws); the Expo 58 template emits
+// android.builtInKotlin=false, where external KGP must apply or no Kotlin
+// compiles at all.
+const APP_GATED_KOTLIN =
+  "if (!((findProperty('android.builtInKotlin') ?: 'true') as String).toBoolean()) { apply plugin: 'org.jetbrains.kotlin.android' }";
+
 // RN 0.87's AGP 9.2.1 requires Gradle >=9.4.1 but expo-prebuild generates the wrapper
 // pinning 9.3.1 — bump the distributionUrl so a fresh `prebuild --clean` dir still works.
 const WRAPPER_PROPS = path.resolve(__dirname, '../packages/mobile/android/gradle/wrapper/gradle-wrapper.properties');
@@ -447,24 +495,32 @@ if (fs.existsSync(WRAPPER_PROPS)) {
   }
 }
 
-// The prebuild-generated app build applies KGP directly — same collision, but the file
-// lives in the repo (packages/mobile/android is wiped by `expo prebuild --clean`, so
-// this must run at install time too, not just once by hand).
+// The prebuild-generated app build needs kotlin-android when built-in Kotlin is
+// off (Expo 58 emits android.builtInKotlin=false and no apply at all — the app's
+// MainActivity.kt/MainApplication.kt would never compile). Inject the gated form
+// when absent, and upgrade any bare/stripped apply to it. Mirrors the identical
+// logic in plugins/withReleaseSigning.js, which owns this file at prebuild time.
 const APP_BUILD_GRADLE = path.resolve(__dirname, '../packages/mobile/android/app/build.gradle');
 if (fs.existsSync(APP_BUILD_GRADLE)) {
   const source = fs.readFileSync(APP_BUILD_GRADLE, 'utf8');
-  const patched = source
-    .replace(
-      /^(\s*)apply plugin:\s*["']org\.jetbrains\.kotlin\.android["']\s*$/gm,
-      '$1// kotlin-android apply removed by scripts/patch-react-native-rn087.cjs — AGP 9 built-in Kotlin',
-    )
-    .replace(
-      /getDefaultProguardFile\(["']proguard-android\.txt["']\)/,
-      'getDefaultProguardFile("proguard-android-optimize.txt") // AGP 9 dropped the non-optimizing default',
+  let patched = source.replace(
+    /getDefaultProguardFile\(["']proguard-android\.txt["']\)/,
+    'getDefaultProguardFile("proguard-android-optimize.txt") // AGP 9 dropped the non-optimizing default',
+  );
+  if (!/kotlin-android|org\.jetbrains\.kotlin\.android/.test(patched)) {
+    patched = patched.replace(
+      /apply plugin: "com\.facebook\.react"\s*\n/,
+      `apply plugin: "com.facebook.react"\n\n${APP_GATED_KOTLIN}\n`,
     );
+  } else {
+    patched = patched.replace(
+      /^(\s*)apply plugin:\s*["']org\.jetbrains\.kotlin\.android["']\s*$/gm,
+      `$1${APP_GATED_KOTLIN}`,
+    );
+  }
   if (patched !== source) {
     fs.writeFileSync(APP_BUILD_GRADLE, patched);
-    console.log('patched packages/mobile/android/app/build.gradle: kotlin-android apply / proguard default');
+    console.log('patched packages/mobile/android/app/build.gradle: gated kotlin-android / proguard default');
   }
 }
 
