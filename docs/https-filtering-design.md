@@ -73,7 +73,7 @@ Per owner directive, existing packages are consumed, not duplicated:
 
 ### 5.1 `ca/` — certificate authority
 
-Per-device root CA (ECDSA P-256, 10-year, `cA:TRUE`, pathlen:0) generated on first enable — never shipped, never leaves the device. Private key stored encrypted at rest (`AES-256-GCM` under an OS-provided key where available: Keychain-wrapped on macOS, DPAPI on Windows, 0600 file + Secret Service attempt on Linux); the certificate alone goes to the system trust store via the platform's real consent prompt. Leaf forge: on trusted SNI, mint a leaf (SAN from SNI, 30-day validity, `serverAuth` EKU) signed by the CA, cached in an LRU. Regenerate-and-revoke is a first-class control action (`/v1/proxy/ca` POST rotate). A test asserts the CA key file is never world-readable and never included in any telemetry/export artifact.
+Per-device root CA (RSA-2048, 10-year, `cA:TRUE`, pathlen:0) generated on first enable — never shipped, never leaves the device. RSA over ECDSA because the pinned signing primitive is the vendored `node-forge`, whose x509 EC-signing path is the fragile side. Private key stored encrypted at rest (`AES-256-GCM` under an OS-provided key where available: Keychain-wrapped on macOS, DPAPI on Windows, 0600 file + Secret Service attempt on Linux); the certificate alone goes to the system trust store via the platform's real consent prompt. Leaf forge: on trusted SNI, mint a leaf (SAN from SNI, 30-day validity, `serverAuth` EKU) signed by the CA, cached in an LRU. Regenerate-and-revoke is a first-class control action (`/v1/proxy/ca` POST rotate). A test asserts the CA key file is never world-readable and never included in any telemetry/export artifact.
 
 ### 5.2 `proxy/` — listeners
 
