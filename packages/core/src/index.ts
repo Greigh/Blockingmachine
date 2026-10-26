@@ -113,3 +113,12 @@ export * from "./ruleHost.js";
 
 // Replaying captured requests through a compiled rule set (the offline half of a measurement)
 export * from "./ruleReplay.js";
+
+// Runtime URL request evaluation — the verdict a request rule gives one request, for
+// consumers the compiled exports cannot serve (the MITM proxy, on-device matchers).
+export {
+  createRequestEvaluator,
+  type RequestContext,
+  type RequestEvaluator,
+  type RequestVerdict,
+} from "./evaluateRequest.js";
