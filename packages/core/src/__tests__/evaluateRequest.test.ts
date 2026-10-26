@@ -49,29 +49,59 @@ describe('createRequestEvaluator', () => {
     expect(evaluator.evaluate('https://exact.example/p').action).toBe('allowed');
   });
 
-  test('||x.com^$removeparam=name yields transforms.removeParams on a blocked verdict', () => {
+  test('||x.com^$removeparam=name modifies, it does not block — transforms on an allowed verdict', () => {
     const evaluator = createRequestEvaluator(['||x.com^$removeparam=utm_source']);
     const verdict = evaluator.evaluate('https://x.com/?utm_source=a&keep=1');
-    expect(verdict.action).toBe('blocked');
+    // A modify-only rule matches and transforms; nothing intercepted the request itself.
+    expect(verdict.action).toBe('allowed');
+    expect(verdict.coveringRule).toBeNull();
     expect(verdict.transforms.removeParams).toEqual(['utm_source']);
+    expect(verdict.transforms.keepParams).toEqual([]);
     expect(verdict.transforms.removeHeaders).toEqual([]);
+  });
+
+  test('a pattern-less *$removeparam rule matches every URL without blocking anything', () => {
+    const evaluator = createRequestEvaluator(['*$removeparam=fbclid']);
+    const verdict = evaluator.evaluate('https://anything.example/?fbclid=1&keep=2');
+    expect(verdict.action).toBe('allowed');
+    expect(verdict.transforms.removeParams).toEqual(['fbclid']);
+    // The rule still applies (and still does not block) on a URL with no query at all.
+    expect(evaluator.evaluate('https://anything.example/').action).toBe('allowed');
   });
 
   test('bare $removeparam means removeParams "all"', () => {
     const evaluator = createRequestEvaluator(['||x.com^$removeparam']);
-    expect(evaluator.evaluate('https://x.com/?a=1').transforms.removeParams).toBe('all');
+    const verdict = evaluator.evaluate('https://x.com/?a=1');
+    expect(verdict.action).toBe('allowed');
+    expect(verdict.transforms.removeParams).toBe('all');
+    expect(verdict.transforms.keepParams).toEqual([]);
   });
 
-  test('||x.com^$removeheader=referer yields transforms.removeHeaders', () => {
+  test('$removeparam=~name strips everything except the named parameters', () => {
+    const evaluator = createRequestEvaluator(['||x.com^$removeparam=~keep']);
+    const verdict = evaluator.evaluate('https://x.com/?keep=1&drop=1');
+    expect(verdict.action).toBe('allowed');
+    expect(verdict.transforms.removeParams).toBe('all');
+    expect(verdict.transforms.keepParams).toEqual(['keep']);
+  });
+
+  test('||x.com^$removeheader=referer modifies, it does not block', () => {
     const evaluator = createRequestEvaluator(['||x.com^$removeheader=referer']);
     const verdict = evaluator.evaluate('https://x.com/');
+    expect(verdict.action).toBe('allowed');
     expect(verdict.transforms.removeHeaders).toEqual(['referer']);
   });
 
-  test('||x.com^$csp=... yields transforms.csp', () => {
+  test('||x.com^$csp=... modifies, it does not block', () => {
     const evaluator = createRequestEvaluator(["||x.com^$csp=script-src 'none'"]);
     const verdict = evaluator.evaluate('https://x.com/');
+    expect(verdict.action).toBe('allowed');
     expect(verdict.transforms.csp).toBe("script-src 'none'");
+  });
+
+  test('interception modifiers still block: $redirect', () => {
+    const evaluator = createRequestEvaluator(['||x.com^$redirect=noop.js']);
+    expect(evaluator.evaluate('https://x.com/lib.js').action).toBe('blocked');
   });
 
   test('||x.com^$third-party only matches third-party requests', () => {
@@ -82,24 +112,53 @@ describe('createRequestEvaluator', () => {
     expect(evaluator.evaluate('https://x.com/').action).toBe('allowed');
   });
 
-  test('@@||x.com^$removeparam=token excepts and still carries the transform', () => {
-    const evaluator = createRequestEvaluator(['||x.com^', '@@||x.com^$removeparam=token']);
-    const verdict = evaluator.evaluate('https://x.com/?token=t');
-    expect(verdict.action).toBe('exception');
-    expect(verdict.coveringRule).toBe('@@||x.com^$removeparam=token');
-    expect(verdict.transforms.removeParams).toEqual(['token']);
+  test('a $denyallow rule never matches — the context carries no initiator', () => {
+    const evaluator = createRequestEvaluator(['||x.com^$denyallow=y.x.com']);
+    expect(evaluator.evaluate('https://x.com/').action).toBe('allowed');
+    expect(evaluator.evaluate('https://y.x.com/').action).toBe('allowed');
   });
 
-  test('transforms are collected from every matching rule, not just the winner', () => {
+  test('@@||x.com^$removeparam=token excepts AND cancels the token strip', () => {
     const evaluator = createRequestEvaluator([
-      '||x.com^',
+      '*$removeparam=token',
+      '@@||x.com^$removeparam=token',
+    ]);
+    // On x.com the exception suppresses the generic strip — the AUTP cancellation pattern.
+    const exempted = evaluator.evaluate('https://x.com/?token=t');
+    expect(exempted.action).toBe('exception');
+    expect(exempted.coveringRule).toBe('@@||x.com^$removeparam=token');
+    expect(exempted.transforms.removeParams).toEqual([]);
+    // Everywhere else the generic rule still strips.
+    const stripped = evaluator.evaluate('https://y.com/?token=t');
+    expect(stripped.action).toBe('allowed');
+    expect(stripped.transforms.removeParams).toEqual(['token']);
+  });
+
+  test('a bare @@||x.com^$removeparam exception clears the whole removeparam transform', () => {
+    const evaluator = createRequestEvaluator([
       '||x.com^$removeparam=utm_source',
-      '@@||x.com^$removeheader=referer',
+      '@@||x.com^$removeparam',
     ]);
     const verdict = evaluator.evaluate('https://x.com/?utm_source=a');
     expect(verdict.action).toBe('exception');
-    expect(verdict.transforms.removeParams).toEqual(['utm_source']);
-    expect(verdict.transforms.removeHeaders).toEqual(['referer']);
+    expect(verdict.transforms.removeParams).toEqual([]);
+    expect(verdict.transforms.keepParams).toEqual([]);
+  });
+
+  test('transforms come from every matching non-exception rule, not just the winner', () => {
+    const evaluator = createRequestEvaluator([
+      '||x.com^',
+      '||x.com^$removeparam=a',
+      '||x.com^$removeparam=b',
+      '||x.com^$removeheader=referer',
+      '@@||x.com^$removeheader=referer',
+    ]);
+    const verdict = evaluator.evaluate('https://x.com/?a=1&b=2');
+    // The exception wins the action and suppresses its own transform type — the
+    // removeparam contributions it does not name are still collected.
+    expect(verdict.action).toBe('exception');
+    expect(verdict.transforms.removeParams).toEqual(['a', 'b']);
+    expect(verdict.transforms.removeHeaders).toEqual([]);
   });
 
   test('no match returns allowed with a null coveringRule and empty transforms', () => {
@@ -108,7 +167,7 @@ describe('createRequestEvaluator', () => {
     expect(verdict).toEqual({
       action: 'allowed',
       coveringRule: null,
-      transforms: { removeParams: [], removeHeaders: [] },
+      transforms: { removeParams: [], keepParams: [], removeHeaders: [] },
     });
   });
 
@@ -116,6 +175,12 @@ describe('createRequestEvaluator', () => {
     const evaluator = createRequestEvaluator(['||tracker.example^']);
     expect(evaluator.evaluate('not a url').action).toBe('allowed');
     expect(evaluator.evaluate('').action).toBe('allowed');
+  });
+
+  test('URLs are clamped at 4096 chars before matching', () => {
+    const evaluator = createRequestEvaluator(['||x.com^']);
+    const verdict = evaluator.evaluate(`https://x.com/${'a'.repeat(5000)}`);
+    expect(verdict.action).toBe('blocked');
   });
 
   test('size counts the indexed request rules, not comments or cosmetic rules', () => {

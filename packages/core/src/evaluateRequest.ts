@@ -14,33 +14,48 @@
  * the same structure the mobile matcher uses: host-only rules (`||domain^`, bare domains) go
  * into suffix maps consulted by walking the request host's labels — exact-name hosts entries
  * beside them — so `||tracker.example^` covers `a.b.tracker.example` but never
- * `nottracker.example`; everything else — path patterns, `|url` anchors, `/regex/` — is
- * compiled through `requestUrlMatcher` / `exceptionRequestUrlMatcher` and scanned per request.
+ * `nottracker.example`; everything else — path patterns, `|url` anchors, `/regex/`, wildcard
+ * hosts, and pattern-less rules such as `*$removeparam=` — is compiled into per-request tests
+ * behind a literal-token shortlist, so a request only ever runs the handful of tests whose
+ * token it contains.
  *
  * Semantics, in the order the verdict is decided:
  *
  *  - A rule matches only when its restricting conditions are met: `$third-party` needs
  *    `ctx.thirdParty === true` (`~third-party`, `first-party` need `false`), `$method=` needs
  *    `ctx.method`, resource-type modifiers (`$script`, `$image`, …) need `ctx.contentType`.
- *    A condition the context cannot answer — `$domain=` most of all, since `RequestContext`
- *    carries no initiator — means the rule does not match. That is the conservative direction:
- *    a MITM proxy that guesses wrong breaks connectivity, one that under-matches stays safe.
+ *    A condition the context cannot answer — `$domain=` and the initiator-scoped `$denyallow=`
+ *    most of all, since `RequestContext` carries no initiator — means the rule does not match.
+ *    That is the conservative direction: a MITM proxy that guesses wrong breaks connectivity,
+ *    one that under-matches stays safe.
  *  - Precedence is `exception` > `blocked` > `allowed`, except an `$important` blocking rule
  *    outranks plain exceptions and an `$important` exception outranks it back — the same
  *    ordering `CompiledDomainRuleSet` resolves at domain level. `coveringRule` is the winning
  *    match's raw text.
- *  - Transforms are independent of the action: `$removeparam`, `$removeheader` and `$csp` are
- *    collected from **every** matching rule, so an exception like `@@||x.com^$removeparam=token`
- *    lets the request through *and* still strips the parameter. Bare `$removeparam` (or
- *    `~name`/`/regex/` forms the `string[]` shape cannot express) reports `"all"`.
- *  - `$badfilter` disables the rule it mirrors, `$denyallow=` exonerates named hosts from a
- *    block, both mirroring `CompiledDomainRuleSet`. `$match-case` is accepted but matched
- *    case-insensitively — the shared URL matchers compile `'i'` and do not offer the flag.
+ *  - **Modify is not interception.** Rules carrying only modify modifiers — `removeparam`,
+ *    `removeheader`, `csp`, `replace`, `urltransform`/`uritransform`, `header`,
+ *    `referrerpolicy`, `permissions`, `stealth` — never produce a `blocked` action: they match
+ *    and contribute transforms, and the verdict stays `allowed` unless a blocking or exception
+ *    rule also matched. Generic `*$removeparam=` rules (the bulk of real URL-tracking lists)
+ *    therefore strip parameters instead of blocking the web. Interception modifiers —
+ *    `redirect`, `redirect-rule`, `empty`, `mp4`, `noop` — keep `blocked`, the honest verdict
+ *    for a request this engine intercepts but cannot rewrite yet.
+ *  - Transforms come from **all** matching non-exception rules, regardless of which rule won
+ *    the action. `removeparam=name` collects `name`; bare, `*` or `/regex/` forms collapse to
+ *    `"all"`; the `~name` exclusion form reports `"all"` with `keepParams: ["name"]`.
+ *    `removeheader=name` collects header names (`request:`/`response:` prefixes stripped) and
+ *    `csp=` keeps the policy text.
+ *  - An exception carrying a transform modifier is a *cancellation*, upstream `@@`-semantics:
+ *    it still wins `exception` on precedence, and it suppresses the collected transform of
+ *    that type and value — `@@||x.com^$removeparam=token` stops `token` being stripped, while
+ *    a bare `@@||x.com^$removeparam` (or a `~name`/`*`/`/regex/` form) stops all parameter
+ *    stripping. Bare `@@` exceptions suppress nothing.
+ *  - `$badfilter` is resolved at index time: a rule whose identity a `$badfilter` marker names
+ *    is never indexed at all, mirroring `CompiledDomainRuleSet`. `$match-case` is accepted but
+ *    matched case-insensitively — the shared URL matchers compile `'i'` and offer no flag.
  *
- * Non-blocking actions a verdict cannot express are still honest about matching: `$redirect`
- * and `$empty`-style rules match and report `blocked` (the request is intercepted either way);
- * `$replace`, `permissions` and DOM-side types are filtered out by classification and never
- * indexed. `size` counts what was indexed.
+ * `size` counts what was indexed. URLs over AdGuard's 4096-char bound are clamped before
+ * matching, and an unparseable URL fails open to `allowed`.
  */
 
 import { exceptionRequestUrlMatcher, requestUrlMatcher } from "./coverage.js";
@@ -66,12 +81,14 @@ export interface RequestVerdict {
   /** Raw text of the rule that won the action; null when nothing matched. */
   coveringRule: string | null;
   /**
-   * Request reshapes from **all** matching rules, regardless of which won the action — an
-   * exception that allows the request can still strip its parameters or headers.
+   * Request reshapes from **all** matching non-exception rules, regardless of which won the
+   * action — minus whatever matching `@@` transform exceptions cancel.
    */
   transforms: {
-    /** Parameter names to strip, or `"all"` when any matching rule strips everything. */
+    /** Parameter names to strip, or `"all"` when a matching rule strips everything. */
     removeParams: string[] | "all";
+    /** Parameter names a `~name` exclusion keeps when `removeParams` is `"all"`. */
+    keepParams: string[];
     /** Header names to strip before forwarding. */
     removeHeaders: string[];
     /** A `$csp=` policy the response should carry; absent when no matching rule set one. */
@@ -97,6 +114,36 @@ const REQUEST_RULE_TYPES = new Set([
 ]);
 
 /**
+ * Modifiers that reshape a request or response without blocking it. A rule carrying only
+ * these — no interception modifier alongside — matches but cannot produce a `blocked` action,
+ * which is what keeps generic `*$removeparam=` lists from being a block-everything rule.
+ */
+const MODIFY_MODIFIERS = new Set([
+  "removeparam",
+  "removeheader",
+  "csp",
+  "replace",
+  "urltransform",
+  "uritransform",
+  "header",
+  "referrerpolicy",
+  "permissions",
+  "stealth",
+]);
+
+/**
+ * Modifiers whose action this verdict can only express as "the request was intercepted" —
+ * closest to `blocked` until a pipeline can rewrite the destination or synthesize the body.
+ */
+const INTERCEPTION_MODIFIERS = new Set([
+  "redirect",
+  "redirect-rule",
+  "empty",
+  "mp4",
+  "noop",
+]);
+
+/**
  * ABP resource-type modifiers, evaluated against `ctx.contentType` as an exact token. Any
  * other restricting modifier needs context `RequestContext` does not carry, so a rule that
  * carries it can never fire — pushing `NEVER` into its conditions is the honest refusal.
@@ -119,6 +166,12 @@ const RESOURCE_TYPE_MODIFIERS = new Set([
 
 const NEVER = () => false;
 
+/** AdGuard's bound on the URLs its engine matches; longer inputs are clamped, not refused. */
+const MAX_URL_LENGTH = 4096;
+
+/** Scan rules with no ≥3-char literal get no index token — they always run. */
+const MIN_TOKEN_LENGTH = 3;
+
 /** One rule, compiled to the index: precomputed flags, conditions and transform payload. */
 interface CompiledRequestRule {
   raw: string;
@@ -128,12 +181,21 @@ interface CompiledRequestRule {
   identity: string;
   /** Restricting conditions; every one must hold for the rule to match. */
   conditions: Array<(ctx: RequestContext) => boolean>;
-  /** `$denyallow=` hosts exempted from this block. */
-  denyAllowDomains: string[];
-  /** True when this rule strips every query parameter. */
+  /**
+   * Whether a match can produce the `blocked` action — false for modify-only rules. On an
+   * exception the flag is moot; exceptions suppress transforms instead of contributing them.
+   */
+  contributesBlock: boolean;
+  /** True on the bare/all-parameters forms — also the `@@` signal for "suppress the type". */
   removeAllParams: boolean;
   removeParamNames: string[];
+  /** `~name` exclusions carried alongside a remove-all — the `keepParams` transform. */
+  keepParamNames: string[];
   removeHeaders: string[];
+  /** Bare `removeheader` — on an exception it suppresses every collected header strip. */
+  removeAllHeaders: boolean;
+  /** Whether the rule carries `csp` at all — a bare `@@…$csp` suppresses any collected csp. */
+  hasCspModifier: boolean;
   csp?: string;
 }
 
@@ -144,8 +206,9 @@ interface ScannedRule {
 }
 
 /**
- * Split a raw rule into pattern body and lower-cased `$`-modifiers. `@@` is reported through
- * `isException` and stripped from the body, so the body is what a URL matcher would see.
+ * Split a raw rule into pattern body and lower-cased `$`-modifiers. `@@` is stripped from the
+ * body (the caller tracks `isException`), so the body is what a URL matcher would see. An
+ * empty body is kept — `*$removeparam=` and `$removeparam=` are match-all rules upstream.
  */
 function splitRule(raw: string): { body: string; modifiers: string[] } {
   let work = raw.trim();
@@ -227,8 +290,8 @@ function wildcardHostTest(hostPattern: string): ((host: string) => boolean) | nu
 
 /**
  * A single-`|` start anchor (`|http://x/p`): a literal prefix the URL must begin with, a
- * trailing `|` turning it into an exact match. The shared URL matcher reads the same text as
- * host+path and would match `https://x/p` — looser than the anchor promises — so this shape
+ * trailing `|` demanding an exact match. The shared URL matcher strips `|` syntax and reads
+ * the same text as host+path — matching `https://x/p` and `/px` alike — so the anchored shape
  * is evaluated here rather than delegated.
  */
 function urlAnchorTest(body: string): ((url: string) => boolean) | null {
@@ -242,6 +305,31 @@ function urlAnchorTest(body: string): ((url: string) => boolean) | null {
     : (url) => url.toLowerCase().startsWith(needle);
 }
 
+/**
+ * The literal substring a scan rule cannot match without — the longest run of non-metachar
+ * characters (`*`, `^`, `|` are the only specials ABP pattern text has) of at least
+ * {@link MIN_TOKEN_LENGTH}. A rule that can match must see its token in the URL, so the index
+ * keys on it and `evaluate` only runs tests whose token the URL contains. Regex bodies and
+ * anything with an escape return null and live in the always-scan residue.
+ */
+function literalToken(body: string): string | null {
+  if (!body || body.includes("\\")) return null;
+  if (body.startsWith("/") && body.endsWith("/") && body.length > 2) return null;
+  let best = "";
+  let run = "";
+  for (const char of body) {
+    if (char === "*" || char === "^" || char === "|") {
+      if (run.length > best.length) best = run;
+      run = "";
+    } else {
+      run += char;
+    }
+  }
+  if (run.length > best.length) best = run;
+  const token = best.toLowerCase();
+  return token.length >= MIN_TOKEN_LENGTH ? token : null;
+}
+
 /** Compile one classified rule; null when nothing about it can be indexed. */
 function compileRule(
   raw: string,
@@ -251,7 +339,9 @@ function compileRule(
   if (!trimmed) return null;
   const isException = isExceptionFlag || trimmed.startsWith("@@");
   const { body, modifiers } = splitRule(trimmed);
-  if (!body) return null;
+  // A body-less rule still indexes when it carries modifiers (`$removeparam=` is match-all);
+  // one without either is a stray `$` and nothing to compile.
+  if (!body && modifiers.length === 0) return null;
 
   const rule: CompiledRequestRule = {
     raw: trimmed,
@@ -259,13 +349,18 @@ function compileRule(
     isImportant: modifiers.includes("important"),
     identity: ruleIdentity(body, isException, modifiers),
     conditions: [],
-    denyAllowDomains: [],
+    contributesBlock: true,
     removeAllParams: false,
     removeParamNames: [],
+    keepParamNames: [],
     removeHeaders: [],
+    removeAllHeaders: false,
+    hasCspModifier: false,
     csp: undefined,
   };
   let isBadfilter = false;
+  let hasModify = false;
+  let hasInterception = false;
 
   for (const modifier of modifiers) {
     const negated = modifier.startsWith("~");
@@ -299,40 +394,45 @@ function compileRule(
       );
       continue;
     }
-    if (name === "denyallow" && !negated && value) {
-      for (const entry of value.split("|")) {
-        const domain = entry.trim().replace(/^\*\./, "").toLowerCase();
-        if (domain) rule.denyAllowDomains.push(domain);
-      }
-      continue;
-    }
-    if (name === "removeparam") {
-      // Bare, `*`, `~name` and `/regex/` all mean "strip everything" to this shape — the
-      // `string[]` form cannot express an exclusion or a pattern, and `"all"` is the honest
-      // nearest rather than a guess.
-      if (!value || value === "*" || value.startsWith("~") || value.startsWith("/")) {
-        rule.removeAllParams = true;
-      } else {
-        for (const entry of value.split("|")) {
-          const param = entry.trim();
-          if (param) rule.removeParamNames.push(param);
+    if (MODIFY_MODIFIERS.has(name) && !negated) {
+      hasModify = true;
+      if (name === "removeparam") {
+        // Bare, `*` and `/regex/` forms strip everything; `~name` strips everything but the
+        // named parameters, which is `keepParams`; `a|b` strips a and b.
+        if (!value || value === "*" || value.startsWith("/")) {
+          rule.removeAllParams = true;
+        } else {
+          for (const entry of value.split("|")) {
+            const param = entry.trim();
+            if (!param) continue;
+            if (param.startsWith("~")) {
+              rule.removeAllParams = true;
+              const kept = param.slice(1).trim();
+              if (kept) rule.keepParamNames.push(kept);
+            } else if (param.startsWith("/")) {
+              rule.removeAllParams = true;
+            } else {
+              rule.removeParamNames.push(param);
+            }
+          }
         }
+      } else if (name === "removeheader") {
+        // `request:`/`response:` prefixes name the side the strip applies to; the pipeline
+        // decides which it can act on, so the transform keeps the bare header name. A bare
+        // modifier only matters on exceptions, where it suppresses the whole type.
+        const header = value.replace(/^(?:request|response):/, "").trim();
+        if (header) rule.removeHeaders.push(header);
+        else rule.removeAllHeaders = true;
+      } else if (name === "csp") {
+        rule.hasCspModifier = true;
+        if (value && rule.csp === undefined) rule.csp = value;
       }
+      // replace/urltransform/header/referrerpolicy/permissions/stealth are modify actions
+      // this verdict cannot express — they still mark the rule non-blocking.
       continue;
     }
-    if (name === "removeheader") {
-      // `request:`/`response:` prefixes name the side the strip applies to; the pipeline
-      // decides which it can act on, so the transform keeps the bare header name.
-      const header = value.replace(/^(?:request|response):/, "").trim();
-      if (header) rule.removeHeaders.push(header);
-      continue;
-    }
-    if (name === "csp") {
-      if (value && rule.csp === undefined) rule.csp = value;
-      continue;
-    }
-    // Actions this verdict expresses as "the request was intercepted" — closest to blocked.
-    if (name === "redirect" || name === "redirect-rule" || name === "empty" || name === "mp4" || name === "noop") {
+    if (INTERCEPTION_MODIFIERS.has(name) && !negated) {
+      hasInterception = true;
       continue;
     }
     if (RESOURCE_TYPE_MODIFIERS.has(name)) {
@@ -343,10 +443,15 @@ function compileRule(
       );
       continue;
     }
-    // Everything else needs context this interface does not carry (`$domain=` above all), so
-    // the rule can never fire — the refusal is explicit rather than a silent zone collapse.
+    // Everything else needs context this interface does not carry — `$domain=` and the
+    // initiator-scoped `$denyallow=` above all — so the rule can never fire. The refusal is
+    // explicit rather than a silent zone collapse.
     rule.conditions.push(NEVER);
   }
+
+  // Modify-only rules match to transform, not to block — an interception modifier alongside
+  // is the only thing that restores `blocked` on a rule carrying a modify action.
+  rule.contributesBlock = !hasModify || hasInterception;
 
   return { rule, body, isBadfilter };
 }
@@ -357,12 +462,24 @@ function addToMap(map: Map<string, CompiledRequestRule[]>, key: string, rule: Co
   else map.set(key, [rule]);
 }
 
+function addToScan(map: Map<string, ScannedRule[]>, residue: ScannedRule[], body: string, entry: ScannedRule): void {
+  const token = literalToken(body);
+  if (!token) {
+    residue.push(entry);
+    return;
+  }
+  const existing = map.get(token);
+  if (existing) existing.push(entry);
+  else map.set(token, [entry]);
+}
+
 /**
  * Compiles raw filter lines into a request evaluator.
  *
  * The index mirrors the mobile matcher's structure: `||domain^`-shaped rules go into suffix
  * maps walked along the request host's labels, and path/pattern rules — anything carrying a
- * `/`, a `|` anchor, a wildcard host or a `/regex/` — are compiled into per-request tests.
+ * `/`, a `|` anchor, a wildcard host, a `/regex/`, or no pattern at all — are compiled into
+ * per-request tests shortlisted by a literal-token index.
  */
 export function createRequestEvaluator(rawRules: string[]): RequestEvaluator {
   const stored = parseFilterList(rawRules.join("\n"), "request-evaluator");
@@ -371,10 +488,12 @@ export function createRequestEvaluator(rawRules: string[]): RequestEvaluator {
   const hostExceptions = new Map<string, CompiledRequestRule[]>();
   const exactBlocks = new Map<string, CompiledRequestRule[]>();
   const exactExceptions = new Map<string, CompiledRequestRule[]>();
-  const blockScan: ScannedRule[] = [];
-  const exceptionScan: ScannedRule[] = [];
-  const badfilters = new Set<string>();
+  const scanTokens = new Map<string, ScannedRule[]>();
+  const scanResidue: ScannedRule[] = [];
 
+  // Pass one collects `$badfilter` identities; pass two indexes — a marker that lands after
+  // the rule it mirrors still disables it, and no runtime check is ever needed.
+  const badfilters = new Set<string>();
   const compiled: Array<{ rule: CompiledRequestRule; body: string }> = [];
   for (const storedRule of stored) {
     if (!REQUEST_RULE_TYPES.has(storedRule.type)) continue;
@@ -388,6 +507,9 @@ export function createRequestEvaluator(rawRules: string[]): RequestEvaluator {
   }
 
   for (const { rule, body } of compiled) {
+    // Resolved at index time, not at evaluate: a marker's target is never indexed at all.
+    if (badfilters.has(rule.identity)) continue;
+
     // A hosts-file entry is an exact-name block; its siblings are expanded to one rule each
     // upstream, and it matches the host itself rather than a zone.
     const hostsEntry = /^(?:0\.0\.0\.0|127\.0\.0\.1|::1|::)\s+(\S+)/.exec(body);
@@ -404,7 +526,10 @@ export function createRequestEvaluator(rawRules: string[]): RequestEvaluator {
     }
 
     let test: ((url: string) => boolean) | null;
-    if (hostKey && hostKey.includes("*")) {
+    if (!body || body === "*") {
+      // Pattern-less (`$removeparam=` and `*` rules) — match-all upstream.
+      test = () => true;
+    } else if (hostKey && hostKey.includes("*")) {
       // Host-only but wildcarded (`||*.x.com^`): a host predicate, any path.
       const hostTest = wildcardHostTest(hostKey);
       test = hostTest
@@ -423,16 +548,16 @@ export function createRequestEvaluator(rawRules: string[]): RequestEvaluator {
         ? exceptionRequestUrlMatcher(matcherRule)
         : requestUrlMatcher(matcherRule);
     }
-    if (test) (rule.isException ? exceptionScan : blockScan).push({ rule, test });
+    if (test) addToScan(scanTokens, scanResidue, body, { rule, test });
   }
 
-  const size =
-    [...hostBlocks.values(), ...hostExceptions.values(), ...exactBlocks.values(), ...exactExceptions.values()]
-      .reduce((count, list) => count + list.length, 0) +
-    blockScan.length +
-    exceptionScan.length;
+  let size = scanResidue.length;
+  for (const map of [hostBlocks, hostExceptions, exactBlocks, exactExceptions, scanTokens]) {
+    for (const list of map.values()) size += list.length;
+  }
 
-  function evaluate(url: string, ctx: RequestContext = {}): RequestVerdict {
+  function evaluate(rawUrl: string, ctx: RequestContext = {}): RequestVerdict {
+    const url = rawUrl.length > MAX_URL_LENGTH ? rawUrl.slice(0, MAX_URL_LENGTH) : rawUrl;
     const host = requestHost(url);
     const matched: CompiledRequestRule[] = [];
 
@@ -454,46 +579,76 @@ export function createRequestEvaluator(rawRules: string[]): RequestEvaluator {
       }
     }
 
-    for (const entry of blockScan) if (entry.test(url)) matched.push(entry.rule);
-    for (const entry of exceptionScan) if (entry.test(url)) matched.push(entry.rule);
+    // Only the rules whose literal token the URL contains can match; residue always runs.
+    const haystack = url.toLowerCase();
+    for (const [token, list] of scanTokens) {
+      if (!haystack.includes(token)) continue;
+      for (const entry of list) if (entry.test(url)) matched.push(entry.rule);
+    }
+    for (const entry of scanResidue) if (entry.test(url)) matched.push(entry.rule);
 
-    const active = matched.filter(
-      (rule) =>
-        rule.conditions.every((holds) => holds(ctx)) &&
-        (rule.isException ||
-          rule.denyAllowDomains.length === 0 ||
-          !rule.denyAllowDomains.some(
-            (domain) => host === domain || (host !== null && host.endsWith(`.${domain}`)),
-          )) &&
-        !badfilters.has(rule.identity),
-    );
+    const active = matched.filter((rule) => rule.conditions.every((holds) => holds(ctx)));
 
+    // Transforms: non-exception rules contribute, exceptions suppress — value-equal, with a
+    // bare-modifier exception clearing its whole transform type.
     let removeAll = false;
+    let suppressRemoveAll = false;
     const removeParamSet = new Set<string>();
+    const keepParamSet = new Set<string>();
+    const suppressParamNames = new Set<string>();
     const removeHeaderSet = new Set<string>();
+    const suppressHeaderNames = new Set<string>();
+    let suppressHeaderAll = false;
     let csp: string | undefined;
+    let cspSuppressed = false;
+    const suppressCspValues = new Set<string>();
+
     for (const rule of active) {
-      if (rule.removeAllParams) removeAll = true;
-      for (const param of rule.removeParamNames) removeParamSet.add(param);
-      for (const header of rule.removeHeaders) removeHeaderSet.add(header);
-      if (rule.csp !== undefined && csp === undefined) csp = rule.csp;
+      if (rule.isException) {
+        if (rule.removeAllParams) suppressRemoveAll = true;
+        for (const param of rule.removeParamNames) suppressParamNames.add(param);
+        if (rule.removeAllHeaders) suppressHeaderAll = true;
+        for (const header of rule.removeHeaders) suppressHeaderNames.add(header);
+        if (rule.hasCspModifier) {
+          if (rule.csp === undefined) cspSuppressed = true;
+          else suppressCspValues.add(rule.csp);
+        }
+      } else {
+        if (rule.removeAllParams) removeAll = true;
+        for (const param of rule.removeParamNames) removeParamSet.add(param);
+        for (const param of rule.keepParamNames) keepParamSet.add(param);
+        for (const header of rule.removeHeaders) removeHeaderSet.add(header);
+        if (rule.csp !== undefined && csp === undefined) csp = rule.csp;
+      }
     }
 
     // Precedence, mirroring CompiledDomainRuleSet: important exception > important block >
-    // exception > block > nothing.
+    // exception > block > nothing. Modify-only rules never fill a block slot.
     const winner =
       active.find((rule) => rule.isException && rule.isImportant) ??
-      active.find((rule) => !rule.isException && rule.isImportant) ??
+      active.find((rule) => !rule.isException && rule.isImportant && rule.contributesBlock) ??
       active.find((rule) => rule.isException) ??
-      active.find((rule) => !rule.isException) ??
+      active.find((rule) => !rule.isException && rule.contributesBlock) ??
       null;
+
+    if (csp !== undefined && (cspSuppressed || suppressCspValues.has(csp))) {
+      csp = undefined;
+    }
+
+    let removeParams: string[] | "all";
+    if (suppressRemoveAll) removeParams = [];
+    else if (removeAll) removeParams = "all";
+    else removeParams = [...removeParamSet].filter((param) => !suppressParamNames.has(param));
 
     return {
       action: winner === null ? "allowed" : winner.isException ? "exception" : "blocked",
       coveringRule: winner?.raw ?? null,
       transforms: {
-        removeParams: removeAll ? "all" : [...removeParamSet],
-        removeHeaders: [...removeHeaderSet],
+        removeParams,
+        keepParams: suppressRemoveAll ? [] : [...keepParamSet],
+        removeHeaders: suppressHeaderAll
+          ? []
+          : [...removeHeaderSet].filter((header) => !suppressHeaderNames.has(header)),
         ...(csp !== undefined ? { csp } : {}),
       },
     };
