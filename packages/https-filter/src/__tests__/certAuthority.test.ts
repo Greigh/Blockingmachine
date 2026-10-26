@@ -10,7 +10,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from '@jest/globals';
 import { statSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import forge from 'node-forge';
@@ -83,12 +83,14 @@ describe('isValidSni / forgeLeaf rejection', () => {
     expect(() => authority.forgeLeaf('not a host!')).toThrow();
     expect(() => authority.forgeLeaf('trailing-dot.example.')).toThrow();
     expect(() => authority.forgeLeaf(`a.${'b'.repeat(250)}.com`)).toThrow();
+    expect(() => authority.forgeLeaf('93.184.216.34')).toThrow();
   });
 
   test('boundary accept/reject per the SNI grammar', () => {
     expect(isValidSni('localhost')).toBe(true);
     expect(isValidSni('cdn.example.com')).toBe(true);
     expect(isValidSni('A-B.EXAMPLE.com')).toBe(true);
+    expect(isValidSni('v2.api3.example.com')).toBe(true);
     expect(isValidSni('')).toBe(false);
     expect(isValidSni('no-dot')).toBe(false);
     expect(isValidSni('not a host!')).toBe(false);
@@ -96,6 +98,9 @@ describe('isValidSni / forgeLeaf rejection', () => {
     expect(isValidSni('.leading.example')).toBe(false);
     expect(isValidSni('under_score.example')).toBe(false);
     expect(isValidSni(`a.${'b'.repeat(250)}.com`)).toBe(false);
+    // IP literals are not DNS names — the proxy passthroughs them, never forges.
+    expect(isValidSni('93.184.216.34')).toBe(false);
+    expect(isValidSni('1.2.3.999')).toBe(false);
   });
 });
 
@@ -114,5 +119,73 @@ describe('rotate', () => {
     const newCa = forge.pki.certificateFromPem(authority.caCertPem);
     const newLeaf = forge.pki.certificateFromPem(leafAfter.certPem);
     expect(newCa.verify(newLeaf)).toBe(true);
+  });
+});
+
+describe('store refusal + recovery', () => {
+  test('a mismatched-but-parseable ca.pem/ca.key.pem pair refuses to open', async () => {
+    const dirA = await mkdtemp(join(tmpdir(), 'bm-ca-mismatch-a-'));
+    const dirB = await mkdtemp(join(tmpdir(), 'bm-ca-mismatch-b-'));
+    try {
+      await CertAuthority.open({ storeDir: dirA });
+      await CertAuthority.open({ storeDir: dirB });
+      // Simulate a torn rotate: B's key beside A's cert — both parse fine but
+      // are not a pair, and every leaf minted from them would fail verify.
+      const bKey = await readFile(join(dirB, 'ca.key.pem'), 'utf8');
+      await writeFile(join(dirA, 'ca.key.pem'), bKey, 'utf8');
+      await expect(CertAuthority.open({ storeDir: dirA })).rejects.toThrow();
+    } finally {
+      await rm(dirA, { recursive: true, force: true });
+      await rm(dirB, { recursive: true, force: true });
+    }
+  });
+
+  test('a corrupt ca.pem refuses to open rather than regenerating', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bm-ca-corrupt-'));
+    try {
+      await CertAuthority.open({ storeDir: dir });
+      await writeFile(join(dir, 'ca.pem'), 'this is not a certificate\n', 'utf8');
+      await expect(CertAuthority.open({ storeDir: dir })).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an orphan key surviving its cert is preserved, not truncated', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bm-ca-orphan-'));
+    try {
+      const first = await CertAuthority.open({ storeDir: dir });
+      const orphanKey = await readFile(join(dir, 'ca.key.pem'), 'utf8');
+      await rm(join(dir, 'ca.pem'));
+
+      const second = await CertAuthority.open({ storeDir: dir });
+
+      expect(second.caCertPem).not.toBe(first.caCertPem);
+      expect(await readFile(join(dir, 'ca.key.pem.orphan'), 'utf8')).toBe(orphanKey);
+      // The replacement pair itself must be a working pair.
+      const caCert = forge.pki.certificateFromPem(second.caCertPem);
+      const leaf = forge.pki.certificateFromPem(second.forgeLeaf('orphan.example').certPem);
+      expect(caCert.verify(leaf)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('rotate persists — a reopened authority verifies new leaves', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bm-ca-rotate-'));
+    try {
+      const authority = await CertAuthority.open({ storeDir: dir });
+      await authority.rotate();
+
+      const reopened = await CertAuthority.open({ storeDir: dir });
+      expect(reopened.caCertPem).toBe(authority.caCertPem);
+      const caCert = forge.pki.certificateFromPem(reopened.caCertPem);
+      const leaf = forge.pki.certificateFromPem(
+        reopened.forgeLeaf('post-rotate.example').certPem,
+      );
+      expect(caCert.verify(leaf)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

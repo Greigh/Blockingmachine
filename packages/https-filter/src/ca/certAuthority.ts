@@ -10,14 +10,15 @@
  *
  * All x509 work goes through the vendored `node-forge`; its RSA keygen defers
  * to Node's native `crypto.generateKeyPair(Sync)`, so nothing here does pure-JS
- * big-int work. A present-but-unparseable CA store throws out of `open` (the
- * proxy refuses to start rather than silently minting over a corrupt store —
- * spec §7); a half-written store (crash between the two file writes) is
- * treated as fresh state and regenerated.
+ * big-int work. A present-but-unparseable CA store — or a parseable pair whose
+ * cert and key don't correspond — throws out of `open` (the proxy refuses to
+ * start rather than silently mint over a corrupt store, spec §7); a
+ * half-written store regenerates, preserving the orphan half as `.orphan`.
  */
 
 import { randomBytes } from 'node:crypto';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { isIPv4 } from 'node:net';
 import { join } from 'node:path';
 import forge from 'node-forge';
 
@@ -46,8 +47,9 @@ const CA_SUBJECT: forge.pki.CertificateField[] = [
  * SNI gate: per-label [a-z0-9-] (case-insensitive), labels ≤63 chars, total
  * ≤253, at least one dot — or the literal `localhost`. Trailing/leading/double
  * dots leave an empty label and fail; anything else (spaces, `!`, underscores)
- * fails the charset. The proxy's passthrough path relies on this never letting
- * a non-DNS-name through to `forgeLeaf`.
+ * fails the charset. IPv4 literals and all-numeric final labels are not DNS
+ * names either — the proxy passthroughs those flows rather than mint a
+ * dNSName leaf for an address.
  */
 export function isValidSni(sni: string): boolean {
   if (sni === 'localhost') {
@@ -56,9 +58,17 @@ export function isValidSni(sni: string): boolean {
   if (sni.length === 0 || sni.length > 253 || !sni.includes('.')) {
     return false;
   }
-  return sni
-    .split('.')
-    .every((label) => label.length <= 63 && /^[a-z0-9-]+$/i.test(label));
+  const labels = sni.split('.');
+  if (!labels.every((label) => label.length <= 63 && /^[a-z0-9-]+$/i.test(label))) {
+    return false;
+  }
+  // isIPv4 catches real dotted-quads; the numeric-final-label rule catches
+  // IP-shaped misses like `1.2.3.999` and all-numeric "TLDs", neither of which
+  // is a DNS name a CA may issue for.
+  if (isIPv4(sni) || /^\d+$/.test(labels[labels.length - 1])) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -125,19 +135,46 @@ export class CertAuthority {
     // mkdir's mode only applies to dirs it creates — pin it on reopen too.
     await chmod(storeDir, 0o700);
 
-    const certPem = await readIfExists(join(storeDir, CA_CERT_FILENAME));
-    const keyPem = await readIfExists(join(storeDir, CA_KEY_FILENAME));
+    const certPath = join(storeDir, CA_CERT_FILENAME);
+    const keyPath = join(storeDir, CA_KEY_FILENAME);
+    const certPem = await readIfExists(certPath);
+    const keyPem = await readIfExists(keyPath);
 
     if (certPem !== null && keyPem !== null) {
       // Both present: parse failures propagate — a corrupt CA store refuses to
       // start rather than silently regenerating under an installed trust root.
       const caCert = forge.pki.certificateFromPem(certPem);
       const caKey = forge.pki.privateKeyFromPem(keyPem);
+      // Parseable is not enough: a crash mid-rotate can leave a new key beside
+      // the old cert — every forged leaf would then fail chain verification.
+      // publicKeyToPem emits deterministic SPKI, so equal keys compare equal.
+      const certPubPem = forge.pki.publicKeyToPem(caCert.publicKey);
+      const keyPubPem = forge.pki.publicKeyToPem(
+        forge.pki.setRsaPublicKey(caKey.n, caKey.e),
+      );
+      if (certPubPem !== keyPubPem) {
+        throw new Error(
+          `Blockingmachine CA store at ${storeDir} is inconsistent: ` +
+            `${CA_CERT_FILENAME} and ${CA_KEY_FILENAME} are not the same pair`,
+        );
+      }
+      // Re-pin the mode on load: writeFile only applies it at create time, and
+      // a restored/copied store may carry looser bits.
+      await chmod(keyPath, 0o600);
       return new CertAuthority(storeDir, caCert, caKey);
     }
 
-    // Fresh dir or half-written store: either way there is no usable pair, so
-    // generate — the CA was never trusted anywhere if its key never landed.
+    // Fresh dir or half-written store: either way there is no usable pair.
+    // An orphan key is preserved, not truncated — if the cert was manually
+    // trusted and its file lost, this key is that CA's only copy. An orphan
+    // cert gets the same treatment for forensics; `.orphan` files are inert
+    // (nothing reads them) and latest-wins on repeat events.
+    if (keyPem !== null) {
+      await rename(keyPath, `${keyPath}.orphan`);
+    }
+    if (certPem !== null) {
+      await rename(certPath, `${certPath}.orphan`);
+    }
     const { cert, key } = await generateCaIdentity();
     await persistCaFiles(storeDir, cert, key);
     return new CertAuthority(storeDir, cert, key);
@@ -219,14 +256,19 @@ async function persistCaFiles(
   key: forge.pki.rsa.PrivateKey,
 ): Promise<void> {
   const keyPath = join(storeDir, CA_KEY_FILENAME);
-  // writeFile's mode only applies on create — chmod pins it on overwrite too.
-  await writeFile(keyPath, forge.pki.privateKeyToPem(key), { mode: 0o600 });
-  await chmod(keyPath, 0o600);
-  await writeFile(
-    join(storeDir, CA_CERT_FILENAME),
-    forge.pki.certificateToPem(cert),
-    'utf8',
-  );
+  const certPath = join(storeDir, CA_CERT_FILENAME);
+  // tmp-then-rename per file: a crash mid-persist can still split the pair
+  // (a new key beside the old cert — which open()'s correspondence check
+  // catches), but a same-dir rename is atomic on POSIX, so a torn half-file
+  // can never reach the real paths.
+  const keyTmp = `${keyPath}.tmp`;
+  const certTmp = `${certPath}.tmp`;
+  // writeFile's mode only applies on create — chmod pins it regardless.
+  await writeFile(keyTmp, forge.pki.privateKeyToPem(key), { mode: 0o600 });
+  await chmod(keyTmp, 0o600);
+  await writeFile(certTmp, forge.pki.certificateToPem(cert), 'utf8');
+  await rename(keyTmp, keyPath);
+  await rename(certTmp, certPath);
 }
 
 async function generateCaIdentity(): Promise<{
