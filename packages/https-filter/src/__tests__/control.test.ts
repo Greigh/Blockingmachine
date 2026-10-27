@@ -16,7 +16,7 @@
 import { afterAll, beforeAll, describe, expect, jest, test } from '@jest/globals';
 import { once } from 'node:events';
 import { createHash, X509Certificate } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -366,6 +366,192 @@ describe('control API routes', () => {
     const body = (await res.json()) as Record<string, any>;
     expect(Array.isArray(body.pins)).toBe(true);
     expect(body.corruptLineCount).toBe(0);
+  });
+});
+
+describe('pin/bypass mutation routes (flags 95, 98)', () => {
+  const postJson = (path: string, body: unknown) =>
+    fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  test('POST /v1/proxy/pins/bypass marks the host bypassed and appends a chained ledger line', async () => {
+    const res = await postJson('/v1/proxy/pins/bypass', {
+      host: 'UserBypass.Example',
+      reason: 'operator-directed',
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, any>;
+    expect(body.success).toBe(true);
+    // The reply echoes the normalized host the store recorded.
+    expect(body.host).toBe('userbypass.example');
+    expect(body.bypassed).toBe(true);
+    expect(body.pinned).toBe(false);
+    expect(body.entry).toMatchObject({
+      host: 'userbypass.example',
+      action: 'bypass',
+      reason: 'operator-directed',
+    });
+    expect(app.policy.isBypassed('userbypass.example')).toBe(true);
+    expect(app.policy.isPinned('userbypass.example')).toBe(false);
+
+    // The GET listing carries every action — the new entry surfaces there.
+    const pins = (await (await fetch(`${base}/v1/proxy/pins`)).json()) as Record<
+      string,
+      any
+    >;
+    expect(
+      pins.pins.some(
+        (p: any) => p.host === 'userbypass.example' && p.action === 'bypass',
+      ),
+    ).toBe(true);
+
+    // Persisted: the on-disk line chains to the previous physical line
+    // (or carries the genesis null when it is the ledger's first line).
+    const raw = await readFile(join(dir, 'store', 'policy.jsonl'), 'utf8');
+    const lines = raw.split('\n').filter((line) => line !== '');
+    const records = lines.map((line) => JSON.parse(line) as Record<string, any>);
+    const last = records[records.length - 1];
+    expect(last.action).toBe('bypass');
+    expect(last.host).toBe('userbypass.example');
+    if (lines.length >= 2) {
+      expect(last.prevHash).toBe(
+        createHash('sha256').update(lines[lines.length - 2], 'utf8').digest('hex'),
+      );
+    } else {
+      expect(last.prevHash).toBeNull();
+    }
+  });
+
+  test('a host bypassed via the route tunnels a CONNECT without a verdict', async () => {
+    const echo = tcpEchoServer();
+    const echoPort = await listen(echo);
+    try {
+      const res = await postJson('/v1/proxy/pins/bypass', { host: 'localhost' });
+      expect(res.status).toBe(200);
+
+      // CONNECT authority 'localhost' is bypassed → 200 + blind splice: raw
+      // non-TLS bytes echo straight through, where an evaluated flow would
+      // have peeked for a ClientHello and closed on this junk.
+      const before = app.proxy.stats();
+      const { sock, status } = await connectHandshake(
+        app.proxy.port,
+        `localhost:${echoPort}`,
+      );
+      expect(status).toBe('HTTP/1.1 200 Connection Established');
+      sock.write('bypassed bytes, never a ClientHello');
+      const echoed = await withTimeout(collectBytes(sock, 32), 8_000, 'bypassed echo');
+      expect(echoed.toString('latin1')).toBe('bypassed bytes, never a ClientHello');
+      const after = app.proxy.stats();
+      expect(after.flowsTunneled).toBe(before.flowsTunneled + 1);
+      expect(after.flowsTerminated).toBe(before.flowsTerminated); // no forge — no verdict
+      sock.destroy();
+    } finally {
+      // Retract so no later test inherits a bypassed loopback authority.
+      app.policy.remove('localhost');
+      await closeServer(echo);
+    }
+  });
+
+  test('POST /v1/proxy/pins/remove retracts a learned pin — the host terminates again', async () => {
+    const host = 'retract.example';
+    app.policy.learnPin(host, 'pin-injection-sim');
+    expect(app.policy.isPinned(host)).toBe(true);
+
+    // While pinned the CONNECT blind-tunnels: the proxy dials
+    // retract.example:443 (NXDOMAIN) and the splice dies — no forged
+    // handshake is ever attempted.
+    const { sock: pinnedSock, status: pinnedStatus } = await connectHandshake(
+      app.proxy.port,
+      `${host}:443`,
+    );
+    expect(pinnedStatus).toBe('HTTP/1.1 200 Connection Established');
+    await withTimeout(once(pinnedSock, 'close'), 10_000, 'pinned-flow dial-fail close');
+
+    const res = await postJson('/v1/proxy/pins/remove', { host });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, any>;
+    expect(body.success).toBe(true);
+    expect(body.host).toBe(host);
+    expect(body.pinned).toBe(false);
+    expect(body.bypassed).toBe(false);
+    expect(body.entry).toMatchObject({ host, action: 'remove' });
+    expect(app.policy.isPinned(host)).toBe(false);
+
+    // Unpinned, the same CONNECT terminates: a real ClientHello completes
+    // against the forged leaf — a blind tunnel could never mint this cert.
+    const { sock, status } = await connectHandshake(app.proxy.port, `${host}:443`);
+    expect(status).toBe('HTTP/1.1 200 Connection Established');
+    const client = tls.connect({
+      socket: sock,
+      servername: host,
+      ca: app.authority.caCertPem,
+      rejectUnauthorized: true,
+    });
+    client.on('error', () => {});
+    await withTimeout(once(client, 'secureConnect'), 10_000, 'post-remove forged handshake');
+    expect(client.getPeerCertificate().subject.CN).toBe(host);
+    // A completed handshake is not a pinning signal — the removal holds.
+    expect(app.policy.isPinned(host)).toBe(false);
+    client.destroy();
+  });
+
+  test('POST /v1/proxy/pins/remove retracts a bypass — remove covers both sets', async () => {
+    app.policy.addBypass('retract-bypass.example');
+    expect(app.policy.isBypassed('retract-bypass.example')).toBe(true);
+
+    const res = await postJson('/v1/proxy/pins/remove', { host: 'retract-bypass.example' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, any>;
+    expect(body.success).toBe(true);
+    expect(body.bypassed).toBe(false);
+    expect(app.policy.isBypassed('retract-bypass.example')).toBe(false);
+    expect(body.entry.action).toBe('remove');
+  });
+
+  test('the mutations reject bad hosts and bodies with 400', async () => {
+    const cases: [string, unknown][] = [
+      ['/v1/proxy/pins/bypass', {}], // host missing
+      ['/v1/proxy/pins/remove', { host: 42 }], // non-string
+      ['/v1/proxy/pins/bypass', { host: '   ' }], // normalizes to empty
+      ['/v1/proxy/pins/remove', { host: `${'a'.repeat(254)}` }], // past the 253 DNS bound
+      ['/v1/proxy/pins/bypass', { host: 'ok.example', reason: 7 }], // non-string reason
+      ['/v1/proxy/pins/bypass', { host: 'ok.example', reason: 'x'.repeat(201) }],
+    ];
+    for (const [path, body] of cases) {
+      const res = await postJson(path, body);
+      expect(res.status).toBe(400);
+      const payload = (await res.json()) as Record<string, any>;
+      expect(payload.success).toBe(false);
+      expect(typeof payload.error).toBe('string');
+    }
+    // Unparseable JSON is a 400 too — the guards pass it, the parser refuses it.
+    const badJson = await fetch(`${base}/v1/proxy/pins/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'definitely not json',
+    });
+    expect(badJson.status).toBe(400);
+    // None of the refused writes touched the ledger.
+    expect(app.policy.isBypassed('ok.example')).toBe(false);
+    expect(app.policy.isPinned('ok.example')).toBe(false);
+  });
+
+  test('the mutations inherit the POST guards — text/plain 415s, GET 405s', async () => {
+    for (const path of ['/v1/proxy/pins/bypass', '/v1/proxy/pins/remove']) {
+      const plain = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ host: 'drive-by.example' }),
+      });
+      expect(plain.status).toBe(415);
+      const get = await fetch(`${base}${path}`);
+      expect(get.status).toBe(405);
+      expect(get.headers.get('allow')).toContain('POST');
+    }
+    expect(app.policy.isBypassed('drive-by.example')).toBe(false);
   });
 });
 

@@ -29,7 +29,12 @@
 import { X509Certificate } from 'node:crypto';
 import http from 'node:http';
 import type { CertAuthority } from './ca/certAuthority.js';
-import type { PolicyStore } from './policy/policyStore.js';
+import {
+  normalizeHost,
+  POLICY_HOST_MAX_LENGTH,
+  type PolicyEntry,
+  type PolicyStore,
+} from './policy/policyStore.js';
 import type { RunningProxy } from './proxy/filterProxy.js';
 
 export interface ControlApiDeps {
@@ -66,12 +71,20 @@ export interface RunningControl {
 /** POST bodies are small JSON documents — past 1MB is hostile (daemon parity). */
 const BODY_LIMIT = 1e6;
 
+/**
+ * A bypass `reason` lands verbatim on a permanent ledger line — it is a
+ * short operator note like 'handshake-abort', not a document.
+ */
+const MAX_REASON_LENGTH = 200;
+
 const ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   '/v1/proxy/status': new Set(['GET']),
   '/v1/proxy/stats': new Set(['GET']),
   '/v1/proxy/ca': new Set(['GET']),
   '/v1/proxy/ca/rotate': new Set(['POST']),
   '/v1/proxy/pins': new Set(['GET']),
+  '/v1/proxy/pins/bypass': new Set(['POST']),
+  '/v1/proxy/pins/remove': new Set(['POST']),
   '/v1/proxy/reload': new Set(['POST']),
   '/v1/proxy/toggle': new Set(['POST']),
 };
@@ -113,6 +126,72 @@ export function startControlServer(deps: ControlApiDeps): Promise<RunningControl
       sha256Fingerprint: x509.fingerprint256,
       notAfter: x509.validTo,
     };
+  };
+
+  /**
+   * The appended ledger line a mutation just wrote — chain internals stay
+   * stripped (list() shape). `null` rather than the wrong entry when the
+   * store's fail-soft append left the journal unwritten: the live sets still
+   * applied, so `pinned`/`bypassed` in the reply stay honest either way.
+   */
+  const lastEntry = (host: string, action: 'bypass' | 'remove'): PolicyEntry | null => {
+    const entries = policy.list();
+    const last = entries.length > 0 ? entries[entries.length - 1] : undefined;
+    return last !== undefined && last.host === host && last.action === action ? last : null;
+  };
+
+  /**
+   * The `{host, reason?}` body the pins mutations share. Host validation
+   * delegates to the store's own normalization — the same trim+lowercase a
+   * learned pin or a ledger replay applies — and its hostname bound, so a
+   * name the store would refuse never reaches it. `reason` is optional but,
+   * when present, must be a short string: it lands verbatim on a permanent
+   * ledger line, so a type error or a megabyte payload is a 400, not a
+   * journal entry. Answers the request and returns null on any failure.
+   */
+  const readPinMutation = async (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<{ host: string; reason?: string } | null> => {
+    let body = '';
+    try {
+      body = await readBody(req);
+    } catch {
+      // Oversize — readBody already destroyed the request; mirror toggle.
+      res.destroy();
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      parsed = body === '' ? {} : JSON.parse(body);
+    } catch {
+      json(res, 400, { success: false, error: 'Bad Request: body must be a JSON object' });
+      return null;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      json(res, 400, { success: false, error: 'Bad Request: body must be a JSON object' });
+      return null;
+    }
+    const payload = parsed as Record<string, unknown>;
+    const host = typeof payload.host === 'string' ? normalizeHost(payload.host) : '';
+    if (host === '' || host.length > POLICY_HOST_MAX_LENGTH) {
+      json(res, 400, {
+        success: false,
+        error: `host must be a non-empty hostname of at most ${POLICY_HOST_MAX_LENGTH} characters`,
+      });
+      return null;
+    }
+    if (payload.reason !== undefined) {
+      if (typeof payload.reason !== 'string' || payload.reason.length > MAX_REASON_LENGTH) {
+        json(res, 400, {
+          success: false,
+          error: `reason must be a string of at most ${MAX_REASON_LENGTH} characters`,
+        });
+        return null;
+      }
+      return { host, reason: payload.reason };
+    }
+    return { host };
   };
 
   const server = http.createServer(async (req, res) => {
@@ -247,6 +326,44 @@ export function startControlServer(deps: ControlApiDeps): Promise<RunningControl
 
         case '/v1/proxy/pins': {
           json(res, 200, { pins: policy.list(), corruptLineCount: policy.corruptLineCount });
+          return;
+        }
+
+        // User-directed bypass (spec §5.6, flags 95/98): tunnels `host`
+        // without a verdict — the same blind-tunnel predicate auto-learned
+        // pins take — and lands a chained 'bypass' line in the ledger.
+        case '/v1/proxy/pins/bypass': {
+          const mutation = await readPinMutation(req, res);
+          if (mutation === null) {
+            return;
+          }
+          policy.addBypass(mutation.host, mutation.reason);
+          json(res, 200, {
+            success: true,
+            host: mutation.host,
+            pinned: policy.isPinned(mutation.host),
+            bypassed: policy.isBypassed(mutation.host),
+            entry: lastEntry(mutation.host, 'bypass'),
+          });
+          return;
+        }
+
+        // Retract whatever policy covers `host` — learned pin or bypass;
+        // `PolicyStore.remove` clears both sets and appends a chained
+        // 'remove' line so later lines can re-pin cleanly on replay.
+        case '/v1/proxy/pins/remove': {
+          const mutation = await readPinMutation(req, res);
+          if (mutation === null) {
+            return;
+          }
+          policy.remove(mutation.host, mutation.reason);
+          json(res, 200, {
+            success: true,
+            host: mutation.host,
+            pinned: policy.isPinned(mutation.host),
+            bypassed: policy.isBypassed(mutation.host),
+            entry: lastEntry(mutation.host, 'remove'),
+          });
           return;
         }
 

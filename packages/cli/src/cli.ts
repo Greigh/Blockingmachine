@@ -525,6 +525,83 @@ proxyProgram
   });
 
 proxyProgram
+  .command("unpin")
+  .description("Retract a learned pin — the host's flows terminate again")
+  .argument("<host>", "Hostname to remove from the pin/bypass ledger")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .action(async (host: string, cmdOptions: { port: string }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new ProxyCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "unpin",
+        host,
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Proxy unpin failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+proxyProgram
+  .command("bypass")
+  .description("Tunnel a host without a verdict — a user-directed bypass")
+  .argument("<host>", "Hostname to bypass")
+  .option("--reason <text>", "Short note recorded on the ledger line")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .action(async (host: string, cmdOptions: { port: string; reason?: string }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new ProxyCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "bypass",
+        host,
+        reason: cmdOptions.reason,
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Proxy bypass failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+proxyProgram
+  .command("bypass-remove")
+  .description("Retract a host's bypass — verdicts apply to it again")
+  .argument("<host>", "Hostname to remove from the pin/bypass ledger")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .action(async (host: string, cmdOptions: { port: string }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new ProxyCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "bypass-remove",
+        host,
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Proxy bypass-remove failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+proxyProgram
   .command("toggle")
   .description(
     "Flip protection on/off — a paused proxy blind-tunnels every flow",

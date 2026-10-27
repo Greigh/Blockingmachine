@@ -6,19 +6,29 @@ import {
 import {
   proxyControlRequest,
   type ProxyControlRequestOptions,
+  type ProxyPinMutationPayload,
 } from "../lib/proxyControl.js";
 import { writeJson } from "../lib/logger.js";
 
 /**
- * The P0 `/v1/proxy/*` surface (plan Task 8, spec §5.7). `pins` rides along
- * with the plan's four because `GET /v1/proxy/pins` shipped in the same P0
- * route table — the pin/bypass ledger is the one piece of engine state an
- * operator otherwise cannot see at all. Removing a pin is deliberately
- * absent: the P0 route table has no pin-removal endpoint (the full API's
- * `POST /v1/proxy/pins/{restore,remove}` is a later-phase route), and this
- * command does not invent endpoints.
+ * The `/v1/proxy/*` surface (plan Task 8, spec §5.7). `pins` lists the
+ * pin/bypass ledger — the one piece of engine state an operator otherwise
+ * cannot see — and the `host` mutations write to it: `unpin` retracts a
+ * learned pin, `bypass` records a user-directed tunnel-without-verdict, and
+ * `bypass-remove` retracts a bypass. Both retractions ride
+ * `POST /v1/proxy/pins/remove` because `PolicyStore.remove` clears the host
+ * from BOTH sets — it is the ledger's one "retract this host's policy"
+ * verb, and a route the API did not have until flags 95/98.
  */
-export type ProxyAction = "status" | "stats" | "pins" | "toggle" | "reload";
+export type ProxyAction =
+  | "status"
+  | "stats"
+  | "pins"
+  | "toggle"
+  | "reload"
+  | "unpin"
+  | "bypass"
+  | "bypass-remove";
 
 export interface ProxyCommandOptions {
   action: ProxyAction;
@@ -31,14 +41,32 @@ export interface ProxyCommandOptions {
    * sends.
    */
   enable?: boolean;
+  /**
+   * `unpin`/`bypass`/`bypass-remove`: the ledger host the mutation covers.
+   * Sent raw — normalization (trim+lowercase) is the store's, applied
+   * server-side.
+   */
+  host?: string;
+  /** `bypass` only: an optional short note the ledger line records. */
+  reason?: string;
 }
 
-const ACTIONS: Record<ProxyAction, { method: "GET" | "POST"; path: string }> = {
+interface ProxyRoute {
+  method: "GET" | "POST";
+  path: string;
+  /** True when the action writes the pin/bypass ledger and needs `<host>`. */
+  host?: true;
+}
+
+const ACTIONS: Record<ProxyAction, ProxyRoute> = {
   status: { method: "GET", path: "/v1/proxy/status" },
   stats: { method: "GET", path: "/v1/proxy/stats" },
   pins: { method: "GET", path: "/v1/proxy/pins" },
   toggle: { method: "POST", path: "/v1/proxy/toggle" },
   reload: { method: "POST", path: "/v1/proxy/reload" },
+  unpin: { method: "POST", path: "/v1/proxy/pins/remove", host: true },
+  bypass: { method: "POST", path: "/v1/proxy/pins/bypass", host: true },
+  "bypass-remove": { method: "POST", path: "/v1/proxy/pins/remove", host: true },
 };
 
 export class ProxyCommand extends BaseCommand<ProxyCommandOptions> {
@@ -62,9 +90,25 @@ export class ProxyCommand extends BaseCommand<ProxyCommandOptions> {
     if (route.path === "/v1/proxy/toggle" && options.enable !== undefined) {
       request.body = { enabled: options.enable };
     }
+    if (route.host === true) {
+      // The API rejects an absent/empty host with a 400 — refuse it here
+      // first so the failure names the missing argument, not the route.
+      const host = typeof options.host === "string" ? options.host.trim() : "";
+      if (host === "") {
+        return this.failure(
+          `proxy ${options.action} needs a host — e.g. \`proxy ${options.action} example.com\`.`,
+        );
+      }
+      request.body =
+        options.action === "bypass" && options.reason !== undefined
+          ? { host, reason: options.reason }
+          : { host };
+    }
 
     try {
-      const payload = await proxyControlRequest(request);
+      const payload = route.host
+        ? await proxyControlRequest<ProxyPinMutationPayload>(request)
+        : await proxyControlRequest(request);
       // These commands exist to inspect a JSON control API, so the payload
       // IS the output — written by `writeJson`, which keeps stdout a clean
       // document a caller can pipe (the `--json` convention applied to the

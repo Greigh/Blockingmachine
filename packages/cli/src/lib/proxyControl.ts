@@ -113,6 +113,26 @@ export interface ProxyReloadPayload {
   [key: string]: unknown;
 }
 
+/** POST `/v1/proxy/pins/bypass` and `/v1/proxy/pins/remove` reply. */
+export interface ProxyPinMutationPayload {
+  success: boolean;
+  /** The normalized host the ledger recorded. */
+  host: string;
+  /**
+   * The host's live policy state after the mutation — a bypass answers
+   * `bypassed:true` (and `pinned` honestly when the host also sits in the
+   * learned-pin set); a remove answers both `false`.
+   */
+  pinned: boolean;
+  bypassed: boolean;
+  /**
+   * The appended ledger line, or null when the store's fail-soft append
+   * could not persist it — the live sets applied either way.
+   */
+  entry: ProxyPolicyEntry | null;
+  [key: string]: unknown;
+}
+
 export interface ProxyControlRequestOptions {
   /** Control port override; defaults to {@link DEFAULT_PROXY_CONTROL_PORT}. */
   port?: number;

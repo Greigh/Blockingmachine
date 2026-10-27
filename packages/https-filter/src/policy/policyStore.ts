@@ -48,12 +48,23 @@ interface PolicyRecord extends PolicyEntry {
 
 const ACTIONS: ReadonlySet<string> = new Set<PolicyAction>(['pin', 'bypass', 'remove']);
 
+/**
+ * The text-form bound on a DNS name — the same 253 `isValidSni` enforces on
+ * the forge gate. A longer string is not a hostname; the ledger refuses it.
+ */
+export const POLICY_HOST_MAX_LENGTH = 253;
+
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-/** DNS is case-insensitive; whitespace on a host read off a socket is garbage. */
-function normalizeHost(host: string): string {
+/**
+ * The store's host normalization — DNS is case-insensitive, and whitespace
+ * on a host read off a socket (or a control-API body) is garbage. Exported
+ * so `/v1/proxy/pins/*` validates with the exact normalization the ledger
+ * applies rather than a second, driftable copy of it.
+ */
+export function normalizeHost(host: string): string {
   return host.trim().toLowerCase();
 }
 
@@ -148,17 +159,27 @@ export class PolicyStore {
     return this.bypassed.has(normalizeHost(host));
   }
 
-  addBypass(host: string): void {
+  /**
+   * User-directed bypass — `POST /v1/proxy/pins/bypass` reaches this. The
+   * optional `reason` lands on the ledger line the way a learned pin's
+   * 'handshake-abort' does.
+   */
+  addBypass(host: string, reason?: string): void {
     const normalized = requireHost(host);
     this.bypassed.add(normalized);
-    this.append(normalized, 'bypass');
+    this.append(normalized, 'bypass', reason);
   }
 
-  remove(host: string): void {
+  /**
+   * Retract whatever policy covers `host` — a learned pin, a bypass, or
+   * both (a host can sit in both sets). The 'remove' line is itself an
+   * entry: replay applies it so a later pin/bypass still wins.
+   */
+  remove(host: string, reason?: string): void {
     const normalized = requireHost(host);
     this.pinned.delete(normalized);
     this.bypassed.delete(normalized);
-    this.append(normalized, 'remove');
+    this.append(normalized, 'remove', reason);
   }
 
   /** The applied ledger, oldest first — chain internals stripped. */
@@ -250,8 +271,10 @@ export class PolicyStore {
 
 function requireHost(host: string): string {
   const normalized = normalizeHost(host);
-  if (normalized.length === 0) {
-    throw new Error('PolicyStore: host must be a non-empty hostname');
+  if (normalized.length === 0 || normalized.length > POLICY_HOST_MAX_LENGTH) {
+    throw new Error(
+      `PolicyStore: host must be a non-empty hostname of at most ${POLICY_HOST_MAX_LENGTH} characters`,
+    );
   }
   return normalized;
 }

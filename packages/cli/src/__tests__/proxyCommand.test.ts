@@ -167,6 +167,145 @@ describe("ProxyCommand", () => {
     expect(parseJsonStdout<Record<string, unknown>>(stdout).rulesLoaded).toBe(12000);
   });
 
+  test("unpin POSTs /v1/proxy/pins/remove with the host body", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        success: true,
+        host: "banking.example",
+        pinned: false,
+        bypassed: false,
+        entry: { ts: 9, host: "banking.example", action: "remove" },
+      }),
+    );
+
+    const stdout = await captureStdout(async () => {
+      const result = await cmd().execute({ action: "unpin", host: "banking.example" });
+      expect(result.success).toBe(true);
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:9293/v1/proxy/pins/remove");
+    expect(init?.method).toBe("POST");
+    expect((init?.headers as Record<string, string>)["Content-Type"]).toBe(
+      "application/json",
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({ host: "banking.example" });
+    const doc = parseJsonStdout<Record<string, unknown>>(stdout);
+    expect(doc.success).toBe(true);
+    expect(doc.pinned).toBe(false);
+  });
+
+  test("bypass POSTs /v1/proxy/pins/bypass — {host} bare, {host,reason} with a note", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        success: true,
+        host: "printer.example",
+        pinned: false,
+        bypassed: true,
+        entry: { ts: 10, host: "printer.example", action: "bypass" },
+      }),
+    );
+
+    await captureStdout(async () => {
+      const result = await cmd().execute({ action: "bypass", host: "printer.example" });
+      expect(result.success).toBe(true);
+    });
+    let [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:9293/v1/proxy/pins/bypass");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ host: "printer.example" });
+
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        success: true,
+        host: "iot.example",
+        pinned: false,
+        bypassed: true,
+        entry: { ts: 11, host: "iot.example", action: "bypass", reason: "smart tv" },
+      }),
+    );
+    const stdout = await captureStdout(async () => {
+      const result = await cmd().execute({
+        action: "bypass",
+        host: "iot.example",
+        reason: "smart tv",
+      });
+      expect(result.success).toBe(true);
+    });
+    [url, init] = fetchMock.mock.calls[1];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      host: "iot.example",
+      reason: "smart tv",
+    });
+    expect(parseJsonStdout<Record<string, unknown>>(stdout).bypassed).toBe(true);
+  });
+
+  test("bypass-remove POSTs /v1/proxy/pins/remove — the one retract verb", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        success: true,
+        host: "printer.example",
+        pinned: false,
+        bypassed: false,
+        entry: { ts: 12, host: "printer.example", action: "remove" },
+      }),
+    );
+
+    await captureStdout(async () => {
+      const result = await cmd().execute({
+        action: "bypass-remove",
+        host: "printer.example",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:9293/v1/proxy/pins/remove");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ host: "printer.example" });
+  });
+
+  test("a mutation without a host fails before any request goes out", async () => {
+    for (const action of ["unpin", "bypass", "bypass-remove"] as const) {
+      const result = await cmd().execute({ action });
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("needs a host");
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("a mutation refusing 400 surfaces the server's own error text", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(400, {
+        success: false,
+        error: "host must be a non-empty hostname of at most 253 characters",
+      }),
+    );
+
+    const result = await cmd().execute({ action: "bypass", host: "   " });
+    expect(result.success).toBe(false);
+    // The command's own pre-check trims to empty and fails first — no fetch.
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const result2 = await cmd().execute({ action: "unpin", host: "bad.example" });
+    expect(result2.success).toBe(false);
+    expect(result2.message).toContain("non-empty hostname");
+  });
+
+  test("--port is honored on the mutation verbs too", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { success: true, host: "x.example", pinned: false, bypassed: false }),
+    );
+
+    await captureStdout(async () => {
+      const result = await cmd().execute({ action: "unpin", host: "x.example", port: 19293 });
+      expect(result.success).toBe(true);
+    });
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:19293/v1/proxy/pins/remove");
+  });
+
   test("--port override changes the URL the request goes to", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { status: "paused" }));
 
