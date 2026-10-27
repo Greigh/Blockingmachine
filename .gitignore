@@ -33,6 +33,7 @@ Desktop.ini
 # Build artifacts
 dist/
 build/
+packages/https-filter/helper/macos/natlook-helper
 .build
 make/
 *.app
