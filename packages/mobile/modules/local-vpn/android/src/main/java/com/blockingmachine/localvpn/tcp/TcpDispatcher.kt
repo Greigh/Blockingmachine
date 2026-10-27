@@ -1,0 +1,145 @@
+package com.blockingmachine.localvpn.tcp
+
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+
+/** Dispatcher-visible counters. [rst] counts every RST this stack emits;
+ *  [reasmDropped] counts inbound bytes dropped inside the reassembly queue. */
+class TcpStats {
+  val flowsOpened = AtomicLong()
+  val flowsClosed = AtomicLong()
+  val rst = AtomicLong()
+  val reasmDropped = AtomicLong()
+}
+
+/**
+ * Flow router between the tun fd and per-flow [TcpSession]s (P4 T1).
+ *
+ * `onPacket` is called with each IP packet read from the tunnel. Packets whose
+ * TCP destination port is 80 or 443 are consumed here — everything else
+ * returns `false` so the service can keep its existing pass-through posture.
+ *
+ * A session is born on a bare SYN (the [upstreamFactory] seam hands T2 a
+ * `protect()`ed socket dial to the hub); a non-SYN packet for an unknown flow
+ * gets a bare RST back — the same answer a real stack gives a port with no
+ * listener. The table is bounded ([maxSessions]) with LRU eviction — the
+ * evicted flow gets RST'd so the app sees a clean failure instead of a hang.
+ *
+ * `onTick` drives each session's retransmit-lite + idle reap; wire it to a
+ * ~50–100ms service-side timer.
+ *
+ * Threading: `onPacket`/`onTick`/`close` are safe to call from the tun reader
+ * thread and a timer thread concurrently; per-session state serializes inside
+ * the session itself.
+ */
+class TcpDispatcher(
+  private val emit: (ByteArray) -> Unit,
+  private val upstreamFactory: (FlowKey) -> SessionUpstream,
+  private val nowMs: () -> Long = { System.nanoTime() / 1_000_000L },
+  private val maxSessions: Int = 1024,
+) {
+
+  val stats = TcpStats()
+  val sessions = ConcurrentHashMap<FlowKey, TcpSession>()
+
+  /** Insertion-ordered touch log for LRU eviction — guarded by [lruLock]. */
+  private val lruLock = Any()
+  private val lru = LinkedHashMap<FlowKey, Long>()
+
+  /**
+   * Route one IP packet read from tun. Returns true when the packet was
+   * consumed by the capture path (TCP dst 80/443 — consumed even when the
+   * packet turned out unparseable: it was aimed at us).
+   */
+  fun onPacket(ip: ByteArray): Boolean {
+    val dstPort = Packet.peekTcpDstPort(ip) ?: return false
+    if (dstPort != 80 && dstPort != 443) return false
+    val seg = Packet.parseTcp(ip) ?: return true
+    val key = FlowKey(seg)
+
+    var session = sessions[key]
+    if (session == null) {
+      if (!seg.isSyn) {
+        // Packet for a flow we have no TCB for — the listener-port answer.
+        if (!seg.has(Packet.FLAG_RST)) {
+          stats.rst.incrementAndGet()
+          emit(Packet.buildRstReply(seg))
+        }
+        return true
+      }
+      evictIfNeeded()
+      session = try {
+        TcpSession(key, emit, upstreamFactory(key), nowMs = nowMs, stats = stats)
+      } catch (e: Exception) {
+        // Upstream dial seam failed at birth — RST like a refused connection.
+        stats.rst.incrementAndGet()
+        emit(Packet.buildRstReply(seg))
+        return true
+      }
+      sessions[key] = session
+      stats.flowsOpened.incrementAndGet()
+    }
+    touch(key)
+    session.onPacket(ip)
+    if (session.terminated) removeSession(key, session)
+    return true
+  }
+
+  /**
+   * Periodic housekeeping — retransmit-lite ticks + idle reaping inside each
+   * session. Weakly-consistent CHM iteration is fine: a session that appears
+   * or dies mid-sweep is handled next tick.
+   */
+  fun onTick() {
+    val now = nowMs()
+    for ((k, s) in sessions.entries) {
+      if (s.onTick(now)) removeSession(k, s)
+    }
+  }
+
+  /** Number of live flows — the T2 status surface reads this. */
+  fun activeCount(): Int = sessions.size
+
+  /** Deadline of the next idle expiry — lets the caller sleep until needed. */
+  fun nextReapDeadlineMs(): Long {
+    var min = Long.MAX_VALUE
+    for (s in sessions.values) min = minOf(min, s.idleDeadlineMs)
+    return min
+  }
+
+  /** Tear every flow down (service shutdown). */
+  fun close() {
+    for ((k, s) in sessions.entries) {
+      s.abortWithRst()
+      removeSession(k, s)
+    }
+    synchronized(lruLock) { lru.clear() }
+  }
+
+  private fun removeSession(key: FlowKey, session: TcpSession) {
+    if (sessions.remove(key, session)) {
+      stats.flowsClosed.incrementAndGet()
+      synchronized(lruLock) { lru.remove(key) }
+    }
+  }
+
+  private fun touch(key: FlowKey) {
+    synchronized(lruLock) {
+      lru.remove(key)
+      lru[key] = nowMs()
+    }
+  }
+
+  private fun evictIfNeeded() {
+    while (sessions.size >= maxSessions) {
+      val victimKey = synchronized(lruLock) {
+        val k = lru.keys.firstOrNull()
+        if (k != null) lru.remove(k)
+        k
+      } ?: sessions.keys.firstOrNull() ?: return
+      val victim = sessions.remove(victimKey) ?: continue
+      victim.abortWithRst()
+      stats.flowsClosed.incrementAndGet()
+    }
+  }
+}
