@@ -100,10 +100,30 @@ __pycache__/
 .pytest_cache/
 .venv/
 
-# Local agent/session scratch — never part of the product
+# Local agent/session scratch and AI-assistant files — never part of the product
 .freebuff/
-AGENTS.md
 .remember/
+AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+QWEN.md
+.clinerules
+.roorules
+.cursorrules
+.windsurfrules
+.aider*
+.claude/
+.cursor/
+.windsurf/
+.codeium/
+.devin/
+.agents/
+.augment/
+.continue/
+.opencode/
+.github/copilot-instructions.md
+llms.txt
 
 # Scratch the Unbound reachability rig builds inside the repo (the VM can only
 # bind-mount from here); the rig removes it on exit, an interrupted run leaves it.
