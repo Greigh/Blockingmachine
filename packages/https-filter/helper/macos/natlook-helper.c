@@ -12,12 +12,28 @@
  * stalled splice can never serialize accept.
  *
  * Fail-open watchdog (spec §7): the parent probes the engine port on a
- * ~2 s tick; after three consecutive connect failures it flushes the pf
- * anchor once — redirected flows stop arriving, new traffic hits the real
- * network. The anchor is never re-loaded by this process (a flapping
- * engine must not oscillate rules); re-running the installer restores it.
- * A 10 s grace window after start keeps a slow engine boot from reading
- * as a failure.
+ * ~2 s tick with a bounded connect; after three consecutive failures it
+ * flushes the pf anchor — redirected flows stop arriving, new traffic
+ * hits the real network. A 10 s grace window after start keeps a slow
+ * engine boot from reading as a failure. The failure postures are
+ * deliberately asymmetric (also documented in install-macos-capture.sh):
+ * ENGINE death is fail-open (the anchor flush above); HELPER death is
+ * fail-CLOSED — a hard-killed helper leaves live rdr rules pointing at a
+ * dead listener (RSTs on :9295, dead web) until launchd KeepAlive
+ * restarts it or the operator uninstalls. There is no watchdog for the
+ * watcher; KeepAlive is the recovery path.
+ *
+ * Reboot re-arm: pf's rules AND enable state die at boot while the
+ * plists and /etc/blockingmachine-capture.state persist — launchd
+ * restarts both daemons over a capture that is administratively on but
+ * silently inert. When the state file marks capture enabled but no
+ * anchor is loaded, the first successful engine probe re-runs the
+ * installer's own arm sequence via the pf-anchor.sh installed beside
+ * this binary (a system() callout — the pfctl logic lives in exactly
+ * one place). The probe gate keeps a helper restart during engine-death
+ * from re-arming a blackhole; the pending arm is consumed by the first
+ * load and vetoed by a real flush, so a flapping engine still sees ≤1
+ * anchor load per helper process — the no-oscillation contract holds.
  *
  *   argv:  natlook-helper <helperPort> <engineHost> <enginePort> [-v]
  *          natlook-helper --selftest <helperPort> <engineHost> <enginePort>
@@ -95,12 +111,26 @@ _Static_assert(DIOCNATLOOK == 0xc0544417, "DIOCNATLOOK ioctl number drifted");
 /* The anchor nests under the com.apple wildcard — the stock ruleset's only
  * attach point (see install-macos-capture.sh). This name must match. */
 #define PF_ANCHOR "com.apple/com.blockingmachine"
+/* Written by pf-anchor.sh — presence marks capture administratively
+ * enabled (the install-time -E posture + token ledger live inside). */
+#define STATE_FILE "/etc/blockingmachine-capture.state"
 #define FLUSH_CMD "/sbin/pfctl -a " PF_ANCHOR " -F all >/dev/null 2>&1"
+/* Empty output → no ruleset loaded under the anchor (post-reboot state). */
+#define ANCHOR_QRY "/sbin/pfctl -a " PF_ANCHOR " -s rules 2>/dev/null | /usr/bin/grep -q ."
+/* The installed shared arm script — identical sequence to the installer's
+ * step 9 (anchor load + conditional -E + state-file bookkeeping). */
+#define ARM_CMD "\"/Library/Application Support/Blockingmachine/pf-anchor.sh\" load >/dev/null 2>&1"
 
 #define SPLICE_BUF_SIZE (64u * 1024u)
 #define WATCHDOG_TICK_MS 2000 /* probe cadence */
 #define WATCHDOG_GRACE_S 10   /* boot grace before probing starts */
 #define WATCHDOG_FAILS 3      /* consecutive failures before anchor flush */
+#define CONNECT_TIMEOUT_MS 2000 /* engine dial bound — an unblocked     \
+                                 * connect can sit ~75 s behind a full  \
+                                 * listen backlog and stall the watchdog */
+#define MAX_CHILDREN 256      /* live forked splices — over cap,         \
+                                 * accept-and-close so a local conn     \
+                                 * flood can't fork-bomb the daemon     */
 #define CHILD_TRACK 512       /* shutdown-kill registry size (ring) */
 
 static int g_verbose = 0;
@@ -318,6 +348,14 @@ static int parse_test_dst(const char *text, struct sockaddr_storage *out) {
 /* TCP plumbing                                                        */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Bounded connect: a blocking connect() can sit ~75 s behind a full
+ * listen backlog before the kernel gives up — long enough to stall the
+ * watchdog's probe cadence (and to park a flow child on a wedged engine).
+ * Nonblocking connect + poll(SO_ERROR) caps the wait at CONNECT_TIMEOUT_MS;
+ * the fd is returned to BLOCKING mode before handoff because splice's
+ * write_all assumes it (a nonblocking write could EAGAIN mid-body).
+ */
 static int connect_tcp(const char *host, uint16_t port) {
   char portstr[8];
   snprintf(portstr, sizeof(portstr), "%u", (unsigned)port);
@@ -332,8 +370,36 @@ static int connect_tcp(const char *host, uint16_t port) {
     fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
     if (fd < 0)
       continue;
-    if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0)
-      break;
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0) {
+      close(fd);
+      fd = -1;
+      continue;
+    }
+    int ok = 0;
+    if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
+      ok = 1;
+    } else if (errno == EINPROGRESS) {
+      struct pollfd pfd;
+      pfd.fd = fd;
+      pfd.events = POLLOUT;
+      pfd.revents = 0;
+      int prc;
+      do {
+        prc = poll(&pfd, 1, CONNECT_TIMEOUT_MS);
+      } while (prc < 0 && errno == EINTR);
+      if (prc > 0) {
+        /* SO_ERROR is authoritative — POLLOUT|POLLERR arrive alike. */
+        int err = 0;
+        socklen_t elen = sizeof(err);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) == 0 && err == 0)
+          ok = 1;
+        else if (err != 0)
+          errno = err; /* keep vlogf's errno honest */
+      }
+    }
+    if (ok && fcntl(fd, F_SETFL, fl) == 0)
+      break; /* connected, restored to blocking */
     close(fd);
     fd = -1;
   }
@@ -487,6 +553,11 @@ static time_t g_start_mono = 0;
 static time_t g_last_probe = 0;
 static int g_consec_fails = 0;
 static int g_anchor_flushed = 0;
+static int g_rearm_pending = 0; /* armed at startup; consumed/vetoed below */
+
+/* 0 = a ruleset is currently loaded under our anchor (empty pfctl output
+ * means absent — the post-reboot state, or a consumed watchdog flush). */
+static int anchor_is_loaded(void) { return system(ANCHOR_QRY) == 0; }
 
 static void watchdog_tick(const char *engine_host, uint16_t engine_port,
                           int enabled) {
@@ -505,18 +576,45 @@ static void watchdog_tick(const char *engine_host, uint16_t engine_port,
     if (g_consec_fails > 0)
       vlogf("watchdog: engine reachable again");
     g_consec_fails = 0;
+    if (g_rearm_pending) {
+      /* Consumed on the first live probe whether or not a load runs —
+       * ≤1 arm per helper process keeps the no-oscillation contract. */
+      g_rearm_pending = 0;
+      if (!anchor_is_loaded()) {
+        int rc = system(ARM_CMD);
+        logf("watchdog: state file marks capture enabled — anchor re-armed "
+             "via pf-anchor.sh (rc=%d)",
+             rc);
+      }
+    }
     return;
   }
   g_consec_fails++;
   vlogf("watchdog: engine probe failed (%d/%d)", g_consec_fails, WATCHDOG_FAILS);
-  if (g_consec_fails >= WATCHDOG_FAILS && !g_anchor_flushed) {
-    g_anchor_flushed = 1;
-    int rc = system(FLUSH_CMD);
-    /* Fail-open: anchor gone → new flows hit the real network. Never
-     * re-loaded here — the installer owns re-arm, so a flapping engine
-     * cannot oscillate rules. */
-    logf("watchdog: %d consecutive probe failures — flushed pf anchor (rc=%d)",
-         g_consec_fails, rc);
+  if (g_consec_fails >= WATCHDOG_FAILS) {
+    if (anchor_is_loaded()) {
+      if (!g_anchor_flushed) {
+        /* Fail-open: anchor gone → new flows hit the real network. A real
+         * flush also vetoes the startup re-arm — rules must not bounce
+         * under a flapping engine. */
+        g_anchor_flushed = 1;
+        g_rearm_pending = 0;
+        int rc = system(FLUSH_CMD);
+        logf("watchdog: %d consecutive probe failures — flushed pf anchor (rc=%d)",
+             g_consec_fails, rc);
+      }
+    } else {
+      /* Anchor already absent (post-reboot, or our own earlier flush):
+       * nothing to flush — and NOT a veto, so a late engine start can
+       * still re-arm. Clearing the hysteresis here also means an anchor
+       * externally reloaded while the engine stays down gets flushed on
+       * the next tick — fail-open is a posture, not a one-time event. */
+      if (g_consec_fails == WATCHDOG_FAILS)
+        logf("watchdog: %d consecutive probe failures — anchor already absent, "
+             "nothing to flush (fail-open holds)",
+             g_consec_fails);
+      g_anchor_flushed = 0;
+    }
   }
 }
 
@@ -525,6 +623,7 @@ static void watchdog_tick(const char *engine_host, uint16_t engine_port,
 /* ------------------------------------------------------------------ */
 
 static int g_shutdown = 0;
+static volatile sig_atomic_t g_live_children = 0; /* MAX_CHILDREN gate */
 static pid_t g_children[CHILD_TRACK];
 static size_t g_children_len = 0;
 static size_t g_children_next = 0;
@@ -543,8 +642,18 @@ static void on_sigterm(int sig) {
 
 static void on_sigchld(int sig) {
   (void)sig;
-  while (waitpid(-1, NULL, WNOHANG) > 0) {
-    /* reap */
+  pid_t p;
+  while ((p = waitpid(-1, NULL, WNOHANG)) > 0) {
+    /* Clear every slot holding the reaped pid: a reaped pid can be
+     * recycled by the kernel to an unrelated process, and the
+     * shutdown-kill must never SIGTERM one of those. Slots still holding
+     * a pid are live children (or unreaped zombies — they keep their pid
+     * and ignore SIGTERM), never recycled ones. */
+    for (size_t i = 0; i < g_children_len; i++)
+      if (g_children[i] == p)
+        g_children[i] = 0;
+    if (g_live_children > 0)
+      g_live_children--;
   }
 }
 
@@ -554,7 +663,13 @@ static int bind_listener(const struct sockaddr *sa, socklen_t slen) {
     return -1;
   int one = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-  if (bind(fd, sa, slen) != 0 || listen(fd, 128) != 0) {
+  /* O_NONBLOCK on the LISTENER: a client that aborts between poll() and
+   * accept() must not stall the acceptor inside a blocking accept — the
+   * drain loop below stops at EAGAIN instead. Accepted sockets keep
+   * blocking semantics (the flag is not inherited on BSD). */
+  int fl = fcntl(fd, F_GETFL, 0);
+  if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0 ||
+      bind(fd, sa, slen) != 0 || listen(fd, 128) != 0) {
     close(fd);
     return -1;
   }
@@ -591,9 +706,16 @@ static int acceptor_loop(uint16_t helper_port, const char *engine_host,
   sin6.sin6_addr = in6addr_loopback;
   sin6.sin6_port = htons(helper_port);
   int l6 = bind_listener((const struct sockaddr *)&sin6, sizeof(sin6));
-  if (l6 < 0)
-    logf("warning: cannot bind [::1]:%u errno=%d — v6 capture leg dead",
+  if (l6 < 0) {
+    /* The anchor's inet6 rdr sends [::1] flows at this port whether or
+     * not we listen — a warn-only posture would leave v6 clients RST'd
+     * while v4 worked: asymmetric breakage. Die so launchd KeepAlive
+     * retries and the failure surfaces loudly. */
+    logf("fatal: cannot bind [::1]:%u errno=%d — v6 capture leg required",
          (unsigned)helper_port, errno);
+    close(l4);
+    return 1;
+  }
 
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
@@ -614,8 +736,18 @@ static int acceptor_loop(uint16_t helper_port, const char *engine_host,
   signal(SIGPIPE, SIG_IGN);
 
   g_start_mono = time(NULL);
-  logf("listening on 127.0.0.1:%u%s — engine %s:%u", (unsigned)helper_port,
-       l6 >= 0 ? " + [::1]" : "", engine_host, (unsigned)engine_port);
+  logf("listening on 127.0.0.1:%u + [::1] — engine %s:%u", (unsigned)helper_port,
+       engine_host, (unsigned)engine_port);
+
+  /* Post-reboot re-arm (see the header block): arm the one-shot pending
+   * flag when capture is administratively enabled but pf has no rules —
+   * the next successful engine probe performs the load. Probes keep it
+   * pending across a slow engine boot; a real watchdog flush vetoes it. */
+  if (watchdog_enabled && access(STATE_FILE, F_OK) == 0 && !anchor_is_loaded()) {
+    g_rearm_pending = 1;
+    logf("state file marks capture enabled but anchor is absent — "
+         "will re-arm on first live engine probe");
+  }
 
   while (!g_shutdown) {
     struct pollfd pfd[2];
@@ -638,50 +770,78 @@ static int acceptor_loop(uint16_t helper_port, const char *engine_host,
       for (int i = 0; i < 2; i++) {
         if (pfd[i].fd < 0 || !(pfd[i].revents & POLLIN))
           continue;
-        int cfd = accept(pfd[i].fd, NULL, NULL);
-        if (cfd < 0) {
-          if (errno == EINTR)
-            continue;
-          if (errno == EMFILE || errno == ENFILE) {
-            logf("accept: fd exhaustion errno=%d — pausing", errno);
-            usleep(200000);
+        /* Nonblocking listeners: drain accepts until EAGAIN — a client
+         * aborted between poll and accept must not stall the acceptor. */
+        for (;;) {
+          int cfd = accept(pfd[i].fd, NULL, NULL);
+          if (cfd < 0) {
+            if (errno == EINTR)
+              continue;
+            if (errno == ECONNABORTED)
+              continue; /* this pending conn died — more may be queued */
+            if (errno == EAGAIN)
+              break;
+            if (errno == EMFILE || errno == ENFILE) {
+              logf("accept: fd exhaustion errno=%d — pausing", errno);
+              usleep(200000);
+            } else {
+              logf("accept: errno=%d", errno);
+            }
+            break;
           }
-          continue;
-        }
-        pid_t pid = fork();
-        if (pid == 0) {
-          /* child: one connection, then die — a stalled splice can never
-           * serialize the acceptor. Default signal dispositions so the
-           * parent's shutdown-kill actually lands. */
-          signal(SIGTERM, SIG_DFL);
-          signal(SIGINT, SIG_DFL);
-          signal(SIGHUP, SIG_DFL);
-          close(l4);
-          if (l6 >= 0)
+          if (g_live_children >= MAX_CHILDREN) {
+            /* Over cap: still accept (drain the backlog honestly rather
+             * than leave clients in SYN limbo) but close immediately. */
+            vlogf("accept: child cap %d reached — closing conn", MAX_CHILDREN);
+            close(cfd);
+            continue;
+          }
+          /* Track under a blocked SIGCHLD: a child exiting before its
+           * slot write would reap with nothing to clear and leave a
+           * reusable stale pid for the shutdown-kill. */
+          sigset_t chld, prev;
+          sigemptyset(&chld);
+          sigaddset(&chld, SIGCHLD);
+          sigprocmask(SIG_BLOCK, &chld, &prev);
+          pid_t pid = fork();
+          if (pid == 0) {
+            /* child: one connection, then die — a stalled splice can
+             * never serialize the acceptor. Restore the signal mask and
+             * default dispositions so the parent's shutdown-kill lands. */
+            sigprocmask(SIG_SETMASK, &prev, NULL);
+            signal(SIGTERM, SIG_DFL);
+            signal(SIGINT, SIG_DFL);
+            signal(SIGHUP, SIG_DFL);
+            close(l4);
             close(l6);
-          handle_connection(cfd, engine_host, engine_port, &test_dst,
-                            have_test_dst);
-          _exit(0);
-        }
-        if (pid < 0) {
-          logf("accept: fork failed errno=%d", errno);
+            handle_connection(cfd, engine_host, engine_port, &test_dst,
+                              have_test_dst);
+            _exit(0);
+          }
+          if (pid > 0) {
+            track_child(pid);
+            g_live_children++;
+          }
+          sigprocmask(SIG_SETMASK, &prev, NULL);
+          if (pid < 0) {
+            logf("accept: fork failed errno=%d", errno);
+          }
           close(cfd);
-          continue;
         }
-        track_child(pid);
-        close(cfd);
       }
     }
     watchdog_tick(engine_host, engine_port, watchdog_enabled);
   }
 
-  /* Best-effort kill of in-flight splices — tracked pids may already be
-   * reaped; ESRCH makes that harmless. */
+  /* Best-effort kill of in-flight splices — slots are zeroed on reap, so
+   * signalled pids are live children or unreaped zombies (both safe: a
+   * zombie keeps its pid and ignores SIGTERM). Skipping 0 matters —
+   * kill(0, SIGTERM) would hit our own process group. */
   for (size_t i = 0; i < g_children_len; i++)
-    kill(g_children[i], SIGTERM);
+    if (g_children[i] > 0)
+      kill(g_children[i], SIGTERM);
   close(l4);
-  if (l6 >= 0)
-    close(l6);
+  close(l6);
   logf("shutdown complete");
   return 0;
 }

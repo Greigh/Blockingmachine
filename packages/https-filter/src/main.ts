@@ -7,7 +7,9 @@
  *    non-darwin), bundled as `.webpack/main/filterProxy.cjs`.
  *  - The macOS capture service's launchd plist (`com.blockingmachine.proxy`,
  *    P1 Task 3) runs this same file as `_blockingmachine` — the dedicated user
- *    the pf anchor's `no rdr … user = _blockingmachine` exemption needs.
+ *    the pf anchor's `user != _blockingmachine` route-to rules carve out of
+ *    capture (pf allows user matching on filter rules only — the exemption
+ *    cannot live on the rdr rules themselves).
  *
  * Configuration is env-only so neither launcher needs argv plumbing:
  *

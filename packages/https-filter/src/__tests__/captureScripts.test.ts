@@ -25,8 +25,9 @@ const SCRIPTS = join(REPO_ROOT, 'scripts');
 const INSTALL = join(SCRIPTS, 'install-macos-capture.sh');
 const UNINSTALL = join(SCRIPTS, 'uninstall-macos-capture.sh');
 const REHEARSE = join(SCRIPTS, 'macos-capture-rehearse.sh');
+const PF_ANCHOR = join(SCRIPTS, 'pf-anchor.sh');
 const BUILD_SH = join(REPO_ROOT, 'packages/https-filter/helper/macos/build.sh');
-const ALL_SCRIPTS = [INSTALL, UNINSTALL, REHEARSE, BUILD_SH];
+const ALL_SCRIPTS = [INSTALL, UNINSTALL, REHEARSE, PF_ANCHOR, BUILD_SH];
 
 const tmpDirs: string[] = [];
 afterAll(() => {
@@ -55,12 +56,23 @@ describe('macos capture scripts — hygiene', () => {
     const text = readFileSync(INSTALL, 'utf8');
     const euidAt = text.indexOf('[[ $EUID -eq 0 ]]');
     const dsclAt = text.indexOf('dscl . -create "/Users/');
-    const pfctlAt = text.indexOf('pfctl -a "$ANCHOR_NAME" -f');
+    const armAt = text.indexOf('"$APP_SUPPORT_DIR/pf-anchor.sh" load');
     expect(euidAt).toBeGreaterThan(-1);
     // The EUID gate sits after the --render-only early-return but before
-    // the first real system mutation (user create / pfctl load).
+    // the first real system mutation (user create / anchor arm).
     expect(euidAt).toBeLessThan(dsclAt);
-    expect(euidAt).toBeLessThan(pfctlAt);
+    expect(euidAt).toBeLessThan(armAt);
+  });
+
+  test('--service-user is restricted to a login-name shape before use', () => {
+    // Raw input lands in `user !=` filter rules + dscl paths — the regex
+    // must run before the render-only early-return and before any mutation.
+    const text = readFileSync(INSTALL, 'utf8');
+    expect(text).toMatch(/SERVICE_USER" =~ \^\[a-z_\]\[a-z0-9_-\]/);
+    const gateAt = text.indexOf('SERVICE_USER" =~');
+    const renderAt = text.indexOf('if [[ -n "$RENDER_ONLY" ]]');
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(gateAt).toBeLessThan(renderAt);
   });
 
   test('rehearse script is sudo-gated and never self-escalates', () => {
@@ -80,6 +92,49 @@ describe('macos capture scripts — hygiene', () => {
     expect(code).not.toMatch(/osascript/);
     // Trap-driven cleanup guarantees no rdr survives a failure path.
     expect(text).toMatch(/trap cleanup EXIT INT TERM/);
+    expect(text).toMatch(/pfctl -a "\$ANCHOR_NAME" -F all/);
+  });
+
+  test('pf-anchor.sh is the single arm sequence — installed, invoked, removed', () => {
+    const install = readFileSync(INSTALL, 'utf8');
+    const uninstall = readFileSync(UNINSTALL, 'utf8');
+    const anchor = readFileSync(PF_ANCHOR, 'utf8');
+    // The installer ships it beside the helper and arms through it.
+    expect(install).toContain('pf-anchor.sh');
+    expect(install).toMatch(/install -o root -g wheel -m 0755 .*pf-anchor\.sh/);
+    expect(install).toContain('"$APP_SUPPORT_DIR/pf-anchor.sh" load');
+    // The shared script owns the state-file + conditional -E bookkeeping —
+    // the installer must not carry a second copy of the pfctl sequence.
+    expect(anchor).toContain('pfctl -a "$ANCHOR_NAME" -f "$ANCHOR_FILE"');
+    expect(anchor).toContain('>> "$STATE_FILE"');
+    expect(install).not.toMatch(/pfctl -a "\$ANCHOR_NAME" -f/);
+    // Uninstall releases EVERY recorded token (re-arm appends fresh ones)
+    // and removes the installed script.
+    expect(uninstall).toContain('PF_TOKEN=');
+    expect(uninstall).toMatch(/while IFS= read -r t/);
+    expect(uninstall).toMatch(/pfctl -X "\$t"/);
+    expect(uninstall).toContain('pf-anchor.sh');
+    expect(uninstall).not.toMatch(/sed -n 's\/\^PF_TOKEN=\/\/p' "\$STATE_FILE" \| head -1/);
+  });
+
+  test('helper re-arms through the installed pf-anchor.sh, gated on state file + probe', () => {
+    const helper = readFileSync(join(REPO_ROOT, 'packages/https-filter/helper/macos/natlook-helper.c'), 'utf8');
+    // The startup gate: state file present AND anchor absent → pending arm.
+    expect(helper).toContain('"/etc/blockingmachine-capture.state"');
+    expect(helper).toContain('pf-anchor.sh');
+    expect(helper).toMatch(/g_rearm_pending/);
+    // A real watchdog flush vetoes the pending arm (no rule oscillation).
+    expect(helper).toMatch(/g_rearm_pending = 0;/);
+  });
+
+  test('rehearse proves the block via flowsBlocked delta and re-arm via kickstart', () => {
+    const text = readFileSync(REHEARSE, 'utf8');
+    // Stats delta — a refused curl alone passes vacuously on a dead pin.
+    expect(text).toContain('/v1/proxy/stats');
+    expect(text).toContain('flowsBlocked');
+    expect(text).toMatch(/blocked_after -gt \$blocked_before/);
+    // Re-arm rehearsal: manual flush + helper restart must reload the anchor.
+    expect(text).toMatch(/launchctl kickstart -k system\/com\.blockingmachine\.natlook/);
     expect(text).toMatch(/pfctl -a "\$ANCHOR_NAME" -F all/);
   });
 });
@@ -143,7 +198,19 @@ describe('macos capture scripts — hygiene', () => {
     expect(plist).toMatch(/<key>BM_CONTROL_PORT<\/key>\s*<string>9293<\/string>/);
     expect(plist).toMatch(/<key>BM_RULES_PATH<\/key>\s*<string>\/rules\/compiled\.rules<\/string>/);
     expect(plist).toMatch(/<key>ELECTRON_RUN_AS_NODE<\/key>\s*<string>1<\/string>/);
+    // BM_KEYWRAP pinned off: _blockingmachine has no login keychain, so
+    // keystore auto-resolve would degrade to plaintext anyway.
+    expect(plist).toMatch(/<key>BM_KEYWRAP<\/key>\s*<string>off<\/string>/);
     expect(plist).toContain('<key>KeepAlive</key>');
+  });
+
+  test('--service-user rejects bad names and accepts valid ones', () => {
+    expect(() => render('bad;user')).toThrow();
+    expect(() => render('UPPER')).toThrow();
+    expect(() => render('1leading-digit')).toThrow();
+    const ok = render('_ok-name2');
+    const anchor = readFileSync(join(ok, 'com.blockingmachine.anchor'), 'utf8');
+    expect(anchor).toContain('user != _ok-name2');
   });
 
   test('plist XML is structurally well-formed (and plutil-clean on darwin)', () => {

@@ -33,22 +33,46 @@
 #   4. creates the store dir /Users/Shared/Blockingmachine/https-filter
 #      (0700, _blockingmachine-owned — CA + policy ledger root) and the
 #      log dir /Library/Logs/Blockingmachine
-#   5. installs the prebuilt natlook-helper to
-#      /Library/Application Support/Blockingmachine/ (root:wheel 0755)
+#   5. installs the prebuilt natlook-helper AND pf-anchor.sh to
+#      /Library/Application Support/Blockingmachine/ (root:wheel 0755) —
+#      pf-anchor.sh is the shared anchor-arm sequence the helper calls at
+#      startup for post-reboot re-arm (see FAILURE POSTURES)
 #   6. writes /etc/pf.anchors/com.blockingmachine (rendered below)
 #   7. writes both LaunchDaemon plists (rendered below, plutil -lint'd)
 #   8. bootstraps com.blockingmachine.proxy (engine, as _blockingmachine)
 #      then com.blockingmachine.natlook (helper, as root) — services BEFORE
 #      the anchor so a redirect never meets a dead listener
-#   9. records pf's pre-install status + enables:
-#      `pfctl -a com.apple/com.blockingmachine -f <anchor>` then `pfctl -E`,
-#      storing the returned token + prior status in
-#      /etc/blockingmachine-capture.state for uninstall's -X release
+#   9. arms the anchor via the installed pf-anchor.sh — the single
+#      implementation of the sequence: record pf's pre-enable status in
+#      /etc/blockingmachine-capture.state, `pfctl -a
+#      com.apple/com.blockingmachine -f <anchor>`, then `pfctl -E` iff pf
+#      is currently disabled, appending the returned token to the state
+#      file for uninstall's -X release
 #  10. verifies the anchor loaded and both services printed
+#
+# FAILURE POSTURES — asymmetric by design, documented here so nobody
+# "fixes" the wrong half:
+#   * ENGINE death is fail-OPEN: the helper's watchdog (2s bounded probes,
+#     3 strikes, 10s boot grace) flushes the anchor — redirected flows
+#     stop arriving, traffic flows direct. A real flush vetoes same-
+#     process re-arm (a flapping engine must not oscillate rules); a
+#     helper restart or an installer re-run is what restores capture.
+#   * HELPER death is fail-CLOSED: rdr points at :9295 whether or not a
+#     listener exists — a hard-killed helper leaves live rdr → RST on
+#     :9295 → dead web until launchd KeepAlive restarts it (or uninstall,
+#     or reboot — there is no watchdog for the watcher; KeepAlive is the
+#     recovery path).
+#   * REBOOT drops the anchor: pf's rules and enable state are per-boot —
+#     after restart both daemons come up via KeepAlive over a silently
+#     inert capture. The helper re-arms at startup when the state file
+#     marks capture enabled AND the anchor is absent AND the engine
+#     answers a probe — by invoking the installed pf-anchor.sh, never a
+#     second copy of the pfctl logic.
 #
 # Idempotent: re-running refreshes every artifact and rebootstrap's both
 # services — that is also the documented way to re-arm the anchor after
-# the helper's fail-open watchdog flushed it.
+# the helper's fail-open watchdog flushed it (the helper's own startup
+# re-arm covers the reboot case only).
 #
 # THE ANCHOR DESIGN — three deliberate facts live here:
 #   a) The anchor path is com.apple/com.blockingmachine, nested under the
@@ -121,6 +145,11 @@ done
 BUNDLE_PATH="${POSITIONAL[0]}"
 ENGINE_RUNNER="${POSITIONAL[1]}"
 RULES_PATH="${POSITIONAL[2]:-}"
+
+# --service-user lands raw in the anchor's `user !=` filter rules and in
+# dscl paths — restrict it to a real login-name shape or the anchor dies
+# at pfctl with a confusing syntax error (or worse, parses as pf grammar).
+[[ "$SERVICE_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid --service-user '$SERVICE_USER' — must match [a-z_][a-z0-9_-]*"
 
 xml_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
@@ -195,6 +224,10 @@ EOF
 }
 
 render_proxy_plist() {
+  # BM_KEYWRAP=off pins the CA key-wrap off explicitly: _blockingmachine
+  # is a service account with no login keychain, so keystore auto-resolve
+  # would degrade to plaintext anyway — pin it and keep the posture
+  # deterministic rather than discovered.
   local rules_env=""
   if [[ -n "$RULES_PATH" ]]; then
     rules_env=$'\n'"        <key>BM_RULES_PATH</key>"$'\n'"        <string>$(xml_escape "$RULES_PATH")</string>"
@@ -221,6 +254,8 @@ render_proxy_plist() {
         <string>${ENGINE_PORT}</string>
         <key>BM_CONTROL_PORT</key>
         <string>${CONTROL_PORT}</string>
+        <key>BM_KEYWRAP</key>
+        <string>off</string>
         <key>ELECTRON_RUN_AS_NODE</key>
         <string>1</string>${rules_env}
     </dict>
@@ -303,9 +338,10 @@ install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$STORE_DIR"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0755 "$LOG_DIR"
 install -d -o root -g wheel -m 0755 "$APP_SUPPORT_DIR"
 
-# --- helper binary ---
+# --- helper binary + the shared anchor-arm script it re-arms through ---
 install -o root -g wheel -m 0755 "$HELPER_SRC" "$HELPER_DST"
-log "installed $HELPER_DST"
+install -o root -g wheel -m 0755 "$SCRIPT_DIR/pf-anchor.sh" "$APP_SUPPORT_DIR/pf-anchor.sh"
+log "installed $HELPER_DST and $APP_SUPPORT_DIR/pf-anchor.sh"
 
 # --- anchor ---
 render_anchor > "$ANCHOR_FILE"
@@ -332,20 +368,12 @@ boot_or_fresh "$PROXY_PLIST" com.blockingmachine.proxy
 boot_or_fresh "$NATLOOK_PLIST" com.blockingmachine.natlook
 log "bootstrapped com.blockingmachine.proxy (as $SERVICE_USER) and com.blockingmachine.natlook"
 
-# --- pf state record BEFORE enabling ---
-PF_WAS_ENABLED=0
-if pfctl -s info 2>/dev/null | grep -q '^Status: Enabled'; then
-  PF_WAS_ENABLED=1
-fi
-
-pfctl -a "$ANCHOR_NAME" -f "$ANCHOR_FILE" || die "pfctl anchor load failed (check: sudo pfctl -nf $ANCHOR_FILE)"
-PF_TOKEN="$(pfctl -E 2>/dev/null | sed -n 's/^Token : //p' | tr -d '[:space:]')"
-{
-  echo "PF_WAS_ENABLED=$PF_WAS_ENABLED"
-  if [[ -n "$PF_TOKEN" ]]; then echo "PF_TOKEN=$PF_TOKEN"; fi
-} > "$STATE_FILE"
-chmod 0600 "$STATE_FILE"
-log "anchor loaded; pf enabled (was_enabled=$PF_WAS_ENABLED token=${PF_TOKEN:-none})"
+# --- arm the anchor through the installed shared sequence ---
+# (records the pre-enable status + token ledger in the state file, loads
+# the anchor, -E's iff pf is currently disabled — the helper's startup
+# re-arm invokes this exact script, so the pfctl logic exists once)
+"$APP_SUPPORT_DIR/pf-anchor.sh" load
+log "anchor loaded; pf enabled (state: $STATE_FILE)"
 
 # --- verify ---
 if ! pfctl -a "$ANCHOR_NAME" -s rules 2>/dev/null | grep -q 'rdr pass on lo0'; then

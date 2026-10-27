@@ -25,14 +25,21 @@
 #      trusting the engine CA — the minted leaf proves the flow crossed
 #      rdr → natlook → engine MITM, not the real wire
 #   6. transparent block proof: curl to the rehearsal-blocked SNI (pinned
-#      to a reachable IP via --resolve) is refused
-#   7. engine death: launchctl bootout com.blockingmachine.proxy —
+#      to a reachable IP via --resolve) is refused AND the engine's own
+#      flowsBlocked counter ticks — the refusal is provably the verdict,
+#      not a dead pinned IP passing vacuously
+#   7. re-arm proof: flush the anchor by hand, then `launchctl kickstart
+#      -k` the helper — the state-file gate must reload it once the engine
+#      answers a probe (the exact path a post-reboot helper boot takes;
+#      pf's per-boot token drop is not rehearsed — no -E needed here
+#      because the install's token still holds pf enabled)
+#   8. engine death: launchctl bootout com.blockingmachine.proxy —
 #      simulates a crash launchd gave up on; the helper watchdog must
 #      flush the anchor within ~6–10 s (3 failed 2 s probes, grace long
 #      past by this point)
-#   8. fail-open proof: the same curl now succeeds WITHOUT the engine CA —
+#   9. fail-open proof: the same curl now succeeds WITHOUT the engine CA —
 #      a publicly-rooted cert proves traffic flows direct upstream
-#   9. uninstall (uninstall-macos-capture.sh), report PASS
+#  10. uninstall (uninstall-macos-capture.sh), report PASS
 #
 # Env knobs (operator overrides; not secrets):
 #   REHEARSE_ALLOWED_URL   default https://example.com/
@@ -63,6 +70,16 @@ step=0
 log() { printf '[rehearse %02d] %s\n' "$step" "$*"; }
 fail() { printf '[rehearse %02d] FAIL: %s\n' "$step" "$*" >&2; exit 1; }
 begin() { step=$((step + 1)); log "$*"; }
+
+# json_int <file> <key> — first-level integer field out of a control-API
+# response (python3 when present, sed otherwise; the responses are flat).
+json_int() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get(sys.argv[2], 0)))' "$1" "$2"
+  else
+    sed -n "s/.*\"$2\":\(-\?[0-9][0-9]*\).*/\1/p" "$1" | head -1
+  fi
+}
 
 WORK=""
 CLEANUP_DONE=0
@@ -143,13 +160,40 @@ allow_out="$(curl -sv --cacert "$CA_PEM" --max-time "$CURL_MAX" -o "$WORK/allowe
 grep -q 'subject.*CN' "$WORK/allowed.verbose" || true
 log "allowed fetch HTTP $allow_out through engine MITM (engine CA trusted the minted leaf)"
 
-begin "block proof — curl $BLOCKED_HOST pinned to a reachable IP must be refused"
+begin "block proof — curl $BLOCKED_HOST must be refused AND counted by the engine"
 block_ip="$(dscacheutil -q host -a name example.com 2>/dev/null | awk '/ip_address:/{print $2; exit}')"
 [[ -n "$block_ip" ]] || block_ip="93.184.216.34"
+# The robust signal is the engine's own counter, not curl's exit: a dead
+# pinned IP fails curl vacuously without the flow ever reaching a verdict.
+curl -sf --max-time 5 "$CONTROL/v1/proxy/stats" > "$WORK/stats-before.json" || fail "GET /v1/proxy/stats (before) failed"
+blocked_before="$(json_int "$WORK/stats-before.json" flowsBlocked)"
+[[ "$blocked_before" =~ ^[0-9]+$ ]] || fail "no flowsBlocked in /v1/proxy/stats response"
 if curl -s --cacert "$CA_PEM" --resolve "$BLOCKED_HOST:443:$block_ip" --max-time "$CURL_MAX" -o "$WORK/blocked.body" "https://$BLOCKED_HOST/" 2> "$WORK/blocked.verbose"; then
   fail "blocked domain was NOT refused — the rule never reached the engine"
 fi
-log "blocked fetch refused as expected: $(tail -1 "$WORK/blocked.verbose" 2>/dev/null || echo 'connection refused/reset')"
+curl -sf --max-time 5 "$CONTROL/v1/proxy/stats" > "$WORK/stats-after.json" || fail "GET /v1/proxy/stats (after) failed"
+blocked_after="$(json_int "$WORK/stats-after.json" flowsBlocked)"
+[[ "$blocked_after" =~ ^[0-9]+$ ]] || fail "no flowsBlocked in /v1/proxy/stats response"
+[[ $blocked_after -gt $blocked_before ]] || fail "blocked fetch was refused but flowsBlocked did not tick ($blocked_before→$blocked_after) — refusal was not the engine's verdict"
+log "blocked fetch refused AND counted by the engine (flowsBlocked $blocked_before→$blocked_after)"
+
+begin "re-arm proof — flush the anchor, kickstart the helper, assert it reloads"
+# Simulates the post-reboot state: capture administratively enabled (state
+# file persists) but the anchor rules gone (pf state is per-boot). The
+# restarted helper must re-arm through pf-anchor.sh once the engine probe
+# answers — ~10 s boot grace + one probe tick.
+pfctl -a "$ANCHOR_NAME" -F all || fail "manual anchor flush failed"
+launchctl kickstart -k system/com.blockingmachine.natlook || fail "helper kickstart failed"
+rearmed=0
+for _ in $(seq 1 "$WAIT_FLUSH_S"); do
+  if pfctl -a "$ANCHOR_NAME" -s rules 2>/dev/null | grep -q 'rdr pass on lo0'; then
+    rearmed=1
+    break
+  fi
+  sleep 1
+done
+[[ $rearmed -eq 1 ]] || fail "restarted helper did not re-arm the anchor within ${WAIT_FLUSH_S}s — post-reboot capture would stay silently inert"
+log "anchor re-armed by the restarted helper (state-file gate + engine probe)"
 
 begin "engine death — launchctl bootout com.blockingmachine.proxy"
 launchctl bootout system/com.blockingmachine.proxy || fail "bootout proxy failed"

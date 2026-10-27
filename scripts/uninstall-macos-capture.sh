@@ -11,14 +11,16 @@
 #   2. flushes the capture anchor: pfctl -a com.apple/com.blockingmachine
 #      -F all — FIRST, so pf stops delivering new flows before the
 #      listeners die (in-flight splices finish naturally)
-#   3. reads /etc/blockingmachine-capture.state: releases the enable
-#      token (pfctl -X <token>) or, when pf was disabled before install
-#      and no token is recorded, falls back to pfctl -d; if pf was already
-#      enabled, leaves it on — the uninstaller never turns off a firewall
-#      it didn't turn on
+#   3. reads /etc/blockingmachine-capture.state: releases EVERY recorded
+#      enable token (pfctl -X <token> per PF_TOKEN line — install and any
+#      post-reboot helper re-arm each append one; stale ones fail -X
+#      harmlessly) or, when pf was disabled before install and no token
+#      released, falls back to pfctl -d; if pf was already enabled, leaves
+#      it on — the uninstaller never turns off a firewall it didn't turn on
 #   4. bootout's both LaunchDaemons (engine + helper)
 #   5. removes both plists, the anchor file, the state file, and the
-#      helper binary in /Library/Application Support/Blockingmachine
+#      helper binary + pf-anchor.sh in
+#      /Library/Application Support/Blockingmachine
 #
 # Deliberately KEPT on the machine (reinstall must find state intact):
 #   - the _blockingmachine service account + group
@@ -58,19 +60,28 @@ fi
 
 # --- 2. restore pf enable state ---
 PF_WAS_ENABLED=""
-PF_TOKEN=""
+TOKENS=()
 if [[ -f "$STATE_FILE" ]]; then
-  # state file is install-owned; parse the two keys without sourcing it
+  # state file is install-owned; parse the keys without sourcing it. More
+  # than one PF_TOKEN can be recorded — the helper's post-reboot re-arm
+  # appends a fresh token each time it -E's.
   PF_WAS_ENABLED="$(sed -n 's/^PF_WAS_ENABLED=//p' "$STATE_FILE" | head -1)"
-  PF_TOKEN="$(sed -n 's/^PF_TOKEN=//p' "$STATE_FILE" | head -1)"
+  while IFS= read -r t; do TOKENS+=("$t"); done < <(sed -n 's/^PF_TOKEN=//p' "$STATE_FILE")
 fi
 
-if [[ -n "$PF_TOKEN" && "$PF_TOKEN" =~ ^[0-9]+$ ]]; then
-  if pfctl -X "$PF_TOKEN" >/dev/null 2>&1; then
-    log "released pf enable token $PF_TOKEN"
+released=0
+for t in ${TOKENS[@]+"${TOKENS[@]}"}; do
+  [[ "$t" =~ ^[0-9]+$ ]] || continue
+  if pfctl -X "$t" >/dev/null 2>&1; then
+    log "released pf enable token $t"
+    released=$((released + 1))
   else
-    log "pf token $PF_TOKEN already released or stale — continuing"
+    log "pf token $t already released or stale — continuing"
   fi
+done
+
+if [[ $released -gt 0 ]]; then
+  : # enable refcount balanced by the -X releases above
 elif [[ "$PF_WAS_ENABLED" == "0" ]]; then
   if pfctl -d 2>/dev/null; then
     log "pf disabled (it was off before install)"
@@ -91,7 +102,7 @@ for label in com.blockingmachine.natlook com.blockingmachine.proxy; do
 done
 
 # --- 4. remove installed files ---
-for f in "$NATLOOK_PLIST" "$PROXY_PLIST" "$ANCHOR_FILE" "$STATE_FILE" "$APP_SUPPORT_DIR/natlook-helper"; do
+for f in "$NATLOOK_PLIST" "$PROXY_PLIST" "$ANCHOR_FILE" "$STATE_FILE" "$APP_SUPPORT_DIR/natlook-helper" "$APP_SUPPORT_DIR/pf-anchor.sh"; do
   if [[ -e "$f" ]]; then
     rm -f "$f"
     log "removed $f"

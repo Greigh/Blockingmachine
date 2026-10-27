@@ -15,6 +15,7 @@
 
 import { describe, expect, jest, test } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -24,9 +25,52 @@ jest.setTimeout(90_000);
 const PKG_DIR = fileURLToPath(new URL('../..', import.meta.url));
 const HELPER_DIR = join(PKG_DIR, 'helper', 'macos');
 const HELPER_BIN = join(HELPER_DIR, 'natlook-helper');
+const HELPER_SRC = join(HELPER_DIR, 'natlook-helper.c');
 const BUILD = join(HELPER_DIR, 'build.sh');
 
 const describeDarwin = process.platform === 'darwin' ? describe : describe.skip;
+
+/**
+ * Source-level invariants — run everywhere (file reads only, no clang,
+ * no pf, no root). These pin the failure-posture contracts the C code
+ * carries so a refactor can't silently drop one.
+ */
+describe('natlook-helper source invariants', () => {
+  const src = readFileSync(HELPER_SRC, 'utf8');
+
+  test('watchdog connect is bounded (nonblocking connect + poll + SO_ERROR)', () => {
+    expect(src).toContain('CONNECT_TIMEOUT_MS');
+    expect(src).toMatch(/fcntl\(fd, F_SETFL, fl \| O_NONBLOCK\)/);
+    expect(src).toMatch(/getsockopt\(fd, SOL_SOCKET, SO_ERROR/);
+  });
+
+  test('listeners are O_NONBLOCK with an EAGAIN-drained accept loop', () => {
+    expect(src).toMatch(/fcntl\(fd, F_SETFL, fl \| O_NONBLOCK\)/);
+    expect(src).toMatch(/errno == EAGAIN\s*\)\s*break|errno == EAGAIN\)/);
+  });
+
+  test('concurrent children are capped and the shutdown-kill skips reaped slots', () => {
+    expect(src).toContain('MAX_CHILDREN');
+    expect(src).toMatch(/g_live_children/);
+    // Reaped pids are zeroed in the ring — a recycled pid must never
+    // catch a stale SIGTERM (and kill(0) would hit our own group).
+    expect(src).toMatch(/g_children\[i\] == p/);
+    expect(src).toMatch(/if \(g_children\[i\] > 0\)\s*kill/);
+  });
+
+  test('the inet6 bind is fatal — a dead v6 leg must not strand redirected flows', () => {
+    expect(src).toMatch(/cannot bind \[::1\]:%u errno=%d — v6 capture leg required/);
+    expect(src).not.toMatch(/v6 capture leg dead/);
+  });
+
+  test('post-reboot re-arm is gated on the state file and performed by pf-anchor.sh', () => {
+    expect(src).toContain('/etc/blockingmachine-capture.state');
+    expect(src).toContain('pf-anchor.sh');
+    expect(src).toMatch(/g_rearm_pending/);
+    // The arm rides a successful engine probe — never unconditional.
+    expect(src).toMatch(/access\(STATE_FILE, F_OK\)/);
+  });
+});
 
 /** Distinct free loopback ports — bind 0, harvest, close (same pattern as other suites). */
 async function freePorts(n: number): Promise<number[]> {
