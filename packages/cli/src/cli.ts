@@ -27,6 +27,9 @@ import { AiScanCommand } from "./commands/AiScanCommand.js";
 import { AiCrawlCommand } from "./commands/AiCrawlCommand.js";
 import { CoverageCommand } from "./commands/CoverageCommand.js";
 import { TierPlanCommand } from "./commands/TierPlanCommand.js";
+import { ProxyCommand } from "./commands/ProxyCommand.js";
+import { CertCommand } from "./commands/CertCommand.js";
+import { DEFAULT_PROXY_CONTROL_PORT } from "./lib/proxyControl.js";
 import { listRuleSnapshots, rollbackSnapshot } from "./lib/db.js";
 import { EXPORT_FORMATS, type SupportedFormat } from "@blockingmachine/core";
 import type { MetaConfig } from "./types.js";
@@ -443,6 +446,189 @@ program
     } catch (error) {
       logger.error(
         `Tier plan failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+const proxyProgram = program
+  .command("proxy")
+  .description("Inspect and control the HTTPS filter proxy (/v1/proxy control API)");
+
+proxyProgram
+  .command("status")
+  .description("Print the proxy status document")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .action(async (cmdOptions: { port: string }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new ProxyCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "status",
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Proxy status failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+proxyProgram
+  .command("stats")
+  .description("Print the proxy flow counters")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .action(async (cmdOptions: { port: string }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new ProxyCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "stats",
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Proxy stats failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+proxyProgram
+  .command("pins")
+  .description("List the learned pin/bypass ledger")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .action(async (cmdOptions: { port: string }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new ProxyCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "pins",
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Proxy pins failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+proxyProgram
+  .command("toggle")
+  .description(
+    "Flip protection on/off — a paused proxy blind-tunnels every flow",
+  )
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .option("--enable", "Enable protection instead of flipping")
+  .option("--disable", "Disable protection instead of flipping")
+  .action(
+    async (cmdOptions: { port: string; enable?: boolean; disable?: boolean }) => {
+      try {
+        if (cmdOptions.enable && cmdOptions.disable) {
+          logger.error("--enable and --disable are mutually exclusive");
+          process.exit(1);
+        }
+        const config = await loadConfig();
+        const cmd = new ProxyCommand({ config, logger });
+        const result = await cmd.execute({
+          action: "toggle",
+          port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+          enable: cmdOptions.enable ? true : cmdOptions.disable ? false : undefined,
+        });
+        if (!result.success) {
+          process.exit(1);
+        }
+      } catch (error) {
+        logger.error(
+          `Proxy toggle failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        process.exit(1);
+      }
+    },
+  );
+
+proxyProgram
+  .command("reload")
+  .description("Re-read the engine's rules file into the live evaluator")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .action(async (cmdOptions: { port: string }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new ProxyCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "reload",
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Proxy reload failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+const certProgram = program
+  .command("cert")
+  .description("Inspect and export the HTTPS filter proxy's CA certificate");
+
+certProgram
+  .command("status")
+  .description("Print the CA fingerprint and validity window")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .option("--json", "Output the full CA payload as JSON (includes the PEM)")
+  .action(async (cmdOptions: { port: string; json?: boolean }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new CertCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "status",
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+        json: cmdOptions.json,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Cert status failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+certProgram
+  .command("export [path]")
+  .description("Write the CA PEM to a file, or stdout when no path is given")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .action(async (exportPath: string | undefined, cmdOptions: { port: string }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new CertCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "export",
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+        path: exportPath,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Cert export failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       process.exit(1);
     }
