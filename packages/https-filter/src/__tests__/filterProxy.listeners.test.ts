@@ -4,10 +4,10 @@
  * Exercises all three first-bytes dispatch paths on the data port — PROXY-v2
  * transparent flows, explicit CONNECT, and helper-spliced first-bytes-TLS —
  * plus the two helpers they stand on: the v2 binary parser and the bounded
- * ClientHello peek. In P0 every allowed flow lands on the blind-tunnel seam
- * (termination is Task 5), so "handshake completes and bytes echo through" is
- * the splice proof everywhere — including that `head` replay carries the
- * peeked ClientHello upstream intact.
+ * ClientHello peek. Blind-tunnel paths are proven by "handshake completes and
+ * bytes echo through" (including that `head` replay carries the peeked
+ * ClientHello upstream intact); allowed flows with a valid SNI now terminate
+ * (Task 5), proven by the forged cert the client sees.
  */
 
 import { afterAll, beforeAll, describe, expect, jest, test } from '@jest/globals';
@@ -287,9 +287,8 @@ describe('startProxy listeners', () => {
     expect(after.flowsTotal).toBe(before.flowsTotal + 1);
   });
 
-  test('CONNECT to an allowed host → 200, then a real TLS handshake echoes through the tunnel', async () => {
-    const leaf = authority.forgeLeaf('good.example');
-    const upstream = tlsEchoServer(leaf.keyPem, leaf.certPem);
+  test('CONNECT to an allowed host → 200, then the forged-leaf endpoint terminates TLS', async () => {
+    const upstream = tcpEchoServer();
     const upstreamPort = await listen(upstream);
 
     const before = proxy.stats();
@@ -301,10 +300,12 @@ describe('startProxy listeners', () => {
       servername: 'good.example',
       rejectUnauthorized: false,
     });
-    await withTimeout(once(client, 'secureConnect'), 10_000, 'tunneled handshake');
-    client.write('ping');
-    expect((await collectBytes(client, 4)).toString('latin1')).toBe('ping');
-    expect(proxy.stats().flowsTunneled).toBe(before.flowsTunneled + 1);
+    await withTimeout(once(client, 'secureConnect'), 10_000, 'terminated handshake');
+    // The handshake ran against a leaf forged for the announced SNI — proof
+    // the flow terminated here instead of blind-tunneling to the echo server.
+    expect(client.getPeerCertificate().subject.CN).toBe('good.example');
+    expect(proxy.stats().flowsTerminated).toBe(before.flowsTerminated + 1);
+    expect(proxy.stats().flowsTunneled).toBe(before.flowsTunneled);
 
     client.destroy();
     await closeServer(upstream);
@@ -350,9 +351,8 @@ describe('startProxy listeners', () => {
     await closeServer(echo);
   });
 
-  test('PROXY-v2 frame → transparent flow: ClientHello peeked, allowed SNI tunnels to the header dst', async () => {
-    const leaf = authority.forgeLeaf('v2.example');
-    const upstream = tlsEchoServer(leaf.keyPem, leaf.certPem);
+  test('PROXY-v2 frame → transparent flow: allowed SNI terminates on the forged leaf', async () => {
+    const upstream = tcpEchoServer();
     const upstreamPort = await listen(upstream);
 
     const before = proxy.stats();
@@ -364,10 +364,9 @@ describe('startProxy listeners', () => {
       servername: 'v2.example',
       rejectUnauthorized: false,
     });
-    await withTimeout(once(client, 'secureConnect'), 10_000, 'v2 tunneled handshake');
-    client.write('v2 ping');
-    expect((await collectBytes(client, 7)).toString('latin1')).toBe('v2 ping');
-    expect(proxy.stats().flowsTunneled).toBe(before.flowsTunneled + 1);
+    await withTimeout(once(client, 'secureConnect'), 10_000, 'v2 terminated handshake');
+    expect(client.getPeerCertificate().subject.CN).toBe('v2.example');
+    expect(proxy.stats().flowsTerminated).toBe(before.flowsTerminated + 1);
 
     client.destroy();
     await closeServer(upstream);
@@ -423,7 +422,7 @@ describe('startProxy listeners', () => {
     await closeServer(upstream);
   });
 
-  test('helper-spliced TLS without a PROXY header → peeked, then closed honestly (no dst)', async () => {
+  test('helper-spliced TLS without a PROXY header → valid SNI terminates (upstream is sni:443)', async () => {
     const before = proxy.stats();
     const sock = net.connect({ host: '127.0.0.1', port: proxy.port });
     await once(sock, 'connect');
@@ -432,10 +431,12 @@ describe('startProxy listeners', () => {
       servername: 'spliced.example',
       rejectUnauthorized: false,
     });
-    client.on('error', () => {}); // the proxy has no dst to tunnel — it drops
-    await withTimeout(once(sock, 'close'), 10_000, 'spliced close');
+    await withTimeout(once(client, 'secureConnect'), 10_000, 'spliced terminated handshake');
+    expect(client.getPeerCertificate().subject.CN).toBe('spliced.example');
+    expect(proxy.stats().flowsTerminated).toBe(before.flowsTerminated + 1);
     expect(proxy.stats().flowsTotal).toBe(before.flowsTotal + 1);
     client.destroy();
+    await withTimeout(once(sock, 'close'), 10_000, 'spliced close');
   });
 
   test('garbage first bytes → immediate close, counted', async () => {

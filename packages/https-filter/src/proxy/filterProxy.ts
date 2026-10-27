@@ -10,11 +10,13 @@
  *  - **ASCII `CONNECT `** — an explicit forward-proxy handshake, the P0
  *    no-privileges path (and the future LAN-hub mode).
  *  - **`0x16 0x03`** — first bytes of a TLS record: a helper-spliced flow
- *    without a PROXY header. Not expected; the ClientHello is still peeked
- *    for consistency, but with no destination header the flow has nowhere to
- *    tunnel — it is closed honestly until Task 5 can terminate it.
- *  - anything else — plain-HTTP absolute-form forwarding lands here in
- *    Task 5; for now the flow closes, counted, never hung.
+ *    without a PROXY header. A valid announced SNI terminates locally and
+ *    relays upstream to `sni:443` — the only destination the wire itself
+ *    announces; invalid/absent SNI still closes honestly (no header, no
+ *    routable destination).
+ *  - anything else — probed for plain-HTTP absolute-form (`GET http://h/x`);
+ *    a real request is evaluated and forwarded verbatim to the resolved
+ *    host:port (default 80), everything else closes, counted, never hung.
  *
  * Flow semantics per path:
  *
@@ -23,20 +25,20 @@
  *    `https://<host>/` — `blocked` answers `403` + `X-Blockingmachine-Rule`,
  *    allowed/exception answers `200`. Pinned/bypassed targets then splice
  *    blind; the rest take a bounded ClientHello peek — non-TLS bytes or
- *    silence close cleanly (never a hung socket), real TLS reaches the
- *    Task-5 termination seam, which today is a blind tunnel.
+ *    silence close cleanly (never a hung socket), and real TLS with a valid
+ *    SNI terminates at the forged-leaf endpoint (Task 5); absent or invalid
+ *    SNI keeps the blind tunnel — `forgeLeaf` throws on those names.
  *  - PROXY-v2: the same peek decides — non-TLS, missing/invalid SNI, and
  *    pinned/bypassed SNI all blind-tunnel to the header's destination; a
  *    blocked SNI drops the flow silently (no response exists on raw TLS);
- *    allowed reaches the same seam.
+ *    allowed + valid SNI terminates. Per-request verdicts then run on every
+ *    decrypted request — keep-alive connections may change Host (Review
+ *    Focus #4).
  *
  * `reload(rawRules)` rebuilds the evaluator off the hot path and swaps the
  * reference — `RequestEvaluator` is immutable, so in-flight flows finish on
  * the ruleset they started with. `close()` stops accepting and destroys
  * every tracked socket (client and upstream alike).
- *
- * `authority` is a constructor arg for the Task-5 termination seam — no
- * leaf is forged on this task.
  */
 
 import net, { isIP } from 'node:net';
@@ -44,14 +46,22 @@ import {
   createRequestEvaluator,
   type RequestEvaluator,
 } from '@blockingmachine/core';
-import type { CertAuthority } from '../ca/certAuthority.js';
+import { isValidSni, type CertAuthority } from '../ca/certAuthority.js';
 import type { PolicyStore } from '../policy/policyStore.js';
+import {
+  absoluteRequestUrl,
+  parsePlainHttpTarget,
+  probePlainHttp,
+  relayRequest,
+  type UpstreamEndpoint,
+} from './httpRelay.js';
 import {
   matchProxyV2Signature,
   parseProxyV2,
   proxyV2FrameLength,
 } from './proxyProtocol.js';
 import { collectClientHello } from './sniPeek.js';
+import { terminateToHttp } from './terminate.js';
 
 export interface ProxyStats {
   flowsTotal: number;
@@ -71,10 +81,16 @@ export interface RunningProxy {
 export interface StartProxyOptions {
   bindHost: string;
   dataPort: number;
-  /** Consumed by Task 5's termination seam — accepted now so the shape is stable. */
+  /** Forges the leaf each terminated flow serves — required. */
   authority: CertAuthority;
   evaluator: RequestEvaluator;
   policy: PolicyStore;
+  /**
+   * Extra PEM roots merged over `tls.rootCertificates` for upstream
+   * verification — a deployment/test hook, never a bypass:
+   * `rejectUnauthorized: true` holds regardless.
+   */
+  upstreamCaCerts?: string[];
 }
 
 /** Bound on first-bytes dispatch — a connection that never speaks is reaped. */
@@ -169,9 +185,8 @@ function parseConnectAuthority(authority: string): { host: string; port: number 
 }
 
 export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
-  const { bindHost, dataPort, policy } = opts;
+  const { bindHost, dataPort, policy, authority } = opts;
   let evaluator = opts.evaluator;
-  // opts.authority is accepted but unused — Task 5 forges leaves at the seam.
 
   const stats: ProxyStats = {
     flowsTotal: 0,
@@ -230,6 +245,85 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       upstream.pipe(client);
       stats.flowsTunneled++;
     });
+  }
+
+  /**
+   * Forge + terminate a flow, then serve decrypted requests through the
+   * verdict/relay chain. Callers must have already run the policy/verdict
+   * checks and `isValidSni` gate — `sni` here is the normalized leaf name.
+   * `upstream` is where every request in this flow is dialed.
+   *
+   * Per-request evaluation (Review Focus #4): the handler evaluates the
+   * absolute URL of EVERY request — one keep-alive connection may carry
+   * different Host headers, so verdicts are never per-connection. The
+   * evaluator is snapshotted at flow start: a mid-flow `reload` must not
+   * swap rules under in-flight requests.
+   */
+  function terminateFlow(flow: {
+    sock: net.Socket;
+    head: Buffer;
+    sni: string;
+    upstream: UpstreamEndpoint;
+  }): void {
+    stats.flowsTerminated++;
+    const flowEvaluator = evaluator;
+    void terminateToHttp(
+      flow.sock,
+      authority,
+      (req, res) => {
+        const verdict = flowEvaluator.evaluate(absoluteRequestUrl(req, 'https'), {
+          method: req.method,
+        });
+        if (verdict.action === 'blocked') {
+          stats.flowsBlocked++;
+          const headers: Record<string, string> = { 'content-length': '0' };
+          if (verdict.coveringRule !== null) {
+            headers['X-Blockingmachine-Rule'] = sanitizeHeaderValue(verdict.coveringRule);
+          }
+          res.respond(403, headers);
+          return;
+        }
+        relayRequest(req, res, flow.upstream, { upstreamCaCerts: opts.upstreamCaCerts });
+      },
+      {
+        head: flow.head,
+        sni: flow.sni,
+        onHandshakeAbort: () => {
+          // The pinning signal — pin-check itself ran upstream of this seam;
+          // there is no unlearn path out of a terminated flow.
+          policy.learnPin(flow.sni, 'handshake-abort');
+          stats.pinsLearned++;
+        },
+      },
+    ).catch(() => flow.sock.destroy());
+  }
+
+  /**
+   * Plain-HTTP forward (Review Focus #3): the request head is already
+   * accumulated; parse the target, evaluate once, then splice the whole
+   * buffered stream verbatim — headers and body untouched. The verdict is
+   * per-connection here (a blind splice cannot re-evaluate pipelined
+   * requests); per-request evaluation is the terminated path's job.
+   */
+  function handlePlainHttp(sock: net.Socket, buf: Buffer): void {
+    const parsed = parsePlainHttpTarget(buf);
+    if (parsed === null) {
+      sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    const verdict = evaluator.evaluate(parsed.url);
+    if (verdict.action === 'blocked') {
+      stats.flowsBlocked++;
+      const rule =
+        verdict.coveringRule === null
+          ? ''
+          : `\r\nX-Blockingmachine-Rule: ${sanitizeHeaderValue(verdict.coveringRule)}`;
+      sock.end(
+        `HTTP/1.1 403 Forbidden\r\nContent-Length: 0${rule}\r\nConnection: close\r\n\r\n`,
+      );
+      return;
+    }
+    blindTunnel(sock, parsed.host, parsed.port, buf);
   }
 
   /**
@@ -297,17 +391,27 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         return;
       }
     }
-    // P0: blind tunnel — Task 5 terminates here (forged-leaf TLSSocket for
-    // `peeked.sni`/`host`, ALPN h2|http/1.1, then the request pipeline).
-    // Gate the forge on isValidSni first — `forgeLeaf` throws on invalid SNI,
-    // and a missing/garbage name must stay on this blind path.
-    blindTunnel(sock, host, port, peeked.head);
+    // Termination seam: the leaf name is the announced SNI when there is one,
+    // else the CONNECT authority. `forgeLeaf` throws on invalid/absent names,
+    // so anything that fails `isValidSni` keeps the blind tunnel it had.
+    const leafName = peeked.sni !== null ? normalizeSni(peeked.sni) : host.toLowerCase();
+    if (!isValidSni(leafName)) {
+      blindTunnel(sock, host, port, peeked.head);
+      return;
+    }
+    terminateFlow({
+      sock,
+      head: peeked.head,
+      sni: leafName,
+      upstream: { host, port, servername: leafName },
+    });
   }
 
   /**
    * Transparent flow: PROXY-v2 gives `target`; a spliced flow without the
-   * header passes null — peeked for consistency but unroutable, so it closes
-   * until Task 5 can terminate it (no destination exists to tunnel to).
+   * header passes null — a valid announced SNI still terminates (upstream is
+   * `sni:443`, the only destination the wire announces); anything else has
+   * nowhere to go and closes honestly.
    */
   async function handleTransparent(
     sock: net.Socket,
@@ -315,15 +419,14 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     rest: Buffer,
   ): Promise<void> {
     const peeked = await collectClientHello(sock, PEEK_TIMEOUT_MS, rest);
-    if (target === null) {
-      // Head cannot be replayed anywhere — no destination was announced.
-      sock.destroy();
-      return;
-    }
-    const { dstHost, dstPort } = target;
-    // Non-TLS bytes forward honestly — helpers also redirect port 80.
+    // Non-TLS bytes forward honestly — helpers also redirect port 80 — but
+    // only when a header announced a destination.
     if (!peeked.isTls) {
-      blindTunnel(sock, dstHost, dstPort, peeked.head);
+      if (target === null) {
+        sock.destroy();
+        return;
+      }
+      blindTunnel(sock, target.dstHost, target.dstPort, peeked.head);
       return;
     }
     const sni = peeked.sni;
@@ -335,7 +438,11 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     if (sni !== null) {
       const normalized = normalizeSni(sni);
       if (policy.isPinned(normalized) || policy.isBypassed(normalized)) {
-        blindTunnel(sock, dstHost, dstPort, peeked.head);
+        if (target === null) {
+          sock.destroy();
+        } else {
+          blindTunnel(sock, target.dstHost, target.dstPort, peeked.head);
+        }
         return;
       }
       if (evaluator.evaluate(`https://${normalized}/`).action === 'blocked') {
@@ -344,12 +451,25 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         sock.destroy();
         return;
       }
+      // Termination seam — gated on isValidSni: `forgeLeaf` throws on
+      // invalid/absent names, and those keep the blind tunnel (or the honest
+      // close when no destination was ever announced).
+      if (isValidSni(normalized)) {
+        const upstream: UpstreamEndpoint =
+          target === null
+            ? { host: normalized, port: 443, servername: normalized }
+            : { host: target.dstHost, port: target.dstPort, servername: normalized };
+        terminateFlow({ sock, head: peeked.head, sni: normalized, upstream });
+        return;
+      }
     }
 
-    // P0: blind tunnel — Task 5 terminates here, but ONLY when
-    // isValidSni(sni) — `forgeLeaf` throws on invalid/absent names, and a
-    // normalizable-but-invalid or missing SNI keeps this blind tunnel.
-    blindTunnel(sock, dstHost, dstPort, peeked.head);
+    if (target === null) {
+      // Head cannot be replayed anywhere — no destination was announced.
+      sock.destroy();
+      return;
+    }
+    blindTunnel(sock, target.dstHost, target.dstPort, peeked.head);
   }
 
   /**
@@ -361,7 +481,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     track(sock);
     stats.flowsTotal++;
     const chunks: Buffer[] = [];
-    let mode: 'dispatch' | 'connect' | 'proxy2' = 'dispatch';
+    let mode: 'dispatch' | 'connect' | 'proxy2' | 'http' = 'dispatch';
 
     const timer = setTimeout(() => sock.destroy(), DISPATCH_TIMEOUT_MS);
     sock.once('close', () => clearTimeout(timer));
@@ -386,17 +506,28 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           return;
         }
         if (cls === 'reject') {
-          // Task 5: plain-HTTP absolute-form (`GET http://h/x`) lands here.
-          handOff(() => sock.destroy());
-          return;
-        }
-        if (cls === 'tls') {
+          // Not CONNECT/PROXY-v2/TLS — maybe plain HTTP (Review Focus #3).
+          // 'possible' stays in dispatch until the request line decides;
+          // 'no' closes immediately so garbage still dies promptly. 'yes'
+          // falls through into the http branch below on this same buffer —
+          // the whole head may already have arrived in one chunk.
+          const probe = probePlainHttp(buf);
+          if (probe === 'no') {
+            handOff(() => sock.destroy());
+            return;
+          }
+          if (probe === 'possible') {
+            return;
+          }
+          mode = 'http';
+        } else if (cls === 'tls') {
           handOff(() => {
             void handleTransparent(sock, null, buf).catch(() => sock.destroy());
           });
           return;
+        } else {
+          mode = cls;
         }
-        mode = cls;
       }
       if (mode === 'proxy2') {
         const frameLength = proxyV2FrameLength(buf);
@@ -412,6 +543,17 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           }
           void handleTransparent(sock, target, rest).catch(() => sock.destroy());
         });
+        return;
+      }
+      if (mode === 'http') {
+        const end = buf.indexOf(HEADER_END);
+        if (end < 0) {
+          if (buf.length > CONNECT_HEADER_LIMIT) {
+            handOff(() => sock.destroy());
+          }
+          return;
+        }
+        handOff(() => handlePlainHttp(sock, buf));
         return;
       }
       if (mode === 'connect') {
