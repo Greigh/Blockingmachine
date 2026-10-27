@@ -231,6 +231,34 @@ describe('FilterProxyManager', () => {
     expect(last.status).toBe('stopped');
   });
 
+  test('concurrent start() calls collapse to a single spawn', async () => {
+    const dir = mkdtempSync(join(tmpBase, 'spawn-race-'));
+    const entry = writeFakeEngine(dir);
+    const controlPort = await freePort();
+    const dataPort = await freePort();
+
+    const manager = tracked(
+      new FilterProxyManager({
+        controlPort,
+        dataPort,
+        storeDir: join(dir, 'store'),
+        entryPath: entry,
+      }),
+    );
+
+    // The latch drops before the status probe, so the second call is refused
+    // synchronously — a real second spawn would instead EADDRINUSE on the
+    // already-bound control port and come back a startup failure.
+    const [first, second] = await Promise.all([manager.start(), manager.start()]);
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+    expect(second.message).toContain('already starting');
+
+    const status = await manager.getStatus();
+    expect(status.status).toBe('running');
+    expect(status.managedByApp).toBe(true);
+  });
+
   test('stop() without a managed child reports external ownership', async () => {
     const manager = tracked(new FilterProxyManager({ controlPort: 65431 }));
     const result = await manager.stop();

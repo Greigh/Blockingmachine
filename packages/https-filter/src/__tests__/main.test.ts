@@ -30,6 +30,9 @@ const TSC = join(PKG_DIR, '..', '..', 'node_modules', 'typescript', 'bin', 'tsc'
 const children: ChildProcess[] = [];
 const tmpDirs: string[] = [];
 
+// The cold-build tsc bound is 180s — the hook must outlive it or jest aborts
+// the still-compiling beforeAll at the 60s test default (F9). A warm cache
+// (dist/ already emitted) returns instantly either way.
 beforeAll(() => {
   if (!existsSync(ENTRY)) {
     execFileSync(process.execPath, [TSC, '-p', join(PKG_DIR, 'tsconfig.json')], {
@@ -37,7 +40,7 @@ beforeAll(() => {
       timeout: 180_000,
     });
   }
-});
+}, 200_000);
 
 afterEach(async () => {
   while (children.length) {
@@ -75,7 +78,9 @@ function freePort(): Promise<number> {
 /**
  * Spawn `dist/main.js` with a scrubbed env: ambient `BM_*` from the caller's
  * shell must never leak into the contract under test (a stray BM_STORE_DIR
- * would turn the missing-env case into a real boot).
+ * would turn the missing-env case into a real boot). `BM_KEYWRAP=off` is the
+ * hermetic baseline — a suite-spawned engine must never probe or write the
+ * real login keychain; a test that wants the auto-resolve path overrides it.
  */
 function spawnEngine(env: Record<string, string>): { child: ChildProcess; stderr: () => string } {
   const cleanEnv: NodeJS.ProcessEnv = {};
@@ -84,7 +89,7 @@ function spawnEngine(env: Record<string, string>): { child: ChildProcess; stderr
   }
   let errBuf = '';
   const child = spawn(process.execPath, [ENTRY], {
-    env: { ...cleanEnv, ...env },
+    env: { ...cleanEnv, BM_KEYWRAP: 'off', ...env },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   child.stderr?.on('data', (chunk) => {
@@ -144,6 +149,39 @@ describe('configFromEnv', () => {
     }
   });
 
+  test('rejects hex/exponent/signed port spellings Number() would accept', () => {
+    for (const bogus of ['0x10', '4e2', '+443', '-1', '443.5', '65536', 'junk443']) {
+      const parsed = configFromEnv({
+        BM_STORE_DIR: '/tmp/x',
+        BM_DATA_PORT: bogus,
+        BM_CONTROL_PORT: bogus,
+      });
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.config.dataPort).toBe(9294);
+        expect(parsed.config.controlPort).toBe(9293);
+      }
+    }
+  });
+
+  test('BM_KEYWRAP=off|none|0 pins keyWrapBackend:null; anything else auto-resolves', () => {
+    for (const pin of ['off', 'none', '0', ' OFF ']) {
+      const parsed = configFromEnv({ BM_STORE_DIR: '/tmp/x', BM_KEYWRAP: pin });
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.config.keyWrapBackend).toBeNull();
+    }
+    // Unset, or an unrecognised value, leaves the field absent — the engine
+    // then auto-resolves the platform keystore at CertAuthority.open.
+    for (const auto of [undefined, 'keychain', 'on']) {
+      const parsed = configFromEnv({
+        BM_STORE_DIR: '/tmp/x',
+        ...(auto === undefined ? {} : { BM_KEYWRAP: auto }),
+      });
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.config.keyWrapBackend).toBeUndefined();
+    }
+  });
+
   test('honours explicit ports, bind host and rules path', () => {
     const parsed = configFromEnv({
       BM_STORE_DIR: '/tmp/x',
@@ -199,5 +237,32 @@ describe('dist/main.js spawned', () => {
     const code = await exitCode(child);
     expect(code).toBe(0);
     expect(stderr()).toContain('SIGTERM');
+  });
+
+  test('BM_KEYWRAP=off leaves no OS-keystore trace — CA reports keyWrapped:false', async () => {
+    const storeDir = await tempDir('bm-proxy-unwrapped-');
+    const dataPort = await freePort();
+    const controlPort = await freePort();
+
+    // spawnEngine already pins BM_KEYWRAP=off for hermeticity; name it again
+    // so the contract under test reads explicitly.
+    const { child } = spawnEngine({
+      BM_STORE_DIR: storeDir,
+      BM_DATA_PORT: String(dataPort),
+      BM_CONTROL_PORT: String(controlPort),
+      BM_BIND_HOST: '127.0.0.1',
+      BM_KEYWRAP: 'off',
+    });
+
+    await waitForStatus(child, controlPort);
+    const res = await fetch(`http://127.0.0.1:${controlPort}/v1/proxy/ca`);
+    expect(res.ok).toBe(true);
+    const ca = await res.json();
+    // The at-rest posture endpoint is the observable proof: no backend ran,
+    // so no keychain item exists and the key sits at 0600 ca.key.pem.
+    expect(ca.keyWrapped).toBe(false);
+    expect(ca.keyWrapBackend).toBeUndefined();
+    expect(existsSync(join(storeDir, 'ca', 'ca.key.pem'))).toBe(true);
+    expect(existsSync(join(storeDir, 'ca', 'ca.key.enc'))).toBe(false);
   });
 });

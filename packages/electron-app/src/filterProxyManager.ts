@@ -1,11 +1,8 @@
-import { spawn, execFile, ChildProcess } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn, ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { app } from 'electron';
-
-const execFileAsync = promisify(execFile);
 
 // `__dirname` is the real bundle dir under webpack's CJS output (the config's
 // `node.__dirname: false` keeps it that way — daemonManager relies on it), but
@@ -64,7 +61,6 @@ export interface FilterProxyCaInfo {
   keyWrapBackend?: string;
 }
 
-const LAUNCHD_LABEL = 'com.blockingmachine.proxy';
 const LAUNCHD_PLIST = '/Library/LaunchDaemons/com.blockingmachine.proxy.plist';
 
 export class FilterProxyManager {
@@ -102,7 +98,7 @@ export class FilterProxyManager {
   async getStatus(): Promise<FilterProxyStatus> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1500);
-    const captureServiceInstalled = await this.isCaptureServiceInstalled();
+    const captureServiceInstalled = this.isCaptureServiceInstalled();
 
     try {
       const res = await fetch(`http://${this.bindHost}:${this.controlPort}/v1/proxy/status`, {
@@ -152,20 +148,16 @@ export class FilterProxyManager {
   }
 
   /**
-   * True when the macOS capture install (P1 Task 3) owns the engine: the
-   * plist's presence proves installation; `launchctl list` additionally
-   * catches a loaded-but-plist-moved service. Checked per call so installing
-   * or removing capture mid-session reports honestly on the next probe.
+   * True when the macOS capture install (P1 Task 3) owns the engine. The
+   * plist's presence is the whole signal — `/Library/LaunchDaemons` services
+   * live in the SYSTEM domain, which a user-context `launchctl list` cannot
+   * see, so a probing `launchctl` could never report the service anyway.
+   * Checked per call so installing or removing capture mid-session reports
+   * honestly on the next probe.
    */
-  private async isCaptureServiceInstalled(): Promise<boolean> {
+  private isCaptureServiceInstalled(): boolean {
     if (process.platform !== 'darwin') return false;
-    if (existsSync(LAUNCHD_PLIST)) return true;
-    try {
-      const { stdout } = await execFileAsync('launchctl', ['list'], { timeout: 2000 });
-      return stdout.split('\n').some((line) => line.includes(LAUNCHD_LABEL));
-    } catch {
-      return false;
-    }
+    return existsSync(LAUNCHD_PLIST);
   }
 
   /** Ordered spawn-target candidates — daemonManager's join set verbatim. */
@@ -254,11 +246,23 @@ export class FilterProxyManager {
    * already-active convention).
    */
   async start(options?: { storeDir?: string; rulesPath?: string }): Promise<{ success: boolean; message: string }> {
+    // The latch drops BEFORE the status probe: two concurrent start() calls
+    // would otherwise both await getStatus(), both read 'stopped', and both
+    // spawn. Once held, it stays down until the child answers its control
+    // port or exits — the 'starting' status union exists to report that gap.
+    if (this.starting) {
+      return { success: true, message: 'Filter proxy engine is already starting.' };
+    }
+    this.starting = true;
+
     const current = await this.getStatus();
     if (current.status === 'starting') {
+      // A spawned child exists but has not answered yet — its start is still
+      // in flight and owns the latch (its exit handler does the clear).
       return { success: true, message: 'Filter proxy engine is already starting.' };
     }
     if (current.status !== 'stopped') {
+      this.starting = false;
       const owner = current.managedByApp
         ? 'this app'
         : current.captureServiceInstalled
@@ -269,6 +273,7 @@ export class FilterProxyManager {
 
     const storeDir = this.resolveStoreDir(options?.storeDir);
     if (!storeDir) {
+      this.starting = false;
       return {
         success: false,
         message: 'No storeDir available — construct FilterProxyManager with one or pass start({storeDir}).',
@@ -277,6 +282,7 @@ export class FilterProxyManager {
 
     const entryPath = this.resolveEntryPath();
     if (!entryPath) {
+      this.starting = false;
       return {
         success: false,
         message: 'Could not find built @blockingmachine/https-filter entry. Please run npm run build.',
@@ -308,24 +314,34 @@ export class FilterProxyManager {
       });
 
       const child = this.childProcess;
-      this.starting = true;
       let childExit: number | null = null;
       child.once('exit', (code) => {
         childExit = code;
         this.starting = false;
         if (this.childProcess === child) this.childProcess = null;
       });
+      let errTail = '';
+      let sawListening = false;
       child.stderr?.on('data', (chunk) => {
-        console.error(`[FilterProxy] ${String(chunk).trimEnd()}`);
+        const text = String(chunk);
+        console.error(`[FilterProxy] ${text.trimEnd()}`);
+        // `listening:` is the engine's own "came up" contract — printed only
+        // after BOTH listeners bind. Chunks can split mid-line, so match
+        // against a rolling tail rather than the single chunk.
+        errTail = (errTail + text).slice(-2048);
+        if (errTail.includes('listening:')) sawListening = true;
       });
       child.unref();
       (child.stderr as { unref?: () => void } | null)?.unref?.();
 
-      // Poll the control API — the engine is only "started" once it answers,
-      // not when spawn() returned. A port taken by something else reads as the
-      // honest failure it is.
-      for (let i = 0; i < 15; i++) {
-        await new Promise((r) => setTimeout(r, 400));
+      // "Started" means an up-signal, not spawn() returning: the stderr
+      // `listening:` line (authoritative — both listeners are bound by the
+      // time it prints) or a control-API answer (fallback for engines that
+      // don't print it). First-boot CA mints — RSA keygen + a keychain
+      // probe — can run well past a few seconds, so the bound is ~30s
+      // overall; a child exit fails immediately either way.
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
         if (childExit !== null) {
           this.starting = false;
           return {
@@ -338,6 +354,11 @@ export class FilterProxyManager {
           this.starting = false;
           return { success: true, message: `Filter proxy engine started successfully on port ${status.port}` };
         }
+        if (sawListening) {
+          this.starting = false;
+          return { success: true, message: `Filter proxy engine started successfully on port ${this.dataPort}` };
+        }
+        await new Promise((r) => setTimeout(r, 400));
       }
 
       this.starting = false;
@@ -368,7 +389,7 @@ export class FilterProxyManager {
       }
     }
 
-    if (await this.isCaptureServiceInstalled()) {
+    if (this.isCaptureServiceInstalled()) {
       return {
         success: false,
         message: 'Filter proxy is managed by the macOS capture service — unload com.blockingmachine.proxy via launchctl (or the Task 3 uninstaller).',

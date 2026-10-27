@@ -17,6 +17,11 @@
  *   BM_DATA_PORT     CONNECT/PROXY-v2/plain-HTTP listener (default 9294)
  *   BM_CONTROL_PORT  /v1/proxy/* listener (default 9293)
  *   BM_BIND_HOST     bind host for both listeners (default 127.0.0.1)
+ *   BM_KEYWRAP       CA key-wrap backend pin — 'off'/'none'/'0' forces
+ *                    `keyWrapBackend: null` (0600 `ca.key.pem`, `keyWrapped:
+ *                    false`, zero OS-keystore contact); unset or any other
+ *                    value auto-resolves the platform keystore. Test/dev
+ *                    rigs that must never touch a real keychain set 'off'.
  *
  * Garbage port values fall back to the defaults rather than binding a surprise
  * port. One stderr line announces the bound ports on success — that line is how
@@ -39,6 +44,12 @@ export interface SpawnedProxyConfig {
   bindHost: string;
   dataPort: number;
   controlPort: number;
+  /**
+   * `null` pins key-wrap off (BM_KEYWRAP=off|none|0); absent auto-resolves
+   * the OS keystore. Env can only express the pin — callers that need a
+   * bespoke backend construct `FilterProxyConfig` directly.
+   */
+  keyWrapBackend?: null;
 }
 
 export type EnvParse = { ok: true; config: SpawnedProxyConfig } | { ok: false; error: string };
@@ -50,12 +61,16 @@ const DEFAULT_CONTROL_PORT = 9293;
 /**
  * `parseInt` alone turns '9293junk' into 9293 and 'junk' into NaN — the first
  * silently binds a port the operator never picked, the second crashes listen.
- * Only a clean integer in port range survives; anything else takes `fallback`.
+ * `Number()` is no better: it accepts '0x10', '+443' and '4e2'. Same idiom as
+ * the CONNECT authority parser — decimal digits only, then the range check;
+ * anything else takes `fallback`.
  */
 function envPort(raw: string | undefined, fallback: number): number {
-  if (raw === undefined || raw.trim() === '') return fallback;
-  const parsed = Number(raw.trim());
-  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535 ? parsed : fallback;
+  if (raw === undefined) return fallback;
+  const text = raw.trim();
+  if (!/^\d{1,5}$/.test(text)) return fallback;
+  const parsed = Number(text);
+  return parsed <= 65535 ? parsed : fallback;
 }
 
 export function configFromEnv(env: NodeJS.ProcessEnv): EnvParse {
@@ -65,6 +80,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv): EnvParse {
   }
   const rulesPath = env.BM_RULES_PATH?.trim();
   const bindHost = env.BM_BIND_HOST?.trim();
+  const keyWrap = env.BM_KEYWRAP?.trim().toLowerCase();
   return {
     ok: true,
     config: {
@@ -73,6 +89,9 @@ export function configFromEnv(env: NodeJS.ProcessEnv): EnvParse {
       bindHost: bindHost || DEFAULT_BIND_HOST,
       dataPort: envPort(env.BM_DATA_PORT, DEFAULT_DATA_PORT),
       controlPort: envPort(env.BM_CONTROL_PORT, DEFAULT_CONTROL_PORT),
+      ...(keyWrap === 'off' || keyWrap === 'none' || keyWrap === '0'
+        ? { keyWrapBackend: null }
+        : {}),
     },
   };
 }
