@@ -1,6 +1,6 @@
-# Open Flags
+# Known Issues
 
-Flagged but unfixed work, and the decisions behind it, recorded the moment it is flagged rather than left in conversation. An entry states why it was left, what it would take, and how a fix could be verified. Closed entries move to `closed-flags.md` with the commit that closed them, so the list doubles as a record of what was deferred and when it was picked up.
+Flagged but unfixed work, and the decisions behind it, recorded the moment it is flagged rather than left in conversation. An entry states why it was left, what it would take, and how a fix could be verified. Closed entries move to `closed-issues.md` with the commit that closed them, so the list doubles as a record of what was deferred and when it was picked up.
 
 Nothing here is scheduled. The list exists so nothing is *relied on* silently.
 

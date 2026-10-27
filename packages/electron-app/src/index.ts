@@ -5084,7 +5084,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         }
         // Firefox keeps its own NSS store (cert9.db) that no OS-store write
         // reaches — when a profile exists off-darwin, flag the gap rather
-        // than let a trusted/installed reply overclaim (open-flags 116,
+        // than let a trusted/installed reply overclaim (known-issues 116,
         // firefox-nss-cert9; the nss certutil needed to touch cert9.db is
         // not shipped). darwin's posture is P1-settled and stays as-is.
         if (process.platform === 'win32' || process.platform === 'linux') {

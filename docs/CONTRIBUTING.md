@@ -18,7 +18,7 @@ First off, thank you for considering contributing to Blockingmachine! Everyone c
   - [Filter List Guidelines](#filter-list-guidelines)
   - [Testing Your Changes](#testing-your-changes)
     - [Testing Filter Rules](#testing-filter-rules)
-  - [The Open Flags Ledger](#the-open-flags-ledger)
+  - [The Known Issues Ledger](#the-known-issues-ledger)
   - [Issue Templates](#issue-templates)
   - [Communication Guidelines](#communication-guidelines)
   - [Project Structure](#project-structure)
@@ -116,7 +116,7 @@ Found ads or trackers we're missing?
    - Follow the coding style
    - Add tests if applicable
    - Update documentation if needed
-   - Record any problem you noticed but did not fix in [the open flags ledger](#the-open-flags-ledger)
+   - Record any problem you noticed but did not fix in [the known issues ledger](#the-known-issues-ledger)
 
 4. **Commit Your Changes**
    - Use meaningful commit messages
@@ -201,9 +201,9 @@ When contributing new filter rules:
    ||example.com^$dnsrewrite
    ```
 
-## The Open Flags Ledger
+## The Known Issues Ledger
 
-Known problems are recorded rather than remembered. When a change surfaces a defect, an honest limitation, or a trade-off it does not fix, the finding goes in [open-flags.md](open-flags.md) — the moment it is noticed, in the same change if practical — instead of living in a conversation or a review comment nobody can find later.
+Known problems are recorded rather than remembered. When a change surfaces a defect, an honest limitation, or a trade-off it does not fix, the finding goes in [known-issues.md](known-issues.md) — the moment it is noticed, in the same change if practical — instead of living in a conversation or a review comment nobody can find later.
 
 1. **Raising a flag.** Add `### N. <title>` under `## Open`, numbered with the next free integer. Numbers are never reused, so gaps in the sequence are closed entries, not mistakes. An entry states:
    - **Where** — the file, symbol, and rough line a reader should start from.

@@ -102,7 +102,7 @@ unbound.lan:5335     -> host=unbound.lan  port=5335  THREW ERR_INVALID_IP_ADDRES
 
 The unbracketed IPv6 case is quieter and just as wrong: `::1:5353` has four colon-separated parts, so the `host:port` branch does not match and the whole string becomes the host with port 53. `[::1]:5353` parses correctly. The mis-parse does not throw — it queries a host that cannot exist and reports `refused`, which the check reports as an unreachable resolver.
 
-Also open flags. Both are recorded in [open-flags.md](open-flags.md) 23 and 24.
+Also open flags. Both are recorded in [known-issues.md](known-issues.md) 23 and 24.
 
 ## Two rig bugs worth keeping
 

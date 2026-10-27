@@ -39,7 +39,7 @@
  *   the Windows store; Firefox's own NSS `cert9.db` is handled by the
  *   per-profile `firefox*Ca` ops below — they drive the *NSS* certutil when
  *   one exists (PATH plus conventional locations like Homebrew's `nss` keg)
- *   and answer `tool-missing` when it does not (open-flags 116,
+ *   and answer `tool-missing` when it does not (known-issues 116,
  *   firefox-nss-cert9). The Windows *inbox* certutil cannot touch NSS dbs;
  *   the resolver's usage-signature probe is what keeps it from being picked.
  * - `certutil -user -verifystore Root <sha1-thumb>` looks the cert up in the
@@ -70,7 +70,7 @@
  *   root, so a missing certutil + present system store answers
  *   `needs-admin` and the caller prints the sudo line
  *   (`linuxSystemStoreCommands`). certutil missing AND no system paths at
- *   all → `unsupported` (open-flags 117, linux-no-ca-store).
+ *   all → `unsupported` (known-issues 117, linux-no-ca-store).
  * - Fingerprint matching against the system store is done in-process with
  *   `X509Certificate` rather than by shelling `openssl` — the fallback path
  *   exists precisely for minimal systems where helper tools may be absent,
@@ -721,7 +721,7 @@ async function linuxTrustStatus(
 
   const sys = await linuxProbeSystemStore(fingerprint256, options);
   // Neither mechanism exists at all → the platform genuinely cannot be
-  // driven (open-flags 117, linux-no-ca-store). A working certutil alone still
+  // driven (known-issues 117, linux-no-ca-store). A working certutil alone still
   // means 'absent' is honest — the db is creatable on install.
   if (!sys.storePresent && probe.kind === "no-certutil") return "unsupported";
   return sys.state;
@@ -845,7 +845,7 @@ async function linuxRemoveCa(
  * NSS stores under its own roots. Returns every `cert9.db` that exists —
  * the discovery half of the `firefox*Ca` ops below, and still the evidence
  * a caller needs to name the gap when no NSS certutil exists to write them
- * (open-flags 116, firefox-nss-cert9).
+ * (known-issues 116, firefox-nss-cert9).
  */
 export async function firefoxNssProfileDbs(options?: {
   platform?: NodeJS.Platform;

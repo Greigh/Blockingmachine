@@ -75,7 +75,7 @@ Tests:
 ## Task 4 — UI + flags
 
 `HttpsFilterCard`: stats ribbon gains injected/blocked-response counts when non-zero (keep the strip uncluttered — tooltip carries detail); a collapsed "content filtering" line showing cosmetic index size (`cosmeticRulesLoaded`) so "0 rules" and "loaded but not injecting" are distinguishable states.
-`docs/open-flags.md`: new flags for deferred items discovered during T1–T3 reviews (scriptlet coverage gaps, extended-css `#?#`, toString-spoofing, gzip-recompress instead of identity, per-host inject toggle).
+`docs/known-issues.md`: new flags for deferred items discovered during T1–T3 reviews (scriptlet coverage gaps, extended-css `#?#`, toString-spoofing, gzip-recompress instead of identity, per-host inject toggle).
 
 ## Sequencing
 

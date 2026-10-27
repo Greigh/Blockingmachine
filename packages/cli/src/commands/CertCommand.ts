@@ -305,7 +305,7 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
   /**
    * Firefox ships its own NSS cert9.db that no OS-store write reaches —
    * name the gap when a profile exists so a successful install does not
-   * overclaim (open-flags 116, firefox-nss-cert9). darwin's posture predates
+   * overclaim (known-issues 116, firefox-nss-cert9). darwin's posture predates
    * P3 and is left as-is.
    */
   private async warnFirefoxNssGap(): Promise<void> {

@@ -1,6 +1,6 @@
-# Closed Flags
+# Closed Issues
 
-The other half of `open-flags.md` — every flag that has been fixed, in flag-number order. An entry keeps the closure record: what closed it, where, and how it was verified. When a closed entry's fix is reverted or regresses, it moves back rather than being edited in place.
+The other half of `known-issues.md` — every flag that has been fixed, in flag-number order. An entry keeps the closure record: what closed it, where, and how it was verified. When a closed entry's fix is reverted or regresses, it moves back rather than being edited in place.
 
 ### 1. The popup reports a site pause or allowance the browser may not be enforcing — closed by the site-control drift wiring
 

@@ -56,7 +56,7 @@ Tests: module-facing logic where the harness allows (the Kotlin TCP core is the 
 - `main.ts`/`configFromEnv`: `BM_BIND_HOST` already exists — add a `BM_LAN_PROXIES` optional second bind? NO — keep one bind; document that hub mode = `BM_BIND_HOST=<lan-ip>` (loopback then closes — a deliberate posture the operator picks). Add to `index.ts` status payload: nothing needed (bindHost already surfaced? check).
 - `HttpsFilterCard`: "LAN hub mode" hint line when `bindHost !== 127.0.0.1` (surfaces that the proxy accepts remote flows — security note: the data listener now trusts LAN clients; document the threat posture: no auth on the data port — recommend bind-to-LAN only on trusted nets; the control port stays loopback — VERIFY it can't also be LAN-bound accidentally).
 - `docs/https-filtering-design.md` §9 LAN-hub extension: mark Android-via-hub as shipped-posture.
-- `docs/open-flags.md`: android-no-ondevice-engine (nodejs-mobile track — the full-MITM-on-device upgrade, its own phase), android-cert-trust-ceiling (API24+ user-CA wall — documented, unfixable), tun-only-on-locked-profiles, the hub-LAN-auth posture (bind-to-LAN trusts the network — flag for a token/mTLS layer if this becomes multi-user).
+- `docs/known-issues.md`: android-no-ondevice-engine (nodejs-mobile track — the full-MITM-on-device upgrade, its own phase), android-cert-trust-ceiling (API24+ user-CA wall — documented, unfixable), tun-only-on-locked-profiles, the hub-LAN-auth posture (bind-to-LAN trusts the network — flag for a token/mTLS layer if this becomes multi-user).
 
 ## Sequencing + non-goals
 

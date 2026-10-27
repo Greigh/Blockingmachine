@@ -46,7 +46,7 @@ Tests: runner-fake unit tests for certutil parsing (both platforms); manager pla
 ## Task 4 — consolidated P3 review + flags + docs
 
 Cross-platform review pass (one subagent, all of T1–T3): the PROXY-v2 byte contract must be identical across all three helpers (byte-for-byte — the engine's parser is already tested against the mac emitter; add a shared fixture test: emit from each helper's `--test` mode on its native platform gated, plus a C-level golden-bytes test runnable anywhere by asserting the byte-layout code is common-core); exclusion-filter semantics per platform; service-manager parity (launchd/systemd/sc all KeepAlive-equivalent); the fail-open posture audit per platform (what happens when each component dies — write the matrix into `docs/https-filtering-design.md` §11 or the platform README section).
-`docs/open-flags.md`: new entries — WinDivert fallback posture, Firefox-NSS cert gap, openrc/sysvinit unsupported, TPROXY not chosen (why), wfp records-API fragility if untested, QUIC-suppression granularity notes.
+`docs/known-issues.md`: new entries — WinDivert fallback posture, Firefox-NSS cert gap, openrc/sysvinit unsupported, TPROXY not chosen (why), wfp records-API fragility if untested, QUIC-suppression granularity notes.
 `AGENTS.md`: add the P3 helper/build/install notes to the https-filter section (build gating, service names, the `blockingmachine` linux user, WFP callout choice).
 
 ## Sequencing
