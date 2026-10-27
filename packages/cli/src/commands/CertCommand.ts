@@ -3,6 +3,14 @@ import fs from "fs/promises";
 import path from "path";
 import chalk from "chalk";
 import {
+  installCa,
+  removeCa,
+  trustStatus,
+  type CaInstallOutcome,
+  type CaRemoveOutcome,
+  type CaTrustState,
+} from "@blockingmachine/core";
+import {
   BaseCommand,
   type CommandOptions,
   type CommandResult,
@@ -13,7 +21,12 @@ import {
 } from "../lib/proxyControl.js";
 import { writeJson } from "../lib/logger.js";
 
-export type CertAction = "status" | "export";
+export type CertAction =
+  | "status"
+  | "export"
+  | "trust-check"
+  | "install"
+  | "uninstall";
 
 export interface CertCommandOptions {
   action: CertAction;
@@ -30,9 +43,16 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
   }
 
   async execute(options: CertCommandOptions): Promise<CommandResult> {
-    if (options?.action !== "status" && options?.action !== "export") {
+    const known: CertAction[] = [
+      "status",
+      "export",
+      "trust-check",
+      "install",
+      "uninstall",
+    ];
+    if (!known.includes(options?.action)) {
       return this.failure(
-        `Unknown cert action "${options?.action}". Expected: status, export.`,
+        `Unknown cert action "${options?.action}". Expected: ${known.join(", ")}.`,
       );
     }
 
@@ -54,6 +74,20 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
         this.printStatus(payload);
       }
       return this.success(payload, "CA status retrieved");
+    }
+
+    // Trust-store verbs — the PEM is fetched over the loopback control API
+    // (public certificate material only), then the OS op runs locally through
+    // core's caTrustStore. darwin only today; every other platform reports
+    // 'unsupported' honestly rather than half-doing the work.
+    if (options.action === "trust-check") {
+      return this.runTrustCheck(payload, options.json);
+    }
+    if (options.action === "install") {
+      return this.runInstall(payload, options.json);
+    }
+    if (options.action === "uninstall") {
+      return this.runUninstall(payload, options.json);
     }
 
     // `export` — the PEM is a public certificate, written verbatim. A path
@@ -79,6 +113,148 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
       );
     } catch (error) {
       return this.handleError(error);
+    }
+  }
+
+  /** `cert trust-check` — probe the OS trust store for this exact CA. */
+  private async runTrustCheck(
+    payload: ProxyCaPayload,
+    json?: boolean,
+  ): Promise<CommandResult> {
+    let state: CaTrustState;
+    try {
+      state = await trustStatus(payload.certPem);
+    } catch (error) {
+      return this.handleError(error);
+    }
+    const data = { ...payload, trustState: state };
+    if (json) {
+      writeJson(data);
+    } else {
+      console.log(
+        `\n${chalk.bold.underline("Proxy CA trust state:")}\n\n  ${this.describeTrustState(state)}\n`,
+      );
+    }
+    return this.success(data, `CA trust state: ${state}`);
+  }
+
+  /**
+   * `cert install` — anchor the CA as a trust root in the login keychain. On
+   * darwin the `add-trusted-cert -d` write is itself the consent prompt when a
+   * GUI session can service it; `needs-admin` means this context could not
+   * (headless shell, locked keychain), so the command the user must run with
+   * sudo is printed verbatim.
+   */
+  private async runInstall(
+    payload: ProxyCaPayload,
+    json?: boolean,
+  ): Promise<CommandResult> {
+    let outcome: CaInstallOutcome;
+    try {
+      outcome = await installCa(payload.certPem);
+    } catch (error) {
+      return this.handleError(error);
+    }
+
+    if (outcome === "installed") {
+      const message = "CA installed into the login keychain and trusted.";
+      if (json) {
+        writeJson({ result: outcome, sha256Fingerprint: payload.sha256Fingerprint });
+      } else {
+        this.logger.info(`✓ ${message}`);
+      }
+      return this.success({ result: outcome }, message);
+    }
+
+    if (outcome === "needs-admin") {
+      // `cert export` writes the PEM the sudo line consumes — keep the pair
+      // copy-pasteable as one shell command.
+      const sudoCommand =
+        "blockingmachine cert export ca.pem && " +
+        'sudo security add-trusted-cert -d -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" ca.pem';
+      const message =
+        "Trust install needs administrator rights from this context. Run: " +
+        sudoCommand;
+      if (json) {
+        writeJson({
+          result: outcome,
+          sha256Fingerprint: payload.sha256Fingerprint,
+          sudoCommand,
+        });
+      } else {
+        this.logger.warn(
+          "The keychain refused the unprivileged install (headless or locked session).",
+        );
+        this.logger.warn(`Run the admin form yourself:\n\n  ${sudoCommand}\n`);
+      }
+      return this.failure(message);
+    }
+
+    const message =
+      "OS trust-store ops are only implemented for macOS — this platform reports 'unsupported'.";
+    if (json) {
+      writeJson({ result: outcome, sha256Fingerprint: payload.sha256Fingerprint });
+    } else {
+      this.logger.error(message);
+    }
+    return this.failure(message);
+  }
+
+  /** `cert uninstall` — drop the CA's trust settings and keychain entry. */
+  private async runUninstall(
+    payload: ProxyCaPayload,
+    json?: boolean,
+  ): Promise<CommandResult> {
+    let outcome: CaRemoveOutcome;
+    try {
+      outcome = await removeCa(payload.certPem);
+    } catch (error) {
+      return this.handleError(error);
+    }
+
+    if (outcome === "unsupported") {
+      const message =
+        "OS trust-store ops are only implemented for macOS — this platform reports 'unsupported'.";
+      if (json) {
+        writeJson({ result: outcome, sha256Fingerprint: payload.sha256Fingerprint });
+      } else {
+        this.logger.error(message);
+      }
+      return this.failure(message);
+    }
+
+    const message =
+      outcome === "removed"
+        ? "CA trust settings and keychain entry removed."
+        : "CA was not present in the keychain — nothing to remove.";
+    if (json) {
+      writeJson({ result: outcome, sha256Fingerprint: payload.sha256Fingerprint });
+    } else {
+      this.logger.info(`✓ ${message}`);
+    }
+    return this.success({ result: outcome }, message);
+  }
+
+  private describeTrustState(state: CaTrustState): string {
+    switch (state) {
+      case "trusted":
+        return `${chalk.green("trusted")} — the CA anchors TLS verification on this Mac.`;
+      case "installed-untrusted":
+        return (
+          `${chalk.yellow("installed-untrusted")} — present in the keychain but not ` +
+          `anchored as a trust root; run ${chalk.bold("cert install")} to trust it.`
+        );
+      case "absent":
+        return (
+          `${chalk.yellow("absent")} — not in the macOS keychain; run ` +
+          `${chalk.bold("cert install")} to trust it.`
+        );
+      case "unsupported":
+        return "unsupported — OS trust-store ops are only implemented for macOS.";
+      default:
+        // Unreachable per the union; keep a string so a widened caller
+        // still gets a printable line rather than undefined.
+        return String(state);
     }
   }
 

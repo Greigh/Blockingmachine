@@ -8,7 +8,7 @@
  * is refused end-to-end".
  */
 
-import { describe, expect, test, jest, beforeAll } from '@jest/globals';
+import { describe, expect, test, jest, beforeAll, beforeEach, afterEach } from '@jest/globals';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -169,6 +169,32 @@ jest.unstable_mockModule('electron', () => ({
   },
 }));
 
+/**
+ * The `httpsfilter:ca-*` handlers call core's caTrustStore ops, which spawn
+ * `security` — under jest these delegate to these jest.fn()s so no test ever
+ * touches a real keychain.
+ */
+const caTrustOps = {
+  trustStatus: jest.fn<(pem: string) => Promise<string>>(async () => 'absent'),
+  installCa: jest.fn<(pem: string) => Promise<string>>(async () => 'installed'),
+  removeCa: jest.fn<(pem: string) => Promise<string>>(async () => 'removed'),
+};
+
+/**
+ * index.ts's admin-consent path (`osascript … with administrator privileges`)
+ * funnels through `runShellAsAdmin` — under jest it delegates to this fn, so
+ * a test can answer the macOS auth sheet without ever showing one.
+ */
+const runShellAsAdminMock = jest.fn(async (_cmd: string) => ({
+  success: true,
+  cancelled: false,
+  stderr: '',
+}));
+jest.unstable_mockModule('../adminShell', () => ({
+  __esModule: true,
+  runShellAsAdmin: (cmd: string) => runShellAsAdminMock(cmd),
+}));
+
 // The reputation DB refresh hits the network at boot — stub just that edge and keep the
 // real core for everything else (sanitizers, classifiers, formatters under test).
 jest.unstable_mockModule('@blockingmachine/core', async () => {
@@ -177,6 +203,9 @@ jest.unstable_mockModule('@blockingmachine/core', async () => {
     ...actual,
     refreshDb: async () => ({ remoteLastFetched: null, applied: false }),
     setDbCacheDirectory: () => {},
+    trustStatus: (pem: string) => caTrustOps.trustStatus(pem),
+    installCa: (pem: string) => caTrustOps.installCa(pem),
+    removeCa: (pem: string) => caTrustOps.removeCa(pem),
   };
 });
 
@@ -1032,5 +1061,115 @@ describe('LAN auth modes (D-1)', () => {
     // Restore the legacy posture so nothing that runs after inherits a mode.
     capturedStoreRef.current!.delete('lanAuthMode');
     capturedStoreRef.current!.set('feedToken', '');
+  });
+});
+
+// ============================================================================
+// httpsfilter:ca-* — CA trust-store IPC (P1 Task 4)
+// ============================================================================
+// The engine's CA PEM arrives via a stubbed global fetch (the manager's
+// getCaInfo GETs /v1/proxy/ca on :9293); the core trust ops and index.ts's
+// execFile (osascript only) are module-mocked, so these run nowhere near a
+// real keychain or a real macOS auth sheet.
+describe('httpsfilter:ca-* IPC handlers', () => {
+  const CA_JSON = {
+    certPem: '-----BEGIN CERTIFICATE-----\nSTUB\n-----END CERTIFICATE-----\n',
+    sha256Fingerprint: 'AA:BB:CC',
+    notAfter: 'Jan  1 00:00:00 2036 GMT',
+    keyWrapped: true,
+  };
+  let fetchSpy: jest.SpiedFunction<typeof fetch>;
+
+  beforeEach(() => {
+    fetchSpy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(JSON.stringify(CA_JSON), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    caTrustOps.trustStatus.mockReset().mockResolvedValue('absent');
+    caTrustOps.installCa.mockReset().mockResolvedValue('installed');
+    caTrustOps.removeCa.mockReset().mockResolvedValue('removed');
+    runShellAsAdminMock
+      .mockReset()
+      .mockResolvedValue({ success: true, cancelled: false, stderr: '' });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  test('ca-trust-status probes with the engine PEM and reports state + fingerprint', async () => {
+    caTrustOps.trustStatus.mockResolvedValue('trusted');
+    const res = await invoke('httpsfilter:ca-trust-status');
+    expect(res.success).toBe(true);
+    expect(res.state).toBe('trusted');
+    expect(res.sha256Fingerprint).toBe('AA:BB:CC');
+    expect(caTrustOps.trustStatus).toHaveBeenCalledWith(CA_JSON.certPem);
+    expect(String(fetchSpy.mock.calls[0][0])).toContain('/v1/proxy/ca');
+  });
+
+  test('a dead engine answers unavailable without touching the trust store', async () => {
+    fetchSpy.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    const res = await invoke('httpsfilter:ca-trust-status');
+    expect(res.success).toBe(false);
+    expect(res.state).toBe('unavailable');
+    expect(caTrustOps.trustStatus).not.toHaveBeenCalled();
+  });
+
+  test('ca-install runs the unprivileged install and repaints state', async () => {
+    caTrustOps.installCa.mockResolvedValue('installed');
+    caTrustOps.trustStatus.mockResolvedValue('trusted');
+    const res = await invoke('httpsfilter:ca-install');
+    expect(res.success).toBe(true);
+    expect(res.state).toBe('trusted');
+    expect(caTrustOps.installCa).toHaveBeenCalledWith(CA_JSON.certPem);
+    // No admin sheet was shown for a clean unprivileged install.
+    expect(runShellAsAdminMock).not.toHaveBeenCalled();
+  });
+
+  test('ca-install needs-admin is a state, not an escalation — no osascript until elevate', async () => {
+    caTrustOps.installCa.mockResolvedValue('needs-admin');
+    const res = await invoke('httpsfilter:ca-install');
+    expect(res.success).toBe(false);
+    expect(res.state).toBe('needs-admin');
+    expect(res.needsAdmin).toBe(true);
+    expect(runShellAsAdminMock).not.toHaveBeenCalled();
+  });
+
+  test('ca-install {elevate:true} reaches for the osascript admin prompt', async () => {
+    caTrustOps.trustStatus.mockResolvedValue('trusted');
+    const res = await invoke('httpsfilter:ca-install', { elevate: true });
+    expect(res.success).toBe(true);
+    expect(res.state).toBe('trusted');
+    // installCa is skipped; the shell line handed to the admin prompt
+    // carries the same add-trusted-cert invocation the core runner uses.
+    expect(caTrustOps.installCa).not.toHaveBeenCalled();
+    expect(runShellAsAdminMock).toHaveBeenCalledTimes(1);
+    const [cmd] = runShellAsAdminMock.mock.calls[0] as [string];
+    expect(cmd).toContain('security add-trusted-cert -d -r trustRoot');
+    expect(cmd).toContain('login.keychain-db');
+    expect(cmd).toMatch(/bm-ca-.*\.pem/);
+  });
+
+  test('ca-install surfaces a declined admin sheet as needs-admin', async () => {
+    runShellAsAdminMock.mockResolvedValue({
+      success: false,
+      cancelled: true,
+      stderr: 'User canceled. (-128)',
+    });
+    const res = await invoke('httpsfilter:ca-install', { elevate: true });
+    expect(res.success).toBe(false);
+    expect(res.needsAdmin).toBe(true);
+    expect(res.message).toContain('declined');
+  });
+
+  test('ca-uninstall removes and repaints absent', async () => {
+    const res = await invoke('httpsfilter:ca-uninstall');
+    expect(res.success).toBe(true);
+    expect(res.state).toBe('absent');
+    expect(caTrustOps.removeCa).toHaveBeenCalledWith(CA_JSON.certPem);
   });
 });

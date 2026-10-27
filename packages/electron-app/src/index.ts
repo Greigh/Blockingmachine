@@ -1,6 +1,6 @@
 import { join, dirname, isAbsolute, basename, resolve as pathResolve, sep } from 'path';
 import { createServer, Server as HttpServer, ServerResponse, type IncomingMessage } from 'http';
-import { networkInterfaces } from 'os';
+import { networkInterfaces, tmpdir } from 'os';
 import { getServers as getDnsServers } from 'dns';
 import { createHash, randomBytes } from 'crypto';
 import {
@@ -148,6 +148,11 @@ import {
   parseHitLedgerText,
   selectHotList,
   formatHotList,
+  trustStatus as caTrustStatus,
+  installCa as caTrustInstall,
+  removeCa as caTrustRemove,
+  macOsLoginKeychainPath,
+  type CaTrustState,
   type TierFileInput,
   type AiProviderConfig,
   type AiScanResult,
@@ -168,6 +173,8 @@ import type {
 } from './types';
 import type { ThreatCategory } from '@blockingmachine/core';
 import { DaemonManager } from './daemonManager';
+import { FilterProxyManager } from './filterProxyManager';
+import { runShellAsAdmin } from './adminShell';
 import { TrayManager, type TraySharedState } from './trayManager';
 import { shadowReadiness, shadowScoreObservationFile, shadowScoreWatchdogDomains } from './learnedShadow';
 import {
@@ -294,6 +301,9 @@ setupCrashBoundary();
 app.name = 'Blockingmachine';
 
 const daemonManager = new DaemonManager();
+// The HTTPS filter proxy's engine manager — Task 4 consumes only its
+// `/v1/proxy/ca` reader for the trust-store IPC; Task 5 wires start/stop.
+const filterProxyManager = new FilterProxyManager();
 
 const isMac = process.platform === 'darwin';
 
@@ -5014,6 +5024,146 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     ipcMain.handle('daemon:get-network-services', async () => {
       return await daemonManager.getNetworkServices();
     });
+
+    // ====================================================================
+    // HTTPS Filter Proxy — CA trust-store IPC (P1 Task 4)
+    // ====================================================================
+    // Result shape mirrors the daemon:* convention: `{success, state, message}`.
+    // `state` is the post-op CaTrustState ('trusted' | 'installed-untrusted' |
+    // 'absent' | 'unsupported') so the Deploy Hub CA row repaints off a single
+    // call; 'unavailable'/'error' cover a dead engine / a thrown op. The PEM
+    // comes from the engine's own /v1/proxy/ca — never from the renderer —
+    // because trusting a renderer-supplied cert would let any compromised pane
+    // install a MITM root.
+    const caTrustReply = async (
+      fn: (certPem: string) => Promise<{ success: boolean; state: string; message: string; needsAdmin?: boolean }>,
+    ): Promise<{ success: boolean; state: string; message: string; sha256Fingerprint?: string; needsAdmin?: boolean }> => {
+      const ca = await filterProxyManager.getCaInfo();
+      if (!ca) {
+        return {
+          success: false,
+          state: 'unavailable',
+          message: 'HTTPS filter proxy engine is not running — start it before managing CA trust.',
+        };
+      }
+      try {
+        const reply = await fn(ca.certPem);
+        return { ...reply, sha256Fingerprint: ca.sha256Fingerprint };
+      } catch (err: any) {
+        return { success: false, state: 'error', message: err?.message || String(err) };
+      }
+    };
+
+    ipcMain.handle('httpsfilter:ca-trust-status', async () =>
+      caTrustReply(async (certPem) => {
+        const state = await caTrustStatus(certPem);
+        const messages: Record<CaTrustState, string> = {
+          trusted: 'CA is trusted — HTTPS filtering can terminate TLS.',
+          'installed-untrusted': 'CA is in the keychain but not anchored as a trust root.',
+          absent: 'CA is not in the keychain — install it to enable TLS termination.',
+          unsupported: 'OS trust-store ops are only implemented for macOS.',
+        };
+        return { success: true, state, message: messages[state] };
+      }),
+    );
+
+    // The repo's admin-consent convention — `osascript "do shell script …
+    // with administrator privileges"` via adminShell.ts, the same mechanism
+    // the capture installer documents. Runs `security add-trusted-cert` as
+    // admin when the unprivileged spawn could not get authorization
+    // (headless/locked keychain context); the macOS auth sheet is the consent UI.
+    const installCaAsAdmin = async (certPem: string): Promise<{ success: boolean; state: string; message: string; needsAdmin?: boolean }> => {
+      const tmpPem = join(
+        tmpdir(),
+        `bm-ca-${process.pid}-${randomBytes(6).toString('hex')}.pem`,
+      );
+      await fs.writeFile(tmpPem, certPem, { mode: 0o600 });
+      try {
+        const shellQuote = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+        const shellCmd = `security add-trusted-cert -d -r trustRoot -k ${shellQuote(macOsLoginKeychainPath())} ${shellQuote(tmpPem)}`;
+        const result = await runShellAsAdmin(shellCmd);
+        if (!result.success) {
+          return {
+            success: false,
+            state: 'needs-admin',
+            needsAdmin: true,
+            message: result.cancelled
+              ? 'Administrator approval was declined — the CA is not trusted.'
+              : `Elevated trust install failed: ${result.stderr}`,
+          };
+        }
+        const post = await caTrustStatus(certPem);
+        return post === 'trusted'
+          ? { success: true, state: 'trusted', message: 'CA trusted after administrator approval.' }
+          : { success: false, state: post, needsAdmin: true, message: `Elevated install ran but the CA still reports '${post}'.` };
+      } finally {
+        await fs.rm(tmpPem, { force: true }).catch(() => {});
+      }
+    };
+
+    ipcMain.handle(
+      'httpsfilter:ca-install',
+      async (_event, options?: { elevate?: boolean }) =>
+        caTrustReply(async (certPem) => {
+          if (process.platform !== 'darwin') {
+            return {
+              success: false,
+              state: 'unsupported',
+              message: 'OS trust-store ops are only implemented for macOS.',
+            };
+          }
+          if (options?.elevate === true) {
+            // The renderer already knows admin consent is required (the
+            // unprivileged attempt answered needs-admin, or the pane skipped
+            // it on purpose) — go straight to the macOS auth sheet.
+            return installCaAsAdmin(certPem);
+          }
+          const outcome = await caTrustInstall(certPem);
+          if (outcome === 'installed') {
+            const post = await caTrustStatus(certPem);
+            return { success: true, state: post, message: 'CA installed into the login keychain.' };
+          }
+          if (outcome === 'unsupported') {
+            return {
+              success: false,
+              state: 'unsupported',
+              message: 'OS trust-store ops are only implemented for macOS.',
+            };
+          }
+          // 'needs-admin': the unprivileged spawn could not get authorization
+          // (headless or locked keychain). The pane re-invokes this channel
+          // with {elevate:true} when the user consents — we never pop a macOS
+          // auth sheet unprompted off a routine probe.
+          return {
+            success: false,
+            state: 'needs-admin',
+            needsAdmin: true,
+            message:
+              'Administrator approval is required to trust the CA — confirm to show the macOS prompt.',
+          };
+        }),
+    );
+
+    ipcMain.handle('httpsfilter:ca-uninstall', async () =>
+      caTrustReply(async (certPem) => {
+        const outcome = await caTrustRemove(certPem);
+        if (outcome === 'unsupported') {
+          return {
+            success: false,
+            state: 'unsupported',
+            message: 'OS trust-store ops are only implemented for macOS.',
+          };
+        }
+        return {
+          success: true,
+          state: 'absent',
+          message:
+            outcome === 'removed'
+              ? 'CA trust settings and keychain entry removed.'
+              : 'CA was not present in the keychain — nothing to remove.',
+        };
+      }),
+    );
 
     ipcMain.handle('test-sinkhole-connection', async (_event, service: 'pihole' | 'adguard' | 'webhook') => {
       const startTime = Date.now();

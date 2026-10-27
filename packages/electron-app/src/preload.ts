@@ -262,6 +262,12 @@ contextBridge.exposeInMainWorld('electron', {
   getServiceInstallScript: () => ipcRenderer.invoke('daemon:get-service-script'),
   getNetworkServices: () => ipcRenderer.invoke('daemon:get-network-services'),
 
+  // HTTPS filter proxy — CA trust store (P1 Task 4)
+  getHttpsFilterCaTrust: () => ipcRenderer.invoke('httpsfilter:ca-trust-status'),
+  installHttpsFilterCa: (options?: { elevate?: boolean }) =>
+    ipcRenderer.invoke('httpsfilter:ca-install', options),
+  uninstallHttpsFilterCa: () => ipcRenderer.invoke('httpsfilter:ca-uninstall'),
+
   // Secure channel-checked fallback for legacy listeners
   receive: (channel: string, callback: (...args: unknown[]) => void) => {
     if (ALLOWED_CHANNELS.has(channel)) {

@@ -715,6 +715,81 @@ certProgram
     }
   });
 
+certProgram
+  .command("trust-check")
+  .description("Probe the OS trust store for the proxy CA (macOS)")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .option("--json", "Output the CA payload plus trustState as JSON")
+  .action(async (cmdOptions: { port: string; json?: boolean }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new CertCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "trust-check",
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+        json: cmdOptions.json,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Cert trust-check failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+certProgram
+  .command("install")
+  .description("Install the proxy CA into the login keychain as a trust root (macOS)")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .option("--json", "Output the install result as JSON")
+  .action(async (cmdOptions: { port: string; json?: boolean }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new CertCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "install",
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+        json: cmdOptions.json,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Cert install failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+certProgram
+  .command("uninstall")
+  .description("Remove the proxy CA's trust settings and keychain entry (macOS)")
+  .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
+  .option("--json", "Output the remove result as JSON")
+  .action(async (cmdOptions: { port: string; json?: boolean }) => {
+    try {
+      const config = await loadConfig();
+      const cmd = new CertCommand({ config, logger });
+      const result = await cmd.execute({
+        action: "uninstall",
+        port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
+        json: cmdOptions.json,
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      logger.error(
+        `Cert uninstall failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
 const snapshotProgram = program
   .command("snapshot")
   .description("Manage database snapshots and rollbacks");

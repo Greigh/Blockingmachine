@@ -712,6 +712,29 @@ export interface ElectronAPI {
   flushDnsCache?: () => Promise<{ success: boolean; message: string }>;
   getServiceInstallScript?: () => Promise<{ mac: string; linux: string }>;
   getNetworkServices?: () => Promise<string[]>;
+
+  // HTTPS filter proxy — CA trust store (P1 Task 4). `state` is the post-op
+  // CaTrustState for the Deploy Hub CA row; 'unavailable' = engine down.
+  getHttpsFilterCaTrust?: () => Promise<{
+    success: boolean;
+    state: string;
+    message: string;
+    sha256Fingerprint?: string;
+  }>;
+  installHttpsFilterCa?: (options?: { elevate?: boolean }) => Promise<{
+    success: boolean;
+    state: string;
+    message: string;
+    sha256Fingerprint?: string;
+    /** True when only the admin-consent path remains — surface the prompt. */
+    needsAdmin?: boolean;
+  }>;
+  uninstallHttpsFilterCa?: () => Promise<{
+    success: boolean;
+    state: string;
+    message: string;
+    sha256Fingerprint?: string;
+  }>;
 }
 
 // Global declarations

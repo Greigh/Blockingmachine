@@ -122,3 +122,20 @@ export {
   type RequestEvaluator,
   type RequestVerdict,
 } from "./evaluateRequest.js";
+
+// OS trust-store ops on the HTTPS-filter proxy CA (P1 Task 4) — the cli's
+// `cert` verbs and the electron `httpsfilter:ca-*` IPC both consume these.
+// darwin implemented against `security`; other platforms answer 'unsupported'.
+export {
+  trustStatus,
+  installCa,
+  removeCa,
+  macOsLoginKeychainPath,
+  commonNameFromSubject,
+  type CaTrustState,
+  type CaInstallOutcome,
+  type CaRemoveOutcome,
+  type CaTrustStoreOptions,
+  type SecurityRunner,
+  type SecurityRunResult,
+} from "./caTrustStore.js";
