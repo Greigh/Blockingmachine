@@ -15,7 +15,10 @@ import os from "node:os";
 import path from "node:path";
 import {
   commonNameFromSubject,
+  firefoxInstallCa,
   firefoxNssProfileDbs,
+  firefoxRemoveCa,
+  firefoxTrustStatus,
   installCa,
   linuxSystemStoreCommands,
   macOsLoginKeychainPath,
@@ -672,6 +675,426 @@ describe("linux NSS certutil trust ops", () => {
         linuxSystemStore: { sourceDirs: ["/nonexistent"], bundleFiles: ["/nonexistent/x"] },
       }),
     ).resolves.toBe("unsupported");
+  });
+});
+
+// ============================================================================
+// Firefox cert9.db — per-profile ops through a located NSS certutil (flag 116)
+// ============================================================================
+// The injected `platformRunner` sees every spawn: the `-H` identity probe is
+// what resolves a tool, so fakes answer it with the real NSS usage text (or
+// the Windows inbox tool's) — and `certutilPaths: []` pins the candidate list
+// to PATH alone so a box with nss really installed cannot leak into a test.
+
+/** NSS certutil's usage dump — the `-H` probe signature lives in it. */
+const NSS_USAGE =
+  "certutil - Utility to manipulate NSS certificate databases\n\n" +
+  "Usage:  certutil <command> -d <database-directory> <options>\n\n" +
+  "Valid commands:\n" +
+  "-A              Add a certificate to the database        (create if needed)\n" +
+  "-D              Delete a certificate from the database\n" +
+  "-L              List all certs, or print out a single named cert (or a subset)\n" +
+  "-M              Modify trust attributes of certificate\n";
+
+/** The Windows inbox certutil's usage — a different tool that must not resolve. */
+const WIN_INBOX_USAGE =
+  "CertUtil [Options] -dump\n" +
+  "CertUtil [Options] -addstore            Add certificate to store\n" +
+  "CertUtil [Options] -delstore            Delete certificate from store\n";
+
+/** A `certutil -L` listing with no cert rows. */
+function nssEmptyList(): SecurityRunResult {
+  return ok(
+    "Certificate Nickname                                         Trust Attributes\n" +
+      "                                                             SSL,S/MIME,JAR/XPI\n\n",
+  );
+}
+
+/** Profile dirs each carrying a cert9.db under one tmp root — the `profileRoots` seam. */
+async function mkFirefoxProfiles(...names: string[]): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bm-ff-root-"));
+  for (const name of names) {
+    const dir = path.join(root, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "cert9.db"), "db");
+  }
+  return root;
+}
+
+describe("Firefox NSS cert9.db trust ops", () => {
+  const noConventionalPaths = { certutilPaths: [] as string[] };
+
+  it("resolves a PATH certutil by its NSS usage signature, then probes each profile", async () => {
+    const root = await mkFirefoxProfiles("a1.default-release");
+    const spec = `sql:${path.join(root, "a1.default-release")}`;
+    const { runner, calls } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      if (args.includes("-a")) return ok(CA_PEM);
+      return nssList("C,,");
+    });
+    try {
+      const report = await firefoxTrustStatus(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.certutil).toBe("certutil");
+      expect(report.profiles).toEqual([
+        {
+          profile: "a1.default-release",
+          dbPath: path.join(root, "a1.default-release", "cert9.db"),
+          dbSpec: spec,
+          state: "trusted",
+        },
+      ]);
+      // The identity probe precedes any db read, and -d gets the sql: spec
+      // of the profile DIR — not the cert9.db file itself.
+      expect(calls[0]).toEqual({ file: "certutil", args: ["-H"] });
+      expect(calls[1]).toEqual({ file: "certutil", args: ["-L", "-d", spec] });
+      expect(calls[2].args).toEqual(["-L", "-n", CA_CN, "-a", "-d", spec]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads 'installed-untrusted' for a row carrying T without C — client-cert trust is not server trust", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const { runner } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      if (args.includes("-a")) return ok(CA_PEM);
+      return nssList("T,,");
+    });
+    try {
+      const report = await firefoxTrustStatus(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.profiles[0].state).toBe("installed-untrusted");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads 'not-installed' when no listed nickname fingerprint-matches", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const { runner } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      if (args.includes("-a")) return ok("-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n");
+      return nssList("C,,");
+    });
+    try {
+      const report = await firefoxTrustStatus(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.profiles[0].state).toBe("not-installed");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports tool-missing per profile when no certutil spawns — distinct from 'unsupported'", async () => {
+    const root = await mkFirefoxProfiles("a.default", "b.default-release");
+    try {
+      const report = await firefoxTrustStatus(CA_PEM, {
+        platformRunner: noCertutilRunner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.certutil).toBeNull();
+      expect(report.profiles).toHaveLength(2);
+      expect(report.profiles.map((p) => p.state)).toEqual(["tool-missing", "tool-missing"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let the Windows inbox certutil resolve — its usage lacks the NSS signature", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const { runner, calls } = recordingPlatformRunner((file, args) =>
+      args[0] === "-H" ? ok(WIN_INBOX_USAGE) : nssEmptyList(),
+    );
+    try {
+      const report = await firefoxTrustStatus(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.certutil).toBeNull();
+      expect(report.profiles[0].state).toBe("tool-missing");
+      // Probed and rejected: the wrong-tool answer must not lead to db reads.
+      expect(calls).toEqual([{ file: "certutil", args: ["-H"] }]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a certutil at an explicit location when PATH's is absent", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const toolDir = await fs.mkdtemp(path.join(os.tmpdir(), "bm-ff-tool-"));
+    const toolPath = path.join(toolDir, "certutil");
+    await fs.writeFile(toolPath, "binary placeholder");
+    const { runner } = recordingPlatformRunner((file, args) => {
+      if (file === "certutil") throw new Error("spawn certutil ENOENT");
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      return nssEmptyList();
+    });
+    try {
+      const report = await firefoxTrustStatus(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        certutilPaths: [toolPath],
+      });
+      expect(report.certutil).toBe(toolPath);
+      expect(report.profiles[0].state).toBe("not-installed");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(toolDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips certutilPaths candidates that do not exist on disk without spawning them", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const { runner, calls } = recordingPlatformRunner((file) => {
+      throw new Error(`spawn ${file} ENOENT`);
+    });
+    try {
+      const report = await firefoxTrustStatus(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        certutilPaths: ["/nonexistent/nss/bin/certutil"],
+      });
+      expect(report.certutil).toBeNull();
+      // The missing path was never probed — only PATH's bare 'certutil' was.
+      expect(calls).toEqual([{ file: "certutil", args: ["-H"] }]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("install runs `certutil -A -n <cn> -t C,, -d sql:<dir> -i <pem>` — never CT,C,C — then re-probes", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const spec = `sql:${path.join(root, "p.default")}`;
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bm-ff-tmp-"));
+    let added = false;
+    const { runner, calls } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      if (args[0] === "-A") {
+        added = true;
+        return ok("");
+      }
+      if (args.includes("-a")) return ok(CA_PEM);
+      return added ? nssList("C,,") : nssEmptyList();
+    });
+    try {
+      const report = await firefoxInstallCa(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        tmpDir,
+        ...noConventionalPaths,
+      });
+      expect(report.profiles[0].state).toBe("trusted");
+      const add = calls.find((c) => c.args[0] === "-A");
+      expect(add).toBeDefined();
+      expect(add!.args).toEqual(["-A", "-n", CA_CN, "-t", "C,,", "-d", spec, "-i", add!.args[8]]);
+      expect(add!.args[8]).toMatch(/bm-ca-.*\.pem$/);
+      // The pinned trust triple is the flag's — SSL-only CA trust; the OS
+      // paths' CT,C,C would over-grant email + object signing here.
+      expect(add!.args).toContain("C,,");
+      expect(add!.args).not.toContain("CT,C,C");
+      // The tmp pem is unlinked after the run.
+      const leftovers = (await fs.readdir(tmpDir)).filter((f) => f.endsWith(".pem"));
+      expect(leftovers).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("install rewrites trust via -M -t C,, when the cert is already filed untrusted — no -A collision", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const spec = `sql:${path.join(root, "p.default")}`;
+    let modified = false;
+    const { runner, calls } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      if (args[0] === "-M") {
+        modified = true;
+        return ok("");
+      }
+      if (args.includes("-a")) return ok(CA_PEM);
+      return modified ? nssList("C,,") : nssList("P,,");
+    });
+    try {
+      const report = await firefoxInstallCa(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.profiles[0].state).toBe("trusted");
+      expect(calls.some((c) => c.args[0] === "-A")).toBe(false);
+      expect(calls.find((c) => c.args[0] === "-M")!.args).toEqual([
+        "-M", "-n", CA_CN, "-t", "C,,", "-d", spec,
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("install skips the write for a profile already trusted", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const { runner, calls } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      if (args.includes("-a")) return ok(CA_PEM);
+      return nssList("C,,");
+    });
+    try {
+      const report = await firefoxInstallCa(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.profiles[0].state).toBe("trusted");
+      expect(calls.some((c) => c.args[0] === "-A" || c.args[0] === "-M")).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("install throws on a nickname collision — a different cert holds the name", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const { runner } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      if (args[0] === "-A") {
+        return fail("certutil: could not add certificate to token or database: SEC_ERROR_CERT_NICKNAME_ALREADY_IN_USE");
+      }
+      return nssEmptyList();
+    });
+    try {
+      await expect(
+        firefoxInstallCa(CA_PEM, {
+          platformRunner: runner,
+          profileRoots: [root],
+          ...noConventionalPaths,
+        }),
+      ).rejects.toThrow("nickname");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("install reports tool-missing per profile and spawns no db write when certutil is absent", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const calls: string[][] = [];
+    const runner: PlatformRunner = async (file, args) => {
+      calls.push([file, ...args]);
+      throw new Error(`spawn ${file} ENOENT`);
+    };
+    try {
+      const report = await firefoxInstallCa(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.certutil).toBeNull();
+      expect(report.profiles[0].state).toBe("tool-missing");
+      // Only the -H probe ran — no -L/-A ever fired.
+      expect(calls).toEqual([["certutil", "-H"]]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("remove deletes the fingerprint-matched nickname via -D and re-probes", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const spec = `sql:${path.join(root, "p.default")}`;
+    let deleted = false;
+    const { runner, calls } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      if (args[0] === "-D") {
+        deleted = true;
+        return ok("");
+      }
+      if (args.includes("-a")) return deleted ? nssEmptyList() : ok(CA_PEM);
+      return deleted ? nssEmptyList() : nssList("C,,");
+    });
+    try {
+      const report = await firefoxRemoveCa(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.profiles[0].state).toBe("not-installed");
+      expect(calls.find((c) => c.args[0] === "-D")!.args).toEqual(["-D", "-n", CA_CN, "-d", spec]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("remove never spawns -D for a profile where the cert is absent", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const { runner, calls } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      return nssEmptyList();
+    });
+    try {
+      const report = await firefoxRemoveCa(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.profiles[0].state).toBe("not-installed");
+      expect(calls.some((c) => c.args[0] === "-D")).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("remove throws when -D ran but the fingerprint still matches", async () => {
+    const root = await mkFirefoxProfiles("p.default");
+    const { runner } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      if (args[0] === "-D") return ok("");
+      if (args.includes("-a")) return ok(CA_PEM); // the cert survives
+      return nssList("C,,");
+    });
+    try {
+      await expect(
+        firefoxRemoveCa(CA_PEM, {
+          platformRunner: runner,
+          profileRoots: [root],
+          ...noConventionalPaths,
+        }),
+      ).rejects.toThrow("still reads");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports each profile independently across several profile dirs", async () => {
+    const root = await mkFirefoxProfiles("a.default", "b.default-esr");
+    const specA = `sql:${path.join(root, "a.default")}`;
+    const specB = `sql:${path.join(root, "b.default-esr")}`;
+    const { runner } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-H") return ok(NSS_USAGE);
+      const spec = args[args.indexOf("-d") + 1];
+      if (args.includes("-a")) return spec === specA ? ok(CA_PEM) : ok("");
+      return spec === specA ? nssList("C,,") : nssEmptyList();
+    });
+    try {
+      const report = await firefoxTrustStatus(CA_PEM, {
+        platformRunner: runner,
+        profileRoots: [root],
+        ...noConventionalPaths,
+      });
+      expect(report.profiles).toHaveLength(2);
+      const bySpec = new Map(report.profiles.map((p) => [p.dbSpec, p.state]));
+      expect(bySpec.get(specA)).toBe("trusted");
+      expect(bySpec.get(specB)).toBe("not-installed");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

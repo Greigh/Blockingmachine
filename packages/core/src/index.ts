@@ -156,6 +156,10 @@ export {
 // these. darwin runs `security`; win32 runs `certutil -user` against the
 // CurrentUser Root store; linux runs NSS `certutil` on ~/.pki/nssdb with a
 // sudo-guided system-store fallback. Other platforms answer 'unsupported'.
+// The `firefox*` ops are the separate per-profile cert9.db path (flag 116):
+// they run through a located NSS certutil — PATH plus conventional
+// locations like Homebrew's `nss` — and report each profile independently,
+// `tool-missing` when no NSS certutil exists on the box.
 export {
   trustStatus,
   installCa,
@@ -163,12 +167,19 @@ export {
   macOsLoginKeychainPath,
   commonNameFromSubject,
   firefoxNssProfileDbs,
+  firefoxTrustStatus,
+  firefoxInstallCa,
+  firefoxRemoveCa,
   linuxSystemStoreCommands,
   LINUX_SYSTEM_CA_TARGET,
   type CaTrustState,
   type CaInstallOutcome,
   type CaRemoveOutcome,
   type CaTrustStoreOptions,
+  type FirefoxTrustOptions,
+  type FirefoxTrustReport,
+  type FirefoxProfileTrust,
+  type FirefoxProfileTrustState,
   type SecurityRunner,
   type SecurityRunResult,
   type PlatformRunner,

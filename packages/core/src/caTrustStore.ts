@@ -36,10 +36,12 @@
  *   `Root` store (`certutil -user …`) is the honest default — the machine
  *   store needs admin and would anchor the CA for every user on the box.
  *   Chrome/Edge (and Firefox with `security.enterprise_roots.enabled`) read
- *   the Windows store; Firefox's own NSS `cert9.db` is a documented gap —
- *   `firefoxNssProfileDbs` detects profiles so callers can name it
- *   (open-flags 116, firefox-nss-cert9; the nss certutil we would need is not
- *   shipped).
+ *   the Windows store; Firefox's own NSS `cert9.db` is handled by the
+ *   per-profile `firefox*Ca` ops below — they drive the *NSS* certutil when
+ *   one exists (PATH plus conventional locations like Homebrew's `nss` keg)
+ *   and answer `tool-missing` when it does not (open-flags 116,
+ *   firefox-nss-cert9). The Windows *inbox* certutil cannot touch NSS dbs;
+ *   the resolver's usage-signature probe is what keeps it from being picked.
  * - `certutil -user -verifystore Root <sha1-thumb>` looks the cert up in the
  *   store and dumps it (`Cert Hash(sha1): …`); a miss exits nonzero with
  *   `Cannot find object or property.` / CRYPT_E_NOT_FOUND (0x80092004).
@@ -827,16 +829,16 @@ async function linuxRemoveCa(
 }
 
 // ============================================================================
-// Firefox's own NSS store — a detectable gap on every OS-store path
+// Firefox's own NSS store — per-profile cert9.db ops via a located certutil
 // ============================================================================
 
 /**
  * Firefox never reads the OS trust store we write (win32 user-Root, linux
  * system dirs — or even the macOS keychain without
  * `security.enterprise_roots.enabled`); it keeps per-profile `cert9.db`
- * NSS stores under its own roots. Returns every `cert9.db` that exists so
- * callers can name the gap instead of overclaiming "trusted" — importing
- * into them needs the NSS certutil, which this project does not ship
+ * NSS stores under its own roots. Returns every `cert9.db` that exists —
+ * the discovery half of the `firefox*Ca` ops below, and still the evidence
+ * a caller needs to name the gap when no NSS certutil exists to write them
  * (open-flags 116, firefox-nss-cert9).
  */
 export async function firefoxNssProfileDbs(options?: {
@@ -870,6 +872,347 @@ export async function firefoxNssProfileDbs(options?: {
     }
   }
   return dbs;
+}
+
+/**
+ * Per-profile trust state inside a Firefox `cert9.db`. `tool-missing` is a
+ * resolution answer, not a probe result — no NSS certutil exists, so that
+ * profile's real state was never read; it is reported per-profile because
+ * the profile list is itself the evidence that a tool-missing box still has
+ * Firefox installed. `installed-untrusted` means the CA is filed but its
+ * SSL trust field lacks `C` — present, yet not anchored for TLS issuance.
+ */
+export type FirefoxProfileTrustState =
+  | "trusted"
+  | "installed-untrusted"
+  | "not-installed"
+  | "tool-missing";
+
+/** One profile's row in a `FirefoxTrustReport`. */
+export interface FirefoxProfileTrust {
+  /** The profile directory's basename (e.g. `abc123.default-release`). */
+  profile: string;
+  /** Absolute path to the profile's `cert9.db`. */
+  dbPath: string;
+  /** The `sql:` database spec certutil is invoked with — `sql:<profileDir>`. */
+  dbSpec: string;
+  state: FirefoxProfileTrustState;
+}
+
+/** The result of one op across every discovered Firefox profile. */
+export interface FirefoxTrustReport {
+  /**
+   * The NSS certutil the ops ran through — `"certutil"` when PATH-resolved,
+   * an absolute path for a conventional/explicit location, `null` when no
+   * NSS certutil exists on this box (the `tool-missing` posture).
+   */
+  certutil: string | null;
+  /** One entry per discovered profile `cert9.db`, in discovery order. */
+  profiles: FirefoxProfileTrust[];
+}
+
+/**
+ * The seams for the Firefox path — `platformRunner` is the same injected
+ * spawn seam every other backend uses, so unit tests never touch a real
+ * profile or binary.
+ */
+export interface FirefoxTrustOptions {
+  platformRunner?: PlatformRunner;
+  platform?: NodeJS.Platform;
+  /** HOME override — forwarded to `firefoxNssProfileDbs`. */
+  homeDir?: string;
+  /** Explicit profile roots — forwarded to `firefoxNssProfileDbs`; the test seam. */
+  profileRoots?: string[];
+  /**
+   * NSS-certutil locations probed after PATH's bare `certutil` — REPLACES the
+   * platform's conventional list when provided, so a test can pin `[]` and
+   * get a deterministic tool-missing even on a box that really has NSS
+   * installed. Candidates that do not exist on disk are skipped without
+   * spawning.
+   */
+  certutilPaths?: string[];
+  /** Tmp-PEM directory override for the `-i` input — same seam as `CaTrustStoreOptions.tmpDir`. */
+  tmpDir?: string;
+}
+
+/**
+ * Where an NSS certutil conventionally lives beyond PATH. darwin: Homebrew's
+ * `nss` keg on both prefixes — the formula is keg-only, so `certutil` lands
+ * in `opt/nss/bin` and is NOT linked into the prefix `bin/` by default (the
+ * `bin` paths are still probed for `--force`-linked installs). linux: the
+ * usual `libnss3-tools`/`nss-tools` targets, in case the caller's PATH is
+ * minimal. win32 has no conventional NSS install root, so PATH is the whole
+ * surface there — and the usage-signature probe is what keeps the *inbox*
+ * `certutil` (a different tool that cannot touch NSS databases) from being
+ * picked up on it.
+ */
+const NSS_CERTUTIL_LOCATIONS: Partial<Record<NodeJS.Platform, string[]>> = {
+  darwin: [
+    "/opt/homebrew/opt/nss/bin/certutil",
+    "/usr/local/opt/nss/bin/certutil",
+    "/opt/homebrew/bin/certutil",
+    "/usr/local/bin/certutil",
+  ],
+  linux: ["/usr/bin/certutil", "/usr/local/bin/certutil", "/bin/certutil"],
+};
+
+/**
+ * The line NSS certutil's usage dump always carries — printed for `-H` and
+ * for any unrecognized verb, so the probe is version-robust. The Windows
+ * inbox certutil's own usage never contains it, which is what makes the
+ * bare-PATH candidate safe to try on win32.
+ */
+const NSS_CERTUTIL_USAGE = /Add a certificate to the database/i;
+
+/**
+ * certutil's "the nickname is taken" surface on `-A` — thrown rather than
+ * silently retargeted, because the collision means a DIFFERENT certificate
+ * already holds the name we would use.
+ */
+const NSS_NICKNAME_IN_USE = /CERT_NICKNAME_ALREADY_IN_USE/i;
+
+/**
+ * Resolve an NSS certutil: PATH's bare `certutil` first, then the
+ * conventional locations (or the injected `certutilPaths` list that replaces
+ * them). Each candidate is verified by a `-H` usage probe — a spawn
+ * rejection means the binary is not there; output without the NSS signature
+ * means a different tool answered.
+ */
+async function resolveNssCertutil(
+  run: PlatformRunner,
+  options?: FirefoxTrustOptions,
+): Promise<string | null> {
+  const platform = resolvePlatform(options);
+  const candidates = [
+    "certutil",
+    ...(options?.certutilPaths ?? NSS_CERTUTIL_LOCATIONS[platform] ?? []),
+  ];
+  for (const candidate of candidates) {
+    if (candidate !== "certutil" && !existsSync(candidate)) continue;
+    let res: SecurityRunResult;
+    try {
+      res = await run(candidate, ["-H"]);
+    } catch {
+      continue; // not spawnable — ENOENT or a kill
+    }
+    if (NSS_CERTUTIL_USAGE.test(`${res.stdout}\n${res.stderr}`)) {
+      return candidate;
+    }
+    // Ran but is not NSS's certutil — keep looking.
+  }
+  return null;
+}
+
+interface FirefoxProfileRef {
+  profile: string;
+  dbPath: string;
+  dbSpec: string;
+}
+
+/** The discovered profiles as the records the per-profile ops iterate. */
+async function firefoxProfiles(
+  options?: FirefoxTrustOptions,
+): Promise<FirefoxProfileRef[]> {
+  const dbs = await firefoxNssProfileDbs({
+    platform: options?.platform ?? process.platform,
+    homeDir: options?.homeDir,
+    profileRoots: options?.profileRoots,
+  });
+  return dbs.map((dbPath) => {
+    const dir = path.dirname(dbPath);
+    return { profile: path.basename(dir), dbPath, dbSpec: `sql:${dir}` };
+  });
+}
+
+/**
+ * `C` in the SSL field is "trusted CA to issue server certs" — the flag a
+ * `cert9.db` row needs before Firefox accepts a MITM CA's forged leaf. `T`
+ * only trusts client-cert issuance and `c`/`p` are merely valid, so none of
+ * them count for this purpose — which is also why the install writes `C,,`
+ * and not the OS-store paths' `CT,C,C` (that would trust the CA for email
+ * and object signing too, which the flag deliberately does not grant).
+ */
+function firefoxRowTrusts(row: NssRow): boolean {
+  return row.flags.split(",")[0].includes("C");
+}
+
+interface FirefoxProbe {
+  state: "trusted" | "installed-untrusted" | "not-installed";
+  /** The nickname whose `-a` dump fingerprint-matched — the id `-M`/`-D` need. */
+  nickname?: string;
+}
+
+/**
+ * Read one profile db: `-L` lists nicknames+flags, then each row's cert is
+ * fingerprint-verified via its `-a` dump — same discipline as the linux
+ * nssdb path, never trusting the nickname alone. A cert9.db that exists but
+ * will not open (corrupt, locked) reads `not-installed` — for TLS purposes
+ * nothing in it is usable, and a later `-A` would surface its real failure.
+ */
+async function firefoxProbeProfile(
+  run: PlatformRunner,
+  certutil: string,
+  dbSpec: string,
+  fingerprint256: string,
+): Promise<FirefoxProbe> {
+  const list = await run(certutil, ["-L", "-d", dbSpec]);
+  if (list.code !== 0) {
+    if (NSS_DB_MISSING.test(list.stderr) || NSS_DB_MISSING.test(list.stdout)) {
+      return { state: "not-installed" };
+    }
+    throw new Error(`certutil -L failed on ${dbSpec}: ${sanitizeToolError(list)}`);
+  }
+  for (const row of parseCertutilList(list.stdout)) {
+    const dump = await run(certutil, ["-L", "-n", row.nick, "-a", "-d", dbSpec]);
+    if (dump.code !== 0) continue; // a vanished/unreadable nick — keep scanning
+    if (fingerprint256OfPemOutput(dump.stdout) !== fingerprint256) continue;
+    return {
+      state: firefoxRowTrusts(row) ? "trusted" : "installed-untrusted",
+      nickname: row.nick,
+    };
+  }
+  return { state: "not-installed" };
+}
+
+/**
+ * Probe every discovered Firefox profile `cert9.db` for this CA. Each
+ * profile reports independently: `trusted` when a fingerprint-matched row
+ * anchors server-cert issuance (`C` in the SSL field), `installed-untrusted`
+ * when the cert is filed without it, `not-installed` when no row matches —
+ * and `tool-missing` across the board when no NSS certutil exists, reported
+ * distinctly from `unsupported` because the mechanism exists and only the
+ * tool is absent.
+ */
+export async function firefoxTrustStatus(
+  caPem: string,
+  options?: FirefoxTrustOptions,
+): Promise<FirefoxTrustReport> {
+  const { fingerprint256 } = caIdentity(caPem);
+  const run = resolveRunner(options);
+  const profiles = await firefoxProfiles(options);
+  const certutil = await resolveNssCertutil(run, options);
+  const report: FirefoxProfileTrust[] = [];
+  for (const ref of profiles) {
+    if (certutil === null) {
+      report.push({ ...ref, state: "tool-missing" });
+      continue;
+    }
+    const probe = await firefoxProbeProfile(run, certutil, ref.dbSpec, fingerprint256);
+    report.push({ ...ref, state: probe.state });
+  }
+  return { certutil, profiles: report };
+}
+
+/**
+ * Install the CA into every discovered Firefox profile as a server-cert CA
+ * only: `certutil -A -n <name> -t C,, -d sql:<profile> -i <ca.pem>` — `C,,`
+ * anchors TLS issuance and nothing else (deliberately NOT `CT,C,C`, which
+ * would also trust it for email and object signing). A cert already filed
+ * without the flag gets `certutil -M -t C,,` on its real nickname rather
+ * than an `-A` that would collide on the name. Every write is re-probed by
+ * fingerprint — a claim the post-read cannot confirm throws rather than
+ * reports trusted.
+ */
+export async function firefoxInstallCa(
+  caPem: string,
+  options?: FirefoxTrustOptions,
+): Promise<FirefoxTrustReport> {
+  const { commonName, fingerprint256 } = caIdentity(caPem);
+  const run = resolveRunner(options);
+  const profiles = await firefoxProfiles(options);
+  const certutil = await resolveNssCertutil(run, options);
+
+  if (certutil === null || profiles.length === 0) {
+    return {
+      certutil,
+      profiles: profiles.map((ref) => ({
+        ...ref,
+        state: certutil === null ? ("tool-missing" as const) : ("not-installed" as const),
+      })),
+    };
+  }
+
+  return withTmpPem(caPem, options?.tmpDir, async (pemPath) => {
+    const report: FirefoxProfileTrust[] = [];
+    for (const ref of profiles) {
+      const before = await firefoxProbeProfile(run, certutil, ref.dbSpec, fingerprint256);
+      if (before.state === "trusted") {
+        report.push({ ...ref, state: "trusted" });
+        continue;
+      }
+      if (before.state === "installed-untrusted" && before.nickname) {
+        // The cert is already filed — rewrite its trust flags rather than
+        // collide on the nickname with -A.
+        const mod = await run(certutil, [
+          "-M", "-n", before.nickname, "-t", "C,,", "-d", ref.dbSpec,
+        ]);
+        if (mod.code !== 0) {
+          throw new Error(`certutil -M failed on ${ref.dbSpec}: ${sanitizeToolError(mod)}`);
+        }
+      } else {
+        const add = await run(certutil, [
+          "-A", "-n", commonName, "-t", "C,,", "-d", ref.dbSpec, "-i", pemPath,
+        ]);
+        if (add.code !== 0) {
+          if (NSS_NICKNAME_IN_USE.test(add.stderr) || NSS_NICKNAME_IN_USE.test(add.stdout)) {
+            throw new Error(
+              `certutil -A on ${ref.dbSpec}: the nickname "${commonName}" already holds a different certificate — refusing to overwrite`,
+            );
+          }
+          throw new Error(`certutil -A failed on ${ref.dbSpec}: ${sanitizeToolError(add)}`);
+        }
+      }
+      const post = await firefoxProbeProfile(run, certutil, ref.dbSpec, fingerprint256);
+      if (post.state !== "trusted") {
+        throw new Error(
+          `certutil reported success but the CA reads '${post.state}' in ${ref.dbSpec}`,
+        );
+      }
+      report.push({ ...ref, state: "trusted" });
+    }
+    return { certutil, profiles: report };
+  });
+}
+
+/**
+ * Remove the CA from every discovered Firefox profile — `certutil -D -n
+ * <nick>` against the fingerprint-matched row, so a same-name impostor is
+ * never the cert we delete. Profiles with no matching row report
+ * `not-installed` (nothing to do); a post-delete probe that still sees the
+ * fingerprint throws rather than claiming removal.
+ */
+export async function firefoxRemoveCa(
+  caPem: string,
+  options?: FirefoxTrustOptions,
+): Promise<FirefoxTrustReport> {
+  const { fingerprint256 } = caIdentity(caPem);
+  const run = resolveRunner(options);
+  const profiles = await firefoxProfiles(options);
+  const certutil = await resolveNssCertutil(run, options);
+  const report: FirefoxProfileTrust[] = [];
+  for (const ref of profiles) {
+    if (certutil === null) {
+      report.push({ ...ref, state: "tool-missing" });
+      continue;
+    }
+    const before = await firefoxProbeProfile(run, certutil, ref.dbSpec, fingerprint256);
+    if (before.state === "not-installed" || !before.nickname) {
+      report.push({ ...ref, state: "not-installed" });
+      continue;
+    }
+    const del = await run(certutil, ["-D", "-n", before.nickname, "-d", ref.dbSpec]);
+    if (del.code !== 0) {
+      throw new Error(`certutil -D failed on ${ref.dbSpec}: ${sanitizeToolError(del)}`);
+    }
+    const post = await firefoxProbeProfile(run, certutil, ref.dbSpec, fingerprint256);
+    if (post.state !== "not-installed") {
+      throw new Error(
+        `certutil -D ran but the CA still reads '${post.state}' in ${ref.dbSpec}`,
+      );
+    }
+    report.push({ ...ref, state: "not-installed" });
+  }
+  return { certutil, profiles: report };
 }
 
 // ============================================================================
