@@ -21,6 +21,17 @@
  * stderr/exit: 1 + a "golden: FAIL <name>" line on the first failure.
  */
 
+#ifndef _WIN32
+/* Same feature-test block as splice.c — glibc hides socketpair/fork/
+ * inet_pton behind POSIX+DEFAULT visibility; darwin exposes all. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE 1
+#endif
+#endif
+
 #include "splice.h"
 
 #ifdef _WIN32
@@ -54,7 +65,7 @@ static int bytes_eq(const uint8_t *a, const uint8_t *b, size_t n) {
 static void test_v4(void) {
   /* src 192.0.2.10:51000 → dst 203.0.113.7:443 */
   uint8_t buf[64];
-  bm_ip_addr src = {.v4 = {0}}, dst = {.v4 = {0}};
+  bm_ip_addr src = {0}, dst = {0};
   memset(buf, 0xaa, sizeof(buf));
   inet_pton(AF_INET, "192.0.2.10", &src.v4);
   inet_pton(AF_INET, "203.0.113.7", &dst.v4);
@@ -71,7 +82,7 @@ static void test_v4(void) {
 static void test_v6(void) {
   /* src 2001:db8::1:52000 → dst 2001:db8::5:443 */
   uint8_t buf[64];
-  bm_ip_addr src = {.v6 = {0}}, dst = {.v6 = {0}};
+  bm_ip_addr src = {0}, dst = {0};
   memset(buf, 0xaa, sizeof(buf));
   inet_pton(AF_INET6, "2001:db8::1", &src.v6);
   inet_pton(AF_INET6, "2001:db8::5", &dst.v6);
@@ -89,7 +100,7 @@ static void test_v6(void) {
 
 static void test_negatives(void) {
   uint8_t buf[64];
-  bm_ip_addr a4 = {.v4 = {0}}, a6 = {.v6 = {0}};
+  bm_ip_addr a4 = {0}, a6 = {0};
   inet_pton(AF_INET, "127.0.0.1", &a4.v4);
   inet_pton(AF_INET6, "::1", &a6.v6);
 
@@ -116,7 +127,7 @@ static void test_negatives(void) {
   sin.sin_family = AF_INET;
   inet_pton(AF_INET, "10.20.30.40", &sin.sin_addr);
   sin.sin_port = htons(8080);
-  bm_ip_addr got = {.v4 = {0}};
+  bm_ip_addr got = {0};
   uint16_t port = 0;
   struct sockaddr_storage ss;
   memcpy(&ss, &sin, sizeof(sin));

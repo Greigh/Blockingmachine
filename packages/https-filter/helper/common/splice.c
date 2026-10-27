@@ -14,6 +14,23 @@
  * out (Windows handlers are threads).
  */
 
+#ifndef _WIN32
+/* Feature-test macros — glibc hides the POSIX.1-2008 declarations this
+ * TU uses (getaddrinfo/freeaddrinfo, sigaction, kill, nanosleep) behind
+ * _POSIX_C_SOURCE, and BSD-flavoured defaults behind _DEFAULT_SOURCE;
+ * darwin and musl expose them unconditionally. Pinned before the first
+ * libc header so the TU compiles identically on glibc, musl, BSD and
+ * darwin — the linux helper build and the golden-test compile both hit
+ * this on glibc (found by the linux-capture rehearsal in a bookworm
+ * container: implicit-declaration errors without it). */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE 1
+#endif
+#endif /* !_WIN32 */
+
 #include "splice.h"
 
 #ifdef _WIN32
