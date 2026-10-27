@@ -70,7 +70,14 @@ import { terminateToHttp } from './terminate.js';
 
 export interface ProxyStats {
   flowsTotal: number;
+  /** Whole flows refused before any relaying — CONNECT/plain-HTTP verdicts, blocked SNIs. */
   flowsBlocked: number;
+  /**
+   * Per-request blocks *inside* terminated flows — a keep-alive connection
+   * can carry many. Kept apart from `flowsBlocked` so `blockRatePercent`
+   * stays a flow rate: chatty keep-alives must not push it past 100.
+   */
+  requestsBlocked: number;
   flowsTunneled: number;
   flowsTerminated: number;
   pinsLearned: number;
@@ -98,6 +105,15 @@ export interface RunningProxy {
 export interface StartProxyOptions {
   bindHost: string;
   dataPort: number;
+  /**
+   * The companion `/v1/proxy/*` control listener's port, when the caller
+   * knows it — the self-target guard refuses client-supplied destinations
+   * aimed at either own port. Optional for direct `startProxy` callers; an
+   * ephemeral (`0`) control port resolves to a port the data listener never
+   * learned, which is safe — a client that cannot name the port cannot
+   * self-chain through it.
+   */
+  controlPort?: number;
   /** Forges the leaf each terminated flow serves — required. */
   authority: CertAuthority;
   evaluator: RequestEvaluator;
@@ -113,6 +129,8 @@ export interface StartProxyOptions {
   upstreamCaCerts?: string[];
   /** Test/deploy knob — the upstream dial deadline (default 15s). */
   upstreamConnectTimeoutMs?: number;
+  /** Test knob — the bounded ClientHello peek (default 10s, spec §5.2). */
+  peekTimeoutMs?: number;
 }
 
 /** Bound on first-bytes dispatch — a connection that never speaks is reaped. */
@@ -197,12 +215,18 @@ function parseConnectAuthority(authority: string): { host: string; port: number 
 
 export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   const { bindHost, dataPort, policy, authority } = opts;
+  const controlPort = opts.controlPort;
+  const peekTimeoutMs = opts.peekTimeoutMs ?? PEEK_TIMEOUT_MS;
+  // `dataPort: 0` resolves to an ephemeral port at listen time — the
+  // self-target guard must compare the *bound* port, captured below.
+  let boundDataPort = dataPort;
   let evaluator = opts.evaluator;
   let paused = false;
 
   const stats: ProxyStats = {
     flowsTotal: 0,
     flowsBlocked: 0,
+    requestsBlocked: 0,
     flowsTunneled: 0,
     flowsTerminated: 0,
     pinsLearned: 0,
@@ -219,11 +243,58 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   }
 
   /**
+   * Is `host:port` one of this engine's own listeners? Every client-supplied
+   * destination — CONNECT authority, plain-HTTP Host/absolute-form, PROXY-v2
+   * frame (the magic is just bytes any local process can write) — is checked
+   * against this: a target resolving to the bound data or control port on a
+   * local address tunnels back into this same listener, where the spliced
+   * bytes re-dispatch and spawn the next flow until fds run out — and a
+   * same-host web page can drive it (`fetch('http://127.0.0.1:<port>/')` is
+   * a simple cross-origin request). "Local" means loopback (127.0.0.0/8,
+   * ::1 — expanded and ::ffff:-mapped forms included — `localhost`), the
+   * wildcard addresses every stack loops back (0.0.0.0, ::), or the bindHost
+   * itself. A hostname that merely *resolves* to loopback is out of scope —
+   * that is the caller's routing answer, not a listener identity.
+   */
+  function isSelfTarget(host: string, port: number): boolean {
+    if (port !== boundDataPort && (controlPort === undefined || port !== controlPort)) {
+      return false;
+    }
+    let h = host.trim().toLowerCase().replace(/\.+$/, '');
+    if (h.startsWith('[') && h.endsWith(']')) {
+      h = h.slice(1, -1);
+    }
+    if (h === 'localhost' || h === bindHost.toLowerCase()) {
+      return true;
+    }
+    const version = isIP(h);
+    if (version === 4) {
+      return h.startsWith('127.') || h === '0.0.0.0';
+    }
+    if (version === 6) {
+      if (h.startsWith('::ffff:')) {
+        const mapped = h.slice('::ffff:'.length);
+        return isIP(mapped) === 4 && (mapped.startsWith('127.') || mapped === '0.0.0.0');
+      }
+      return h === '::1' || h === '0:0:0:0:0:0:0:1' || h === '::' || h === '0:0:0:0:0:0:0:0';
+    }
+    return false;
+  }
+
+  /**
    * Blind splice: replay `head` (bytes a peek already consumed) into the
    * original destination, then pipe both ways. Either side erroring or
    * closing destroys the other — no half-dead flow, no leaked fds.
    */
   function blindTunnel(client: net.Socket, dstHost: string, dstPort: number, head: Buffer): void {
+    // Backstop self-target refusal: every splice converges here, so the
+    // guard holds even on paths that skip a verdict point (paused flows,
+    // the headerless-splice sni:443 fallback). HTTP-shaped callers already
+    // answered 400; at this level the honest move is just to close.
+    if (isSelfTarget(dstHost, dstPort)) {
+      client.destroy();
+      return;
+    }
     // Pause while the upstream dials: the client socket is in flowing mode
     // (dispatch read off it), so a byte arriving between now and `pipe()` has
     // no 'data' listener and would be silently dropped — pausing buffers it
@@ -278,6 +349,13 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     sni: string;
     upstream: UpstreamEndpoint;
   }): void {
+    // A terminated flow dials `upstream` per request — the same self-target
+    // refusal a blind tunnel gets (the headerless-splice path derives
+    // upstream as `sni:443`, which is this listener when dataPort is 443).
+    if (isSelfTarget(flow.upstream.host, flow.upstream.port)) {
+      flow.sock.destroy();
+      return;
+    }
     stats.flowsTerminated++;
     const flowEvaluator = evaluator;
     void terminateToHttp(
@@ -288,7 +366,10 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           method: req.method,
         });
         if (verdict.action === 'blocked') {
-          stats.flowsBlocked++;
+          // Per-request unit — keep-alive flows carry many requests, so
+          // this must not land in flowsBlocked (a flow counter) and inflate
+          // blockRatePercent past 100.
+          stats.requestsBlocked++;
           const headers: Record<string, string> = { 'content-length': '0' };
           if (verdict.coveringRule !== null) {
             headers['X-Blockingmachine-Rule'] = sanitizeHeaderValue(verdict.coveringRule);
@@ -336,6 +417,16 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // answers 403, otherwise the flow can't be forwarded without smuggling
     // one unjudged name past the splice → 400.
     if (parsed === null) {
+      sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    // Self-target refusal ahead of everything — paused included, because
+    // dumb transit is exactly what self-chains: `GET /` + `Host:
+    // 127.0.0.1:<dataPort>` would tunnel back into this listener, each flow
+    // spawning the next until fds run out, and a same-host web page can
+    // drive it cross-origin (`fetch('http://127.0.0.1:9294/')` is a simple
+    // request — no preflight, no origin wall on this listener).
+    if (isSelfTarget(parsed.host, parsed.port)) {
       sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
       return;
     }
@@ -388,6 +479,15 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       return;
     }
     const { host, port } = target;
+    // The same self-target refusal the plain-HTTP path has: a tunnel to our
+    // own listener re-dispatches the spliced bytes and chains flows (the
+    // CONNECT flavor is technically self-limiting — the inner flow would
+    // terminate and its upstream verify fail — but only after paying
+    // accept+dial per level). 400, and dial nothing.
+    if (isSelfTarget(host, port)) {
+      sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+      return;
+    }
 
     // A literal IP never carries SNI — nothing to evaluate or peek (Review
     // Focus #1); pinned/bypassed hosts are the policy store's blind-tunnel
@@ -420,7 +520,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // sends. Non-TLS bytes or silence close cleanly inside the peek bound —
     // Review Focus #2: a scanner or a non-TLS port must never hang a socket.
     sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-    const peeked = await collectClientHello(sock, PEEK_TIMEOUT_MS, rest);
+    const peeked = await collectClientHello(sock, peekTimeoutMs, rest);
     if (!peeked.isTls) {
       // A mid-peek pause still owns this flow: splice whatever arrived to the
       // CONNECT target — a paused proxy is dumb transit, never a verdict.
@@ -482,6 +582,14 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     target: { dstHost: string; dstPort: number } | null,
     rest: Buffer,
   ): Promise<void> {
+    // A PROXY-v2 destination is still client-supplied bytes — the v2 magic
+    // is a wire prefix any local process can write — so the self-target
+    // refusal applies before the paused shortcut too. Raw TLS has no honest
+    // 400 to send; the close is the answer.
+    if (target !== null && isSelfTarget(target.dstHost, target.dstPort)) {
+      sock.destroy();
+      return;
+    }
     // Paused: protection off — splice to the announced destination untouched.
     // A PROXY-v2 frame carries it; skip the peek entirely and replay the
     // dispatch buffer verbatim.
@@ -489,7 +597,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       blindTunnel(sock, target.dstHost, target.dstPort, rest);
       return;
     }
-    const peeked = await collectClientHello(sock, PEEK_TIMEOUT_MS, rest);
+    const peeked = await collectClientHello(sock, peekTimeoutMs, rest);
     // Non-TLS bytes forward honestly — helpers also redirect port 80 — but
     // only when a header announced a destination.
     if (!peeked.isTls) {
@@ -671,6 +779,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     server.listen(dataPort, bindHost, () => {
       const address = server.address();
       const port = typeof address === 'object' && address !== null ? address.port : dataPort;
+      boundDataPort = port;
       resolve({
         port,
         stats: () => ({ ...stats }),

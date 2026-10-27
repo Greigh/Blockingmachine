@@ -77,6 +77,66 @@ No action by anyone advances these today — they move when an upstream release 
 - **Fix shape:** Either land the behavioural features the deferral names (daemon/crawler observations feeding the label store — the M4-shaped work the README already describes) and re-measure, or re-examine the bar itself: with the adjusted P@R now in every report, the reviewer has the measured version of "good enough where the allowlist does not already cover it" — but only if they agree the residual miss is acceptable, which is a decision, not a metric. **What remains is data, not machinery:** nothing below has a corpus yet — no `labels.db` or live-observation accumulation exists on this checkout, so no v3 model has been trained and no gate report has been re-run. Days of real daemon/browser traffic must accrue before `train.py --features 3` can answer whether `cname_foreign`/`fanout_sites` move P@R; the pipeline existing is not the flag closing.
 - **Verify:** `gate.py` over the v1 metrics still FAILs today; it closes when a future model passes the gate as configured, or the config change that passes it records why the adjusted bar is the right one — now with the adjusted number printed next to the raw one instead of having to be argued for. For the landed pipeline: `observationRecorder.test.ts` pins CNAME traversal/loop/dedup/JSONL persistence (5 suites, 34 tests); `learnedShadowObservations.test.ts` pins the offset-tail scorer; `fanoutLedger.test.ts` pins first-party aggregation; `learned-model.test.ts` pins v3 Python↔TS vector parity via `learned-fixtures-v3.json`. The verification that does *not* exist: a `train.py --features 3` run over real accrued streams.
 
+## Open — deferred engineering
+
+Code-level gaps the whole-branch review of the https-filter P0 engine (`packages/https-filter`) surfaced and consciously deferred — nothing external gates them; they need a work session, most of them alongside the P1 LAN-hub/UI milestones.
+
+### 93. PROXY-v2 non-TLS flows get no verdict — the transparent :80 filtering gap
+
+- **Where:** `packages/https-filter/src/proxy/filterProxy.ts` `handleTransparent` — the `!peeked.isTls` branch blind-tunnels straight to the PROXY-v2 destination with no evaluation.
+- **What:** A helper-spliced port-80 flow announces its destination in the v2 header; the ClientHello peek sees non-TLS bytes and the flow is spliced verbatim — `handlePlainHttp`'s parse-and-verdict never runs because dispatch already routed the socket into 'proxy2' mode. Transparent-redirected web traffic on :80 passes unfiltered.
+- **Why left:** deferred to P1 — the v2 transport was built correctly (honest splice, bounds) but verdicts on it were out of P0 scope; the CONNECT/plain-HTTP paths do evaluate.
+- **Fix shape:** on `!peeked.isTls` with a target, run the buffered head through `probePlainHttp`/`parsePlainHttp`; a parseable request gets the same evaluate-both-authorities verdict `handlePlainHttp` applies (403/400 on block/mismatch), everything else tunnels as today.
+- **Verify:** a v2-framed flow carrying `GET http://blocked.example/` is refused like the dispatch path's 403 — the upstream never sees a connection.
+
+### 94. Leaf forging is synchronous RSA-2048 on the event loop — an SNI spray stalls every flow
+
+- **Where:** `packages/https-filter/src/ca/certAuthority.ts` `forgeLeaf` (`forge.pki.rsa.generateKeyPair(2048)` — synchronous), called per terminated flow from `proxy/terminate.ts`; LRU capped at 500.
+- **What:** every leaf-cache miss is a synchronous RSA-2048 keygen (~50–150 ms) on the engine's single event loop. A client spraying distinct valid SNIs (or churning past the 500-entry LRU) keeps the loop busy minting and stalls every other flow — dispatch, control API, relays alike.
+- **Why left:** recorded at review; the P0 posture is one loopback client where a spray is self-inflicted. Before any LAN-hub mode it becomes a real DoS surface — any LAN neighbor can stall the whole device.
+- **Fix shape:** forge dedupe + a concurrency semaphore (one in-flight keygen per name, bounded parallelism), or move keygen into a worker; revisit the LRU size with it.
+- **Verify:** a burst of N distinct SNIs leaves a concurrent allowed request's latency bounded, and a repeated-name spray pays one forge, not N.
+
+### 95. Pin learning can pin an arbitrary host and P0 has no unlearn route
+
+- **Where:** `filterProxy.ts` `onHandshakeAbort` → `policy.learnPin` (`pin` is inherent to auto-learn — a local client does `CONNECT victim.example` then aborts the forged handshake); `control.ts` ROUTES — `/v1/proxy/pins/remove` was deferred.
+- **What:** pin-injection is the price of spec §5.3's auto-learn, but a poisoned pin currently needs a hand-edit of `policy.jsonl` *with* hash-chain repair to retract — no control route, no CLI verb.
+- **Why left:** the remove route is P1 UI work; recorded so the gap is a known ledger entry, not something discovered during an incident.
+- **Fix shape:** `POST /v1/proxy/pins/remove` → `policy.remove(host)` behind the same JSON-body guards; a CLI `unpin` verb and a Settings surface to match.
+- **Verify:** a learned pin removed via the route terminates again (not tunneled) and the ledger carries a chained `remove` entry.
+
+### 96. Evaluator `thirdParty`/`contentType` are never populated in the proxy — `$third-party`-style rules under-match
+
+- **Where:** `filterProxy.ts` verdict calls (`evaluator.evaluate(url, { method })` passes no `thirdParty`/`contentType`), `pipeline/transforms.ts`.
+- **What:** the core evaluator supports initiator/content-type modifiers (`$third-party`, `$image`, …) but a network-layer proxy has no initiator signal to feed them, so those rules conservatively under-match — real coverage gap that must not be mistaken for coverage.
+- **Why left:** no honest initiator exists at this layer; wiring one needs a browser-side signal (extension telemetry or an initiator header convention), which is P1 integration work.
+- **Fix shape:** extend the evaluate-options plumbing once an initiator source exists, then re-audit which modifiers the proxy can truthfully honor.
+- **Verify:** a `$third-party`-scoped rule fires on a request the proxy can prove is third-party — needs the initiator signal first.
+
+### 97. The CA private key rests as 0600 plaintext — spec §5.1 promised OS-wrapped encryption at rest
+
+- **Where:** `packages/https-filter/src/ca/certAuthority.ts` (`persistCaFiles` writes `ca.key.pem` mode 0600; `open` re-pins the mode on load).
+- **What:** the spec promised OS-wrapped encryption-at-rest for the CA key (Keychain/DPAPI-class protection); shipped scope is filesystem permissions only — any same-UID process can read the key and mint trusted leaves.
+- **Why left:** spec-vs-shipped gap recorded deliberately — per-OS key-storage integration is its own work item, not a P0 correctness issue.
+- **Fix shape:** wrap the stored key blob behind a small OS-keychain interface (per-platform backend, migration path for existing plaintext stores).
+- **Verify:** `ca.key.pem` on disk is unusable without the OS principal, and the engine still opens when the wrap secret is available.
+
+### 98. `PolicyStore.addBypass`/`remove` exist but have no control route
+
+- **Where:** `packages/https-filter/src/policy/policyStore.ts` (methods implemented and persisted), `packages/https-filter/src/control.ts` ROUTES (no pin/bypass mutation route).
+- **What:** user-directed bypass add/remove and pin removal are implemented in the store — writes hash-chain and persist correctly — but unreachable over `/v1/proxy/*`, so only auto-learned pins ever land in the ledger today.
+- **Why left:** the P1 UI surface (dashboard pins/bypass management) isn't built; recorded so the silent half of the store API reads as deferred, not broken.
+- **Fix shape:** POST routes (`/v1/proxy/pins/bypass`, `/v1/proxy/pins/remove`) behind the JSON-body guards; CLI `proxy bypass`/`unpin` verbs; dashboard surface.
+- **Verify:** a bypass added via the route tunnels without a verdict, persists to `policy.jsonl`, and `remove` retracts it.
+
+### 99. No upstream response deadline after `secureConnect` — a hung response parks until the client disconnects
+
+- **Where:** `packages/https-filter/src/proxy/httpRelay.ts` `relayRequest` — `sock.setTimeout(connectTimeout)` is cleared to `0` at `secureConnect`; both relay paths then wait on 'response' with no bound.
+- **What:** an upstream that completes the TLS handshake then never answers holds the request (and the downstream client, and both sockets) open until the client gives up — a parked fd per stalled response; bounded because the loopback client owns the hang, but a hung tab leaves flows lingering.
+- **Why left:** a response deadline must not cut legitimate long-lived responses (large downloads, slow endpoints) — the bound is a policy choice, deferred to P1 hardening.
+- **Fix shape:** a first-byte deadline on the 'response' event (distinct from body streaming — reset/clear once bytes flow).
+- **Verify:** a TLS upstream that handshakes then goes silent answers the client 502 within the bound instead of parking.
+
 ## Closed
 
 ### 87. v1.0.0-rc.12 shipped — desktop + npm via `release.mjs`, signed Android APK and first development-signed iOS IPA under `mobile-v1.0.0-rc.12`

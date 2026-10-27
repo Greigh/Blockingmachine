@@ -164,12 +164,22 @@ export function terminateToHttp(
 
   // Per-flow secure server: its own TLSSocket wrap is what actually performs
   // the handshake, so the forged leaf goes in through server options.
-  // SNICallback covers a wire SNI that disagrees with the peeked name —
-  // same-name hits the forged default context, other valid names forge on
-  // demand (LRU-cached), invalid names fail the handshake honestly. The wire
-  // name is normalized first: a trailing-dot SNI (`name.`) must still match
-  // `ctx.sni` — otherwise a perfectly pinnable-looking handshake failure is
-  // manufactured out of a normalization miss, learning a false pin.
+  // SNICallback exists only to resolve the *same* name under wire
+  // normalization — a trailing-dot SNI (`name.`) must still match `ctx.sni`,
+  // or a normalization miss would manufacture a pinnable-looking handshake
+  // failure and learn a false pin. A wire SNI that normalizes to a DIFFERENT
+  // name must never mint a second leaf: every gate on this flow — verdict,
+  // pin/bypass, pause — ran on `ctx.sni` (the peeked or CONNECT name), so
+  // forging for another name would serve a leaf nothing judged. That was the
+  // ungated-forge regression this guards: CONNECT an allowed host, drip the
+  // ClientHello past the peek timeout (the peek resolves sni:null and the
+  // flow terminates under the CONNECT name), then let the late hello
+  // announce a blocked SNI — the callback used to forge it sight-unseen. Now
+  // a disagreeing name fails the handshake honestly. A legit client whose
+  // wire SNI differs from its CONNECT host fails the same way — intended:
+  // the pre-peek gate already refuses a *visible* SNI≠CONNECT mismatch, so
+  // only this late-arriving corner lands here.
+  let sniRejected = false;
   const server = http2.createSecureServer({
     allowHTTP1: true,
     secureContext: defaultContext,
@@ -180,12 +190,17 @@ export function terminateToHttp(
         cb(null, defaultContext);
         return;
       }
-      try {
-        const alt = authority.forgeLeaf(normalized);
-        cb(null, tls.createSecureContext({ key: alt.keyPem, cert: alt.certPem }));
-      } catch (err) {
-        cb(err as Error);
-      }
+      // Flag before failing: the refusal surfaces as `tlsClientError`, which
+      // feeds the abort hook — and a *server-side* rejection is not the
+      // pinning signal (the client never saw a leaf to distrust). Without
+      // the flag, "CONNECT victim → drip → late foreign SNI" would pin the
+      // victim host, and P0 has no unlearn route.
+      sniRejected = true;
+      cb(
+        new Error(
+          `wire SNI ${JSON.stringify(servername)} disagrees with the flow's gated name`,
+        ),
+      );
     },
   });
 
@@ -195,7 +210,11 @@ export function terminateToHttp(
   const abort = () => {
     if (!aborted) {
       aborted = true;
-      ctx.onHandshakeAbort?.();
+      // An abort after our own SNICallback refusal is not the pinning
+      // signal — the flow died on the name gate, not on leaf distrust.
+      if (!sniRejected) {
+        ctx.onHandshakeAbort?.();
+      }
     }
   };
   server.on('secureConnection', () => {

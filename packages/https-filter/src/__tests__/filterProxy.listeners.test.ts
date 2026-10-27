@@ -395,6 +395,23 @@ describe('startProxy listeners', () => {
     await closeServer(echo);
   });
 
+  test('CONNECT aimed at the data port itself → 400, never a self-dial', async () => {
+    // Literal-IP CONNECTs normally blind-tunnel — but a target that IS this
+    // listener would splice the client's next bytes back into dispatch and
+    // chain flows until fds run out. The refusal must outrank even the
+    // no-verdict literal-IP path.
+    for (const target of [`127.0.0.1:${proxy.port}`, `localhost:${proxy.port}`]) {
+      const before = proxy.stats();
+      const { sock, status } = await connectHandshake(target);
+      expect(status).toBe('HTTP/1.1 400 Bad Request');
+      await withTimeout(once(sock, 'close'), 5_000, 'self-target close');
+      // Exactly one counted flow — no inner connection was accepted.
+      expect(proxy.stats().flowsTotal).toBe(before.flowsTotal + 1);
+      expect(proxy.stats().flowsTunneled).toBe(before.flowsTunneled);
+      sock.destroy();
+    }
+  });
+
   test('CONNECT then non-TLS bytes → clean close inside the peek bound, counted', async () => {
     const before = proxy.stats();
     const { sock, status } = await connectHandshake('localhost:9');

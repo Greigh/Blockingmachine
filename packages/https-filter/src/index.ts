@@ -121,6 +121,11 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
   const proxy = await startProxy({
     bindHost,
     dataPort,
+    // The data listener's self-target guard covers the control port too —
+    // a client pointing a flow back at either listener gets refused. With
+    // `controlPort: 0` the real pick is still unknown here; that is safe
+    // (a client that cannot name the port cannot self-chain through it).
+    controlPort,
     authority,
     evaluator: createRequestEvaluator(rules),
     policy,

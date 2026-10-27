@@ -425,6 +425,40 @@ describe('TLS termination', () => {
     }
   });
 
+  test('per-request blocks keep their own counter — two blocks on one flow: requestsBlocked+2, flowsBlocked unchanged', async () => {
+    // flowsBlocked is flow-scoped; a keep-alive connection can stack
+    // arbitrary per-request blocks, which would otherwise push the counter
+    // (and blockRatePercent = flowsBlocked/flowsTotal) past its unit.
+    const { server, port } = await httpsOrigin('counter.example');
+    try {
+      const { client } = await connectThenTls(`localhost:${port}`, 'counter.example', [
+        'http/1.1',
+      ]);
+      const before = proxy.stats();
+      const first = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'b.example' }),
+        10_000,
+        'first blocked request',
+      );
+      expect(first.status).toBe(403);
+      // Same keep-alive connection — the 403 leaves it open for a second.
+      const second = await withTimeout(
+        httpRequestOver(client, { path: '/two', host: 'b.example' }),
+        10_000,
+        'second blocked request',
+      );
+      expect(second.status).toBe(403);
+      const after = proxy.stats();
+      expect(after.requestsBlocked).toBe(before.requestsBlocked + 2);
+      expect(after.flowsBlocked).toBe(before.flowsBlocked);
+      // The flow itself was counted at CONNECT-terminate time, before `before`.
+      expect(after.flowsTerminated).toBe(before.flowsTerminated);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   test('upstream verification is fail-closed: an origin cert from an untrusted CA yields 502, never pass-through', async () => {
     const leaf = rogueCa.forgeLeaf('rogue.example');
     const origin = http2.createSecureServer({ key: leaf.keyPem, cert: leaf.certPem });
@@ -575,6 +609,30 @@ describe('plain-HTTP absolute-form forwarding', () => {
     expect(head).toContain('HTTP/1.1 403 Forbidden');
     sock.destroy();
   });
+
+  test('a plain-HTTP request aimed at the data port itself → 400, no self-tunnel chain', async () => {
+    // `Host: 127.0.0.1:<dataPort>` used to blind-tunnel back into this very
+    // listener — each spliced flow re-dispatches and spawns the next until
+    // fds run out (web-reachable: fetch('http://127.0.0.1:<port>/') is a
+    // simple cross-origin request). All three target spellings refuse.
+    for (const wire of [
+      `GET / HTTP/1.1\r\nHost: 127.0.0.1:${proxy.port}\r\n\r\n`,
+      `GET http://127.0.0.1:${proxy.port}/x HTTP/1.1\r\nHost: 127.0.0.1:${proxy.port}\r\n\r\n`,
+      `GET / HTTP/1.1\r\nHost: localhost:${proxy.port}\r\n\r\n`,
+    ]) {
+      const before = proxy.stats();
+      const sock = net.connect({ host: '127.0.0.1', port: proxy.port });
+      await once(sock, 'connect');
+      sock.write(wire);
+      const head = await withTimeout(readHttpHead(sock), 5_000, 'self-target response');
+      expect(head).toContain('HTTP/1.1 400 Bad Request');
+      // A spliced self-connection would show up as a second counted flow —
+      // exactly one new flow means nothing dialed back into the listener.
+      expect(proxy.stats().flowsTotal).toBe(before.flowsTotal + 1);
+      expect(proxy.stats().flowsTunneled).toBe(before.flowsTunneled);
+      sock.destroy();
+    }
+  });
 });
 
 describe('hardened failure handling', () => {
@@ -635,6 +693,78 @@ describe('hardened failure handling', () => {
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(policy.isPinned('trail.example')).toBe(false);
     expect(proxy.stats().pinsLearned).toBe(before.pinsLearned);
+  });
+
+  test('a ClientHello arriving past the peek timeout can never forge a second name — disagreeing wire SNI fails the handshake', async () => {
+    // The ungated-forge regression: SNICallback used to mint/serve a leaf
+    // for ANY valid wire SNI with no verdict behind it — CONNECT an allowed
+    // host, drip the ClientHello past the peek bound (the peek resolves
+    // sni:null and the flow terminates under the CONNECT name), and the late
+    // hello's blocked SNI got forged sight-unseen. The gate now serves only
+    // the gated name's context; a disagreeing name fails the handshake. A
+    // dedicated proxy with a short peek keeps the drip fast, and an
+    // ephemeral policy store keeps the pin assertions self-contained.
+    const dripPolicy = PolicyStore.ephemeral();
+    const dripProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator(['||blocked.example^']),
+      policy: dripPolicy,
+      peekTimeoutMs: 400,
+    });
+    try {
+      // A real ClientHello for blocked.example, delivered in two writes: a
+      // 3-byte record-header stub the peek cannot settle on, then — after
+      // the timeout resolves the flow under the CONNECT name — the rest,
+      // reassembling into the genuine hello on the wire.
+      const hello = await captureClientHello('blocked.example');
+      // The forge path itself under observation — a regression would mint a
+      // 'blocked.example' leaf for a name no verdict ever saw.
+      const forgeSpy = jest.spyOn(authority, 'forgeLeaf');
+      const before = dripProxy.stats();
+      const raw = net.connect({ host: '127.0.0.1', port: dripProxy.port });
+      await once(raw, 'connect');
+      raw.write('CONNECT allowed.example:443 HTTP/1.1\r\nHost: allowed.example:443\r\n\r\n');
+      const head = await withTimeout(readHttpHead(raw), 5_000, 'CONNECT response');
+      expect(head).toContain('200');
+      raw.write(hello.subarray(0, 3));
+      // Outlast the peek bound — the flow terminates under 'allowed.example'.
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      raw.write(hello.subarray(3));
+      const tail = await withTimeout(
+        new Promise<Buffer>((resolve) => {
+          const chunks: Buffer[] = [];
+          raw.on('data', (c: Buffer) => chunks.push(c));
+          raw.once('close', () => resolve(Buffer.concat(chunks)));
+        }),
+        10_000,
+        'late-SNI close',
+      );
+      // A forged leaf answers with handshake records (0x16 ServerHello…);
+      // the refusal dies with at most a TLS alert (0x15) before close.
+      if (tail.length > 0) {
+        expect(tail[0]).toBe(0x15);
+      }
+      // 'blocked.example' was never minted — only the gated CONNECT name.
+      const forged = forgeSpy.mock.calls.map((call) => call[0]);
+      expect(forged).toContain('allowed.example');
+      expect(forged).not.toContain('blocked.example');
+      forgeSpy.mockRestore();
+      const after = dripProxy.stats();
+      // The flow was admitted to termination under the CONNECT name (the
+      // refusal happens inside its handshake) — and nothing spliced.
+      expect(after.flowsTerminated).toBe(before.flowsTerminated + 1);
+      expect(after.flowsTunneled).toBe(before.flowsTunneled);
+      // A server-side SNI refusal is not client distrust of the leaf — no
+      // pin may be learned on either name (P0 has no unlearn route).
+      expect(dripPolicy.isPinned('allowed.example')).toBe(false);
+      expect(dripPolicy.isPinned('blocked.example')).toBe(false);
+      expect(after.pinsLearned).toBe(before.pinsLearned);
+      raw.destroy();
+    } finally {
+      await dripProxy.close();
+    }
   });
 
   test('a hostile upstream answering a bare 101 on an h2 flow → 502, engine survives', async () => {

@@ -39,7 +39,10 @@ export interface ProxyStatusPayload {
   corruptLineCount: number;
   stats: {
     flowsTotal: number;
+    /** Per-flow blocks only — per-request blocks are `requestsBlocked`. */
     flowsBlocked: number;
+    /** Blocks inside terminated keep-alive flows — not a share of flowsTotal. */
+    requestsBlocked: number;
     flowsTunneled: number;
     flowsTerminated: number;
     pinsLearned: number;
@@ -54,6 +57,8 @@ export interface ProxyStatusPayload {
 export interface ProxyStatsPayload {
   flowsTotal: number;
   flowsBlocked: number;
+  /** Per-request blocks inside terminated flows — split from flowsBlocked. */
+  requestsBlocked: number;
   flowsTunneled: number;
   flowsTerminated: number;
   pinsLearned: number;
