@@ -33,7 +33,8 @@ import http2 from 'node:http2';
 import type net from 'node:net';
 import type { Readable, Writable } from 'node:stream';
 import tls from 'node:tls';
-import { normalizeSni, type CertAuthority } from '../ca/certAuthority.js';
+import { normalizeSni } from '../ca/certAuthority.js';
+import type { LeafForgeQueue } from '../ca/leafForgeQueue.js';
 
 /**
  * One decrypted request. `url` is the request-target exactly as received —
@@ -153,13 +154,56 @@ class CompatRelayResponse implements RelayResponse {
  * lifecycle is self-contained from there (the caller's `track()` still owns
  * socket teardown).
  */
-export function terminateToHttp(
+export async function terminateToHttp(
   socket: net.Socket,
-  authority: CertAuthority,
+  forger: LeafForgeQueue,
   onRequest: HttpHandler,
   ctx: TerminateContext,
 ): Promise<void> {
-  const leaf = authority.forgeLeaf(ctx.sni);
+  let sawRequest = false;
+  let secure = false;
+  let aborted = false;
+  let sniRejected = false;
+  const abort = () => {
+    if (!aborted) {
+      aborted = true;
+      // An abort after our own SNICallback refusal is not the pinning
+      // signal — the flow died on the name gate, not on leaf distrust.
+      if (!sniRejected) {
+        ctx.onHandshakeAbort?.();
+      }
+    }
+  };
+  // The pinning signal listeners attach BEFORE the forge wait: minting a
+  // leaf is an async hop now, and a client gone while its leaf queued is
+  // the same signal as one gone mid-handshake — socket dead before
+  // secureConnection ever fired.
+  socket.once('error', () => {
+    if (!secure) {
+      abort();
+    }
+  });
+  socket.once('close', () => {
+    if (!secure) {
+      abort();
+    }
+  });
+  socket.once('end', () => {
+    if (!secure) {
+      abort();
+    }
+  });
+
+  // Deduped, serialized forge (flag 94): a same-name spray shares this one
+  // keygen and a distinct-name burst waits its turn instead of every flow's
+  // RSA-2048 running back-to-back on the loop. The SNICallback below serves
+  // only this same queued leaf — it never mints again.
+  const leaf = await forger.forge(ctx.sni);
+  if (socket.destroyed) {
+    // Dead while the forge was queued — the listeners above already recorded
+    // the pinning signal; never wrap a gone socket in the TLS layer.
+    return;
+  }
   const defaultContext = tls.createSecureContext({ key: leaf.keyPem, cert: leaf.certPem });
 
   // Per-flow secure server: its own TLSSocket wrap is what actually performs
@@ -179,7 +223,6 @@ export function terminateToHttp(
   // wire SNI differs from its CONNECT host fails the same way — intended:
   // the pre-peek gate already refuses a *visible* SNI≠CONNECT mismatch, so
   // only this late-arriving corner lands here.
-  let sniRejected = false;
   const server = http2.createSecureServer({
     allowHTTP1: true,
     secureContext: defaultContext,
@@ -204,19 +247,6 @@ export function terminateToHttp(
     },
   });
 
-  let sawRequest = false;
-  let secure = false;
-  let aborted = false;
-  const abort = () => {
-    if (!aborted) {
-      aborted = true;
-      // An abort after our own SNICallback refusal is not the pinning
-      // signal — the flow died on the name gate, not on leaf distrust.
-      if (!sniRejected) {
-        ctx.onHandshakeAbort?.();
-      }
-    }
-  };
   server.on('secureConnection', () => {
     secure = true;
   });
@@ -225,24 +255,10 @@ export function terminateToHttp(
   // fired — 'end' counts too: a FIN'd client can never finish the handshake.
   // A close *after* a completed handshake is abandonment, not pinning.
   server.on('tlsClientError', abort);
-  socket.once('error', () => {
-    if (!secure) {
-      abort();
-    }
-  });
-  socket.once('close', () => {
-    if (!secure) {
-      abort();
-    }
-  });
-  socket.once('end', () => {
-    if (!secure) {
-      abort();
-    }
-  });
-  // The peek resolves inside a 'data' handler — a fast client can FIN/reset
-  // the socket before these listeners attach. Catch the already-happened
-  // close so the pinning signal is never lost to a registration race.
+  // The peek (and now the forge await) resolves inside a 'data' handler — a
+  // fast client can FIN/reset the socket before the pre-forge listeners
+  // attach. Catch the already-happened close so the pinning signal is never
+  // lost to a registration race.
   if (!secure && (socket.destroyed || socket.readableEnded)) {
     abort();
   }

@@ -30,6 +30,81 @@ import type { IncomingHttpHeaders } from 'node:http';
 import type { RequestVerdict } from '@blockingmachine/core';
 
 /**
+ * `sec-fetch-dest` → the evaluator's ABP contentType tokens. The header is
+ * client-declared fetch metadata — a lie buys a hostile client nothing an
+ * absent header doesn't, so it is an honest hint for resource-type
+ * modifiers. Only mappings with one reading are listed: `empty` (fetch,
+ * XHR, beacons, EventSource all report it) is deliberately absent —
+ * xmlhttprequest/ping/other are all live guesses, and wrong attribution is
+ * worse than none.
+ */
+const SEC_FETCH_DEST_TYPES: Readonly<Record<string, string>> = {
+  document: 'document',
+  frame: 'subdocument',
+  iframe: 'subdocument',
+  fencedframe: 'subdocument',
+  embed: 'object',
+  object: 'object',
+  image: 'image',
+  imageset: 'image',
+  script: 'script',
+  // Workers and worklets are script fetches — Chromium's own webRequest
+  // resource types classify them under 'script' the same way.
+  worker: 'script',
+  sharedworker: 'script',
+  serviceworker: 'script',
+  audioworklet: 'script',
+  paintworklet: 'script',
+  style: 'stylesheet',
+  font: 'font',
+  audio: 'media',
+  video: 'media',
+  track: 'media',
+  websocket: 'websocket',
+  // Declared dests outside the primary types are 'other' — exactly what
+  // the token means in the ABP vocabulary.
+  manifest: 'other',
+  report: 'other',
+  xslt: 'other',
+};
+
+/**
+ * The evaluator's `contentType` context, inferred from what a terminated
+ * request truthfully declares. `sec-fetch-dest` maps directly; the `accept`
+ * fallback applies only where the client's most-preferred type admits one
+ * reading (`image/*` → image, `text/css` → stylesheet) — ambiguous or
+ * absent signals stay `undefined`, so a wrong guess can never fire an
+ * `$image`-style rule that shouldn't. No `thirdParty` inference lives here:
+ * a network-layer proxy sees no initiator, so first-/third-party stays
+ * unanswerable by design.
+ */
+export function inferContentType(headers: IncomingHttpHeaders): string | undefined {
+  const dest = headers['sec-fetch-dest'];
+  const destValue = Array.isArray(dest) ? dest[0] : dest;
+  if (typeof destValue === 'string') {
+    const normalized = destValue.trim().toLowerCase();
+    if (normalized === 'empty') {
+      return undefined; // fetch/XHR/beacon/EventSource share it — no honest type
+    }
+    // A declared dest outside the known table still means "some resource
+    // fetch" — 'other' is the vocabulary's catch-all for exactly that.
+    return SEC_FETCH_DEST_TYPES[normalized] ?? 'other';
+  }
+  const accept = headers.accept;
+  const acceptValue = Array.isArray(accept) ? accept[0] : accept;
+  if (typeof acceptValue === 'string') {
+    const first = acceptValue.split(',', 1)[0].split(';', 1)[0].trim().toLowerCase();
+    if (first.startsWith('image/')) {
+      return 'image';
+    }
+    if (first === 'text/css') {
+      return 'stylesheet';
+    }
+  }
+  return undefined;
+}
+
+/**
  * The `name` half of one `name[=value]` query entry — the raw text before the
  * first `=`. Value-less entries (`?flag`) name themselves.
  */

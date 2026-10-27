@@ -59,10 +59,22 @@ export interface RelayOptions {
   upstreamCaCerts?: string[];
   /** Upstream dial deadline override (default 15s) — test/deploy knob. */
   connectTimeoutMs?: number;
+  /**
+   * Upstream first-byte deadline override (default 30s) — bound on the wait
+   * for the 'response' event after request dispatch, NOT on body streaming.
+   */
+  responseTimeoutMs?: number;
 }
 
 /** Upstream dial deadline — a blackholed target must not park fds. */
 const UPSTREAM_CONNECT_TIMEOUT_MS = 15_000;
+/**
+ * Upstream first-byte deadline — an upstream that handshakes then never
+ * answers must not park the request (and the downstream client) until the
+ * client gives up. Cleared the instant 'response' fires; a long-running
+ * body streams unbounded below it.
+ */
+const UPSTREAM_RESPONSE_TIMEOUT_MS = 30_000;
 
 /**
  * RFC 7230 hop-by-hop fields — never forwarded in either direction.
@@ -226,7 +238,12 @@ function responseHeaders(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
 
 /** h1 upstream: `http.request` rides the pre-connected socket (no `agent` key —
  * that is the only spot where Node honors `createConnection`). */
-function relayOverH1(req: TerminatedRequest, res: RelayResponse, sock: tls.TLSSocket): void {
+function relayOverH1(
+  req: TerminatedRequest,
+  res: RelayResponse,
+  sock: tls.TLSSocket,
+  responseTimeoutMs: number,
+): void {
   let upstream: http.ClientRequest;
   try {
     // `path` with a control character throws ERR_UNESCAPED_CHARACTERS — a
@@ -241,7 +258,16 @@ function relayOverH1(req: TerminatedRequest, res: RelayResponse, sock: tls.TLSSo
     failClosed(res, () => sock.destroy());
     return;
   }
+  // First-byte deadline (flag 99): armed at request dispatch, cleared the
+  // moment 'response' fires — a handshook-but-silent upstream answers 502 +
+  // destroy inside the bound instead of parking until the client gives up.
+  const responseDeadline = setTimeout(
+    () => failClosed(res, () => sock.destroy()),
+    responseTimeoutMs,
+  );
+  responseDeadline.unref();
   upstream.once('response', (upRes) => {
+    clearTimeout(responseDeadline);
     let target;
     try {
       // A status the downstream protocol can't express (101 on h2) or an
@@ -262,14 +288,25 @@ function relayOverH1(req: TerminatedRequest, res: RelayResponse, sock: tls.TLSSo
   // Forwarded headers strip Upgrade/Connection, so a 101 should surface as
   // 'response' — but a protocol-correct client can't rely on hostile bytes:
   // anything routed here is still an uninspectable switch → fail closed.
-  upstream.once('upgrade', () => failClosed(res, () => sock.destroy()));
-  upstream.once('error', () => failClosed(res, () => sock.destroy()));
+  upstream.once('upgrade', () => {
+    clearTimeout(responseDeadline);
+    failClosed(res, () => sock.destroy());
+  });
+  upstream.once('error', () => {
+    clearTimeout(responseDeadline);
+    failClosed(res, () => sock.destroy());
+  });
   req.body.pipe(upstream);
 }
 
 /** h2 upstream: `http2.connect` adopts the pre-connected socket; one request
  * per session — the session closes with its stream. */
-function relayOverH2(req: TerminatedRequest, res: RelayResponse, sock: tls.TLSSocket): void {
+function relayOverH2(
+  req: TerminatedRequest,
+  res: RelayResponse,
+  sock: tls.TLSSocket,
+  responseTimeoutMs: number,
+): void {
   let session: http2.ClientHttp2Session;
   try {
     // A malformed evaluated authority throws ERR_INVALID_URL here. The
@@ -295,8 +332,14 @@ function relayOverH2(req: TerminatedRequest, res: RelayResponse, sock: tls.TLSSo
     failClosed(res, kill);
     return;
   }
+  // First-byte deadline (flag 99) — same posture as the h1 path: armed at
+  // stream dispatch, cleared at 'response' or on any teardown that already
+  // resolved the request. Body streaming is unaffected below it.
+  const responseDeadline = setTimeout(() => failClosed(res, kill), responseTimeoutMs);
+  responseDeadline.unref();
   let responded = false;
   stream.once('response', (headers) => {
+    clearTimeout(responseDeadline);
     responded = true;
     let target;
     try {
@@ -310,9 +353,16 @@ function relayOverH2(req: TerminatedRequest, res: RelayResponse, sock: tls.TLSSo
     }
     stream.pipe(target);
   });
-  stream.once('error', () => failClosed(res, kill));
-  stream.once('aborted', () => failClosed(res, kill));
+  stream.once('error', () => {
+    clearTimeout(responseDeadline);
+    failClosed(res, kill);
+  });
+  stream.once('aborted', () => {
+    clearTimeout(responseDeadline);
+    failClosed(res, kill);
+  });
   stream.once('close', () => {
+    clearTimeout(responseDeadline);
     session.close();
     // A stream that dies without ever producing a response (graceful GOAWAY,
     // reset) still owes the client an honest failure — not a hang.
@@ -347,6 +397,7 @@ export function relayRequest(
     ...(ca !== undefined ? { ca } : {}),
   });
   const connectTimeout = options?.connectTimeoutMs ?? UPSTREAM_CONNECT_TIMEOUT_MS;
+  const responseTimeout = options?.responseTimeoutMs ?? UPSTREAM_RESPONSE_TIMEOUT_MS;
   // A blackholed dial owes the client a 502, not a silent destroy — the
   // downstream request must never park until some distant default timeout.
   sock.setTimeout(connectTimeout, () => failClosed(res, () => sock.destroy()));
@@ -358,10 +409,10 @@ export function relayRequest(
     sock.setTimeout(0);
     try {
       if (sock.alpnProtocol === 'h2') {
-        relayOverH2(req, res, sock);
+        relayOverH2(req, res, sock, responseTimeout);
       } else {
         // false (no ALPN) and 'http/1.1' both mean the h1 path.
-        relayOverH1(req, res, sock);
+        relayOverH1(req, res, sock, responseTimeout);
       }
     } catch {
       failClosed(res, () => sock.destroy());
@@ -424,7 +475,10 @@ export interface PlainHttpTarget {
 }
 
 /** `host:port` / `[v6]:port` / bare host → `{host, port}` with `defPort`. */
-function splitHostPort(authority: string, defPort: number): { host: string; port: number } | null {
+export function splitHostPort(
+  authority: string,
+  defPort: number,
+): { host: string; port: number } | null {
   const trimmed = authority.trim();
   if (trimmed.length === 0) {
     return null;

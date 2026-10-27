@@ -28,12 +28,14 @@
  *    silence close cleanly (never a hung socket), and real TLS with a valid
  *    SNI terminates at the forged-leaf endpoint (Task 5); absent or invalid
  *    SNI keeps the blind tunnel — `forgeLeaf` throws on those names.
- *  - PROXY-v2: the same peek decides — non-TLS, missing/invalid SNI, and
- *    pinned/bypassed SNI all blind-tunnel to the header's destination; a
- *    blocked SNI drops the flow silently (no response exists on raw TLS);
- *    allowed + valid SNI terminates. Per-request verdicts then run on every
- *    decrypted request — keep-alive connections may change Host (Review
- *    Focus #4).
+ *  - PROXY-v2: the same peek decides — non-TLS bytes that parse as a
+ *    plain-HTTP request take the same dual-authority verdict the dispatch
+ *    path applies (flag 93 — helpers redirect :80 too); other non-TLS
+ *    bytes, missing/invalid SNI, and pinned/bypassed SNI all blind-tunnel
+ *    to the header's destination; a blocked SNI drops the flow silently
+ *    (no response exists on raw TLS); allowed + valid SNI terminates.
+ *    Per-request verdicts then run on every decrypted request — keep-alive
+ *    connections may change Host (Review Focus #4).
  *
  * `reload(rawRules)` rebuilds the evaluator off the hot path and swaps the
  * reference — `RequestEvaluator` is immutable, so in-flight flows finish on
@@ -51,13 +53,16 @@ import {
   type RequestEvaluator,
 } from '@blockingmachine/core';
 import { isValidSni, normalizeSni, type CertAuthority } from '../ca/certAuthority.js';
-import { applyRequestTransforms } from '../pipeline/transforms.js';
+import { LeafForgeQueue } from '../ca/leafForgeQueue.js';
+import { applyRequestTransforms, inferContentType } from '../pipeline/transforms.js';
 import type { PolicyStore } from '../policy/policyStore.js';
 import {
   absoluteRequestUrl,
   parsePlainHttpTarget,
   probePlainHttp,
   relayRequest,
+  splitHostPort,
+  type PlainHttpTarget,
   type UpstreamEndpoint,
 } from './httpRelay.js';
 import {
@@ -129,8 +134,16 @@ export interface StartProxyOptions {
   upstreamCaCerts?: string[];
   /** Test/deploy knob — the upstream dial deadline (default 15s). */
   upstreamConnectTimeoutMs?: number;
+  /**
+   * Test/deploy knob — first-byte deadline on the upstream response once the
+   * TLS handshake has completed (default 30s). Bounds only the wait for the
+   * 'response' event; a streaming body is unaffected.
+   */
+  upstreamResponseTimeoutMs?: number;
   /** Test knob — the bounded ClientHello peek (default 10s, spec §5.2). */
   peekTimeoutMs?: number;
+  /** Test knob — leaf-forge concurrency bound (default 1, serialized). */
+  forgeConcurrency?: number;
 }
 
 /** Bound on first-bytes dispatch — a connection that never speaks is reaped. */
@@ -222,6 +235,10 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   let boundDataPort = dataPort;
   let evaluator = opts.evaluator;
   let paused = false;
+  // Dedupe + serialize the synchronous RSA-2048 leaf forge (flag 94): one
+  // keygen per name under a spray, and queued bursts yield the loop between
+  // mints instead of chaining them inside one synchronous drain.
+  const forgeQueue = new LeafForgeQueue(authority, { concurrency: opts.forgeConcurrency });
 
   const stats: ProxyStats = {
     flowsTotal: 0,
@@ -360,10 +377,13 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     const flowEvaluator = evaluator;
     void terminateToHttp(
       flow.sock,
-      authority,
+      forgeQueue,
       (req, res) => {
         const verdict = flowEvaluator.evaluate(absoluteRequestUrl(req, 'https'), {
           method: req.method,
+          // The client's declared resource type feeds $image/$script/… —
+          // inferred only from what the wire truthfully declares.
+          contentType: inferContentType(req.headers),
         });
         if (verdict.action === 'blocked') {
           // Per-request unit — keep-alive flows carry many requests, so
@@ -388,6 +408,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         relayRequest({ ...req, url: transformed.url, headers: transformed.headers }, res, flow.upstream, {
           upstreamCaCerts: opts.upstreamCaCerts,
           connectTimeoutMs: opts.upstreamConnectTimeoutMs,
+          responseTimeoutMs: opts.upstreamResponseTimeoutMs,
         });
       },
       {
@@ -401,6 +422,29 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         },
       },
     ).catch(() => flow.sock.destroy());
+  }
+
+  /**
+   * The dual-authority verdict both plain-HTTP entry points share (RFC 7230
+   * §5.4): an absolute-form target disagreeing with the `Host` header gets
+   * BOTH authorities evaluated — a block on either answers 403; two
+   * individually-allowed names that disagree answer 400, since forwarding
+   * the pair would smuggle one unjudged authority past the splice.
+   */
+  function plainHttpVerdict(
+    parsed: PlainHttpTarget,
+  ): { action: 'blocked'; rule: string | null } | { action: 'mismatch' } | { action: 'allowed' } {
+    const verdict = evaluator.evaluate(parsed.url, { method: parsed.method });
+    let hostBlocked = false;
+    if (parsed.authorityMismatch && parsed.hostHeader !== null) {
+      hostBlocked =
+        evaluator.evaluate(`http://${parsed.hostHeader}/`, { method: parsed.method })
+          .action === 'blocked';
+    }
+    if (verdict.action === 'blocked' || hostBlocked) {
+      return { action: 'blocked', rule: verdict.coveringRule };
+    }
+    return parsed.authorityMismatch ? { action: 'mismatch' } : { action: 'allowed' };
   }
 
   /**
@@ -436,31 +480,90 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       blindTunnel(sock, parsed.host, parsed.port, buf);
       return;
     }
-    const verdict = evaluator.evaluate(parsed.url, { method: parsed.method });
-    let hostBlocked = false;
-    if (parsed.authorityMismatch && parsed.hostHeader !== null) {
-      hostBlocked =
-        evaluator.evaluate(`http://${parsed.hostHeader}/`, { method: parsed.method })
-          .action === 'blocked';
-    }
-    if (verdict.action === 'blocked' || hostBlocked) {
+    const judged = plainHttpVerdict(parsed);
+    if (judged.action === 'blocked') {
       stats.flowsBlocked++;
       const rule =
-        verdict.coveringRule === null
+        judged.rule === null
           ? ''
-          : `\r\nX-Blockingmachine-Rule: ${sanitizeHeaderValue(verdict.coveringRule)}`;
+          : `\r\nX-Blockingmachine-Rule: ${sanitizeHeaderValue(judged.rule)}`;
       sock.end(
         `HTTP/1.1 403 Forbidden\r\nContent-Length: 0${rule}\r\nConnection: close\r\n\r\n`,
       );
       return;
     }
-    if (parsed.authorityMismatch) {
+    if (judged.action === 'mismatch') {
       // Both authorities individually allow — but forwarding absolute-form
       // verbatim would still deliver a Host the splice never re-checks.
       sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
       return;
     }
     blindTunnel(sock, parsed.host, parsed.port, buf);
+  }
+
+  /**
+   * PROXY-v2 non-TLS verdict (flag 93): helpers redirect :80 flows too, so a
+   * peeked head that is not TLS may still be a judgeable HTTP request — the
+   * transparent-:80 gap this closes. A parseable request takes the same
+   * dual-authority verdict handlePlainHttp applies; a paused proxy or a
+   * bypassed authority stays dumb transit, and an unparseable head tunnels
+   * verbatim exactly as before. The upstream dial is always the v2-announced
+   * destination — the parsed authorities only feed the verdict, never the
+   * dial (the client already told us where its bytes were headed).
+   */
+  function handleTransparentPlainHttp(
+    sock: net.Socket,
+    target: { dstHost: string; dstPort: number },
+    head: Buffer,
+  ): void {
+    // A pause landing mid-peek owns this flow — verdicts off, dumb transit.
+    if (paused) {
+      blindTunnel(sock, target.dstHost, target.dstPort, head);
+      return;
+    }
+    // Only a COMPLETE request head gets judged — the dispatch path waits
+    // for \r\n\r\n before parsing, and judging a torn head could turn a
+    // truncated Host line into a false authority verdict. 'no' can never
+    // be an HTTP request; a partial head tunnels as before.
+    if (probePlainHttp(head) === 'no' || !head.includes('\r\n\r\n')) {
+      blindTunnel(sock, target.dstHost, target.dstPort, head);
+      return;
+    }
+    const parsed = parsePlainHttpTarget(head);
+    if (parsed === null) {
+      blindTunnel(sock, target.dstHost, target.dstPort, head);
+      return;
+    }
+    // A bypassed authority escapes judgment — the request-target host, and
+    // the Host header's host when it names a different authority. Pins are
+    // leaf-distrust learned on TLS handshakes — no leaf is ever served on
+    // :80, so a pin cannot apply here.
+    const hostAuthority =
+      parsed.hostHeader === null ? null : splitHostPort(parsed.hostHeader, 80);
+    if (
+      policy.isBypassed(parsed.host) ||
+      (hostAuthority !== null && policy.isBypassed(hostAuthority.host))
+    ) {
+      blindTunnel(sock, target.dstHost, target.dstPort, head);
+      return;
+    }
+    const judged = plainHttpVerdict(parsed);
+    if (judged.action === 'blocked') {
+      stats.flowsBlocked++;
+      const rule =
+        judged.rule === null
+          ? ''
+          : `\r\nX-Blockingmachine-Rule: ${sanitizeHeaderValue(judged.rule)}`;
+      sock.end(
+        `HTTP/1.1 403 Forbidden\r\nContent-Length: 0${rule}\r\nConnection: close\r\n\r\n`,
+      );
+      return;
+    }
+    if (judged.action === 'mismatch') {
+      sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    blindTunnel(sock, target.dstHost, target.dstPort, head);
   }
 
   /**
@@ -598,14 +701,16 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       return;
     }
     const peeked = await collectClientHello(sock, peekTimeoutMs, rest);
-    // Non-TLS bytes forward honestly — helpers also redirect port 80 — but
-    // only when a header announced a destination.
+    // Non-TLS bytes: with an announced destination a parseable HTTP request
+    // takes the same verdict the dispatch path applies (helpers redirect :80
+    // too — flag 93); anything else forwards honestly. No header means no
+    // destination and nothing to judge against — honest close.
     if (!peeked.isTls) {
       if (target === null) {
         sock.destroy();
         return;
       }
-      blindTunnel(sock, target.dstHost, target.dstPort, peeked.head);
+      handleTransparentPlainHttp(sock, target, peeked.head);
       return;
     }
     const sni = peeked.sni;

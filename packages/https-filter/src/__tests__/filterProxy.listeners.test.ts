@@ -535,4 +535,181 @@ describe('startProxy listeners', () => {
     await withTimeout(once(sock, 'close'), 5_000, 'garbage dispatch close');
     expect(proxy.stats().flowsTotal).toBe(before.flowsTotal + 1);
   });
+
+  describe('PROXY-v2 non-TLS flows (flag 93)', () => {
+  /** A fresh TCP connection to the shared data listener. */
+  async function openSock(): Promise<net.Socket> {
+    const sock = net.connect({ host: '127.0.0.1', port: proxy.port });
+    await once(sock, 'connect');
+    return sock;
+  }
+
+  test('v2-framed GET http://blocked.example/ → 403 + covering rule, upstream never dialed', async () => {
+    let upstreamSaw = false;
+    const upstream = net.createServer((socket) => {
+      upstreamSaw = true;
+      socket.on('data', (chunk) => socket.write(chunk));
+    });
+    const upstreamPort = await listen(upstream);
+    try {
+      const before = proxy.stats();
+      const sock = await openSock();
+      sock.write(
+        Buffer.concat([
+          buildTcp4Header([10, 9, 9, 9], [127, 0, 0, 1], 51121, upstreamPort),
+          Buffer.from(
+            'GET http://blocked.example/x HTTP/1.1\r\nHost: blocked.example\r\n\r\n',
+            'latin1',
+          ),
+        ]),
+      );
+      const head = await withTimeout(readHttpHead(sock), 5_000, 'v2 blocked response');
+      expect(head).toContain('HTTP/1.1 403 Forbidden');
+      expect(head).toContain('X-Blockingmachine-Rule: ||blocked.example^');
+      await withTimeout(once(sock, 'close'), 5_000, 'blocked flow close');
+      // Give a would-be dial a beat — the flow must have died at the verdict.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(upstreamSaw).toBe(false);
+      expect(proxy.stats().flowsBlocked).toBe(before.flowsBlocked + 1);
+      sock.destroy();
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  test('v2-framed non-HTTP bytes still blind-tunnel to the announced destination', async () => {
+    const upstream = tcpEchoServer();
+    const upstreamPort = await listen(upstream);
+    try {
+      const sock = await openSock();
+      sock.write(
+        Buffer.concat([
+          buildTcp4Header([10, 9, 9, 9], [127, 0, 0, 1], 51122, upstreamPort),
+          Buffer.from('this is not an HTTP request', 'latin1'),
+        ]),
+      );
+      expect((await collectBytes(sock, 27)).toString('latin1')).toBe(
+        'this is not an HTTP request',
+      );
+      sock.destroy();
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  test('v2-framed allowed GET tunnels to the v2-announced destination — the dial is the header, not the URL', async () => {
+    // 'v2allowed.example' does not resolve here; the flow only answers if the
+    // splice dialed the frame's dstHost:dstPort — proof the parsed authority
+    // fed the verdict and the header fed the dial.
+    const upstream = tcpEchoServer();
+    const upstreamPort = await listen(upstream);
+    try {
+      const before = proxy.stats();
+      const sock = await openSock();
+      const request =
+        'GET http://v2allowed.example/x?q=1 HTTP/1.1\r\nHost: v2allowed.example\r\n\r\n';
+      sock.write(
+        Buffer.concat([
+          buildTcp4Header([10, 9, 9, 9], [127, 0, 0, 1], 51123, upstreamPort),
+          Buffer.from(request, 'latin1'),
+        ]),
+      );
+      const echoed = await collectBytes(sock, request.length);
+      expect(echoed.toString('latin1')).toBe(request);
+      expect(proxy.stats().flowsTunneled).toBe(before.flowsTunneled + 1);
+      sock.destroy();
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  test('v2-framed allowed request-target + blocked Host header → both authorities evaluated, 403', async () => {
+    const upstream = tcpEchoServer();
+    const upstreamPort = await listen(upstream);
+    try {
+      const sock = await openSock();
+      sock.write(
+        Buffer.concat([
+          buildTcp4Header([10, 9, 9, 9], [127, 0, 0, 1], 51124, upstreamPort),
+          Buffer.from(
+            'GET http://v2allowed.example/x HTTP/1.1\r\nHost: blocked.example\r\n\r\n',
+            'latin1',
+          ),
+        ]),
+      );
+      const head = await withTimeout(readHttpHead(sock), 5_000, 'v2 host-blocked response');
+      expect(head).toContain('HTTP/1.1 403 Forbidden');
+      sock.destroy();
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  test('v2-framed authorities that disagree but individually allow → 400, never forwarded', async () => {
+    const upstream = tcpEchoServer();
+    const upstreamPort = await listen(upstream);
+    try {
+      const sock = await openSock();
+      sock.write(
+        Buffer.concat([
+          buildTcp4Header([10, 9, 9, 9], [127, 0, 0, 1], 51125, upstreamPort),
+          Buffer.from(
+            'GET http://allowed-one.example/x HTTP/1.1\r\nHost: allowed-two.example\r\n\r\n',
+            'latin1',
+          ),
+        ]),
+      );
+      const head = await withTimeout(readHttpHead(sock), 5_000, 'v2 mismatch response');
+      expect(head).toContain('HTTP/1.1 400 Bad Request');
+      sock.destroy();
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  test('a paused proxy tunnels a v2-framed blocked request — verdicts off, connectivity on', async () => {
+    const upstream = tcpEchoServer();
+    const upstreamPort = await listen(upstream);
+    proxy.setPaused(true);
+    try {
+      const request =
+        'GET http://blocked.example/x HTTP/1.1\r\nHost: blocked.example\r\n\r\n';
+      const sock = await openSock();
+      sock.write(
+        Buffer.concat([
+          buildTcp4Header([10, 9, 9, 9], [127, 0, 0, 1], 51126, upstreamPort),
+          Buffer.from(request, 'latin1'),
+        ]),
+      );
+      const echoed = await collectBytes(sock, request.length);
+      expect(echoed.toString('latin1')).toBe(request);
+      sock.destroy();
+    } finally {
+      proxy.setPaused(false);
+      await closeServer(upstream);
+    }
+  });
+
+  test('a bypassed host tunnels on a v2 non-TLS flow — no verdict runs', async () => {
+    policy.addBypass('v2bypass.example');
+    const upstream = tcpEchoServer();
+    const upstreamPort = await listen(upstream);
+    try {
+      const request =
+        'GET http://v2bypass.example/x HTTP/1.1\r\nHost: v2bypass.example\r\n\r\n';
+      const sock = await openSock();
+      sock.write(
+        Buffer.concat([
+          buildTcp4Header([10, 9, 9, 9], [127, 0, 0, 1], 51127, upstreamPort),
+          Buffer.from(request, 'latin1'),
+        ]),
+      );
+      const echoed = await collectBytes(sock, request.length);
+      expect(echoed.toString('latin1')).toBe(request);
+      sock.destroy();
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+  });
 });

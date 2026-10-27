@@ -91,7 +91,7 @@ interface WireResponse {
  */
 function httpRequestOver(
   sock: tls.TLSSocket,
-  opts: { method?: string; path: string; host: string },
+  opts: { method?: string; path: string; host: string; headers?: Record<string, string> },
 ): Promise<WireResponse> {
   return new Promise((resolve) => {
     let buf = Buffer.alloc(0);
@@ -115,8 +115,11 @@ function httpRequestOver(
       });
     };
     sock.on('data', onData);
+    const extra = Object.entries(opts.headers ?? {})
+      .map(([name, value]) => `${name}: ${value}\r\n`)
+      .join('');
     sock.write(
-      `${opts.method ?? 'GET'} ${opts.path} HTTP/1.1\r\nHost: ${opts.host}\r\n\r\n`,
+      `${opts.method ?? 'GET'} ${opts.path} HTTP/1.1\r\nHost: ${opts.host}\r\n${extra}\r\n`,
     );
   });
 }
@@ -160,8 +163,9 @@ async function connectThenTls(
   target: string,
   servername: string,
   alpn: string[],
+  proxyPort: number = proxy.port,
 ): Promise<{ client: tls.TLSSocket; status: string }> {
-  const raw = net.connect({ host: '127.0.0.1', port: proxy.port });
+  const raw = net.connect({ host: '127.0.0.1', port: proxyPort });
   await once(raw, 'connect');
   raw.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
   const head = await withTimeout(readHttpHead(raw), 5_000, 'CONNECT response');
@@ -933,6 +937,263 @@ describe('hardened failure handling', () => {
       client.destroy();
     } finally {
       await closeServer(origin);
+    }
+  });
+});
+
+describe('leaf-forge admission (flag 94)', () => {
+  test('a distinct-SNI burst pays at most one forge per name through the queue', async () => {
+    const forgeSpy = jest.spyOn(authority, 'forgeLeaf');
+    try {
+      const names = ['burst-a.example', 'burst-b.example', 'burst-c.example'];
+      const clients = await Promise.all(
+        names.map((sni) => connectThenTls('localhost:1', sni, ['http/1.1'])),
+      );
+      const forged = forgeSpy.mock.calls
+        .map((call) => call[0])
+        .filter((n) => names.includes(n));
+      for (const sni of names) {
+        expect(forged.filter((n) => n === sni).length).toBe(1);
+      }
+      for (const { client } of clients) {
+        client.destroy();
+      }
+    } finally {
+      forgeSpy.mockRestore();
+    }
+  });
+});
+
+describe('upstream response deadline (flag 99)', () => {
+  test('a TLS upstream that handshakes then goes silent → 502 inside the bound (h1)', async () => {
+    const leaf = originCa.forgeLeaf('silent.example');
+    const held = new Set<tls.TLSSocket>();
+    const silent = tls.createServer(
+      { key: leaf.keyPem, cert: leaf.certPem },
+      (sock) => {
+        held.add(sock);
+        // Handshake completes — the request is swallowed, never answered.
+        sock.on('data', () => {});
+        sock.on('error', () => {});
+        sock.once('close', () => held.delete(sock));
+      },
+    );
+    const port = await listen(silent);
+    try {
+      const probe = fakeResponse();
+      const start = Date.now();
+      relayRequest(
+        {
+          method: 'GET',
+          url: '/',
+          host: 'silent.example',
+          headers: {},
+          body: Readable.from([]),
+          protocol: 'h1',
+        },
+        probe.res,
+        { host: '127.0.0.1', port, servername: 'silent.example' },
+        { upstreamCaCerts: [originCa.caCertPem], responseTimeoutMs: 400 },
+      );
+      await waitFor(() => probe.statuses.length > 0 || probe.isDestroyed(), 6_000);
+      expect(probe.statuses[0]).toBe(502);
+      const elapsed = Date.now() - start;
+      // The deadline fired the failure — not a dial error (instant) and not
+      // a parked request (seconds-long).
+      expect(elapsed).toBeGreaterThanOrEqual(250);
+      expect(elapsed).toBeLessThan(5_000);
+      await probeEngineAlive('silent');
+    } finally {
+      for (const sock of held) {
+        sock.destroy();
+      }
+      await closeServer(silent);
+    }
+  });
+
+  test('an h2 upstream stream left unanswered → 502 inside the bound', async () => {
+    const leaf = originCa.forgeLeaf('h2silent.example');
+    const held = new Set<http2.ServerHttp2Stream>();
+    const origin = http2.createSecureServer({
+      key: leaf.keyPem,
+      cert: leaf.certPem,
+      ALPNProtocols: ['h2'],
+    });
+    origin.on('request', (req, res) => {
+      held.add(req.stream);
+      req.stream.on('error', () => {});
+      req.stream.once('close', () => held.delete(req.stream));
+      void res; // the stream is accepted — and never answered
+    });
+    origin.on('sessionError', () => {});
+    const port = await listen(origin);
+    try {
+      const probe = fakeResponse();
+      const start = Date.now();
+      relayRequest(
+        {
+          method: 'GET',
+          url: '/',
+          host: 'h2silent.example',
+          headers: {},
+          body: Readable.from([]),
+          protocol: 'h1',
+        },
+        probe.res,
+        { host: '127.0.0.1', port, servername: 'h2silent.example' },
+        { upstreamCaCerts: [originCa.caCertPem], responseTimeoutMs: 400 },
+      );
+      await waitFor(() => probe.statuses.length > 0 || probe.isDestroyed(), 6_000);
+      expect(probe.statuses[0]).toBe(502);
+      expect(Date.now() - start).toBeLessThan(5_000);
+    } finally {
+      for (const stream of held) {
+        stream.destroy();
+      }
+      await closeServer(origin);
+    }
+  });
+
+  test('end-to-end: a terminated request to a silent upstream answers the client 502 inside the bound', async () => {
+    const silentProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator([]),
+      policy,
+      upstreamCaCerts: [originCa.caCertPem],
+      upstreamConnectTimeoutMs: 2_000,
+      upstreamResponseTimeoutMs: 300,
+    });
+    const leaf = originCa.forgeLeaf('silente2e.example');
+    const held = new Set<tls.TLSSocket>();
+    const silent = tls.createServer(
+      { key: leaf.keyPem, cert: leaf.certPem },
+      (sock) => {
+        held.add(sock);
+        sock.on('data', () => {});
+        sock.on('error', () => {});
+        sock.once('close', () => held.delete(sock));
+      },
+    );
+    const port = await listen(silent);
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'silente2e.example',
+        ['http/1.1'],
+        silentProxy.port,
+      );
+      const start = Date.now();
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'silente2e.example' }),
+        10_000,
+        'silent upstream response',
+      );
+      expect(res.status).toBe(502);
+      expect(Date.now() - start).toBeLessThan(5_000);
+      client.destroy();
+    } finally {
+      for (const sock of held) {
+        sock.destroy();
+      }
+      await closeServer(silent);
+      await silentProxy.close();
+    }
+  });
+
+  test('a slow-but-answering upstream clears the bound at first byte — a body streaming past it arrives whole', async () => {
+    // Tight response bound on a dedicated proxy; the origin answers headers
+    // immediately, then drips the body tail PAST the bound — the deadline is
+    // first-byte only, so the whole body still lands.
+    const dripProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator([]),
+      policy,
+      upstreamCaCerts: [originCa.caCertPem],
+      upstreamConnectTimeoutMs: 2_000,
+      upstreamResponseTimeoutMs: 300,
+    });
+    const leaf = originCa.forgeLeaf('drip.example');
+    const origin = https.createServer(
+      { key: leaf.keyPem, cert: leaf.certPem },
+      (_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '10' });
+        res.write('chunk-');
+        setTimeout(() => res.end('one!'), 450); // body tail lands past the bound
+      },
+    );
+    const port = await listen(origin);
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'drip.example',
+        ['http/1.1'],
+        dripProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'drip.example' }),
+        10_000,
+        'dripping response',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toBe('chunk-one!');
+      client.destroy();
+    } finally {
+      await closeServer(origin);
+      await dripProxy.close();
+    }
+  });
+});
+
+describe('contentType inference (flag 96)', () => {
+  test('sec-fetch-dest: image fires an $image rule; the same request undeclared relays to the origin', async () => {
+    const ctProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator(['||img-scope.example^$image']),
+      policy,
+      upstreamCaCerts: [originCa.caCertPem],
+      upstreamConnectTimeoutMs: 2_000,
+    });
+    const { server, port } = await httpsOrigin('img-scope.example');
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'img-scope.example',
+        ['http/1.1'],
+        ctProxy.port,
+      );
+      // The declared resource type feeds the $image modifier — 403, no dial.
+      const blocked = await withTimeout(
+        httpRequestOver(client, {
+          path: '/pic.png',
+          host: 'img-scope.example',
+          headers: { 'sec-fetch-dest': 'image' },
+        }),
+        10_000,
+        'image-scoped request',
+      );
+      expect(blocked.status).toBe(403);
+      expect(blocked.head.toLowerCase()).toContain(
+        'x-blockingmachine-rule: ||img-scope.example^$image',
+      );
+      // Undeclared: the rule cannot fire — conservative under-match, so the
+      // same request relays through to the origin.
+      const allowed = await withTimeout(
+        httpRequestOver(client, { path: '/pic.png', host: 'img-scope.example' }),
+        10_000,
+        'undeclared request',
+      );
+      expect(allowed.status).toBe(200);
+      expect(allowed.body).toContain('origin GET /pic.png');
+      client.destroy();
+    } finally {
+      await closeServer(server);
+      await ctProxy.close();
     }
   });
 });

@@ -12,7 +12,7 @@
 
 import { describe, expect, test } from '@jest/globals';
 import type { RequestVerdict } from '@blockingmachine/core';
-import { applyRequestTransforms } from '../pipeline/transforms.js';
+import { applyRequestTransforms, inferContentType } from '../pipeline/transforms.js';
 
 type Transforms = RequestVerdict['transforms'];
 
@@ -124,5 +124,45 @@ describe('applyRequestTransforms — pass-through', () => {
     );
     expect(out.url).toBe('https://x.test/?a=1');
     expect(out.headers).toBe(headers);
+  });
+});
+
+describe('inferContentType', () => {
+  test('sec-fetch-dest maps to the evaluator vocabulary, case-folded', () => {
+    expect(inferContentType({ 'sec-fetch-dest': 'document' })).toBe('document');
+    expect(inferContentType({ 'sec-fetch-dest': 'image' })).toBe('image');
+    expect(inferContentType({ 'sec-fetch-dest': 'style' })).toBe('stylesheet');
+    expect(inferContentType({ 'sec-fetch-dest': 'iframe' })).toBe('subdocument');
+    expect(inferContentType({ 'sec-fetch-dest': 'serviceworker' })).toBe('script');
+    expect(inferContentType({ 'sec-fetch-dest': 'VIDEO' })).toBe('media');
+    expect(inferContentType({ 'sec-fetch-dest': 'websocket' })).toBe('websocket');
+    expect(inferContentType({ 'sec-fetch-dest': 'font' })).toBe('font');
+  });
+
+  test('sec-fetch-dest: empty admits no single type — no inference', () => {
+    expect(inferContentType({ 'sec-fetch-dest': 'empty' })).toBeUndefined();
+    // The declared fetch metadata outranks even an unambiguous Accept —
+    // fetch/XHR/beacon all report 'empty'.
+    expect(
+      inferContentType({ 'sec-fetch-dest': 'empty', accept: 'image/*' }),
+    ).toBeUndefined();
+  });
+
+  test('a declared dest outside the named types is the vocabulary catch-all', () => {
+    expect(inferContentType({ 'sec-fetch-dest': 'manifest' })).toBe('other');
+    expect(inferContentType({ 'sec-fetch-dest': 'future-dest' })).toBe('other');
+  });
+
+  test('accept fallback fires only where the most-preferred type is unambiguous', () => {
+    expect(inferContentType({ accept: 'image/avif,image/webp,*/*;q=0.8' })).toBe('image');
+    expect(inferContentType({ accept: 'text/css,*/*;q=0.1' })).toBe('stylesheet');
+    // Navigations, scripts and XHR carry accepts with no honest single type.
+    expect(
+      inferContentType({
+        accept: 'text/html,application/xhtml+xml,image/avif;q=0.8,*/*;q=0.5',
+      }),
+    ).toBeUndefined();
+    expect(inferContentType({ accept: '*/*' })).toBeUndefined();
+    expect(inferContentType({})).toBeUndefined();
   });
 });
