@@ -71,6 +71,14 @@ function fakePage(): FakePage {
   window.EventTarget.prototype = {
     addEventListener: (t: string, fn: (...args: any[]) => any) => void (listeners[t] = listeners[t] ?? []).push(fn),
   };
+  window.XMLHttpRequest.prototype = {
+    open: function (this: any, m: string, u: string) {
+      this._opened = [m, u];
+    },
+    send: function (this: any) {
+      this._sent = true;
+    },
+  };
   const document: any = {
     currentScript: null,
     documentElement: {},
@@ -99,6 +107,50 @@ function fakePage(): FakePage {
     Event: function (this: any, t: string) { this.type = t; },
   };
   return { window, document, listeners, timeouts, intervals, globals };
+}
+
+/**
+ * Minimal element fake: `attributes` stays synced with the attr/class sets,
+ * `classList` exposes live `length` + indexable tokens + `remove`, and every
+ * `removeAttribute` call is recorded so tests can see an emptied `class`.
+ */
+function fakeEl(opts: { attrs?: string[]; classes?: string[] } = {}) {
+  const attrs = [...(opts.attrs ?? [])];
+  const classes = [...(opts.classes ?? [])];
+  const el: any = { removed: [] as string[], attributes: [] as { name: string }[], classes };
+  const sync = () => {
+    el.attributes = attrs.concat(classes.length ? ['class'] : []).map((name) => ({ name }));
+  };
+  el.removeAttribute = (n: string) => {
+    el.removed.push(n);
+    if (n === 'class') {
+      classes.length = 0;
+    } else {
+      const i = attrs.indexOf(n);
+      if (i > -1) attrs.splice(i, 1);
+    }
+    sync();
+  };
+  Object.defineProperty(el, 'classList', {
+    get() {
+      const list: any = {
+        get length() {
+          return classes.length;
+        },
+        remove: (c: string) => {
+          const i = classes.indexOf(c);
+          if (i > -1) classes.splice(i, 1);
+          sync();
+        },
+      };
+      classes.forEach((c, i) => {
+        list[i] = c;
+      });
+      return list;
+    },
+  });
+  sync();
+  return el;
 }
 
 /** Executes generated payload text inside the fake page's globals. */
@@ -170,6 +222,17 @@ describe('emission correctness', () => {
     expect(rt).not.toContain('\u2029');
     new Function(rt); // parses standalone
   });
+
+  test('emitted regexes survive template-literal cooking', () => {
+    // The runtime is a TS template literal — `\s`/`\d`/`\w` must be written
+    // `\\s`/`\\d`/`\\w` or the emitted text reads `split(/s+/)` etc. Parsing
+    // the payload proves syntax only; this pins the actual regex source.
+    const rt = scriptletRuntimeSource();
+    expect(rt).toContain('split(/\\s+/)');
+    expect(rt).toContain('/^length:(\\d+)(?:-(\\d+))?$/');
+    expect(rt).toContain('/[^$\\w -]/');
+    expect(rt).not.toContain('split(/s+/)');
+  });
 });
 
 describe('runtime behavior under a fake page', () => {
@@ -193,16 +256,63 @@ describe('runtime behavior under a fake page', () => {
     expect(page.window.__bm_sc).toBe(first);
   });
 
-  test('set-constant defines a dotted path, creating intermediates', () => {
+  test('__bm_sc carries a non-enumerable __bm marker', () => {
+    const page = fakePage();
+    run(page, scriptletRuntimeSource());
+    expect(page.window.__bm_sc.__bm).toBe(1);
+    const d = Object.getOwnPropertyDescriptor(page.window.__bm_sc, '__bm');
+    expect(d?.enumerable).toBe(false);
+    expect(Object.keys(page.window.__bm_sc)).not.toContain('__bm');
+  });
+
+  test('a foreign truthy __bm_sc is replaced, not obeyed', () => {
+    const page = fakePage();
+    const foreign = function () {
+      page.window.foreignCalled = true;
+    };
+    page.window.__bm_sc = foreign; // plain assignment → configurable → replaceable
+    runIn(page, [{ name: 'set-constant', args: ['ok2', '5'] }]);
+    expect(page.window.__bm_sc).not.toBe(foreign);
+    expect(page.window.__bm_sc.__bm).toBe(1);
+    expect(page.window.ok2).toBe(5);
+    expect(page.window.foreignCalled).toBeUndefined();
+  });
+
+  test('a foreign non-configurable __bm_sc is logged on its misses and bails', () => {
+    const page = fakePage();
+    const foreign: any = function () {};
+    Object.defineProperty(page.window, '__bm_sc', { value: foreign, configurable: false });
+    run(page, scriptletRuntimeSource());
+    expect(page.window.__bm_sc).toBe(foreign); // unbeatable — cannot redefine
+    expect(foreign.misses).toBe(1); // honest accounting of the blocked install
+  });
+
+  test('set-constant lazily traps a leaf under a page-created intermediate', () => {
     const page = fakePage();
     runIn(page, [{ name: 'set-constant', args: ['ads.blocked', 'false'] }]);
+    // uBO trapChain semantics: no eager {} — `typeof window.ads` must not flip.
+    expect(page.window.ads).toBeUndefined();
+    page.window.ads = {}; // the page's own assignment descends and traps the leaf
     expect(page.window.ads.blocked).toBe(false);
     page.window.ads.blocked = 'sentinel'; // type-mismatch write ends the trap (uBO mustAbort)
     expect(page.window.ads.blocked).toBe('sentinel');
   });
 
+  test('set-constant leaves an existing type-mismatched leaf alone', () => {
+    const page = fakePage();
+    page.window.foo = 42;
+    runIn(page, [{ name: 'set-constant', args: ['foo', 'false'] }]);
+    expect(page.window.foo).toBe(42); // init mustAbort — an existing number isn't masked
+    page.window.foo = 43;
+    expect(page.window.foo).toBe(43); // still a plain data prop — no trap was installed
+    page.window.flag = true;
+    runIn(page, [{ name: 'set-constant', args: ['flag', 'false'] }]);
+    expect(page.window.flag).toBe(false); // same-type existing value still gets trapped
+  });
+
   test('set-constant resolves value tokens', () => {
     const page = fakePage();
+    page.window.t = {}; // intermediate must exist or arrive via page assignment (lazy traps)
     runIn(page, [
       { name: 'set-constant', args: ['t.n', '42'] },
       { name: 'set-constant', args: ['t.o', 'emptyObj'] },
@@ -363,6 +473,174 @@ describe('runtime behavior under a fake page', () => {
     expect(passthrough).toBe('https://cdn.example/lib.js');
   });
 
+  test('prevent-fetch honors a two-token propsToMatch spec', async () => {
+    // `'method:get url:tracker'` — this spec was dead when the runtime
+    // split on the letter 's' (emitted `split(/s+/)` after template
+    // cooking); it also proves key:value needles hit collated init props.
+    const page = fakePage();
+    const seen: string[] = [];
+    page.window.fetch = (u: string) => {
+      seen.push(u);
+      return Promise.resolve('real');
+    };
+    runIn(page, [{ name: 'prevent-fetch', args: ['method:get url:tracker'] }]);
+    const blocked = await page.window.fetch('https://tracker.example/beacon', { method: 'get' });
+    expect(blocked.status).toBe(200);
+    expect(seen).toHaveLength(0);
+    await page.window.fetch('https://tracker.example/beacon', { method: 'post' });
+    await page.window.fetch('https://cdn.example/lib', { method: 'get' });
+    expect(seen).toEqual(['https://tracker.example/beacon', 'https://cdn.example/lib']);
+  });
+
+  test('prevent-fetch serves responseBody tokens through the fake Response', async () => {
+    const page = fakePage();
+    runIn(page, [{ name: 'prevent-fetch', args: ['trk', 'emptyObj'] }]);
+    const res = await page.window.fetch('https://trk.example/');
+    expect(await res.json()).toEqual({}); // emptyObj → body '{}'
+    const page2 = fakePage();
+    runIn(page2, [{ name: 'prevent-fetch', args: ['trk', 'length:5'] }]);
+    const res2 = await page2.window.fetch('https://trk.example/');
+    expect(await res2.text()).toHaveLength(5);
+  });
+
+  test('prevent-fetch negated needle passes matching urls and blocks the rest', async () => {
+    const page = fakePage();
+    const seen: string[] = [];
+    page.window.fetch = (u: string) => {
+      seen.push(u);
+      return Promise.resolve('real');
+    };
+    runIn(page, [{ name: 'prevent-fetch', args: ['!good.com'] }]);
+    await page.window.fetch('https://good.com/keep.js');
+    expect(seen).toEqual(['https://good.com/keep.js']); // NOT-contains → passthrough
+    const res = await page.window.fetch('https://ads.example/x');
+    expect(res.status).toBe(200); // everything else is prevented
+    expect(seen).toHaveLength(1);
+  });
+
+  test('prevent-fetch facade fallback carries blob/formData/redirected/type', async () => {
+    const page = fakePage();
+    page.globals.Response = undefined as any; // force the object-literal facade
+    runIn(page, [{ name: 'prevent-fetch', args: ['trk', 'emptyObj'] }]);
+    const res = await page.window.fetch('https://trk.example/');
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe(200);
+    expect(res.redirected).toBe(false);
+    expect(res.type).toBe('default');
+    expect(await res.text()).toBe('{}');
+    expect(await res.json()).toEqual({});
+    await expect(res.blob()).resolves.toBeDefined();
+    await expect(res.formData()).resolves.toBeDefined();
+    expect(res.clone()).toBe(res);
+  });
+
+  test('prevent-xhr honors a two-token spec and serves responseBody', () => {
+    const page = fakePage();
+    runIn(page, [{ name: 'prevent-xhr', args: ['method:get url:beacon', 'emptyObj'] }]);
+    const x1: any = new page.window.XMLHttpRequest();
+    x1.open('get', 'https://trk.test/beacon');
+    x1.send();
+    expect(x1._sent).toBeUndefined(); // real send never ran
+    expect(x1.readyState).toBe(4);
+    expect(x1.status).toBe(200);
+    expect(x1.responseText).toBe('{}');
+    const x2: any = new page.window.XMLHttpRequest();
+    x2.open('post', 'https://trk.test/beacon');
+    x2.send();
+    expect(x2._sent).toBe(true); // method needle failed → passthrough
+    const x3: any = new page.window.XMLHttpRequest();
+    x3.open('get', 'https://cdn.test/lib');
+    x3.send();
+    expect(x3._sent).toBe(true); // url needle failed → passthrough
+  });
+
+  test('prevent-fetch key:value needles match arbitrary init props', async () => {
+    const page = fakePage();
+    const seen: string[] = [];
+    page.window.fetch = (u: string) => {
+      seen.push(u);
+      return Promise.resolve('real');
+    };
+    runIn(page, [{ name: 'prevent-fetch', args: ['headers:x-tracker'] }]);
+    const blocked = await page.window.fetch('https://api.example/', { headers: { 'x-tracker': '1' } });
+    expect(blocked.status).toBe(200); // '{"x-tracker":"1"}' contains the needle
+    await page.window.fetch('https://api.example/', { headers: { other: '1' } });
+    await page.window.fetch('https://api.example/'); // absent prop → needle skipped → no match
+    expect(seen).toEqual(['https://api.example/', 'https://api.example/']);
+  });
+
+  test('abort-on-stack-trace with no needle aborts every access', () => {
+    // uBO parity: an empty stack needle matches all stacks (default-yes).
+    const page = fakePage();
+    page.window.Ya = { metric: 7 };
+    runIn(page, [{ name: 'abort-on-stack-trace', args: ['Ya.metric'] }]);
+    expect(() => page.window.Ya.metric).toThrow(ReferenceError);
+  });
+
+  test('remove-attr strips matching attribute names only', () => {
+    const page = fakePage();
+    const el = fakeEl({ attrs: ['data-ad', 'id', 'data-track'] });
+    page.document.querySelectorAll = () => [el];
+    runIn(page, [{ name: 'remove-attr', args: ['data-ad|data-track'] }]);
+    // both literals removed — pins the eq() closure (a shared `var` would
+    // have made every matcher test the last token only)
+    expect(el.attributes.map((a: any) => a.name)).toEqual(['id']);
+  });
+
+  test('remove-attr regex tokens accept flags', () => {
+    const page = fakePage();
+    const el = fakeEl({ attrs: ['DATA-AD', 'id'] });
+    page.document.querySelectorAll = () => [el];
+    runIn(page, [{ name: 'remove-attr', args: ['/data-.*/i'] }]);
+    expect(el.attributes.map((a: any) => a.name)).toEqual(['id']);
+  });
+
+  test('remove-class strips matching classes via classList', () => {
+    const page = fakePage();
+    const el = fakeEl({ attrs: ['id'], classes: ['ads', 'keep', 'promo'] });
+    page.document.querySelectorAll = () => [el];
+    runIn(page, [{ name: 'remove-class', args: ['ads|promo'] }]);
+    expect(el.classes).toEqual(['keep']);
+    expect(el.removed).toEqual([]); // 'keep' survives → class attr stays
+  });
+
+  test('remove-class drops the class attribute when emptied', () => {
+    const page = fakePage();
+    const el = fakeEl({ attrs: ['id'], classes: ['ads'] });
+    page.document.querySelectorAll = () => [el];
+    runIn(page, [{ name: 'remove-class', args: ['ads'] }]);
+    expect(el.classes).toEqual([]);
+    expect(el.removed).toEqual(['class']);
+  });
+
+  test('remove-local-storage-item regex keys accept flags', () => {
+    const page = fakePage();
+    page.window.localStorage.setItem('k1', 'x');
+    page.window.localStorage.setItem('K2', 'x');
+    page.window.localStorage.setItem('keep', 'x');
+    runIn(page, [{ name: 'remove-local-storage-item', args: ['/k\\d/i'] }]);
+    expect(page.window.localStorage.getItem('k1')).toBeNull();
+    expect(page.window.localStorage.getItem('K2')).toBeNull();
+    expect(page.window.localStorage.getItem('keep')).toBe('x');
+  });
+
+  test('no-protected-audience stubs existing PA methods with promise fakes', async () => {
+    const page = fakePage();
+    const nav: any = {
+      createAuctionNonce: () => 'real-nonce',
+      joinAdInterestGroup: () => 'real',
+      updateAdInterestGroups: () => {},
+    };
+    // Browser shape: a Navigator constructor whose prototype carries the PA
+    // surface — the runtime prefers `Navigator.prototype` over `navigator`.
+    page.globals.Navigator = function Navigator() {};
+    (page.globals.Navigator as any).prototype = nav;
+    runIn(page, [{ name: 'no-protected-audience', args: [] }]);
+    await expect(nav.createAuctionNonce()).resolves.toBe(''); // pv('') → Promise, not bare ''
+    await expect(nav.joinAdInterestGroup()).resolves.toBeUndefined();
+    expect(nav.updateAdInterestGroups()).toBeUndefined();
+  });
+
   test('nowebrtc stubs RTCPeerConnection', () => {
     const page = fakePage();
     page.window.RTCPeerConnection = function (this: any) {
@@ -380,9 +658,11 @@ describe('runtime behavior under a fake page', () => {
     runIn(page, [
       { name: 'definitely-not-a-scriptlet', args: ['x'] },
       { name: 'also-bogus', args: [] },
+      { name: 'constructor', args: [] }, // Object slots can't dispatch — hasOwnProperty guard
+      { name: '__proto__', args: [] },
       { name: 'set-constant', args: ['ok', '1'] },
     ]);
-    expect(page.window.__bm_sc.misses).toBe(2);
+    expect(page.window.__bm_sc.misses).toBe(4);
     expect(page.window.ok).toBe(1); // good call after bad ones still ran
     const d = Object.getOwnPropertyDescriptor(page.window.__bm_sc, 'misses');
     expect(d?.enumerable).toBe(false);

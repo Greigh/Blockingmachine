@@ -23,9 +23,29 @@
  *    opener; it lands on the substring branch like every other non-`/re/`
  *    arg (uBO's `patternToRegex` does exactly this — an unclosed `/` arg is
  *    an escaped literal).
- *  - `set-constant` walks/creates the dotted path and traps the leaf so
- *    same-type page writes are absorbed while a type-mismatched write ends
- *    the trap (uBO's `mustAbort`) — the ad-wall neutralizer's core move.
+ *  - `set-constant` traps the leaf of a dotted path so same-type page
+ *    writes are absorbed while a type-mismatched write ends the trap
+ *    (uBO's `mustAbort`). Intermediates are LAZY like uBO's trapChain: a
+ *    missing link gets a configurable accessor that holds the old value
+ *    and only descends to trap the rest of the chain when the page
+ *    assigns a real object — no eager `{}` to detect (`typeof` stays
+ *    'undefined') or for the page to stomp (we run at document-start, so
+ *    the real object usually arrives after us). A leaf that already
+ *    exists with a type-mismatched value is left untrapped — the
+ *    mustAbort init-check: `foo=42` must not be masked by
+ *    `set-constant foo false`.
+ *  - `prevent-fetch`/`prevent-xhr` take uBO's propsToMatch surface:
+ *    whitespace-separated `key:value` needles test that collated prop
+ *    (a bare token is a `url`-contains needle; a key containing chars
+ *    outside `$\w -` collapses back to a url needle, matching uBO's
+ *    parsePropertiesToMatch quirk) and a `!`-leading pattern negates.
+ *    A needle on an absent prop is skipped and at least one needle must
+ *    positively match (uBO's matchObjectProperties). The `responseBody`
+ *    token maps uBO's generator (`emptyObj`/`emptyArr`/`emptyStr`/
+ *    `true`/`length:N[-M]`); `responseType` is honored only to set
+ *    `type` on the synthetic response — the trusted JSON flavor that
+ *    also drives headers/status is out of scope. XHR matches uBO's
+ *    `{method, url}` haystack; fetch collates uBO's init-prop whitelist.
  *  - abort scriptlets throw `ReferenceError(<token>)`; a single installed
  *    `window.onerror` swallows only token-carrying messages, so the abort is
  *    invisible to the page (uBO's `getExceptionToken`).
@@ -40,9 +60,15 @@
  *    named varargs also honored.
  *
  * Anti-detection: `__bm_sc` is installed non-enumerable, non-configurable,
- * non-writable; no `console.*` anywhere; unknown names count silently on
- * `__bm_sc.misses` (also non-enumerable). Function `.toString` spoofing is
- * explicitly out of scope (flagged in the P2 plan).
+ * non-writable and tagged with a non-enumerable `__bm=1` marker; no
+ * `console.*` anywhere; unknown names count silently on `__bm_sc.misses`
+ * (also non-enumerable) and dispatch goes through an own-property check so
+ * `constructor`/`__proto__`-style names can't reach Object slots. A
+ * pre-poisoned `__bm_sc` can't disarm the payload: a foreign configurable
+ * value is replaced by ours, while a foreign NON-configurable one can't be
+ * beaten — that case logs on the foreign value's `misses` counter and
+ * bails honestly. Function `.toString` spoofing is explicitly out of scope
+ * (flagged in the P2 plan).
  *
  * Escaping is the XSS surface: every interpolated arg goes through
  * `emitArg` (JSON.stringify + `</script` → `<\/script`, `<!--` → `\x3C!--`,
@@ -118,12 +144,17 @@ export function scriptletRuntimeSource(): string {
   if (runtimeCache === undefined) {
     runtimeCache = `(function(){
 var w=typeof window=='undefined'?globalThis:window;
-if(w.__bm_sc!=null){return}
 var O=Object,dp=O.defineProperty,gpd=O.getOwnPropertyDescriptor,S=String,
 doc=typeof document=='undefined'?null:document,
 noop=function(){},yes=function(){return!0},never=function(){return!1},
 f2s=Function.prototype.toString,has=O.prototype.hasOwnProperty,
 st=w.setTimeout||function(f){f()},tok=null;
+var pre=gpd(w,'__bm_sc');
+if(pre){var pre_v=pre.value;
+if(typeof pre_v=='function'&&pre_v.__bm===1){return}
+if(!pre.configurable){
+try{if(pre_v!=null&&(typeof pre_v=='object'||typeof pre_v=='function')){pre_v.misses=(pre_v.misses|0)+1}}catch(e){}
+return}}
 function fns(f){try{return f2s.call(f)}catch(e){return''}}
 function stk(){try{return S(Error().stack||'')}catch(e){return''}}
 function et(){if(tok!=null){return tok}tok='bm'+Math.random().toString(36).slice(2);try{var oe=w.onerror;w.onerror=function(m){if(typeof m=='string'&&m.indexOf(tok)>-1){return!0}if(typeof oe=='function'){return oe.apply(this,arguments)}return!1}}catch(e){}return tok}
@@ -148,13 +179,12 @@ if(s!==''){var i=s.indexOf('-');if(i<0){mn=mx=parseInt(s,10)||0}else{if(i!==0){m
 return function(v){var n=Math.min(Math.max(Number(v)||0,0),M),r;
 if(mn==null&&mx==null){r=!0}else if(mn===mx){r=n===mn}else if(mn==null){r=n<=mx}else if(mx==null){r=n>=mn}else{r=n>=mn&&n<=mx}
 return ng?!r:r}}
-function walk(o,ch,leaf,mk){for(;;){var i=ch.indexOf('.');
+function walk(o,ch,leaf){for(;;){var i=ch.indexOf('.');
 if(i<0){leaf(o,ch);return}
 var p=ch.slice(0,i),rest=ch.slice(i+1),cur=o[p];
 if(cur!=null&&(typeof cur=='object'||typeof cur=='function')){o=cur;ch=rest;continue}
 var d=gpd(o,p);
 if(d&&!d.configurable){return}
-if(mk){try{dp(o,p,{value:{},writable:!0,enumerable:!0,configurable:!0});o=o[p];ch=rest;continue}catch(e){return}}
 if(d&&d.set!==undefined){return}
 var h=cur;
 try{dp(o,p,{configurable:!0,get:function(){return h},
@@ -163,16 +193,40 @@ return}}
 function leaf(o,p,g,s){var d=gpd(o,p);if(d&&!d.configurable){return}
 var v;try{v=o[p]}catch(e){}
 try{dp(o,p,{configurable:!0,get:function(){return g(v)},set:function(x){v=s(x)}})}catch(e){}}
-function pset(spec){var t=S(spec||'').split(/\s+/),o=[],i,c;
+function isre(s){if(s.length<2||s[0]!=='/'){return!1}var j=s.lastIndexOf('/');return j>0&&/^[dgimsuvy]*$/.test(s.slice(j+1))}
+function pset(spec){var t=S(spec||'').split(/\\s+/),o=[],i,c,k,p;
 for(i=0;i<t.length;i++){if(!t[i]){continue}
 if(t[i]==='*'){o.push({k:'',m:yes});continue}
-c=t[i].indexOf(':');if(c>0){o.push({k:t[i].slice(0,c),m:mm(t[i].slice(c+1))})}else{o.push({k:'',m:mm(t[i])})}}
+c=t[i].indexOf(':');k='';p=t[i];
+if(c>0){k=t[i].slice(0,c);p=t[i].slice(c+1);
+if(/[^$\\w -]/.test(k)){k='';p=t[i]}}
+var ng=!1;if(p[0]==='!'){ng=!0;p=p.slice(1)}
+var m=mm(p);if(ng){var n0=m;m=function(s){return!n0(s)}}
+o.push({k:k,m:m})}
 return o}
-function hall(ps,o){for(var i=0;i<ps.length;i++){var p=ps[i],v=p.k===''?o.url:o[p.k];
-if(v===undefined){return!1}
-if(typeof v!=='string'){try{v=JSON.stringify(v)}catch(e){}if(typeof v!=='string'){return!1}}
-if(!p.m(v)){return!1}}
-return!0}
+function hall(ps,o){var any=!1;
+for(var i=0;i<ps.length;i++){var p=ps[i],v=p.k===''?o.url:o[p.k];
+if(v===undefined){continue}
+if(typeof v!=='string'){try{v=JSON.stringify(v)}catch(e){}if(typeof v!=='string'){continue}}
+if(!p.m(v)){return!1}
+any=!0}
+return any}
+var FPROPS='body cache credentials duplex headers integrity keepalive method mode priority redirect referrer referrerPolicy url'.split(' ');
+function fargs(res,opt){var d={},i;
+try{if(res!=null&&typeof res=='object'&&typeof res.url=='string'){
+for(i=0;i<FPROPS.length;i++){if(res[FPROPS[i]]!==undefined){d[FPROPS[i]]=res[FPROPS[i]]}}
+}else{d.url=S(res)}
+if(opt&&typeof opt=='object'){for(i=0;i<FPROPS.length;i++){if(opt[FPROPS[i]]!==undefined){d[FPROPS[i]]=opt[FPROPS[i]]}}}}catch(e){}
+return d}
+function rtxt(n){var s='',r;while(s.length<n){r=Math.random().toString(36).slice(2);s+=(s?' ':'')+r}return s.slice(0,n)}
+function genc(tok){tok=S(tok||'');
+if(tok==='emptyObj'){return'{}'}
+if(tok==='emptyArr'){return'[]'}
+if(tok==='true'){return rtxt(10)}
+var mch=/^length:(\\d+)(?:-(\\d+))?$/.exec(tok);
+if(mch){var mn=parseInt(mch[1],10)||0,mx=Math.max(parseInt(mch[2],10)||0,mn);
+return rtxt(Math.min(mn+(mx-mn)*Math.random(),500000)|0)}
+return''}
 function obs(fn){if(!doc||typeof w.MutationObserver!=='function'){return}
 var busy=!1;
 try{var mo=new w.MutationObserver(function(){if(busy){return}busy=!0;
@@ -180,10 +234,11 @@ st(function(){busy=!1;try{fn()}catch(e){}},0)});
 mo.observe(doc,{attributes:!0,childList:!0,subtree:!0})}catch(e){
 try{mo.observe(doc.documentElement,{attributes:!0,childList:!0,subtree:!0})}catch(e2){}}}
 function qsa(s){var o=[];if(!doc){return o}try{o=doc.querySelectorAll(s)}catch(e){}return o}
+function eq(n){return function(x){return x===n}}
 function toks(raw){var t=S(raw).split('|'),ts=[],pl=[],i;
 for(i=0;i<t.length;i++){if(!t[i]){continue}
-if(t[i][0]==='/'&&t[i][t[i].length-1]==='/'){ts.push(mm(t[i]))}
-else{var n=t[i];ts.push(function(x){return x===n});pl.push(t[i])}}
+if(isre(t[i])){ts.push(mm(t[i]))}
+else{ts.push(eq(t[i]));pl.push(t[i])}}
 return{t:ts,p:pl}}
 function tw(nm,a,adj){var fn=w[nm];if(!fn){return}
 var ndl=a[0],ng=!1;
@@ -209,9 +264,11 @@ var sf=a[2];if(sf==='stack'||sf==='stackToMatch'){sf=a[3]}
 if(sf&&!mm(sf)(stk())){return}
 var v=cv(a[1]);
 walk(w,S(ch),function(o,p){var d=gpd(o,p);if(d&&!d.configurable){return}
+var ex;try{ex=o[p]}catch(e){ex=undefined}
+if(ex!==undefined&&ex!==null&&v!==undefined&&v!==null&&typeof ex!==typeof v){return}
 var nv=v,dead=!1;
 try{dp(o,p,{configurable:!1,get:function(){return nv},
-set:function(x){if(dead||(x!=null&&nv!=null&&typeof x!==typeof nv)){dead=!0;nv=x}}})}catch(e){}},!0)},
+set:function(x){if(dead||(x!=null&&nv!=null&&typeof x!==typeof nv)){dead=!0;nv=x}}})}catch(e){}})},
 'abort-on-property-read':function(a){if(a[0]){walk(w,S(a[0]),function(o,p){leaf(o,p,die,function(x){return x})})}},
 'abort-on-property-write':function(a){if(a[0]){walk(w,S(a[0]),function(o,p){leaf(o,p,function(v){return v},die)})}},
 'abort-current-inline-script':function(a){if(!a[0]||!doc){return}
@@ -222,7 +279,7 @@ if(cm&&!cm(S(e.src||''))){return!1}
 return sm(S(e.textContent||''))};
 walk(w,S(a[0]),ab(chk))},
 'abort-on-stack-trace':function(a){if(!a[0]){return}
-var nm=a[1]?mm(a[1]):never;
+var nm=a[1]?mm(a[1]):yes;
 walk(w,S(a[0]),ab(function(){return nm(stk())}))},
 'prevent-setTimeout':function(a){tw('setTimeout',a)},
 'prevent-setInterval':function(a){tw('setInterval',a)},
@@ -230,17 +287,26 @@ walk(w,S(a[0]),ab(function(){return nm(stk())}))},
 'adjust-setInterval':function(a){tw('setInterval',a,!0)},
 'prevent-fetch':function(a){var fn=w.fetch;if(!fn){return}
 var ps=pset(a[0]);if(!ps.length&&!a[0]){return}
-w.fetch=function(){var d={url:'',method:''},res=arguments[0],opt=arguments[1];
-try{if(res!=null&&typeof res=='object'){d.url=S(res.url||'');if(res.method!==undefined){d.method=S(res.method)}}else{d.url=S(res)}
-if(opt&&typeof opt=='object'&&opt.method!==undefined){d.method=S(opt.method)}}catch(e){}
+var body=genc(a[1]);
+var rtype='default',rt=S(a[2]||'');
+if(/^(basic|cors|default|error|opaque)$/.test(rt)){rtype=rt}
+w.fetch=function(){var d=fargs(arguments[0],arguments[1]);
 if(hall(ps,d)){
-if(typeof Response=='function'){try{return Promise.resolve(new Response('',{status:200}))}catch(e){}}
-return Promise.resolve({ok:!0,status:200,url:d.url,headers:{get:function(){return null},forEach:noop},
-text:function(){return Promise.resolve('')},json:function(){return Promise.resolve({})},
-arrayBuffer:function(){return Promise.resolve(new ArrayBuffer(0))},clone:function(){return this}})}
+if(typeof Response=='function'){try{var r2=new Response(body,{status:200});
+if(rtype!=='default'){try{dp(r2,'type',{value:rtype})}catch(e){}}
+return Promise.resolve(r2)}catch(e){}}
+return Promise.resolve({ok:!0,status:200,url:d.url||'',headers:{get:function(){return null},forEach:noop},
+redirected:!1,type:rtype,bodyUsed:!1,
+text:function(){return Promise.resolve(body)},
+json:function(){return Promise.resolve().then(function(){return JSON.parse(body)})},
+arrayBuffer:function(){return Promise.resolve(new ArrayBuffer(0))},
+blob:function(){return Promise.resolve(typeof Blob=='function'?new Blob([body]):{})},
+formData:function(){return Promise.resolve(typeof FormData=='function'?new FormData():{})},
+clone:function(){return this}})}
 return fn.apply(this,arguments)}},
 'prevent-xhr':function(a){var X=w.XMLHttpRequest;if(!X||!X.prototype){return}
 var ps=pset(a[0]);if(!ps.length&&!a[0]){return}
+var body=genc(a[1]);
 var op=X.prototype.open,sn=X.prototype.send;
 if(!op||!sn){return}
 var wm=typeof WeakMap=='function'?new WeakMap():null;
@@ -249,7 +315,7 @@ if(wm){wm.set(this,dt)}else{try{this.__bm_xu=dt.u;this.__bm_xm=dt.m}catch(e){}}
 return op.apply(this,arguments)};
 X.prototype.send=function(){var dt=wm?wm.get(this):{u:this.__bm_xu||'',m:this.__bm_xm||''};
 if(dt&&hall(ps,{url:dt.u,method:dt.m})){var xhr=this;
-try{O.defineProperties(xhr,{readyState:{value:4,configurable:!0},status:{value:200,configurable:!0},response:{value:'',configurable:!0},responseText:{value:'',configurable:!0}})}catch(e){}
+try{O.defineProperties(xhr,{readyState:{value:4,configurable:!0},status:{value:200,configurable:!0},response:{value:body,configurable:!0},responseText:{value:body,configurable:!0},responseXML:{value:null,configurable:!0}})}catch(e){}
 var fire=function(t){try{if(typeof xhr['on'+t]=='function'){xhr['on'+t]()}if(typeof xhr.dispatchEvent=='function'&&typeof Event=='function'){xhr.dispatchEvent(new Event(t))}}catch(e){}};
 st(function(){fire('readystatechange');fire('load');fire('loadend')},1);
 return}
@@ -318,11 +384,12 @@ sw();obs(sw)},
 var tk=toks(a[0]);if(!tk.t.length){return}
 var sel=a[1]?S(a[1]):(tk.p.length===tk.t.length?'.'+tk.p.join(',.'):'*');
 var sw=function(){var els=qsa(sel),i,j,k,rm=[];
-for(i=0;i<els.length;i++){var el=els[i];if(!el.attributes){continue}
+for(i=0;i<els.length;i++){var el=els[i];var cl=el&&el.classList;if(!cl||!cl.length){continue}
 rm.length=0;
-for(j=0;j<el.attributes.length;j++){var an=el.attributes[j].name;
-for(k=0;k<tk.t.length;k++){try{if(tk.t[k](an)){rm.push(an);break}}catch(e){}}}
-for(j=0;j<rm.length;j++){try{el.removeAttribute(rm[j])}catch(e){}}}};
+for(j=0;j<cl.length;j++){var cn=cl[j];
+for(k=0;k<tk.t.length;k++){try{if(tk.t[k](cn)){rm.push(cn);break}}catch(e){}}}
+for(j=0;j<rm.length;j++){try{cl.remove(rm[j])}catch(e){}}
+try{if(!cl.length&&el.removeAttribute){el.removeAttribute('class')}}catch(e){}}};
 sw();obs(sw)},
 'set-local-storage-item':function(a){var s;try{s=w.localStorage}catch(e){}store(s,a)},
 'set-session-storage-item':function(a){var s;try{s=w.sessionStorage}catch(e){}store(s,a)},
@@ -330,7 +397,7 @@ sw();obs(sw)},
 if(!s){return}
 var k=S(a[0]||'');
 try{if(k==='*'){s.clear();return}
-if(k[0]==='/'&&k[k.length-1]==='/'){var m=mm(k),rm=[],i;
+if(isre(k)){var m=mm(k),rm=[],i;
 for(i=0;i<s.length;i++){var key=s.key(i);if(key&&m(key)){rm.push(key)}}
 for(i=0;i<rm.length;i++){s.removeItem(rm[i])}return}
 s.removeItem(k)}catch(e){}},
@@ -375,7 +442,7 @@ w.eval=function(src){if(m(S(src||''))){return undefined}return fn.apply(this,arg
 if(!NP){return}
 var pv=function(x){return function(){return typeof Promise=='function'?Promise.resolve(x):x}};
 var sb={joinAdInterestGroup:pv(),runAdAuction:pv(null),leaveAdInterestGroup:pv(),
-clearOriginJoinedAdInterestGroups:pv(),createAuctionNonce:function(){return''},updateAdInterestGroups:noop};
+clearOriginJoinedAdInterestGroups:pv(),createAuctionNonce:pv(''),updateAdInterestGroups:noop};
 for(var k in sb){if(has.call(NP,k)){try{NP[k]=sb[k]}catch(e){}}}}
 };
 function store(s,a){if(!s){return}
@@ -383,8 +450,9 @@ var k=S(a[0]||'');if(!k){return}
 var v=S(a[1]||'');
 try{if(v==='$remove$'){s.removeItem(k);return}
 s.setItem(k,v=='emptyObj'?'{}':v=='emptyArr'?'[]':v=='emptyStr'?'':v)}catch(e){}}
-function sc(n,args){var h=H[n];if(h===undefined){sc.misses=(sc.misses|0)+1;return}try{h(args||[])}catch(e){}}
+function sc(n,args){var h=has.call(H,n)?H[n]:undefined;if(h===undefined){sc.misses=(sc.misses|0)+1;return}try{h(args||[])}catch(e){}}
 dp(sc,'misses',{value:0,writable:!0});
+dp(sc,'__bm',{value:1});
 dp(w,'__bm_sc',{value:sc,enumerable:!1,configurable:!1,writable:!1});
 })();`
   }
@@ -408,7 +476,9 @@ export function scriptletCallSource(invocations: CanonicalScriptlet[]): string {
 /**
  * runtime + calls fused into the `<script>` body's inner text. Returns
  * `undefined` when there's nothing to run so the caller can skip the whole
- * `<script>` element rather than shipping a dead IIFE.
+ * `<script>` element rather than shipping a dead IIFE. The emitted text is
+ * inner-text context only — never interpolate it into attributes or
+ * event-handler contexts.
  */
 export function renderScriptletBlock(invocations: CanonicalScriptlet[] | undefined): string | undefined {
   if (invocations === undefined || invocations.length === 0) {
