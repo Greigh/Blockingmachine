@@ -95,8 +95,15 @@ class TcpDispatcher(
       // emits nothing while the session is still CLOSED).
       val prev = sessions.putIfAbsent(key, fresh)
       if (prev == null) {
-        session = fresh
         stats.flowsOpened.incrementAndGet()
+        if (closed) {
+          // close() ran between the entry check and our insert — its sweep
+          // may already have passed, so undo the insert ourselves.
+          removeSession(key, fresh)
+          fresh.abortWithRst()
+          return true
+        }
+        session = fresh
       } else {
         fresh.abortWithRst()
         session = prev

@@ -99,6 +99,9 @@ open class QueuedSocketUpstream(
     var sock: Socket? = null
     try {
       sock = socketFactory()
+      // Publish BEFORE the dial: abort() closes `socket`, which is the only
+      // way to break an in-flight connect() short of the connect timeout.
+      socket = sock
       protect(sock) // the dial must bypass the tun or every byte loops
       sock.connect(endpoint, connectTimeoutMs)
     } catch (e: Exception) {
@@ -106,9 +109,8 @@ open class QueuedSocketUpstream(
       fail()
       return
     }
-    socket = sock
     if (aborted.get()) {
-      // abort() raced the dial and couldn't see the socket yet — close it here.
+      // abort() raced the dial and closed the socket under us — done.
       runCatching { sock.close() }
       return
     }

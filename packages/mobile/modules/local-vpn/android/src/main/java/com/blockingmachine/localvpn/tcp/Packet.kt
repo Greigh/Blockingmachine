@@ -1,13 +1,14 @@
 package com.blockingmachine.localvpn.tcp
 
 /**
- * IPv4/IPv6 + TCP codec for the userspace TCP core (P4 T1).
+ * IPv4/IPv6 + TCP/UDP codec for the userspace stack (P4 T1; UDP joined for
+ * the capture posture's pass-through relay).
  *
  * Strict-enough header parse (bounds, version, protocol, real checksum
  * verification — bad-checksum segments drop like a real stack) and serialize
- * with real checksums: the IPv4 header checksum and the TCP pseudo-header
- * checksum for both address families (IPv6 carries no header checksum — the
- * TCP pseudo-header sum is all it gets).
+ * with real checksums: the IPv4 header checksum and the transport
+ * pseudo-header checksum for both address families (IPv6 carries no header
+ * checksum — the pseudo-header sum is all it gets).
  *
  * Pure stdlib — no android.jar types — so the whole codec is JVM-testable.
  * All multi-byte fields are big-endian (network order); sequence numbers are
@@ -78,6 +79,19 @@ object Packet {
     fun endSeq(): Long =
       (seq + payload.size + (if (has(FLAG_SYN) || has(FLAG_FIN)) 1 else 0)) and 0xFFFF_FFFFL
   }
+
+  /**
+   * One parsed UDP datagram inside an IP packet — the relay's unit of work.
+   * [srcAddr]/[dstAddr] are the raw wire bytes; [family] says which.
+   */
+  class UdpDatagram(
+    val family: Int,
+    val srcAddr: ByteArray,
+    val dstAddr: ByteArray,
+    val srcPort: Int,
+    val dstPort: Int,
+    val payload: ByteArray,
+  )
 
   /* ------------------------------------------------------------------ */
   /* Parse                                                               */
@@ -150,6 +164,60 @@ object Packet {
       window = u16(buf, off + 14),
       options = opts,
       payload = payload,
+    )
+  }
+
+  /**
+   * Parse a full IP packet into a [UdpDatagram]. Returns null for anything
+   * that is not an unfragmented UDP/IPv4 or UDP/IPv6 packet, and for
+   * malformed headers. The transport checksum is NOT verified — the relay
+   * rewrites the header (and recomputes the checksum) anyway, so a
+   * router-grade bounds check is the right posture here.
+   */
+  fun parseUdp(ip: ByteArray): UdpDatagram? {
+    if (ip.isEmpty()) return null
+    return when (ip[0].toInt() ushr 4) {
+      4 -> parseUdpV4(ip)
+      6 -> parseUdpV6(ip)
+      else -> null
+    }
+  }
+
+  private fun parseUdpV4(ip: ByteArray): UdpDatagram? {
+    if (ip.size < 20) return null
+    val ihl = (ip[0].toInt() and 0x0F) * 4
+    if (ihl < 20 || ip.size < ihl + 8) return null
+    val totalLen = u16(ip, 2)
+    if (totalLen < ihl + 8 || totalLen > ip.size) return null
+    // Fragments can't relay: fragment-1 alone carries the ports — pass none.
+    if (u16(ip, 6) and 0x3FFF != 0) return null
+    if (u8(ip, 9) != PROTO_UDP) return null
+    val udpLen = u16(ip, ihl + 4)
+    if (udpLen < 8 || ihl + udpLen > totalLen) return null
+    return UdpDatagram(
+      family = FAMILY_V4,
+      srcAddr = ip.copyOfRange(12, 16),
+      dstAddr = ip.copyOfRange(16, 20),
+      srcPort = u16(ip, ihl),
+      dstPort = u16(ip, ihl + 2),
+      payload = ip.copyOfRange(ihl + 8, ihl + udpLen),
+    )
+  }
+
+  private fun parseUdpV6(ip: ByteArray): UdpDatagram? {
+    if (ip.size < 48) return null
+    if (u8(ip, 6) != PROTO_UDP) return null // plain UDP only — no extension-header chasing
+    val payloadLen = u16(ip, 4)
+    if (payloadLen < 8 || ip.size < 40 + payloadLen) return null
+    val udpLen = u16(ip, 44)
+    if (udpLen < 8 || udpLen > payloadLen) return null
+    return UdpDatagram(
+      family = FAMILY_V6,
+      srcAddr = ip.copyOfRange(8, 24),
+      dstAddr = ip.copyOfRange(24, 40),
+      srcPort = u16(ip, 40),
+      dstPort = u16(ip, 42),
+      payload = ip.copyOfRange(48, 40 + udpLen),
     )
   }
 
@@ -240,6 +308,59 @@ object Packet {
       )
     }
 
+  /**
+   * Build a full IP packet carrying one UDP datagram — the relay's reply
+   * path. All checksums are computed (the UDP sum is mandatory for v6; a
+   * computed 0 is sent as 0xFFFF, per RFC 768/8200).
+   */
+  fun buildUdpDatagram(
+    family: Int,
+    srcAddr: ByteArray,
+    dstAddr: ByteArray,
+    srcPort: Int,
+    dstPort: Int,
+    payload: ByteArray,
+  ): ByteArray {
+    val udpLen = 8 + payload.size
+    val ipLen = (if (family == FAMILY_V6) 40 else 20) + udpLen
+    val buf = ByteArray(ipLen)
+
+    val udpOff: Int
+    if (family == FAMILY_V6) {
+      buf[0] = 0x60                    // version 6, tc/flow = 0
+      put16(buf, 4, udpLen)            // payload length
+      buf[6] = PROTO_UDP.toByte()      // next header
+      buf[7] = 64                      // hop limit
+      srcAddr.copyInto(buf, 8)
+      dstAddr.copyInto(buf, 24)
+      udpOff = 40
+    } else {
+      buf[0] = 0x45                    // version 4, IHL 5
+      buf[1] = 0                       // DSCP/ECN
+      put16(buf, 2, ipLen)
+      put16(buf, 4, 0)                 // identification
+      put16(buf, 6, 0x4000)            // DF, fragment offset 0
+      buf[8] = 64                      // TTL
+      buf[9] = PROTO_UDP.toByte()
+      srcAddr.copyInto(buf, 12)
+      dstAddr.copyInto(buf, 16)
+      udpOff = 20
+    }
+
+    put16(buf, udpOff, srcPort)
+    put16(buf, udpOff + 2, dstPort)
+    put16(buf, udpOff + 4, udpLen)
+    // checksum patched below
+    payload.copyInto(buf, udpOff + 8)
+
+    if (family == FAMILY_V4) {
+      put16(buf, 10, ipv4Checksum(buf, 0, 20))
+    }
+    val sum = udpChecksum(srcAddr, dstAddr, buf, udpOff, udpLen)
+    put16(buf, udpOff + 6, if (sum == 0) 0xFFFF else sum)
+    return buf
+  }
+
   /** The only option block we ever emit: bare MSS, already 4-aligned. */
   fun mssOption(mss: Int): ByteArray =
     byteArrayOf(OPT_MSS.toByte(), 4, (mss shr 8).toByte(), (mss and 0xFF).toByte())
@@ -288,6 +409,19 @@ object Packet {
   }
 
   /**
+   * The IP protocol byte/word (6 TCP / 17 UDP / …) without parsing the
+   * transport header — the cheapest "is this ours" routing check.
+   */
+  fun peekIpProtocol(ip: ByteArray): Int? {
+    if (ip.isEmpty()) return null
+    return when (ip[0].toInt() ushr 4) {
+      4 -> if (ip.size < 20) null else u8(ip, 9)
+      6 -> if (ip.size < 40) null else u8(ip, 6)
+      else -> null
+    }
+  }
+
+  /**
    * UDP twin of [peekTcpDstPort] — a routing peek only (no checksum), used by
    * the service for QUIC suppression. Fragments return null on the same
    * posture as TCP: fragment-1's port can't speak for its siblings.
@@ -322,16 +456,33 @@ object Packet {
    * address sizes: 4-byte addrs → IPv4 pseudo-header (src,dst,zero,proto,len16);
    * 16-byte → IPv6 (src,dst,len32,zero×3,next-header).
    */
-  fun tcpChecksum(srcAddr: ByteArray, dstAddr: ByteArray, segment: ByteArray, off: Int, len: Int): Int {
+  fun tcpChecksum(srcAddr: ByteArray, dstAddr: ByteArray, segment: ByteArray, off: Int, len: Int): Int =
+    transportChecksum(PROTO_TCP, srcAddr, dstAddr, segment, off, len)
+
+  /**
+   * UDP checksum including the pseudo-header — same shape as TCP's, protocol
+   * 17; the pseudo-header length field is the UDP length (header + payload).
+   */
+  fun udpChecksum(srcAddr: ByteArray, dstAddr: ByteArray, datagram: ByteArray, off: Int, len: Int): Int =
+    transportChecksum(PROTO_UDP, srcAddr, dstAddr, datagram, off, len)
+
+  private fun transportChecksum(
+    proto: Int,
+    srcAddr: ByteArray,
+    dstAddr: ByteArray,
+    segment: ByteArray,
+    off: Int,
+    len: Int,
+  ): Int {
     var sum = wordSum(srcAddr, 0, srcAddr.size)
     sum += wordSum(dstAddr, 0, dstAddr.size)
     if (srcAddr.size == 4) {
-      sum += PROTO_TCP.toLong()     // 0x00 || proto
-      sum += len.toLong()           // 16-bit TCP length
+      sum += proto.toLong()         // 0x00 || proto
+      sum += len.toLong()           // 16-bit transport length
     } else {
-      sum += (len ushr 16).toLong() // 32-bit TCP length, high word first
+      sum += (len ushr 16).toLong() // 32-bit transport length, high word first
       sum += (len and 0xFFFF).toLong()
-      sum += PROTO_TCP.toLong()     // 0x0000 || next-header
+      sum += proto.toLong()         // 0x0000 || next-header
     }
     sum += wordSum(segment, off, len)
     return fold(sum)

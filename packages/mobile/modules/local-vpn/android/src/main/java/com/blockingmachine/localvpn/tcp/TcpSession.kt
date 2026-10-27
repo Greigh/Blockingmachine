@@ -615,7 +615,14 @@ class TcpSession(
   /* Teardown                                                            */
   /* ------------------------------------------------------------------ */
 
-  /** Graceful end — both directions already closed; nothing left to signal. */
+  /**
+   * End of the flow — graceful or abnormal; the RST (if any) has already been
+   * emitted by the caller. [SessionUpstream.abort] runs on EVERY path —
+   * idempotent and non-blocking by contract, so it is safe under the monitor.
+   * Without it a clean close (LAST_ACK's final ACK, TIME_WAIT expiry) would
+   * leave a socket upstream's worker parked on its queue forever — one leaked
+   * thread + fd per flow.
+   */
   private fun terminate() {
     state = State.CLOSED
     terminated = true
@@ -624,13 +631,11 @@ class TcpSession(
     sendQ.clear()
     sendQBytes = 0
     unacked.clear()
+    upstream.abort()
   }
 
   /** Abnormal end where the RST has already been emitted by the caller. */
-  private fun terminateAborted() {
-    terminate()
-    upstream.abort()
-  }
+  private fun terminateAborted() = terminate()
 
   /** Abnormal end — RST to the client, abort the upstream. Idempotent. */
   fun abortWithRst() {

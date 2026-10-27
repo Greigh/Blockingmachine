@@ -103,11 +103,20 @@ class LocalVpnModule : Module() {
      * Arm hub HTTPS capture on the same tunnel: TCP :80/:443 is spliced to
      * `<hubHost>:9294` (PROXY-v2), other TCP is relayed, QUIC is suppressed.
      * Rides on ACTION_START — a running DNS filter keeps its ruleset.
+     * [HubHost.requireLiteral] rejects names/empties and the tun's own
+     * virtual space before the intent ever flies — a bad value surfaces as
+     * a rejected promise, not a silently broken tunnel.
      */
     AsyncFunction("startHttpsCapture") { hubHost: String ->
+      val host = HubHost.requireLiteral(
+        hubHost,
+        VpnFilterService.TUN_ADDR,
+        VpnFilterService.VIRTUAL_DNS,
+        VpnFilterService.TUN_ADDR6,
+      )
       Intent(context, VpnFilterService::class.java).apply {
         action = VpnFilterService.ACTION_START
-        putExtra(VpnFilterService.EXTRA_HUB_HOST, hubHost)
+        putExtra(VpnFilterService.EXTRA_HUB_HOST, host)
       }.let {
         context.startForegroundService(it)
       }

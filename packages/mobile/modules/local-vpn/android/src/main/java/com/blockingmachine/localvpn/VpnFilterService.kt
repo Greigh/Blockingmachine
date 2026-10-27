@@ -15,6 +15,7 @@ import com.blockingmachine.localvpn.tcp.HubUpstream
 import com.blockingmachine.localvpn.tcp.Packet
 import com.blockingmachine.localvpn.tcp.TcpDispatcher
 import com.blockingmachine.localvpn.tcp.TcpStats
+import com.blockingmachine.localvpn.tcp.UdpDispatcher
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramPacket
@@ -43,10 +44,14 @@ import kotlinx.coroutines.launch
  *    splice them to the hub engine — a `protect()`ed `Socket(hub, 9294)` with
  *    a PROXY-v2 header carrying the app's real 5-tuple. Every other TCP port
  *    gets a `protect()`ed pass-through relay to the original destination so
- *    non-web connectivity is unchanged; UDP/443 (QUIC) is counted and dropped
- *    so HTTP/3 falls back into the TCP path; other UDP/ICMP has no relay yet
- *    and drops — the same effective posture as before, when it never entered
- *    the tunnel (general UDP relay is a documented non-goal for this phase).
+ *    non-web connectivity is unchanged. UDP gets a [UdpDispatcher] relay —
+ *    one `protect()`ed DatagramSocket per (src,dst) pair — because the broad
+ *    routes pull EVERY datagram into the tun and without a relay NTP/STUN/
+ *    WireGuard would black-hole. Two exceptions keep their posture: UDP/443
+ *    (QUIC) is counted and dropped so HTTP/3 falls back into the TCP path,
+ *    and UDP/53 stays with the DNS path (DnsPacket claims it first — the
+ *    filter still answers). Multicast/broadcast UDP can't pass a connected
+ *    unicast socket, and ICMP has no relay — those still drop.
  *
  * `protect()` on every upstream dial is the loop-prevention guarantee that
  * lets the broad routes coexist with the hub dial — those sockets can never
@@ -70,8 +75,9 @@ class VpnFilterService : VpnService() {
     /** The hub engine's PROXY-v2 data listener — fixed convention. */
     const val HUB_DATA_PORT = 9294
 
-    private const val TUN_ADDR = "10.0.0.2"
-    private const val TUN_ADDR6 = "fd00::2"
+    /** The tun's own virtual addresses — read by the module's hub-host guard. */
+    const val TUN_ADDR = "10.0.0.2"
+    const val TUN_ADDR6 = "fd00::2"
     private const val CHANNEL_ID = "blockingmachine_vpn"
     private const val NOTIF_ID = 42
     private const val TAG = "BmVpnFilter"
@@ -102,6 +108,7 @@ class VpnFilterService : VpnService() {
   @Volatile private var hubHost: String? = null
   @Volatile private var captureDispatcher: TcpDispatcher? = null
   @Volatile private var relayDispatcher: TcpDispatcher? = null
+  @Volatile private var udpDispatcher: UdpDispatcher? = null
   @Volatile private var ticker: Thread? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -173,10 +180,10 @@ class VpnFilterService : VpnService() {
     updateNotification(
       if (hubHost != null) "$label · filtering DNS + HTTPS capture" else "$label · filtering DNS"
     )
-    readerJob = scope.launch { readLoop(pfd) }
+    readerJob = scope.launch { readLoop(pfd, this) }
   }
 
-  private fun readLoop(pfd: ParcelFileDescriptor) {
+  private fun readLoop(pfd: ParcelFileDescriptor, cs: CoroutineScope) {
     val input = FileInputStream(pfd.fileDescriptor)
     val output = FileOutputStream(pfd.fileDescriptor)
     // The fd's single writer — dispatcher emits (this thread, per-session
@@ -192,7 +199,9 @@ class VpnFilterService : VpnService() {
     val hub = hubHost
     if (hub != null) {
       // :80/:443 → the hub engine (PROXY-v2); every other TCP port → a
-      // protected pass-through to the original destination.
+      // protected pass-through to the original destination; UDP → the
+      // datagram relay (without it the broad routes black-hole everything
+      // that isn't DNS or QUIC).
       val capture = TcpDispatcher(
         emit = emit,
         upstreamFactory = { key -> HubUpstream(key, hub, HUB_DATA_PORT, { s: Socket -> protect(s) }) },
@@ -202,15 +211,20 @@ class VpnFilterService : VpnService() {
         upstreamFactory = { key -> DirectUpstream(key, { s: Socket -> protect(s) }) },
         portFilter = { true }, // capture claims :80/:443 first — this is the remainder
       )
+      val udp = UdpDispatcher(
+        emit = emit,
+        protect = { s: DatagramSocket -> protect(s) },
+      )
       captureDispatcher = capture
       relayDispatcher = relay
+      udpDispatcher = udp
       captureStats = capture.stats
       captureRunning.set(true)
       startTicker()
-      Log.i(TAG, "hub capture armed — TCP :80/:443 → $hub:$HUB_DATA_PORT")
+      Log.i(TAG, "hub capture armed — TCP :80/:443 → $hub:$HUB_DATA_PORT, UDP relayed")
     }
 
-    while (scope.isActive) {
+    while (cs.isActive) {
       val n = try {
         input.read(buf)
       } catch (e: Exception) {
@@ -225,12 +239,14 @@ class VpnFilterService : VpnService() {
         if (relayDispatcher == null) continue
         if (Packet.peekUdpDstPort(packet) == 443) {
           // QUIC suppression — counted; the TCP fallback lands in the stack.
+          // Precedes the UDP relay so HTTP/3 still can't bypass filtering.
           quicDropped.incrementAndGet()
           continue
         }
         if (captureDispatcher?.onPacket(packet) == true) continue
         if (relayDispatcher?.onPacket(packet) == true) continue
-        continue
+        if (udpDispatcher?.onPacket(packet) == true) continue
+        continue // ICMP et al. — no consumer, honest drop
       }
 
       if (blocklist?.isBlocked(query.domain) == true) {
@@ -262,14 +278,18 @@ class VpnFilterService : VpnService() {
     }
   }
 
-  /** 100ms housekeeping for both dispatchers — retransmit-lite + idle reaps. */
+  /** 100ms housekeeping for the dispatchers — retransmit-lite + idle reaps. */
   private fun startTicker() {
-    ticker = thread(name = "bm-tcp-tick", isDaemon = true) {
-      while (true) {
+    ticker?.interrupt()
+    val t = Thread {
+      // The exit condition is supersession: teardown interrupts us and a
+      // newer tunnel's ticker replaces `ticker` — either way this loop ends.
+      while (ticker === Thread.currentThread()) {
         val c = captureDispatcher
         val r = relayDispatcher
-        if (c == null && r == null) break
-        runCatching { c?.onTick(); r?.onTick() }
+        val u = udpDispatcher
+        if (c == null && r == null && u == null) break
+        runCatching { c?.onTick(); r?.onTick(); u?.onTick() }
         try {
           Thread.sleep(TICK_MS)
         } catch (e: InterruptedException) {
@@ -277,20 +297,27 @@ class VpnFilterService : VpnService() {
         }
       }
     }
+    t.name = "bm-tcp-tick"
+    t.isDaemon = true
+    ticker = t // assigned before start — the loop can never see a stale value
+    t.start()
   }
 
   /**
-   * Capture off, tunnel up: the closed dispatcher refuses new packets so
-   * :80/:443 flows fall through to the pass-through relay — traffic keeps
-   * working, just no longer spliced through the hub.
+   * Capture off, tunnel up: re-establish on the narrow DNS-only routes.
+   * Keeping the broad routes with the relay dispatchers would keep every
+   * app flow detoured through userspace long after the user asked to stop;
+   * the rebuild RSTs in-flight relayed flows (the old fd dies) — apps
+   * reconnect, and real traffic never enters the tunnel again.
    */
   private fun stopCapture() {
     hubHost = null
-    captureDispatcher?.close()
-    captureDispatcher = null
-    captureStats = null
-    captureRunning.set(false)
-    if (running.get()) updateNotification("$label · filtering DNS") else stopSelf()
+    if (running.get()) {
+      startTunnel(label) // tears the old tunnel + dispatchers down first
+    } else {
+      teardownTunnel()
+      stopSelf()
+    }
   }
 
   /** Tear down the current tunnel — safe to call with none established. */
@@ -303,6 +330,8 @@ class VpnFilterService : VpnService() {
     captureDispatcher = null
     relayDispatcher?.close()
     relayDispatcher = null
+    udpDispatcher?.close()
+    udpDispatcher = null
     captureStats = null
     captureRunning.set(false)
     tun?.close()

@@ -8,6 +8,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketAddress
 import java.util.concurrent.ConcurrentLinkedDeque
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -47,6 +48,7 @@ class HubUpstreamTest {
   ) : Socket() {
     val out = ByteArrayOutputStream()
     val connectedAt = AtomicReference<SocketAddress?>()
+    val connectStarted = AtomicBoolean(false)
     val shutdownOutCalled = AtomicBoolean(false)
     private val closedFlag = AtomicBoolean(false)
     private val closeLatch = CountDownLatch(1)
@@ -65,6 +67,7 @@ class HubUpstreamTest {
     }
 
     override fun connect(endpoint: SocketAddress?, timeout: Int) {
+      connectStarted.set(true)
       while (!isClosed && !connectGate.await(25, TimeUnit.MILLISECONDS)) {
         // parked — a slow/refused dial held off the reader thread
       }
@@ -120,6 +123,22 @@ class HubUpstreamTest {
     assertNull(fake.connectedAt.get())
 
     up.abort()
+    gate.countDown()
+  }
+
+  @Test
+  fun `abort during the dial closes the in-flight socket`() {
+    val gate = CountDownLatch(1) // connect parks — a slow hub
+    val fake = FakeSocket(connectGate = gate)
+    val up = HubUpstream(key(), "192.0.2.10", 9294, protect = {}, socketFactory = { fake })
+    val emitted = mutableListOf<ByteArray>()
+    TcpSession(key(), { emitted += it }, up)
+    await { fake.connectStarted.get() } // the worker is mid-connect()
+
+    up.abort()
+    // The socket was published before connect() so abort() could close it —
+    // the parked dial breaks without waiting on the gate or the 10s timeout.
+    await { fake.isClosed }
     gate.countDown()
   }
 
@@ -208,7 +227,8 @@ class HubUpstreamTest {
     val fake = FakeSocket(inboundScript = reply)
     val k = key()
     val up = HubUpstream(k, "192.0.2.10", 9294, protect = {}, socketFactory = { fake })
-    val emitted = mutableListOf<ByteArray>()
+    // COW list — the upstream READER thread appends while the asserts iterate.
+    val emitted = CopyOnWriteArrayList<ByteArray>()
     val session = TcpSession(k, { emitted += it }, up)
     handshook(session, emitted)
 

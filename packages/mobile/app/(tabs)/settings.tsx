@@ -28,8 +28,11 @@ import {
   fetchHubCa,
   hostFromUrl,
   isValidIpLiteral,
+  loadCaFingerprint,
   loadHubHost,
+  saveCaFingerprint,
   saveHubHost,
+  type HubCa,
 } from '../../src/filter/httpsCapture';
 import { nativeRulesPath } from '../../src/filter/ruleset';
 import { ActionButton, Card, Pill, SectionTitle } from '../../src/components/ui';
@@ -209,9 +212,10 @@ function LocalFilterCard({ ready }: { ready: boolean }) {
 /**
  * Android-only card: route this device's web traffic through a LAN hub's HTTPS
  * engine. TCP :80/:443 is spliced onto a `protect()`ed socket to
- * `<hub>:9294` (PROXY-v2), every other TCP port relays through unchanged, and
- * UDP/443 (QUIC) is dropped so HTTP/3 falls back into the TCP path. The hub
- * must be bound to its LAN address (BM_BIND_HOST) for :9294/:9293 to answer.
+ * `<hub>:9294` (PROXY-v2), every other TCP port relays through unchanged,
+ * other UDP relays through protected datagram sockets, and UDP/443 (QUIC) is
+ * dropped so HTTP/3 falls back into the TCP path. The hub must be bound to
+ * its LAN address (BM_BIND_HOST) for :9294/:9293 to answer.
  */
 function HttpsCaptureCard() {
   const { activeServer } = useServers();
@@ -283,11 +287,42 @@ function HttpsCaptureCard() {
       const host = (savedHub ?? hub).trim();
       if (!host) throw new UserError('Set the hub IP first.');
       const ca = await fetchHubCa(host);
-      await LocalVpn.installCaCertificate('Blockingmachine Hub CA', ca.certPem);
-      setCaLine(
-        `Install prompt sent — Android asks you to confirm.${ca.sha256Fingerprint ? ` CA sha256: ${ca.sha256Fingerprint}` : ''}`,
-      );
+      confirmCaInstall(ca, await loadCaFingerprint());
     });
+
+  /**
+   * The CA PEM arrives over cleartext LAN HTTP — anything on the network
+   * could have swapped it. The confirm step is the flow's only authenticity
+   * check: show the fingerprint and have the user compare it against the
+   * hub's own HTTPS Filtering card before the install intent ever fires. A
+   * changed fingerprint vs. the last confirmed one is called out as drift.
+   */
+  const confirmCaInstall = (ca: HubCa, previousFingerprint: string | null) => {
+    const fp = ca.sha256Fingerprint;
+    const drifted = !!previousFingerprint && !!fp && previousFingerprint !== fp;
+    const body =
+      'Compare this fingerprint with the one shown in the hub\u2019s HTTPS Filtering card — the CA is fetched over plain HTTP, so matching it is the only check that it wasn\u2019t swapped on the network.\n\n' +
+      (fp
+        ? `SHA-256\n${fp}`
+        : 'The hub didn\u2019t send a fingerprint — only continue on a network you fully trust.') +
+      (drifted
+        ? '\n\nIt changed since you last confirmed it — make sure the hub\u2019s CA really was rotated.'
+        : '');
+    Alert.alert('Trust this hub CA?', body, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Install CA',
+        onPress: () =>
+          void act('ca', async () => {
+            await LocalVpn.installCaCertificate('Blockingmachine Hub CA', ca.certPem);
+            await saveCaFingerprint(fp ?? null);
+            setCaLine(
+              `Install prompt sent — Android asks you to confirm.${fp ? ` CA sha256: ${fp}` : ''}`,
+            );
+          }),
+      },
+    ]);
+  };
 
   return (
     <Card>
@@ -308,6 +343,9 @@ function HttpsCaptureCard() {
         <>
           <Text style={styles.meta}>
             {`Hub ${savedHub ?? hub}:9294 · ${s!.flowsOpened.toLocaleString()} flows · ${s!.flowsClosed.toLocaleString()} closed · ${s!.quicDropped.toLocaleString()} QUIC dropped`}
+          </Text>
+          <Text style={styles.meta}>
+            While capture runs: QUIC stays dropped so HTTPS uses TCP, other UDP relays through the tunnel — LAN broadcast/multicast (mDNS, SSDP) still pauses.
           </Text>
           <View style={styles.buttonRow}>
             <View style={styles.buttonFlex}>

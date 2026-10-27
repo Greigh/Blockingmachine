@@ -63,11 +63,12 @@ class EndToEndTest {
     assertTrue(fin.has(Packet.FLAG_FIN))
     assertEquals(data.seq + data.payload.size, fin.seq)
 
-    // Final ACK → flow reaped.
+    // Final ACK → flow reaped — the clean close frees the upstream too.
     dispatcher.onPacket(pkt(CISSN + 18, fin.seq + 1, Packet.FLAG_ACK))
     assertEquals(0, dispatcher.activeCount())
     assertEquals(1, dispatcher.stats.flowsOpened.get())
     assertEquals(1, dispatcher.stats.flowsClosed.get())
+    assertTrue(upstream.aborted)
   }
 
   /* ------------------------------------------------------------ */
@@ -123,5 +124,6 @@ class EndToEndTest {
     assertEquals(0, dispatcher.activeCount())
     assertEquals(1, dispatcher.stats.flowsOpened.get())
     assertEquals(1, dispatcher.stats.flowsClosed.get())
+    assertTrue(upstream.aborted)
   }
 }

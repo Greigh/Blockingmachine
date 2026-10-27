@@ -347,4 +347,81 @@ class PacketTest {
     assertEquals(0L, rst.seq)
     assertEquals(seg.endSeq(), rst.ack)
   }
+
+  /* ---------------------------------------------------------- */
+  /* UDP codec (the relay's wire format)                         */
+  /* ---------------------------------------------------------- */
+
+  /** 10.0.0.2:5353 → 8.8.8.8:53, 14-byte payload — independent Python golden. */
+  private val v4UdpGolden = byteArrayOf(
+    0x45, 0x00, 0x00, 0x2a, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11, 0x20, 0xb2.toByte(),
+    0x0a, 0x00, 0x00, 0x02, 0x08, 0x08, 0x08, 0x08,
+    0x14, 0xe9.toByte(), 0x00, 0x35, 0x00, 0x16, 0xbd.toByte(), 0x5d,
+    0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  )
+
+  /** fd00::2:5353 → 2606:4700:4700::1111:53 — same payload, v6 golden. */
+  private val v6UdpGolden = byteArrayOf(
+    0x60, 0x00, 0x00, 0x00, 0x00, 0x16, 0x11, 0x40,
+    0xfd.toByte(), 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+    0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x11,
+    0x14, 0xe9.toByte(), 0x00, 0x35, 0x00, 0x16, 0x15, 0x55,
+    0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  )
+
+  private val udpPayload = byteArrayOf(
+    0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  )
+
+  @Test
+  fun `v4 udp emits golden bytes`() {
+    val got = Packet.buildUdpDatagram(Packet.FAMILY_V4, v4src, byteArrayOf(8, 8, 8, 8), 5353, 53, udpPayload)
+    assertArrayEquals(v4UdpGolden, got)
+  }
+
+  @Test
+  fun `v6 udp emits golden bytes`() {
+    val src6 = hexToBytes("fd000000000000000000000000000002")
+    val dst6 = hexToBytes("26064700470000000000000000001111")
+    val got = Packet.buildUdpDatagram(Packet.FAMILY_V6, src6, dst6, 5353, 53, udpPayload)
+    assertArrayEquals(v6UdpGolden, got)
+  }
+
+  @Test
+  fun `udp round-trip parses what serialize emits`() {
+    for (fam in listOf(Packet.FAMILY_V4, Packet.FAMILY_V6)) {
+      val src = if (fam == Packet.FAMILY_V4) v4src else hexToBytes("fd000000000000000000000000000002")
+      val dst = if (fam == Packet.FAMILY_V4) v4dst else hexToBytes("26064700470000000000000000001111")
+      val wire = Packet.buildUdpDatagram(fam, src, dst, 53000, 123, udpPayload)
+      val dg = Packet.parseUdp(wire)!!
+      assertEquals(fam, dg.family)
+      assertArrayEquals(src, dg.srcAddr)
+      assertArrayEquals(dst, dg.dstAddr)
+      assertEquals(53000, dg.srcPort)
+      assertEquals(123, dg.dstPort)
+      assertArrayEquals(udpPayload, dg.payload)
+      // The checksum field as emitted verifies to zero end-to-end.
+      val off = if (fam == Packet.FAMILY_V6) 40 else 20
+      assertEquals(0, Packet.udpChecksum(dg.srcAddr, dg.dstAddr, wire, off, 8 + dg.payload.size))
+    }
+  }
+
+  @Test
+  fun `parseUdp drops fragments, non-udp, and truncation`() {
+    assertNull(Packet.parseUdp(v4SynGolden)) // TCP proto
+    assertNull(Packet.parseUdp(ByteArray(0)))
+    val frag = v4UdpGolden.copyOf()
+    frag[6] = 0x20 // MF — relay passes no partial datagrams
+    assertNull(Packet.parseUdp(frag))
+    val short = v4UdpGolden.copyOfRange(0, v4UdpGolden.size - 2)
+    assertNull(Packet.parseUdp(short)) // declared UDP length exceeds the packet
+  }
+
+  @Test
+  fun `peekIpProtocol reads the transport protocol`() {
+    assertEquals(Packet.PROTO_TCP, Packet.peekIpProtocol(v4SynGolden))
+    assertEquals(Packet.PROTO_UDP, Packet.peekIpProtocol(v4UdpGolden))
+    assertEquals(Packet.PROTO_UDP, Packet.peekIpProtocol(v6UdpGolden))
+    assertNull(Packet.peekIpProtocol(ByteArray(0)))
+  }
 }

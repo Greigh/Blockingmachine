@@ -5,8 +5,9 @@
  * once the hub CA is installed on this device).
  *
  * This file is the pure-logic seam: IP-literal validation, the hub's persisted
- * address (AsyncStorage — same store family the server list uses), the CA
- * fetch, and URL building. The card keeps the consent + KeyChain plumbing.
+ * address + last-confirmed CA fingerprint (AsyncStorage — same store family
+ * the server list uses), the CA fetch, and URL building. The card keeps the
+ * consent + KeyChain plumbing.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -18,6 +19,7 @@ export const HUB_DATA_PORT = 9294;
 export const HUB_CONTROL_PORT = 9293;
 
 const HUB_HOST_KEY = 'bm.httpsCapture.hubHost';
+const CA_FINGERPRINT_KEY = 'bm.httpsCapture.caFingerprint';
 
 /* ------------------------------------------------------------------ */
 /* Hub address                                                         */
@@ -95,6 +97,29 @@ export async function saveHubHost(host: string | null): Promise<void> {
     else await AsyncStorage.removeItem(HUB_HOST_KEY);
   } catch {
     // Persistence is convenience, not correctness — a lost draft just re-asks.
+  }
+}
+
+/**
+ * The last CA fingerprint the user explicitly confirmed (at the install
+ * prompt). Read on each fetch so a changed fingerprint shows as drift — the
+ * CA arrives over cleartext LAN HTTP, so the confirm prompt is the only
+ * authenticity check the flow has.
+ */
+export async function loadCaFingerprint(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(CA_FINGERPRINT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCaFingerprint(fingerprint: string | null): Promise<void> {
+  try {
+    if (fingerprint) await AsyncStorage.setItem(CA_FINGERPRINT_KEY, fingerprint);
+    else await AsyncStorage.removeItem(CA_FINGERPRINT_KEY);
+  } catch {
+    // Same posture as the hub host — a lost record just re-warns next fetch.
   }
 }
 

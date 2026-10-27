@@ -193,10 +193,12 @@ class TcpSessionTest {
     assertTrue(fin.has(Packet.FLAG_FIN))
     assertEquals(TcpSession.State.LAST_ACK, session.state)
 
-    // Client ACKs our FIN → fully closed.
+    // Client ACKs our FIN → fully closed — and the upstream is torn down too:
+    // a clean close must not leave its worker parked on the queue forever.
     session.onPacket(clientPacket(CISSN + 2, fin.seq + 1, Packet.FLAG_ACK))
     assertTrue(session.terminated)
     assertEquals(TcpSession.State.CLOSED, session.state)
+    assertTrue(upstream.aborted)
   }
 
   @Test
@@ -216,10 +218,11 @@ class TcpSessionTest {
     assertEquals(TcpSession.State.TIME_WAIT, session.state)
     assertTrue(lastSeg().has(Packet.FLAG_ACK))
 
-    // TIME_WAIT-lite expires on tick.
+    // TIME_WAIT-lite expires on tick — the graceful reap aborts upstream too.
     assertFalse(session.onTick(now + TcpSession.TIME_WAIT_MS - 1))
     assertTrue(session.onTick(now + TcpSession.TIME_WAIT_MS + 1))
     assertTrue(session.terminated)
+    assertTrue(upstream.aborted)
   }
 
   /* ------------------------- violations ----------------------- */
@@ -353,6 +356,7 @@ class TcpSessionTest {
     session.onPacket(clientPacket(CISSN + 8, fin.seq + 1, Packet.FLAG_ACK))
     assertTrue(session.terminated)
     assertEquals(TcpSession.State.CLOSED, session.state)
+    assertTrue(upstream.aborted)
   }
 
   @Test
@@ -441,6 +445,7 @@ class TcpSessionTest {
     assertEquals(TcpSession.State.TIME_WAIT, session.state)
     assertTrue(session.onTick(now + TcpSession.TIME_WAIT_MS + 1))
     assertTrue(session.terminated)
+    assertTrue(upstream.aborted) // the TIME_WAIT reap must free the upstream
   }
 
   @Test

@@ -3,6 +3,7 @@
  * "Start capture" on, the control-URL/host helpers, and the /v1/proxy/ca fetch
  * contract (certPem extraction + friendly failures).
  */
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   fetchHubCa,
   hostFromUrl,
@@ -10,6 +11,8 @@ import {
   isValidIpLiteral,
   isValidIpv4,
   isValidIpv6,
+  loadCaFingerprint,
+  saveCaFingerprint,
 } from '../filter/httpsCapture';
 import { UserError } from '../errors';
 
@@ -18,6 +21,8 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(async () => undefined),
   removeItem: jest.fn(async () => undefined),
 }));
+
+const store = AsyncStorage as jest.Mocked<typeof AsyncStorage>;
 
 describe('isValidIpv4', () => {
   it('accepts dotted quads', () => {
@@ -123,5 +128,33 @@ describe('fetchHubCa', () => {
       throw new TypeError('Network request failed');
     }) as unknown as typeof fetch;
     await expect(fetchHubCa('192.168.1.20', fetchMock)).rejects.toThrow(UserError);
+  });
+});
+
+describe('CA fingerprint persistence', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('round-trips the last-confirmed fingerprint', async () => {
+    store.getItem.mockResolvedValueOnce('AA:BB:CC');
+    await expect(loadCaFingerprint()).resolves.toBe('AA:BB:CC');
+    expect(store.getItem).toHaveBeenCalledWith('bm.httpsCapture.caFingerprint');
+
+    await saveCaFingerprint('DD:EE:FF');
+    expect(store.setItem).toHaveBeenCalledWith('bm.httpsCapture.caFingerprint', 'DD:EE:FF');
+  });
+
+  it('clears the stored fingerprint on null', async () => {
+    await saveCaFingerprint(null);
+    expect(store.removeItem).toHaveBeenCalledWith('bm.httpsCapture.caFingerprint');
+    expect(store.setItem).not.toHaveBeenCalled();
+  });
+
+  it('degrades quietly when the store is unavailable', async () => {
+    store.getItem.mockRejectedValueOnce(new Error('no store'));
+    await expect(loadCaFingerprint()).resolves.toBeNull();
+    store.setItem.mockRejectedValueOnce(new Error('no store'));
+    await expect(saveCaFingerprint('AA')).resolves.toBeUndefined();
   });
 });

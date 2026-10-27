@@ -100,12 +100,14 @@ export const LocalVpn = {
   startProxy: (rulesPath: string, port = 8890) => get().startProxy(rulesPath, port),
   stopProxy: () => get().stopProxy(),
   /** Arm hub HTTPS capture on the tunnel — the hub engine then owns :80/:443 verdicts. */
-  startHttpsCapture: (hubHost: string) => get().startHttpsCapture(hubHost),
+  startHttpsCapture: (hubHost: string) =>
+    isLocalVpnSupported() ? get().startHttpsCapture(hubHost) : Promise.resolve(false),
   stopHttpsCapture: () => get().stopHttpsCapture(),
   httpsCaptureStatus: (): Promise<HttpsCaptureStatus> =>
     isLocalVpnSupported() ? get().httpsCaptureStatus().catch(() => EMPTY_CAPTURE) : Promise.resolve(EMPTY_CAPTURE),
   /** Fire Android's certificate-install UI with a hub CA PEM — a real user consent. */
-  installCaCertificate: (name: string, certPem: string) => get().installCaCertificate(name, certPem),
+  installCaCertificate: (name: string, certPem: string) =>
+    isLocalVpnSupported() ? get().installCaCertificate(name, certPem) : Promise.resolve(false),
   status: (): Promise<LocalVpnStatus> =>
     isLocalVpnSupported() ? get().status().catch(() => EMPTY_STATUS) : Promise.resolve(EMPTY_STATUS),
 };

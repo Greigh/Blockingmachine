@@ -196,4 +196,27 @@ class TcpDispatcherTest {
     assertEquals(1, upstreams.count { it.aborted }) // exactly the loser's dial was freed
     assertEquals(1, racing.stats.flowsOpened.get())
   }
+
+  @Test
+  fun `close inside the create path undoes the winning insert`() {
+    // close() racing a SYN between the entry check and putIfAbsent could leak
+    // the fresh session — its sweep may already have passed. The post-insert
+    // closed check is the cover; driving close() from the factory makes the
+    // interleave deterministic.
+    lateinit var closing: TcpDispatcher
+    closing = TcpDispatcher(
+      emit = { emitted += it },
+      upstreamFactory = {
+        closing.close() // the sweep runs before our putIfAbsent — it can't see us
+        TcpSessionTest.FakeUpstream().also { upstreams += it }
+      },
+      nowMs = { now },
+    )
+    assertTrue(closing.onPacket(syn(50000)))
+    assertEquals(0, closing.activeCount())
+    assertEquals(1, upstreams.size)
+    assertTrue(upstreams.single().aborted) // the leaked session was reaped, not parked
+    assertEquals(1, closing.stats.flowsOpened.get())
+    assertEquals(1, closing.stats.flowsClosed.get())
+  }
 }
