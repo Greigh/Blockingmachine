@@ -260,6 +260,40 @@ export const HttpsFilterCard: React.FC = () => {
     return fp.length > 23 ? `${fp.slice(0, 23)}…` : fp;
   }, [caTrust]);
 
+  // The content-depth line (P2 Task 4) — a secondary line under the strip
+  // rather than more cells: every segment hides at zero so the ribbon stays
+  // clean while the surface exists. The cosmetic index's populations lead so
+  // "loaded but not injecting" reads differently from "0 rules" (an engine
+  // predating the field reports nothing at all).
+  const contentLine = useMemo(() => {
+    const s = status?.stats;
+    if (!s) return null;
+    const parts: string[] = [];
+    if (s.cosmetic != null) {
+      parts.push(
+        `${s.cosmetic.selectors.toLocaleString()} selectors · ${s.cosmetic.scriptlets.toLocaleString()} scriptlets` +
+          (s.cosmetic.styles > 0 ? ` · ${s.cosmetic.styles.toLocaleString()} styles` : '') +
+          ' loaded',
+      );
+    }
+    if ((s.htmlInjected ?? 0) > 0)
+      parts.push(`${(s.htmlInjected ?? 0).toLocaleString()} pages injected`);
+    if ((s.responsesBlocked ?? 0) > 0)
+      parts.push(`${(s.responsesBlocked ?? 0).toLocaleString()} responses blocked`);
+    // "Emitted" is the honest verb — the count is invocations spliced into
+    // page markup, not verified in-page executions (a defused or CSP-refused
+    // scriptlet still counts here).
+    if ((s.scriptletsInvoked ?? 0) > 0)
+      parts.push(`${(s.scriptletsInvoked ?? 0).toLocaleString()} scriptlets emitted`);
+    if ((s.cspRewrites ?? 0) > 0)
+      parts.push(`${(s.cspRewrites ?? 0).toLocaleString()} CSP rewrites`);
+    if ((s.skippedScriptlets ?? 0) > 0)
+      parts.push(`${(s.skippedScriptlets ?? 0).toLocaleString()} scriptlets skipped`);
+    if ((s.injectionsSkipped ?? 0) > 0)
+      parts.push(`${(s.injectionsSkipped ?? 0).toLocaleString()} injections skipped`);
+    return parts.length > 0 ? parts.join(' · ') : null;
+  }, [status?.stats]);
+
   const trustState = caTrust?.state;
   const showCaRow = engineAlive || (caTrust != null && caTrust.state !== 'unavailable');
   const showCaptureHint = status?.platform === 'darwin' && status?.captureServiceInstalled === false;
@@ -402,6 +436,16 @@ export const HttpsFilterCard: React.FC = () => {
             <span className="protection-live-detail">{status.rulesLoaded.toLocaleString()}</span>
           </div>
         </div>
+      )}
+
+      {engineAlive && contentLine !== null && (
+        <p
+          className="deploy-feed-box-desc"
+          style={{ margin: '6px 0 0' }}
+          title="Content depth since engine start — cosmetic rules indexed, pages that received injected markup, responses blocked on their content-type, and scriptlet invocations emitted into pages (emitted, not verified executions)."
+        >
+          Content filtering — {contentLine}
+        </p>
       )}
 
       {/* The answering engine's CA differs from the recorded last-trusted

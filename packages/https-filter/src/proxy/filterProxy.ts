@@ -116,6 +116,15 @@ export interface ProxyStats {
    * `evaluator.size` is otherwise unobservable once a reload swaps it.
    */
   rulesSize: number;
+  /**
+   * The live cosmetic index's rule populations — its `size()` seeded at
+   * start and refreshed by `reload()` alongside `rulesSize`, the same
+   * observability contract (the index is immutable and swapped whole).
+   * `null` when this engine was started without an index — "no cosmetic
+   * layer" must read differently from "0 rules" so the card can tell
+   * loaded-but-not-injecting apart from an empty index.
+   */
+  cosmetic: ReturnType<CosmeticIndex['size']> | null;
 }
 
 export interface RunningProxy {
@@ -316,6 +325,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     flowsTerminated: 0,
     pinsLearned: 0,
     rulesSize: evaluator.size,
+    cosmetic: cosmeticIndex?.size() ?? null,
   };
   const sockets = new Set<net.Socket>();
 
@@ -1101,6 +1111,10 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           evaluator = createRequestEvaluator(rawRules);
           if (newCosmeticIndex !== undefined) {
             cosmeticIndex = newCosmeticIndex;
+            // The stats half of the index swap — same contract as
+            // rulesSize: the surface must name the ruleset now live,
+            // not the one that booted.
+            stats.cosmetic = newCosmeticIndex.size();
           }
           stats.rulesSize = evaluator.size;
         },

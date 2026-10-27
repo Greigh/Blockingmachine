@@ -245,6 +245,17 @@ describe('control API routes', () => {
     expect(body.corruptLineCount).toBe(0);
     expect(typeof body.uptimeSeconds).toBe('number');
     expect(body.stats.flowsTotal).toBe(app.proxy.stats().flowsTotal);
+    // The cosmetic index rides the same stats surface as rulesSize — the
+    // booted ruleset holds no cosmetic rules, so the populations are zeros
+    // but the index itself is present (non-null): "loaded, empty" must not
+    // read as "no cosmetic layer".
+    expect(body.stats.cosmetic).toEqual({
+      selectors: 0,
+      exceptions: 0,
+      scriptlets: 0,
+      scriptletExceptions: 0,
+      styles: 0,
+    });
   });
 
   test('POST /v1/proxy/toggle pauses → CONNECT blind-tunnels; resume re-terminates', async () => {
@@ -346,6 +357,42 @@ describe('control API routes', () => {
     );
     expect(connectStatus).toBe('HTTP/1.1 403 Forbidden');
     sock.destroy();
+  });
+
+  test('a reload swaps the cosmetic index live — stats.cosmetic follows', async () => {
+    // The file gets cosmetic rules on top of the ||one.example^ network
+    // rule the pause-semantics suite relies on — the index is the response
+    // pipeline's half of the same line file, swapped by the same reload.
+    await writeFile(
+      rulesPath,
+      '||one.example^\nexample.com##.ad-banner\nexample.com##+js(set-constant, foo, 1)\n',
+    );
+    const res = await fetch(`${base}/v1/proxy/reload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.status).toBe(200);
+
+    const status = (await (await fetch(`${base}/v1/proxy/status`)).json()) as Record<
+      string,
+      any
+    >;
+    expect(status.stats.cosmetic).toEqual({
+      selectors: 1,
+      exceptions: 0,
+      scriptlets: 1,
+      scriptletExceptions: 0,
+      styles: 0,
+    });
+    // The evaluator indexes network rules only — cosmetic lines must not
+    // inflate the request-rules count.
+    expect(status.rulesLoaded).toBe(1);
+    const stats = (await (await fetch(`${base}/v1/proxy/stats`)).json()) as Record<
+      string,
+      any
+    >;
+    expect(stats.cosmetic).toEqual(status.stats.cosmetic);
   });
 
   test('GET /v1/proxy/ca returns PEM + openssl-equivalent sha256 fingerprint + notAfter', async () => {

@@ -61,6 +61,30 @@ export interface FilterProxyStatus {
     pinsLearned: number;
     rulesSize: number;
     blockRatePercent: number;
+    /**
+     * P2 content-depth counters — optional because an older engine's
+     * payload simply lacks them; the card reads each as zero. Per-response
+     * blocks (`responsesBlocked`) are the content-type re-verdict's; the
+     * injection counters count real emissions and their skips.
+     */
+    responsesBlocked?: number;
+    htmlInjected?: number;
+    scriptletsInvoked?: number;
+    skippedScriptlets?: number;
+    injectionsSkipped?: number;
+    cspRewrites?: number;
+    /**
+     * The live cosmetic index's populations, or null when the engine runs
+     * without an index — "loaded but not injecting" vs "0 rules" is only
+     * distinguishable with it.
+     */
+    cosmetic?: {
+      selectors: number;
+      exceptions: number;
+      scriptlets: number;
+      scriptletExceptions: number;
+      styles: number;
+    } | null;
   };
 }
 

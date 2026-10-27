@@ -126,6 +126,86 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **Fix shape:** a `--refuse-under-squat` rehearsal leg: bind :9294, run the installer, assert exit 1 + the "an engine already listens" line + that `dscl . -list /Users/_blockingmachine` shows no new account.
 - **Verify:** run the variant on a live mac — the install dies naming the squatter and `/etc/pf.anchors/com.blockingmachine` is untouched.
 
+### 104. Extended-CSS rules (`#?#`, `#@?#`, `#$?#`, `#@$?#`) are parsed-and-skipped — procedural selectors need an engine port
+
+- **Where:** `packages/core/src/cosmetic/cosmeticIndex.ts` — `findMarker` classifies the four extended markers and `stats.extendedCss`/`stats.extendedStyles` count them; nothing downstream ever sees the rules.
+- **What:** uBO/AdGuard's procedural selectors (`:has()`, `:contains()`, `:matches-attr()`, `:upward()`, …) ride the `#?#` family — the index drops them at build time, so an element whose only cover is procedural gets no hiding on terminated pages.
+- **Why left:** the P2 plan's explicit non-goal — real support is a selector engine inside the injected runtime (parse the procedural pseudo-args, evaluate against the DOM, stay off hot paths), which is its own phase, not an index change.
+- **Fix shape:** a minimal extended-css evaluator emitted beside `__bm_sc` — resolve procedural pseudos over `querySelectorAll` results at document-start plus the runtime's existing `MutationObserver` seam (`obs()`), and keep the index counting what the engine still cannot apply.
+- **Verify:** a terminated page under a `#?#div:has(> .ad)` rule actually hides the element; `extendedCss` shrinks to whatever forms the port still skips.
+
+### 105. The injected scriptlet library covers the common uBO/AdGuard surface, but several upstream behaviors are stubbed or absent
+
+- **Where:** `packages/https-filter/src/pipeline/scriptlets.ts` — the `prevent-fetch`/`prevent-xhr` facades, `set-constant`'s `walk`/`leaf` chain, and `genc`'s response-body generator.
+- **What:** the known thin spots: `prevent-fetch`'s `responseType` arg only sets `type` on the synthetic Response — uBO's trusted JSON flavor (which also drives headers/status) is unimplemented; the synthetic XHR returns the same string for `response`/`responseText` regardless of the request's declared `responseType` (uBO switches — `'json'` gets a parsed object); `genc` knows no `war:` bodies (uBO ships redirect payloads as web_accessible_resources); a `throttle` named vararg is unrecognized — it lands in the stack-needle slot and quietly no-ops the invocation; `walk` bails on a mid-chain accessor that already has a setter (`d.set !== undefined → return`) where uBO chains the previous setter so page writes still reach it; and the fake `Response` facade's `clone()` returns `this`, so a cloned-and-consumed body shares `bodyUsed` state a real Response would not.
+- **Why left:** each miss is real but rare — the alias table plus the propsToMatch surface cover the scriptlet traffic today's lists actually carry; deepening is routine runtime work, not design.
+- **Fix shape:** port the flavors one scriptlet at a time — trusted `prevent-fetch` response fields, XHR `responseType` switching, a `war:` body table, `throttle`/`as` vararg keying, `prevSetter` chaining in the set-constant walk, a real `clone()` — each with a `new Function` harness test like the existing smoke suite.
+- **Verify:** per-gap harness tests; in particular a `+js(…, throttle, N)` invocation still fires (delayed) rather than silently no-op'ing.
+
+### 106. Injected scriptlets carry no `.toString` spoofing — a page that reads `fn.toString()` sees the wrappers
+
+- **Where:** `packages/https-filter/src/pipeline/scriptlets.ts` — every wrapped native (`w.fetch`, `X.prototype.open`/`send`, `JSON.parse`, `w.open`, the timers, `addEventListener`) ships its own function source.
+- **What:** uBO spoofs `Function.prototype.toString` answers for its wrappers (`function fetch() { [native code] }`); ours do not — `fetch.toString()` returns the wrapper's real source, which fingerprints the engine to anti-adblock scripts.
+- **Why left:** explicitly out of scope in the P2 plan — the hook must lie only about OUR functions while staying invisible itself (including `toString.toString()`), a small but delicate piece.
+- **Fix shape:** wrap `Function.prototype.toString` behind an own-property map of wrapped→native spellings; extend the spoof to the hook's own source or the layer self-incriminates.
+- **Verify:** after `prevent-fetch` installs, `fetch.toString()` reads the native spelling and `Object.keys`/`for…in` expose nothing.
+
+### 107. `#@#+js():matches-path(…)` path-scoped scriptlet kill-alls parse as malformed — the exception never applies
+
+- **Where:** `packages/core/src/cosmetic/cosmeticIndex.ts` — `parseScriptletCall` returns null on the empty name before `trailing` is even read, so `+js():matches-path(/x/)` lands in `stats.malformed` instead of a path-scoped cancel.
+- **What:** AdGuard ships `host#@#+js():matches-path(/…)` to cancel a host's scriptlets only under a path pattern; dropped outright, the host keeps every scriptlet the list meant to except — over-injection relative to intent. (A non-exception `+js(name):matches-path(…)` invocation skips via `scopeModifiers` — the honest under-direction; the exception skip is the over-direction.)
+- **Why left:** the index keys on hostnames and the pipeline never hands it a path — supporting path scope means threading the request path through `forHost`/`decideResponse`, a signature change across the pipeline rather than a parse tweak.
+- **Fix shape:** carry the URL path into the cosmetic lookup, apply `:matches-path` rules only on a match, and extend the empty-name kill-all sentinel to its path-scoped form.
+- **Verify:** `example.com#@#+js():matches-path(/ads/)` cancels scriptlets on `example.com/ads/x` but not on `example.com/` — an e2e leg beside the existing mitm injection tests.
+
+### 108. Injectable flows force `accept-encoding: identity` upstream — no in-proxy decompress/recompress path exists
+
+- **Where:** `wantsIdentityEncoding` in `packages/https-filter/src/proxy/httpRelay.ts` (the request-side strip), plus the `injectSkipped: 'encoded'` passthrough in `decideResponse` — the escape hatch for an upstream that compresses anyway.
+- **What:** any flow that could be rewritten asks the upstream for identity bytes — the bandwidth cost of cosmetic injection and `$csp` merges; the upstream's gzip/br reach is deliberately surrendered on those flows.
+- **Why left:** accepted trade documented at the seam and in the plan — AdGuard/mitmproxy normalize the same way; an honest decompress-buffer-splice-recompress loop is real machinery, not a correctness gap.
+- **Fix shape:** `zlib`/`brotli` streams around the buffered body — forward the client's real `accept-encoding`, decompress non-identity bodies, splice, and recompress matching the encoding the upstream actually sent.
+- **Verify:** an injectable page upstream-compressed as gzip arrives at the client compressed AND injected — a `filterProxy.mitm.test.ts` leg; `injectionsSkipped` stops counting `encoded` skips on compliant upstreams.
+
+### 109. Pages served as `text/plain` or with no `content-type` never receive cosmetic injection
+
+- **Where:** `decideResponse` in `packages/https-filter/src/pipeline/response.ts` — `buffer-inject` gates on `mediaType === 'text/html'` only; `mapResponseContentType` lands `text/plain`/absent on `other`/no-token for the typed re-verdict.
+- **What:** a mislabeled or header-less HTML page streams verbatim — real-world coverage misses whatever sloppy origins serve; injection only ever runs on a declared HTML response.
+- **Why left:** deliberate under-injection — sniffing markup inside an arbitrary body and splicing into it risks corrupting bytes that genuinely are not HTML; the failure mode is missing cosmetics, not mangled pages.
+- **Fix shape:** if coverage ever demands it, sniff only when the buffered body opens like markup (`<!doctype`/`<html` after leading whitespace) AND the host carries a payload — never on `application/octet-stream` or declared binary types.
+- **Verify:** a `text/plain`-labeled page whose first bytes are `<html>` receives the injected `<style>`; a binary body under `text/plain` passes through byte-identical.
+
+### 110. A `default-src` carrying `'strict-dynamic'` gets no synthesized `script-src` — CSP2-level engines keep refusing the injected script
+
+- **Where:** `widenChain` in `packages/https-filter/src/pipeline/response.ts` — `strictDynamicApplies` skips the `default-src` clone on the script chain only (the style chain still synthesizes; `'strict-dynamic'` is inert there).
+- **What:** `default-src 'self' 'strict-dynamic'` with no `script-src` → the clone would ship the keyword that makes CSP3 ignore the `'unsafe-inline'` it exists to carry — a widen that only pretends to work, so it is not emitted. The residual: a CSP2-only engine (honors `'unsafe-inline'`, doesn't know `'strict-dynamic'`) loses a widen it could have used — the injected script stays refused there.
+- **Why left:** deliberate, and documented at the code path — no honest directive beats one that lies about widening; the client gives no signal of its CSP level, and a strict-dynamic page opted into the CSP3 contract anyway.
+- **Fix shape:** none planned — the entry records the accepted residual; if CSP2 reach ever matters, the only honest move is emitting the clone minus `'strict-dynamic'`, gated on a signal that does not exist today.
+- **Verify:** `response.test.ts` pins the skip ("a 'strict-dynamic' default-src does not synthesize script-src — style-src still does"); closing this flag means changing that assertion with a reasoned trade.
+
+### 111. The `</head` injection anchor is a first-literal match — an occurrence inside a script string or comment steers the splice point
+
+- **Where:** `findTag`/`resolveAnchor` in `packages/https-filter/src/pipeline/response.ts` — the first literal `</head`/`<head` wins regardless of the context it sits in.
+- **What:** a page whose head carries `"</head>"` inside a JS string literal or an `<!-- -->` comment gets the injected markup inside that string/comment instead of at the real head boundary — a wasted injection (never a security hole — the payload is inert markup and the string context neutralizes it), not a correctness guarantee.
+- **Why left:** upstream parity — uBO's HTML filtering does the same literal-anchor search; a context-aware scan needs a tokenizer over the head section, a bigger instrument than the observed miss rate justifies.
+- **Fix shape:** if it ever bites: skip `<!-- -->` spans and quoted script-text runs when resolving anchors — bounded extra work on the already-buffered ≤512 KiB body.
+- **Verify:** a fixture page with `console.log("</head")` in an inline script must splice the `<style>` at the real `</head>`, not inside the string — compared byte-for-byte against the uninstrumented origin's output around the anchor.
+
+### 112. A combined `*.sony.*` domain token parses as a plain entity — the subdomains-only scope is dropped
+
+- **Where:** `parseDomainList` in `packages/core/src/cosmetic/cosmeticIndex.ts` — `*.` is stripped first (`subdomainsOnly`), then the `.*` tail classifies the token `{kind:'entity', name:'sony'}` and the subdomains-only qualifier never reaches it.
+- **What:** AdGuard's `*.sony.*` means "proper subdomains of any sony entity" (`www.sony.com`, never apex `sony.com`); indexed as a plain entity the rule also fires on the apex — a small over-application.
+- **Why left:** the combined shape is rare in real lists and errs toward more filtering, not less — the index treats it as the entity rule it nearly is rather than rejecting it.
+- **Fix shape:** carry a sub-entity token kind through the suffix walk — match when the host's registrable domain is `name.tld` AND a subdomain label precedes it (`decomposeDomain` already exposes the pieces).
+- **Verify:** `*.sony.*##.ad` fires on `a.sony.com` but not `sony.com`; the existing `sony.*` entity tests keep passing.
+
+### 113. A throwing `onEvent` listener escapes the response pipeline's 'end' handler — emit is deliberately outside the mutation try
+
+- **Where:** `bufferAndInject`'s `body.once('end', …)` in `packages/https-filter/src/proxy/httpRelay.ts` — `emit?.(…)` sits outside the mutation try by design (its own comment: a listener throw inside the try would be miscounted as `inject-skip`).
+- **What:** a throwing listener propagates out of the stream's `emit('end')` — an uncaught on the relay path. Today's only listener (`onResponseEvent` in `filterProxy.ts`) cannot throw — `ledgerEvent` try-guards `policy.recordEvent` and counter increments cannot — so the contract holds by construction, not by isolation.
+- **Why left:** wrapping emit inside the relay is a worse failure mode — either miscounted (a throw reads as injector failure → spurious `inject-skip`) or silently swallowed; the honest posture is a non-throwing-listener contract, which the single caller honors today.
+- **Fix shape:** if a second listener ever attaches (telemetry, UI hooks), wrap `emit?.()` in its own try/catch that logs-and-continues — placed post-mutation so accounting stays exact.
+- **Verify:** an injected listener that throws must not wedge or 502 the flow — response bytes still arrive and stats stay consistent; today that is a contract review, not a test.
+
 ## Closed
 
 ### 97. The CA private key rested as 0600 plaintext — closed by `ca.key.enc`, an AES-256-GCM envelope under an OS-stored wrap secret (`8dae574`)

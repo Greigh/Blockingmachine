@@ -98,6 +98,81 @@ describe('HttpsFilterCard — status surface', () => {
     expect(screen.queryByText('11%')).not.toBeNull();
     // Running engine → pins fetched too.
     expect(bridge.getHttpsFilterPins).toHaveBeenCalled();
+    // No content-depth counters and no cosmetic index in this payload —
+    // the secondary line stays hidden rather than rendering zeros.
+    expect(screen.queryByText(/Content filtering/)).toBeNull();
+  });
+
+  it('renders the content-filtering line from P2 stats, hidden when empty', async () => {
+    installBridge({
+      getHttpsFilterStatus: jest.fn(() =>
+        Promise.resolve({
+          ...running,
+          stats: {
+            ...running.stats!,
+            htmlInjected: 12,
+            responsesBlocked: 3,
+            scriptletsInvoked: 34,
+            cspRewrites: 2,
+            skippedScriptlets: 1,
+            injectionsSkipped: 4,
+            cosmetic: {
+              selectors: 129_601,
+              exceptions: 11_000,
+              scriptlets: 5_658,
+              scriptletExceptions: 4,
+              styles: 9,
+            },
+          },
+        }),
+      ),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // The index populations lead — "loaded but not injecting" must read
+    // differently from "0 rules" — then each non-zero counter, with the
+    // emitted (not executed) wording for scriptlets.
+    expect(screen.queryByText(/Content filtering —/)).not.toBeNull();
+    expect(
+      screen.queryByText(/129,601 selectors · 5,658 scriptlets · 9 styles loaded/),
+    ).not.toBeNull();
+    expect(screen.queryByText(/12 pages injected/)).not.toBeNull();
+    expect(screen.queryByText(/3 responses blocked/)).not.toBeNull();
+    expect(screen.queryByText(/34 scriptlets emitted/)).not.toBeNull();
+    expect(screen.queryByText(/2 CSP rewrites/)).not.toBeNull();
+    expect(screen.queryByText(/1 scriptlets skipped/)).not.toBeNull();
+    expect(screen.queryByText(/4 injections skipped/)).not.toBeNull();
+
+    // A loaded-but-empty index still surfaces — "0 rules" is a distinct,
+    // reportable state (the line shows only its populations segment).
+    cleanup();
+    installBridge({
+      getHttpsFilterStatus: jest.fn(() =>
+        Promise.resolve({
+          ...running,
+          stats: {
+            ...running.stats!,
+            cosmetic: {
+              selectors: 0,
+              exceptions: 0,
+              scriptlets: 0,
+              scriptletExceptions: 0,
+              styles: 0,
+            },
+          },
+        }),
+      ),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/0 selectors · 0 scriptlets loaded/)).not.toBeNull();
+    expect(screen.queryByText(/pages injected/)).toBeNull();
   });
 
   it('shows the capture hint only for darwin without the capture service', async () => {

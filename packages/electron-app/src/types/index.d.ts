@@ -537,6 +537,25 @@ export interface HttpsFilterStatus {
     pinsLearned: number;
     rulesSize: number;
     blockRatePercent: number;
+    /** P2 content-depth counters — optional on older engines; read as zero. */
+    responsesBlocked?: number;
+    htmlInjected?: number;
+    /** Scriptlet invocations emitted into pages — emitted, not verified-run. */
+    scriptletsInvoked?: number;
+    skippedScriptlets?: number;
+    injectionsSkipped?: number;
+    cspRewrites?: number;
+    /**
+     * The engine's cosmetic index populations (null = engine has no index) —
+     * distinguishes "loaded but not injecting" from "0 rules".
+     */
+    cosmetic?: {
+      selectors: number;
+      exceptions: number;
+      scriptlets: number;
+      scriptletExceptions: number;
+      styles: number;
+    } | null;
   };
 }
 
