@@ -102,7 +102,7 @@ function fakePage(): FakePage {
     XMLHttpRequest: window.XMLHttpRequest, EventTarget: window.EventTarget,
     URL, Response, JSON, Promise, WeakMap, Error, Object, Array, Number, String,
     Math, RegExp, ArrayBuffer, parseInt, parseFloat, isFinite, isNaN,
-    decodeURIComponent, Function,
+    decodeURIComponent, Function, Blob, FormData,
     setTimeout: nativeTimeout, setInterval: nativeInterval,
     Event: function (this: any, t: string) { this.type = t; },
   };
@@ -542,7 +542,8 @@ describe('runtime behavior under a fake page', () => {
     expect(await res.json()).toEqual({});
     await expect(res.blob()).resolves.toBeDefined();
     await expect(res.formData()).resolves.toBeDefined();
-    expect(res.clone()).toBe(res);
+    expect(res.clone()).not.toBe(res); // uBO parity: a real clone() is a new Response
+    expect(res.clone().bodyUsed).toBe(false);
   });
 
   test('prevent-xhr honors a two-token spec and serves responseBody', () => {
@@ -649,7 +650,7 @@ describe('runtime behavior under a fake page', () => {
     runIn(page, [{ name: 'no-protected-audience', args: [] }]);
     await expect(nav.createAuctionNonce()).resolves.toBe(''); // pv('') → Promise, not bare ''
     await expect(nav.joinAdInterestGroup()).resolves.toBeUndefined();
-    expect(nav.updateAdInterestGroups()).toBeUndefined();
+    await expect(nav.updateAdInterestGroups()).resolves.toBeUndefined(); // real PA surface is async
   });
 
   test('nowebrtc stubs RTCPeerConnection', () => {
@@ -686,5 +687,301 @@ describe('runtime behavior under a fake page', () => {
     run(page, `try{(window.__bm_sc)('set-constant',[null])}catch(_e){}`);
     runIn(page, [{ name: 'set-constant', args: ['alive', '7'] }]);
     expect(page.window.alive).toBe(7);
+  });
+});
+
+describe('flag-105 upstream parity gaps', () => {
+  test('prevent-fetch responseType JSON applies whitelisted response props', async () => {
+    const page = fakePage();
+    runIn(page, [
+      {
+        name: 'prevent-fetch',
+        args: ['trk', 'emptyObj', '{"status":403,"statusText":"Not Found","ok":false,"type":"opaque"}'],
+      },
+    ]);
+    const res = await page.window.fetch('https://trk.example/x');
+    expect(res.status).toBe(403);
+    expect(res.statusText).toBe('Not Found');
+    expect(res.ok).toBe(false);
+    expect(res.type).toBe('opaque');
+    expect(res.url).toBe('https://trk.example/x'); // uBO sets url per-request
+  });
+
+  test('prevent-fetch responseType JSON drops out-of-range values and the trusted-only headers key', async () => {
+    const page = fakePage();
+    runIn(page, [
+      {
+        name: 'prevent-fetch',
+        args: ['trk', 'emptyObj', '{"status":404,"statusText":"Gone","type":"basic","headers":{"x-evil":"1"},"bogus":1}'],
+      },
+    ]);
+    const res = await page.window.fetch('https://trk.example/');
+    expect(res.status).toBe(200); // 404 is outside uBO's [403] whitelist
+    expect(res.statusText).toBe('OK'); // 'Gone' outside the ['','Not Found'] whitelist
+    expect(res.type).toBe('basic'); // an in-whitelist type still applies
+    expect(res.headers.get('x-evil')).toBeNull(); // headers is trusted-prevent-fetch only
+  });
+
+  test('prevent-fetch throttle vararg delays the resolved response', async () => {
+    const page = fakePage();
+    runIn(page, [{ name: 'prevent-fetch', args: ['trk', 'emptyObj', '', 'throttle', '250'] }]);
+    let settled: any;
+    const p = page.window.fetch('https://trk.example/').then((r: any) => (settled = r));
+    await Promise.resolve();
+    expect(settled).toBeUndefined(); // still parked — delayed, not dropped
+    expect(page.timeouts).toHaveLength(1);
+    expect(page.timeouts[0].d).toBe(250);
+    page.timeouts[0].fn();
+    await p;
+    expect(settled.status).toBe(200);
+  });
+
+  test('prevent-fetch war: serves embedded noop bodies; unknown names resolve empty', async () => {
+    const page = fakePage();
+    runIn(page, [{ name: 'prevent-fetch', args: ['trk', 'war:noop-vast4.xml'] }]);
+    const res = await page.window.fetch('https://trk.example/');
+    expect(await res.text()).toBe('<VAST version="4.0"></VAST>');
+    const page2 = fakePage();
+    runIn(page2, [{ name: 'prevent-fetch', args: ['trk', 'war:not-a-real-resource.bin'] }]);
+    const res2 = await page2.window.fetch('https://trk.example/');
+    expect(await res2.text()).toBe(''); // uBO's fetch-failure answer
+  });
+
+  test('prevent-fetch join: directive concatenates generated parts', async () => {
+    const page = fakePage();
+    runIn(page, [{ name: 'prevent-fetch', args: ['trk', 'join:--emptyObj--emptyArr'] }]);
+    const res = await page.window.fetch('https://trk.example/');
+    expect(await res.text()).toBe('{}[]');
+  });
+
+  test('prevent-xhr switches the synthetic payload on the request responseType', () => {
+    const page = fakePage();
+    runIn(page, [{ name: 'prevent-xhr', args: ['trk', 'emptyObj'] }]);
+    const xj: any = new page.window.XMLHttpRequest();
+    xj.open('get', 'https://trk.test/');
+    xj.responseType = 'json';
+    xj.send();
+    expect(xj.response).toEqual({}); // uBO: 'json' → {}, '{}'
+    expect(xj.responseText).toBe('{}');
+    const xa: any = new page.window.XMLHttpRequest();
+    xa.open('get', 'https://trk.test/');
+    xa.responseType = 'arraybuffer';
+    xa.send();
+    expect(xa.response).toBeInstanceOf(ArrayBuffer);
+    expect(xa.responseText).toBe('');
+    const xb: any = new page.window.XMLHttpRequest();
+    xb.open('get', 'https://trk.test/');
+    xb.responseType = 'blob';
+    xb.send();
+    expect(xb.response).toBeInstanceOf(Blob);
+    const xd: any = new page.window.XMLHttpRequest();
+    xd.open('get', 'https://trk.test/'); // no responseType → generated text
+    xd.send();
+    expect(xd.response).toBe('{}');
+    expect(xd.responseText).toBe('{}');
+    expect(xd.responseURL).toBe('https://trk.test/');
+    expect(xd.statusText).toBe('OK');
+  });
+
+  test('prevent-xhr sync (async=false) applies props without event staging', () => {
+    const page = fakePage();
+    runIn(page, [{ name: 'prevent-xhr', args: ['trk', 'emptyObj'] }]);
+    const x: any = new page.window.XMLHttpRequest();
+    x.open('get', 'https://trk.test/', false);
+    x.send();
+    expect(x.readyState).toBe(4);
+    expect(page.timeouts).toHaveLength(0); // defer=false → no staged readystatechange/load
+  });
+
+  test('set-constant honors throttle — the install is deferred, not dropped', () => {
+    const page = fakePage();
+    runIn(page, [{ name: 'set-constant', args: ['thc.v', '5', 'throttle', '50'] }]);
+    expect(page.window.thc).toBeUndefined(); // still fires — later
+    expect(page.timeouts).toHaveLength(1);
+    expect(page.timeouts[0].d).toBe(50);
+    page.timeouts[0].fn();
+    page.window.thc = {}; // page object arrives → lazy leaf trap
+    expect(page.window.thc.v).toBe(5);
+  });
+
+  test('set-constant as=function wraps the constant; unknown vararg keys no longer eat the stack slot', () => {
+    const page = fakePage();
+    page.window.host = {};
+    runIn(page, [
+      { name: 'set-constant', args: ['host.f', '5', 'as', 'function'] },
+      { name: 'set-constant', args: ['host.g', 'true', 'bogus', '1'] },
+    ]);
+    expect(page.window.host.f()).toBe(5);
+    expect(page.window.host.g).toBe(true); // 'bogus' pairs as a vararg key, not a stack needle
+  });
+
+  test('set-constant chains a pre-existing mid-chain setter', () => {
+    const page = fakePage();
+    const writes: any[] = [];
+    let held: any;
+    Object.defineProperty(page.window, 'mid', {
+      configurable: true,
+      get() {
+        return held;
+      },
+      set(x) {
+        writes.push(x);
+        held = x;
+      },
+    });
+    runIn(page, [{ name: 'set-constant', args: ['mid.flag', 'false'] }]);
+    const real = { flag: true }; // same-type initial → leaf traps
+    page.window.mid = real;
+    expect(writes).toEqual([real]); // the previous setter still observed the write
+    expect(held).toBe(real);
+    expect(real.flag).toBe(false); // descend trapped the leaf on the page's object
+    page.window.mid.flag = 'x';
+    expect(real.flag).toBe('x'); // type-mismatch write still ends the trap
+  });
+
+  test('leaf traps chain a previous setter — writes reach it and dead logic still applies', () => {
+    const page = fakePage();
+    page.window.t = {};
+    const writes: any[] = [];
+    Object.defineProperty(page.window.t, 'acc', {
+      configurable: true,
+      get() {
+        return true; // boolean — same type as the incoming false
+      },
+      set(x) {
+        writes.push(x);
+      },
+    });
+    runIn(page, [{ name: 'set-constant', args: ['t.acc', 'false'] }]);
+    expect(page.window.t.acc).toBe(false);
+    page.window.t.acc = 'bye';
+    expect(writes).toEqual(['bye']); // uBO order: prevSetter fires before our bookkeeping
+    expect(page.window.t.acc).toBe('bye'); // dead → write wins
+  });
+
+  test('abort-on-property-write still throws while reaching a previous setter', () => {
+    const page = fakePage();
+    const writes: any[] = [];
+    Object.defineProperty(page.window, 'acc', {
+      configurable: true,
+      get() {
+        return 1;
+      },
+      set(x) {
+        writes.push(x);
+      },
+    });
+    runIn(page, [{ name: 'abort-on-property-write', args: ['acc'] }]);
+    expect(() => {
+      page.window.acc = 3;
+    }).toThrow(ReferenceError);
+    expect(writes).toEqual([3]);
+  });
+
+  test('facade clone() returns an independent response', async () => {
+    const page = fakePage();
+    page.globals.Response = undefined as any;
+    runIn(page, [{ name: 'prevent-fetch', args: ['trk', 'emptyObj'] }]);
+    const res = await page.window.fetch('https://trk.example/');
+    const clone = res.clone();
+    expect(clone).not.toBe(res);
+    await res.text();
+    expect(res.bodyUsed).toBe(true);
+    expect(clone.bodyUsed).toBe(false); // a real clone does not share bodyUsed state
+    expect(await clone.text()).toBe('{}');
+  });
+});
+
+describe('flag-106 native toString spoofing', () => {
+  test('wrapped natives mirror the replaced function spelling', () => {
+    const page = fakePage();
+    const origTimeout = page.window.setTimeout;
+    const origOpen = page.window.open;
+    const origEval = page.window.eval;
+    runIn(page, [
+      { name: 'prevent-setTimeout', args: ['cbNeedle'] },
+      { name: 'prevent-window-open', args: ['ads'] },
+      { name: 'prevent-eval-if', args: ['evil'] },
+    ]);
+    expect(String(page.window.setTimeout)).toBe(String(origTimeout));
+    expect(page.window.setTimeout.toString()).toBe(String(origTimeout));
+    expect(String(page.window.open)).toBe(String(origOpen));
+    expect(String(page.window.eval)).toBe(String(origEval));
+    // and the wrappers still work
+    expect(page.window.open('https://ads.example/')).toBeNull();
+  });
+
+  test('a wrapped real native reports the [native code] spelling', () => {
+    const page = fakePage();
+    // a detached JSON.parse is still a real native — and wrapping it on the
+    // fake object leaves the realm's real JSON untouched
+    page.globals.JSON = { parse: JSON.parse, stringify: JSON.stringify };
+    runIn(page, [{ name: 'json-prune', args: ['a.b'] }]);
+    expect(String(page.globals.JSON.parse)).toBe('function parse() { [native code] }');
+    expect(page.globals.JSON.parse('{"a":{"b":1,"c":2}}')).toEqual({ a: { c: 2 } });
+  });
+
+  test('xhr open/send and addEventListener wrappers mirror their originals', () => {
+    const page = fakePage();
+    const origXOpen = page.window.XMLHttpRequest.prototype.open;
+    const origXSend = page.window.XMLHttpRequest.prototype.send;
+    const origAEL = page.window.EventTarget.prototype.addEventListener;
+    runIn(page, [
+      { name: 'prevent-xhr', args: ['trk'] },
+      { name: 'prevent-addEventListener', args: ['click'] },
+    ]);
+    expect(String(page.window.XMLHttpRequest.prototype.open)).toBe(String(origXOpen));
+    expect(String(page.window.XMLHttpRequest.prototype.send)).toBe(String(origXSend));
+    expect(String(page.window.EventTarget.prototype.addEventListener)).toBe(String(origAEL));
+  });
+
+  test('trap accessors, dispatcher, onerror and facade methods read [native code]', async () => {
+    const page = fakePage();
+    page.globals.Response = undefined as any; // exercise the facade path
+    page.window.tracker = { enabled: true };
+    runIn(page, [
+      { name: 'set-constant', args: ['tc.v', '5'] },
+      { name: 'abort-on-property-read', args: ['tracker.enabled'] },
+      { name: 'prevent-fetch', args: ['trk'] },
+    ]);
+    const d = Object.getOwnPropertyDescriptor(page.window, 'tc');
+    expect(String(d?.get)).toBe('function get tc() { [native code] }');
+    expect(String(d?.set)).toBe('function set tc() { [native code] }');
+    expect(String(page.window.__bm_sc)).toBe('function __bm_sc() { [native code] }');
+    try {
+      page.window.tracker.enabled;
+    } catch {
+      // abort token fires et() → installs onerror
+    }
+    expect(String(page.window.onerror)).toBe('function onerror() { [native code] }');
+    const res = await page.window.fetch('https://trk.example/');
+    expect(String(res.text)).toBe('function text() { [native code] }');
+    expect(String(res.json)).toBe('function json() { [native code] }');
+    expect(String(res.clone)).toBe('function clone() { [native code] }');
+  });
+
+  test('the hook lies about itself and stays invisible', () => {
+    const page = fakePage();
+    runIn(page, [{ name: 'set-constant', args: ['z', '1'] }]);
+    expect(String(Function.prototype.toString)).toBe('function toString() { [native code] }');
+    expect(Function.prototype.toString.name).toBe('toString');
+    const d = Object.getOwnPropertyDescriptor(Function.prototype, 'toString');
+    expect(d?.enumerable).toBe(false);
+    expect(d?.writable).toBe(true);
+    expect(Object.keys(Function.prototype)).toHaveLength(0);
+  });
+
+  test('unregistered functions keep their honest source', () => {
+    const page = fakePage();
+    runIn(page, [{ name: 'set-constant', args: ['z2', '1'] }]);
+    function pageFn() {
+      return 42;
+    }
+    expect(String(pageFn)).toContain('pageFn');
+    expect(String(pageFn)).toContain('42');
+    // even functions that look up toString late still hit the hook's fallback
+    const late = { toString: Function.prototype.toString };
+    expect(() => Function.prototype.toString.call(42)).toThrow(TypeError); // same as native
+    expect(typeof late.toString).toBe('function');
   });
 });
