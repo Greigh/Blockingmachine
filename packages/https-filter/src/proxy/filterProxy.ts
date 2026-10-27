@@ -47,6 +47,7 @@ import {
   type RequestEvaluator,
 } from '@blockingmachine/core';
 import { isValidSni, normalizeSni, type CertAuthority } from '../ca/certAuthority.js';
+import { applyRequestTransforms } from '../pipeline/transforms.js';
 import type { PolicyStore } from '../policy/policyStore.js';
 import {
   absoluteRequestUrl,
@@ -277,7 +278,15 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           res.respond(403, headers);
           return;
         }
-        relayRequest(req, res, flow.upstream, {
+        // allowed/exception both relay — request-side transforms (removeparam/
+        // removeheader) run first. `transforms.csp` is a response-header
+        // rewrite whose side is P2, so it passes through unapplied here.
+        const transformed = applyRequestTransforms(
+          req.url,
+          req.headers,
+          verdict.transforms,
+        );
+        relayRequest({ ...req, url: transformed.url, headers: transformed.headers }, res, flow.upstream, {
           upstreamCaCerts: opts.upstreamCaCerts,
           connectTimeoutMs: opts.upstreamConnectTimeoutMs,
         });

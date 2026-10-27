@@ -26,10 +26,10 @@
  * request rather than CONNECT/PROXY-v2/TLS get their request head parsed,
  * evaluated once, then forwarded verbatim to the resolved host.
  *
- * Task 6 hooks: the verdict seam lives one level up, in the proxy's
+ * Task 6 wiring: the verdict seam lives one level up, in the proxy's
  * per-request handler — `evaluator.evaluate(url)` → blocked ⇒ `respond(403)`,
- * else ⇒ `relayRequest` — so transforms slot in between those two calls
- * against `req.headers`/`req.url` untouched here.
+ * else ⇒ `applyRequestTransforms` on `req.url`/`req.headers`, then
+ * `relayRequest`. This file only ever sees the already-transformed request.
  */
 
 import http from 'node:http';
