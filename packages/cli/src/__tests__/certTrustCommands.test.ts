@@ -24,12 +24,20 @@ const coreMock = {
   removeCa: jest.fn<(pem: string) => Promise<CaRemoveOutcome>>(),
 };
 
-jest.unstable_mockModule("@blockingmachine/core", () => ({
-  __esModule: true,
-  trustStatus: (pem: string) => coreMock.trustStatus(pem),
-  installCa: (pem: string) => coreMock.installCa(pem),
-  removeCa: (pem: string) => coreMock.removeCa(pem),
-}));
+jest.unstable_mockModule("@blockingmachine/core", async () => {
+  // Spread the real module: the command also consumes the P3 helpers
+  // (linuxSystemStoreCommands, firefoxNssProfileDbs) which are pure — only
+  // the three OS-touching trust ops are mocked.
+  const actual = await jest.requireActual<typeof import("@blockingmachine/core")>(
+    "@blockingmachine/core",
+  );
+  return {
+    ...actual,
+    trustStatus: (pem: string) => coreMock.trustStatus(pem),
+    installCa: (pem: string) => coreMock.installCa(pem),
+    removeCa: (pem: string) => coreMock.removeCa(pem),
+  };
+});
 
 const { CertCommand } = await import("../commands/CertCommand.js");
 
@@ -175,6 +183,45 @@ describe("CertCommand trust verbs", () => {
     const doc = parseJsonStdout<Record<string, unknown>>(stdout);
     expect(doc.result).toBe("needs-admin");
     expect(String(doc.sudoCommand)).toContain("sudo security add-trusted-cert");
+  });
+
+  test("install needs-admin on linux prints the system-store sudo line", async () => {
+    coreMock.installCa.mockResolvedValue("needs-admin");
+    const realPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    try {
+      const result = await cmd().execute({ action: "install" });
+      expect(result.success).toBe(false);
+      const warned = mockLogger.warn.mock.calls
+        .map((c: unknown[]) => String(c[0]))
+        .join("\n");
+      expect(warned).toContain("blockingmachine cert export ca.pem");
+      expect(warned).toContain(
+        "sudo cp 'ca.pem' /usr/local/share/ca-certificates/blockingmachine-ca.crt",
+      );
+      expect(warned).toContain("sudo update-ca-certificates");
+    } finally {
+      Object.defineProperty(process, "platform", { value: realPlatform });
+    }
+  });
+
+  test("uninstall needs-admin on linux prints the removal line", async () => {
+    coreMock.removeCa.mockResolvedValue("needs-admin");
+    const realPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    try {
+      const result = await cmd().execute({ action: "uninstall" });
+      expect(result.success).toBe(false);
+      const warned = mockLogger.warn.mock.calls
+        .map((c: unknown[]) => String(c[0]))
+        .join("\n");
+      expect(warned).toContain(
+        "sudo rm /usr/local/share/ca-certificates/blockingmachine-ca.crt",
+      );
+      expect(warned).toContain("sudo update-ca-certificates");
+    } finally {
+      Object.defineProperty(process, "platform", { value: realPlatform });
+    }
   });
 
   test("install unsupported fails honestly", async () => {

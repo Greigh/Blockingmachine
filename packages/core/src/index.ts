@@ -54,6 +54,8 @@ export {
 export {
   isSafePublicWebUrl,
   isSafeLanEndpointUrl,
+  isLocalNetworkHost,
+  credentialAllowed,
   type SafeUrlCheckResult,
 } from "./utils/urlSafety.js";
 
@@ -149,19 +151,26 @@ export {
   type ScriptletCall,
 } from "./cosmetic/cosmeticIndex.js";
 
-// OS trust-store ops on the HTTPS-filter proxy CA (P1 Task 4) — the cli's
-// `cert` verbs and the electron `httpsfilter:ca-*` IPC both consume these.
-// darwin implemented against `security`; other platforms answer 'unsupported'.
+// OS trust-store ops on the HTTPS-filter proxy CA (P1 Task 4 + P3 Task 3) —
+// the cli's `cert` verbs and the electron `httpsfilter:ca-*` IPC both consume
+// these. darwin runs `security`; win32 runs `certutil -user` against the
+// CurrentUser Root store; linux runs NSS `certutil` on ~/.pki/nssdb with a
+// sudo-guided system-store fallback. Other platforms answer 'unsupported'.
 export {
   trustStatus,
   installCa,
   removeCa,
   macOsLoginKeychainPath,
   commonNameFromSubject,
+  firefoxNssProfileDbs,
+  linuxSystemStoreCommands,
+  LINUX_SYSTEM_CA_TARGET,
   type CaTrustState,
   type CaInstallOutcome,
   type CaRemoveOutcome,
   type CaTrustStoreOptions,
   type SecurityRunner,
   type SecurityRunResult,
+  type PlatformRunner,
+  type PlatformRunResult,
 } from "./caTrustStore.js";

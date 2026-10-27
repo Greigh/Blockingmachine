@@ -44,6 +44,35 @@ const TRUST_LABEL: Record<string, string> = {
   error: 'check failed',
 };
 
+/**
+ * The capture-install hint's per-platform wording: which machine is being
+ * described, how the installer is invoked (`sudo` for the posix scripts;
+ * an elevated Administrator PowerShell for the ps1 — Windows has no sudo
+ * verb to paste), and the script name the fallback message names.
+ */
+interface CaptureHint {
+  device: string;
+  how: string;
+  scriptName: string;
+}
+const CAPTURE_HINTS: Record<string, CaptureHint> = {
+  darwin: {
+    device: "this Mac's",
+    how: 'the installer (administrator rights, once)',
+    scriptName: 'install-macos-capture.sh',
+  },
+  win32: {
+    device: "this PC's",
+    how: 'the installer from an elevated (Administrator) PowerShell, once',
+    scriptName: 'install-windows-capture.ps1',
+  },
+  linux: {
+    device: "this machine's",
+    how: 'the installer with sudo, once',
+    scriptName: 'install-linux-capture.sh',
+  },
+};
+
 export const HttpsFilterCard: React.FC = () => {
   const [status, setStatus] = useState<HttpsFilterStatus | null>(null);
   const [caTrust, setCaTrust] = useState<CaTrustInfo | null>(null);
@@ -148,7 +177,17 @@ export const HttpsFilterCard: React.FC = () => {
         if (!isMountedRef.current) return;
         if (res?.needsAdmin) {
           setAwaitingAdmin(true);
-          setMessage('Administrator approval required — confirm below to show the macOS prompt.');
+          // darwin: the consent strip pops the auth sheet on click. win32 /
+          // linux have no in-app elevation — the strip surfaces the manual
+          // command and the affirmative button still re-asks (which answers
+          // needs-admin again with the remediation line).
+          setMessage(
+            status?.platform === 'linux'
+              ? 'Trust install needs root — run the printed sudo command in a terminal.'
+              : status?.platform === 'win32'
+                ? 'Trust install was denied — re-run certutil from an elevated prompt.'
+                : 'Administrator approval required — confirm below to show the macOS prompt.',
+          );
         } else {
           setAwaitingAdmin(false);
           if (res && !res.success) setMessage(res.message || 'CA install failed.');
@@ -296,7 +335,11 @@ export const HttpsFilterCard: React.FC = () => {
 
   const trustState = caTrust?.state;
   const showCaRow = engineAlive || (caTrust != null && caTrust.state !== 'unavailable');
-  const showCaptureHint = status?.platform === 'darwin' && status?.captureServiceInstalled === false;
+  // The capture hint renders on every platform the installer exists for —
+  // darwin's sudo line, linux's sudo line, win32's elevated-PowerShell ps1.
+  // Unsupported platforms stay hidden; an installed capture service hides it.
+  const captureSpec = status?.platform ? CAPTURE_HINTS[status.platform] : undefined;
+  const showCaptureHint = captureSpec != null && status?.captureServiceInstalled === false;
 
   // The hint's command is the rendered-for-this-host invocation — resolved
   // once capture is confirmed absent (the IPC can fail on a packaged build
@@ -540,7 +583,11 @@ export const HttpsFilterCard: React.FC = () => {
           }}
         >
           <span>
-            Administrator approval required — macOS will ask for your password to trust the CA.
+            {status?.platform === 'linux'
+              ? 'Administrator rights required — the needs-admin reply carries the sudo line.'
+              : status?.platform === 'win32'
+                ? 'Administrator rights required — re-run the certutil line from an elevated prompt.'
+                : 'Administrator approval required — macOS will ask for your password to trust the CA.'}
           </span>
           <div className="deploy-actions-row" style={{ marginTop: 0 }}>
             <button
@@ -637,13 +684,12 @@ export const HttpsFilterCard: React.FC = () => {
         </details>
       )}
 
-      {showCaptureHint && (
+      {showCaptureHint && captureSpec && (
         <div style={{ margin: '10px 0 0' }}>
           <p className="deploy-feed-box-desc" style={{ margin: 0 }}>
             Transparent capture is not installed — the proxy still answers manual CONNECT/HTTP
-            proxying on :{status?.port ?? 9294}. To route this Mac&apos;s traffic through it
-            automatically, run the installer (administrator rights, once); the app does not
-            invoke it for you.
+            proxying on :{status?.port ?? 9294}. To route {captureSpec.device} traffic through it
+            automatically, run {captureSpec.how}; the app does not invoke it for you.
           </p>
           {installHint?.command ? (
             // Absolute script/bundle/runner/rulesPath — pasteable on a
@@ -661,7 +707,7 @@ export const HttpsFilterCard: React.FC = () => {
           ) : (
             <p className="deploy-feed-box-desc" style={{ margin: '6px 0 0' }}>
               {installHint?.message ??
-                'Resolving the installer command… (packaged builds may not ship install-macos-capture.sh — use a source checkout if this does not resolve.)'}
+                `Resolving the installer command… (packaged builds may not ship ${captureSpec.scriptName} — use a source checkout if this does not resolve.)`}
             </p>
           )}
         </div>

@@ -175,7 +175,8 @@ describe('HttpsFilterCard — status surface', () => {
     expect(screen.queryByText(/pages injected/)).toBeNull();
   });
 
-  it('shows the capture hint only for darwin without the capture service', async () => {
+  it('shows the capture hint per platform when the capture service is not installed', async () => {
+    // darwin — the hint's static text names the script via the fallback line.
     installBridge();
     render(<HttpsFilterCard />);
     await act(async () => {
@@ -183,8 +184,57 @@ describe('HttpsFilterCard — status surface', () => {
       await Promise.resolve();
     });
     expect(screen.queryByText(/install-macos-capture\.sh/)).not.toBeNull();
+    expect(screen.queryByText(/this Mac's traffic/)).not.toBeNull();
 
+    // win32 — same hint, but the elevation note is an Administrator
+    // PowerShell (Windows has no sudo verb to paste).
     cleanup();
+    installBridge({
+      getHttpsFilterStatus: jest.fn(() =>
+        Promise.resolve({ ...running, platform: 'win32' }),
+      ),
+      getHttpsFilterInstallScript: jest.fn(() =>
+        Promise.resolve({
+          success: true,
+          command:
+            'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\\Blockingmachine\\scripts\\install-windows-capture.ps1" "C:\\Blockingmachine\\filterProxy.cjs" "C:\\Blockingmachine\\node.exe"',
+        }),
+      ),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/elevated \(Administrator\) PowerShell/)).not.toBeNull();
+    expect(screen.queryByText(/install-windows-capture\.ps1/)).not.toBeNull();
+
+    // linux — "with sudo".
+    cleanup();
+    installBridge({
+      getHttpsFilterStatus: jest.fn(() =>
+        Promise.resolve({ ...running, platform: 'linux' }),
+      ),
+      getHttpsFilterInstallScript: jest.fn(() =>
+        Promise.resolve({
+          success: true,
+          command:
+            "sudo bash '/opt/Blockingmachine/scripts/install-linux-capture.sh' '/opt/Blockingmachine/filterProxy.cjs' '/usr/bin/node'",
+        }),
+      ),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/the installer with sudo/)).not.toBeNull();
+    expect(screen.queryByText(/install-linux-capture\.sh/)).not.toBeNull();
+  });
+
+  it('hides the capture hint when the service is installed or the platform is unsupported', async () => {
     installBridge({
       getHttpsFilterStatus: jest.fn(() =>
         Promise.resolve({ ...running, captureServiceInstalled: true }),
@@ -196,6 +246,20 @@ describe('HttpsFilterCard — status surface', () => {
       await Promise.resolve();
     });
     expect(screen.queryByText(/install-macos-capture\.sh/)).toBeNull();
+
+    // A platform with no installer script gets no hint at all.
+    cleanup();
+    installBridge({
+      getHttpsFilterStatus: jest.fn(() =>
+        Promise.resolve({ ...running, platform: 'freebsd' }),
+      ),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/Transparent capture is not installed/)).toBeNull();
   });
 
   it('renders degraded with its own pill and honest detail', async () => {

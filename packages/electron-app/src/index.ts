@@ -152,6 +152,8 @@ import {
   installCa as caTrustInstall,
   removeCa as caTrustRemove,
   macOsLoginKeychainPath,
+  firefoxNssProfileDbs,
+  linuxSystemStoreCommands,
   type CaTrustState,
   type TierFileInput,
   type AiProviderConfig,
@@ -3096,7 +3098,7 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           // `target` is allowlisted upstream and `detail` already has control characters
           // stripped — the log-time pass is belt and braces against a parser that ever
           // stops doing it, so a report can never smuggle a forged log line.
-          const logSafe = (v: string) => v.replace(/[\x00-\x1f\x7f]+/g, ' ');
+          const logSafe = (v: string) => v.replace(/[\n\r\x00-\x08\x0b-\x1f\x7f]+/g, ' ');
           console.log(`[Deploy Report] ${logSafe(parsed.target)}: scheduled refresh ${parsed.ok ? 'ok' : 'FAILED'}${parsed.detail ? ` — ${logSafe(parsed.detail)}` : ''}`);
           // A mounted pane holds a snapshot whose `refreshReport` was stamped at check time —
           // minutes or days stale. Fold the new report into the stored snapshot and re-publish
@@ -5071,7 +5073,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         };
       }
       try {
-        const reply = await fn(ca.certPem);
+        let reply = await fn(ca.certPem);
         if (reply.state === 'trusted') {
           // A verified 'trusted' reply records the answering engine's CA as
           // the drift baseline — only AFTER trust is proven, so a rotated or
@@ -5079,6 +5081,25 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           // user-engine/launchd-engine store split (flag 100) is exactly
           // what caDrift then watches for.
           store.set('httpsFilterTrustedCaFingerprint', ca.sha256Fingerprint);
+        }
+        // Firefox keeps its own NSS store (cert9.db) that no OS-store write
+        // reaches — when a profile exists off-darwin, flag the gap rather
+        // than let a trusted/installed reply overclaim (open-flags 116,
+        // firefox-nss-cert9; the nss certutil needed to touch cert9.db is
+        // not shipped). darwin's posture is P1-settled and stays as-is.
+        if (process.platform === 'win32' || process.platform === 'linux') {
+          try {
+            if ((await firefoxNssProfileDbs()).length > 0) {
+              reply = {
+                ...reply,
+                message:
+                  `${reply.message} Firefox keeps its own certificate store — ` +
+                  'enable security.enterprise_roots.enabled there or import the CA manually.',
+              };
+            }
+          } catch {
+            // detection is best-effort — never fail a trust reply for it
+          }
         }
         return {
           ...reply,
@@ -5091,14 +5112,44 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
     };
 
+    // The store the trust ops write, for message text — "keychain" only
+    // makes sense on darwin; win32 reads the CurrentUser Root store and
+    // linux the NSS db / distro CA store.
+    const trustStoreNoun = () =>
+      process.platform === 'win32'
+        ? 'the Windows user Root store'
+        : process.platform === 'linux'
+          ? 'the Linux trust store'
+          : 'the login keychain';
+
+    // The needs-admin reply text per platform. darwin: the pane's second
+    // click pops the auth sheet. linux: the system-store write is
+    // `sudo cp` + `update-ca-certificates` — print the literal line.
+    // win32: the user-store write was denied, so the escalation is the
+    // machine-scope Root store from an elevated prompt.
+    const needsAdminInstallMessage = () =>
+      process.platform === 'linux'
+        ? `Trust install needs root — run: ${linuxSystemStoreCommands('ca.pem').install} (export the CA first with 'blockingmachine cert export ca.pem').`
+        : process.platform === 'win32'
+          ? `The user-scope certutil install was denied — run 'certutil -addstore Root ca.pem' from an elevated prompt to trust the CA machine-wide.`
+          : 'Administrator approval is required to trust the CA — confirm to show the macOS prompt.';
+
+    const needsAdminRemoveMessage = () =>
+      process.platform === 'linux'
+        ? `The CA lives in the system trust store — removal needs root: ${linuxSystemStoreCommands().remove}.`
+        : process.platform === 'win32'
+          ? `Removing the CA from the certificate store was denied — re-run removal from an elevated prompt.`
+          : 'Administrator approval is required to remove the CA.';
+
     ipcMain.handle('httpsfilter:ca-trust-status', async () =>
       caTrustReply(async (certPem) => {
         const state = await caTrustStatus(certPem);
+        const storeName = trustStoreNoun();
         const messages: Record<CaTrustState, string> = {
           trusted: 'CA is trusted — HTTPS filtering can terminate TLS.',
-          'installed-untrusted': 'CA is in the keychain but not anchored as a trust root.',
-          absent: 'CA is not in the keychain — install it to enable TLS termination.',
-          unsupported: 'OS trust-store ops are only implemented for macOS.',
+          'installed-untrusted': `CA is in ${storeName} but not anchored as a trust root.`,
+          absent: `CA is not in ${storeName} — install it to enable TLS termination.`,
+          unsupported: `OS trust-store ops are not implemented on ${process.platform}.`,
         };
         return { success: true, state, message: messages[state] };
       }),
@@ -5149,41 +5200,44 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       'httpsfilter:ca-install',
       async (_event, options?: { elevate?: boolean }) =>
         caTrustReply(async (certPem) => {
-          if (process.platform !== 'darwin') {
+          if (options?.elevate === true) {
+            if (process.platform === 'darwin') {
+              // The renderer already knows admin consent is required (the
+              // unprivileged attempt answered needs-admin, or the pane skipped
+              // it on purpose) — go straight to the macOS auth sheet.
+              return installCaAsAdmin(certPem);
+            }
+            // No in-app escalation surface exists off-darwin (osascript has
+            // no analog here): the needs-admin line IS the answer, repeated.
             return {
               success: false,
-              state: 'unsupported',
-              message: 'OS trust-store ops are only implemented for macOS.',
+              state: 'needs-admin',
+              needsAdmin: true,
+              message: needsAdminInstallMessage(),
             };
-          }
-          if (options?.elevate === true) {
-            // The renderer already knows admin consent is required (the
-            // unprivileged attempt answered needs-admin, or the pane skipped
-            // it on purpose) — go straight to the macOS auth sheet.
-            return installCaAsAdmin(certPem);
           }
           const outcome = await caTrustInstall(certPem);
           if (outcome === 'installed') {
             const post = await caTrustStatus(certPem);
-            return { success: true, state: post, message: 'CA installed into the login keychain.' };
+            return { success: true, state: post, message: `CA installed into ${trustStoreNoun()}.` };
           }
           if (outcome === 'unsupported') {
             return {
               success: false,
               state: 'unsupported',
-              message: 'OS trust-store ops are only implemented for macOS.',
+              message: `OS trust-store ops are not implemented on ${process.platform}.`,
             };
           }
-          // 'needs-admin': the unprivileged spawn could not get authorization
-          // (headless or locked keychain). The pane re-invokes this channel
-          // with {elevate:true} when the user consents — we never pop a macOS
-          // auth sheet unprompted off a routine probe.
+          // 'needs-admin': the unprivileged op could not get authorization.
+          // On darwin the pane re-invokes this channel with {elevate:true}
+          // when the user consents — we never pop a macOS auth sheet
+          // unprompted off a routine probe. win32/linux get the manual
+          // remediation line instead — the app cannot elevate for them.
           return {
             success: false,
             state: 'needs-admin',
             needsAdmin: true,
-            message:
-              'Administrator approval is required to trust the CA — confirm to show the macOS prompt.',
+            message: needsAdminInstallMessage(),
           };
         }),
     );
@@ -5195,7 +5249,17 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           return {
             success: false,
             state: 'unsupported',
-            message: 'OS trust-store ops are only implemented for macOS.',
+            message: `OS trust-store ops are not implemented on ${process.platform}.`,
+          };
+        }
+        if (outcome === 'needs-admin') {
+          // linux system-store copies need `sudo rm` + update-ca-certificates;
+          // a win32 removal the SCM denied likewise wants elevation.
+          return {
+            success: false,
+            state: 'needs-admin',
+            needsAdmin: true,
+            message: needsAdminRemoveMessage(),
           };
         }
         return {
@@ -5203,8 +5267,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           state: 'absent',
           message:
             outcome === 'removed'
-              ? 'CA trust settings and keychain entry removed.'
-              : 'CA was not present in the keychain — nothing to remove.',
+              ? 'CA trust settings and store entry removed.'
+              : `CA was not present in ${trustStoreNoun()} — nothing to remove.`,
         };
       }),
     );
@@ -5214,7 +5278,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     // ====================================================================
     // Same `{success, message}` convention the daemon:* handlers keep; status
     // is the manager's FilterProxyStatus plus `platform` so the renderer can
-    // gate the darwin-only capture-install hint. `start` names the compiled
+    // render the platform-appropriate capture-install hint. `start` names the compiled
     // request-rules file the way daemonFeedFilePaths names dns.txt — the
     // browser.txt segregation beside savePath — falling back to the manager's
     // own candidates when no output dir is configured yet.

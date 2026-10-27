@@ -1360,18 +1360,32 @@ describe('httpsfilter:* lifecycle + policy IPC handlers', () => {
     }
   });
 
-  test('get-install-script renders the capture installer invocation (or fails honestly)', async () => {
+  test('get-install-script renders the capture installer invocation for the host platform (or fails honestly)', async () => {
     const res = await invoke('httpsfilter:get-install-script');
     expect(typeof res.success).toBe('boolean');
+    // The render is per-platform — on this mac it's the .sh under sudo; the
+    // ubuntu CI leg genuinely exercises the linux render end-to-end.
+    const script = (
+      {
+        darwin: 'install-macos-capture.sh',
+        linux: 'install-linux-capture.sh',
+        win32: 'install-windows-capture.ps1',
+      } as Record<string, string | undefined>
+    )[process.platform];
     if (res.success) {
+      expect(script).toBeTruthy();
       // Absolute paths only — a repo-relative reference is exactly what this
       // must not render (packaged hosts have no checkout).
-      expect(res.command).toContain('install-macos-capture.sh');
+      expect(res.command).toContain(script);
       expect(res.command).toContain(process.execPath);
-      expect(res.command.startsWith('sudo')).toBe(true);
-      expect(res.command).not.toContain(' scripts/install-macos-capture.sh');
+      if (process.platform === 'win32') {
+        expect(res.command).toContain('powershell -NoProfile -ExecutionPolicy Bypass -File');
+      } else {
+        expect(res.command.startsWith('sudo')).toBe(true);
+      }
+      expect(res.command).not.toContain(` scripts/${script}`);
     } else {
-      // The bundle can be absent when dist/ is unbuilt — the honest failure
+      // An unsupported platform or an unbuilt bundle — the honest failure
       // must still carry a message.
       expect(res.message).toBeTruthy();
     }

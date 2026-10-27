@@ -7,6 +7,8 @@ import {
   installCa,
   removeCa,
   trustStatus,
+  firefoxNssProfileDbs,
+  linuxSystemStoreCommands,
   type CaInstallOutcome,
   type CaRemoveOutcome,
   type CaTrustState,
@@ -79,8 +81,8 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
 
     // Trust-store verbs — the PEM is fetched over the loopback control API
     // (public certificate material only), then the OS op runs locally through
-    // core's caTrustStore. darwin only today; every other platform reports
-    // 'unsupported' honestly rather than half-doing the work.
+    // core's caTrustStore. darwin/win32/linux are implemented; any other
+    // platform reports 'unsupported' honestly rather than half-doing the work.
     if (options.action === "trust-check") {
       return this.runTrustCheck(payload, options.json);
     }
@@ -140,11 +142,13 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
   }
 
   /**
-   * `cert install` — anchor the CA as a trust root in the login keychain. On
+   * `cert install` — anchor the CA as a trust root in the OS store. On
    * darwin the `add-trusted-cert -d` write is itself the consent prompt when a
    * GUI session can service it; `needs-admin` means this context could not
    * (headless shell, locked keychain), so the command the user must run with
-   * sudo is printed verbatim.
+   * sudo is printed verbatim. linux `needs-admin` means the system-store
+   * write (`sudo cp` + `update-ca-certificates`) needs root; win32's means
+   * the machine-scope Root store wants an elevated prompt.
    */
   private async runInstall(
     payload: ProxyCaPayload,
@@ -158,31 +162,18 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
     }
 
     if (outcome === "installed") {
-      const message = "CA installed into the login keychain and trusted.";
+      const message = `CA installed into ${this.storeNoun()} and trusted.`;
       if (json) {
         writeJson({ result: outcome, sha256Fingerprint: payload.sha256Fingerprint });
       } else {
         this.logger.info(`✓ ${message}`);
+        await this.warnFirefoxNssGap();
       }
       return this.success({ result: outcome }, message);
     }
 
     if (outcome === "needs-admin") {
-      // `cert export` writes the PEM the sudo line consumes — keep the pair
-      // copy-pasteable as one shell command. The keychain path is the same
-      // resolution core's macOsLoginKeychainPath uses, expanded to an
-      // absolute path here rather than left as "$HOME": under sudo -H (or
-      // any preserved-env posture) $HOME expands to the WRONG user's home,
-      // so the printed line names the concrete file the write targets.
-      const keychainPath = path.join(
-        process.env.HOME ?? os.homedir(),
-        "Library",
-        "Keychains",
-        "login.keychain-db",
-      );
-      const sudoCommand =
-        "blockingmachine cert export ca.pem && " +
-        `sudo security add-trusted-cert -d -r trustRoot -k '${keychainPath.replace(/'/g, `'\\''`)}' ca.pem`;
+      const sudoCommand = this.adminInstallCommand();
       const message =
         "Trust install needs administrator rights from this context. Run: " +
         sudoCommand;
@@ -194,15 +185,15 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
         });
       } else {
         this.logger.warn(
-          "The keychain refused the unprivileged install (headless or locked session).",
+          `The ${this.storeNoun()} refused the unprivileged install from this context.`,
         );
         this.logger.warn(`Run the admin form yourself:\n\n  ${sudoCommand}\n`);
+        await this.warnFirefoxNssGap();
       }
       return this.failure(message);
     }
 
-    const message =
-      "OS trust-store ops are only implemented for macOS — this platform reports 'unsupported'.";
+    const message = `OS trust-store ops are not implemented on ${process.platform} — this platform reports 'unsupported'.`;
     if (json) {
       writeJson({ result: outcome, sha256Fingerprint: payload.sha256Fingerprint });
     } else {
@@ -211,7 +202,40 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
     return this.failure(message);
   }
 
-  /** `cert uninstall` — drop the CA's trust settings and keychain entry. */
+  /**
+   * The manual escalation line for `needs-admin`, per platform:
+   * - darwin: `sudo security add-trusted-cert` against the resolved login
+   *   keychain path — the path is expanded here rather than left as "$HOME":
+   *   under sudo -H (or any preserved-env posture) $HOME expands to the
+   *   WRONG user's home, so the printed line names the concrete file the
+   *   write targets.
+   * - linux: `sudo cp` into the distro source dir + `update-ca-certificates`
+   *   — the line core's `linuxSystemStoreCommands` renders.
+   * - win32: elevated `certutil -addstore Root` — the MACHINE Root store
+   *   (the user store refused), covering every account on the box.
+   * `cert export` precedes each pair so the pem the line consumes exists.
+   */
+  private adminInstallCommand(): string {
+    const exportStep = "blockingmachine cert export ca.pem";
+    if (process.platform === "linux") {
+      return `${exportStep} && ${linuxSystemStoreCommands("ca.pem").install}`;
+    }
+    if (process.platform === "win32") {
+      return `${exportStep}, then 'certutil -addstore Root ca.pem' from an elevated prompt`;
+    }
+    const keychainPath = path.join(
+      process.env.HOME ?? os.homedir(),
+      "Library",
+      "Keychains",
+      "login.keychain-db",
+    );
+    return (
+      `${exportStep} && ` +
+      `sudo security add-trusted-cert -d -r trustRoot -k '${keychainPath.replace(/'/g, `'\\''`)}' ca.pem`
+    );
+  }
+
+  /** `cert uninstall` — drop the CA's trust settings and store entry. */
   private async runUninstall(
     payload: ProxyCaPayload,
     json?: boolean,
@@ -224,8 +248,7 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
     }
 
     if (outcome === "unsupported") {
-      const message =
-        "OS trust-store ops are only implemented for macOS — this platform reports 'unsupported'.";
+      const message = `OS trust-store ops are not implemented on ${process.platform} — this platform reports 'unsupported'.`;
       if (json) {
         writeJson({ result: outcome, sha256Fingerprint: payload.sha256Fingerprint });
       } else {
@@ -234,10 +257,32 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
       return this.failure(message);
     }
 
+    if (outcome === "needs-admin") {
+      // linux: the cert lives in the distro system store — `sudo rm` +
+      // `update-ca-certificates` is the removal; win32: elevation denied.
+      const line =
+        process.platform === "linux"
+          ? linuxSystemStoreCommands().remove
+          : process.platform === "win32"
+            ? "certutil -delstore Root <sha1-thumbprint> from an elevated prompt"
+            : "an administrator session";
+      const message = `CA removal needs administrator rights from this context. Run: ${line}`;
+      if (json) {
+        writeJson({
+          result: outcome,
+          sha256Fingerprint: payload.sha256Fingerprint,
+          sudoCommand: line,
+        });
+      } else {
+        this.logger.warn(`Run the admin form yourself:\n\n  ${line}\n`);
+      }
+      return this.failure(message);
+    }
+
     const message =
       outcome === "removed"
-        ? "CA trust settings and keychain entry removed."
-        : "CA was not present in the keychain — nothing to remove.";
+        ? "CA trust settings and store entry removed."
+        : `CA was not present in ${this.storeNoun()} — nothing to remove.`;
     if (json) {
       writeJson({ result: outcome, sha256Fingerprint: payload.sha256Fingerprint });
     } else {
@@ -246,22 +291,55 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
     return this.success({ result: outcome }, message);
   }
 
+  /** The OS store the platform's trust ops write — keeps prose honest. */
+  private storeNoun(): string {
+    return process.platform === "darwin"
+      ? "login keychain"
+      : process.platform === "win32"
+        ? "Windows user Root store"
+        : process.platform === "linux"
+          ? "NSS db / system trust store"
+          : "OS trust store";
+  }
+
+  /**
+   * Firefox ships its own NSS cert9.db that no OS-store write reaches —
+   * name the gap when a profile exists so a successful install does not
+   * overclaim (open-flags 116, firefox-nss-cert9). darwin's posture predates
+   * P3 and is left as-is.
+   */
+  private async warnFirefoxNssGap(): Promise<void> {
+    if (process.platform === "darwin") return;
+    let dbs: string[] = [];
+    try {
+      dbs = await firefoxNssProfileDbs();
+    } catch {
+      return;
+    }
+    if (dbs.length === 0) return;
+    this.logger.warn(
+      "Firefox keeps its own certificate store — enable " +
+        "security.enterprise_roots.enabled there or import the CA into its cert9.db manually.",
+    );
+  }
+
   private describeTrustState(state: CaTrustState): string {
+    const store = this.storeNoun();
     switch (state) {
       case "trusted":
-        return `${chalk.green("trusted")} — the CA anchors TLS verification on this Mac.`;
+        return `${chalk.green("trusted")} — the CA anchors TLS verification on this machine.`;
       case "installed-untrusted":
         return (
-          `${chalk.yellow("installed-untrusted")} — present in the keychain but not ` +
+          `${chalk.yellow("installed-untrusted")} — present in the ${store} but not ` +
           `anchored as a trust root; run ${chalk.bold("cert install")} to trust it.`
         );
       case "absent":
         return (
-          `${chalk.yellow("absent")} — not in the macOS keychain; run ` +
+          `${chalk.yellow("absent")} — not in the ${store}; run ` +
           `${chalk.bold("cert install")} to trust it.`
         );
       case "unsupported":
-        return "unsupported — OS trust-store ops are only implemented for macOS.";
+        return `unsupported — OS trust-store ops are not implemented on ${process.platform}.`;
       default:
         // Unreachable per the union; keep a string so a widened caller
         // still gets a printable line rather than undefined.

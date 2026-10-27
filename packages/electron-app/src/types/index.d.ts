@@ -502,7 +502,8 @@ export interface DaemonStatusInfo {
  * `status` is 'stopped' (dead control port), 'starting' (spawned, not yet
  * answering), 'running'/'paused' (the engine's own report), or 'degraded'
  * (running but the pin ledger fell back to ephemeral). `platform` is added
- * by the main process so darwin-only hints stay gated.
+ * by the main process so per-platform hints (the capture-install command
+ * render, the CA trust ops) stay gated to the platforms that implement them.
  */
 export interface HttpsFilterStatus {
   status: 'stopped' | 'starting' | 'running' | 'degraded' | 'paused';
@@ -515,7 +516,7 @@ export interface HttpsFilterStatus {
   uptimeSeconds: number;
   /** True when this app spawned the answering engine (vs launchd/external). */
   managedByApp: boolean;
-  /** True when the macOS capture install owns the engine via launchd. */
+  /** True when the platform's capture install owns the engine (launchd/systemd/SCM). */
   captureServiceInstalled: boolean;
   /**
    * True when the answering engine's CA fingerprint differs from the
@@ -525,7 +526,7 @@ export interface HttpsFilterStatus {
    * re-verify-trust warning.
    */
   caDrift?: boolean;
-  /** Main-process platform — the capture-install hint is darwin-only. */
+  /** Main-process platform — gates the capture-install hint's per-platform script. */
   platform?: string;
   corruptLineCount?: number;
   stats?: {

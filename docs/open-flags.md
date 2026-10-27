@@ -214,7 +214,29 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **Fix shape:** precompute global candidate/exception sets beside `globalSharedPayload` and have the hit path start from them instead of re-walking `globalEntries` — the per-host merge then costs O(hits + exceptions applied), not O(globals).
 - **Verify:** `cosmeticIndex.test.ts` pins the shared-payload identity, veto fallback, and domain-merge semantics; closing this means a benchmark or a count of entries visited per `forHost` on a hit host, not a behavior change.
 
-## Closed
+### 116. Firefox keeps its own NSS `cert9.db` trust store — no OS-store write reaches it (`firefox-nss-cert9`)
+
+- **Where:** `firefoxNssProfileDbs` in `packages/core/src/caTrustStore.ts` (the detection helper), the `caTrustReply` suffix in `packages/electron-app/src/index.ts`, `warnFirefoxNssGap` in `packages/cli/src/commands/CertCommand.ts`.
+- **What:** the CA-trust surface writes the OS store — Windows `CurrentUser\Root` via `certutil -user`, linux `~/.pki/nssdb` via NSS `certutil` or the distro `ca-certificates` dir, macOS the login keychain — but Firefox never reads any of them by default; each profile keeps its own NSS `cert9.db` under `~/.mozilla/firefox`, `%APPDATA%\Mozilla\Firefox\Profiles`, or `~/Library/Application Support/Firefox/Profiles`. A successful `cert install` therefore leaves Firefox untrusted unless the user either enables `security.enterprise_roots.enabled` (Firefox then trusts the OS store) or imports the CA into `cert9.db` by hand.
+- **Why left:** importing into `cert9.db` needs the *NSS* certutil, which this project does not ship — the inbox Windows `certutil` is a different tool that cannot touch NSS databases, and the linux NSS `certutil` path targets `~/.pki/nssdb` (Chrome's db), not Firefox's profile dbs. The shipped surface detects `cert9.db` files and names the gap in the install reply rather than overclaiming "trusted".
+- **Fix shape:** either bundle/resolve an NSS certutil and add a per-profile `cert9.db` write behind a consent prompt, or document `security.enterprise_roots.enabled` as the supported Firefox path in the card/CLI copy.
+- **Verify:** on a Windows or Linux box with a Firefox profile present, `cert install` reports trusted AND prints the NSS-gap line; Firefox actually trusting the CA requires the enterprise-roots pref or a manual import — whichever fix shape lands.
+
+### 117. Linux with no NSS certutil and no distro CA-store paths answers 'unsupported' (`linux-no-ca-store`)
+
+- **Where:** `linuxTrustStatus`/`linuxInstallCa`/`linuxRemoveCa` in `packages/core/src/caTrustStore.ts` — the branch where `linuxProbeNssDb` returns `no-certutil` and `linuxProbeSystemStore` finds no source dir or bundle file.
+- **What:** linux CA trust is driven through two mechanisms — the user-scope NSS db (`certutil` on `~/.pki/nssdb`, what Chrome/Chromium read) and the Debian-style system store (`/usr/local/share/ca-certificates` + `update-ca-certificates`, probed live at `/etc/ssl/certs/ca-certificates.crt`; the RHEL-family `/etc/pki/tls/certs/ca-bundle.crt` is presence-probed only — its `update-ca-trust` write path is not implemented). A minimal box with neither mechanism gets an honest `'unsupported'`, not a fabricated install.
+- **Why left:** the third mechanism — `update-ca-trust`/`trust anchor` on RHEL/Fedora-likes and anything further afield — is a second system-store write path that needs its own verification pass; probing the RHEL bundle for *presence* is free, but writing it honestly is not the same op as the Debian flow.
+- **Fix shape:** add the `update-ca-trust` anchors path (`/etc/pki/ca-trust/source/anchors/` + `update-ca-trust extract`) as a third needs-admin escalation with its own rendered command line.
+- **Verify:** `caTrustStore.test.ts` forces `linuxSystemStore` probe paths to empty + a rejecting runner to hit the 'unsupported' leg today; closing this means a RHEL-family box (or a mocked probe) where install returns `needs-admin` with an `update-ca-trust` line instead.
+
+### 118. The linux capture installer is systemd-only — sysvinit/openrc/alpine die honestly (`sysvinit-openrc-capture`)
+
+- **Where:** `scripts/install-linux-capture.sh` (the `systemctl` gate that dies naming the unsupported inits), the linux branch of `isCaptureServiceInstalled` in `packages/electron-app/src/filterProxyManager.ts` (probes `/etc/systemd/system/blockingmachine-proxy.service` only).
+- **What:** the linux capture install is a systemd unit + an iptables `REDIRECT` anchor supervised by `Restart=always`; on a sysvinit/openrc/alpine host the installer refuses with a named-unsupported error rather than half-installing, and the manager's installed-probe cannot see a non-systemd service anyway.
+- **Why left:** the supervision contract is the load-bearing piece — capture owns the redirect anchor, so helper death must be fail-closed-until-restarted (systemd gives that); openrc/sysvinit restart semantics differ and writing them blind would claim a posture the code cannot prove.
+- **Fix shape:** an openrc service file + a sysvinit init script that replicate the redirect anchor and restart-on-death semantics, plus the matching probe branches — same `bm-anchor.sh` core, new supervisor wrappers.
+- **Verify:** an openrc or sysvinit box where the install script completes, `isCaptureServiceInstalled` reports true through the new probe, and killing the helper shows the supervisor restart keeping the anchor fail-closed.
 
 ### 115. HTML injection buffers were unbounded — closed by a proxy-wide `injectionBudget` concurrency cap (P2 flags pass)
 

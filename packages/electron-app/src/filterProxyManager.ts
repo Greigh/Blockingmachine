@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -112,6 +112,20 @@ export interface FilterProxyPinEntry {
 }
 
 const LAUNCHD_PLIST = '/Library/LaunchDaemons/com.blockingmachine.proxy.plist';
+// The P3 install legs' presence signals: the linux installer writes the
+// unit file under /etc/systemd/system (a file check is the exact analog of
+// the plist check — `systemctl list-units` cannot see a disabled/dead unit
+// reliably either), and the Windows installer registers the SCM service
+// `BlockingmachineProxy` (`sc.exe query` is the service idiom there).
+const SYSTEMD_PROXY_UNIT = '/etc/systemd/system/blockingmachine-proxy.service';
+const WINDOWS_PROXY_SERVICE = 'BlockingmachineProxy';
+
+/** The capture installer script per platform — P1 shipped macos, P3 adds linux/windows. */
+const CAPTURE_SCRIPTS: Record<string, { name: string; shell: 'posix' | 'powershell' }> = {
+  darwin: { name: 'install-macos-capture.sh', shell: 'posix' },
+  linux: { name: 'install-linux-capture.sh', shell: 'posix' },
+  win32: { name: 'install-windows-capture.ps1', shell: 'powershell' },
+};
 
 export class FilterProxyManager {
   private childProcess: ChildProcess | null = null;
@@ -125,6 +139,11 @@ export class FilterProxyManager {
   private entryPath?: string;
   private captureServiceInstalledProbe?: () => boolean;
   private trustedCaFingerprint?: () => string | undefined;
+  private platformOverride?: NodeJS.Platform;
+  private fileExistsProbe?: (p: string) => boolean;
+  private serviceQueryProbe?: (
+    service: string,
+  ) => { status: number | null; stdout: string; stderr: string; error?: unknown };
 
   constructor(options?: {
     controlPort?: number;
@@ -134,11 +153,29 @@ export class FilterProxyManager {
     /** Test/custom-install seam — when set it is THE spawn target (no candidate scan). */
     entryPath?: string;
     /**
-     * Test/custom-posture seam — overrides the launchd-plist probe
-     * (`isCaptureServiceInstalled`). Deliberately bypasses the darwin gate
-     * so non-darwin suites can drive the capture-installed branches.
+     * Test/custom-posture seam — overrides the whole capture probe
+     * (`isCaptureServiceInstalled`). Deliberately bypasses the platform
+     * branches so suites can drive the capture-installed postures directly.
      */
     captureServiceInstalled?: () => boolean;
+    /**
+     * Test seam — platform override for the capture probes and the install
+     * command render, so the win32/linux branches run on a darwin host.
+     */
+    platform?: NodeJS.Platform;
+    /**
+     * Test seam — the file-existence probe the darwin (plist) and linux
+     * (systemd unit) branches use; defaults to existsSync.
+     */
+    fileExists?: (p: string) => boolean;
+    /**
+     * Test seam — the win32 `sc.exe query` runner (spawnSync-shaped result).
+     * A probe that throws or whose output names no service reads as
+     * not-installed.
+     */
+    serviceQuery?: (
+      service: string,
+    ) => { status: number | null; stdout: string; stderr: string; error?: unknown };
     /**
      * Reads the LAST-TRUSTED engine CA fingerprint for drift detection —
      * index.ts backs it with the `httpsFilterTrustedCaFingerprint` store
@@ -154,6 +191,9 @@ export class FilterProxyManager {
     if (options?.entryPath) this.entryPath = options.entryPath;
     if (options?.captureServiceInstalled) this.captureServiceInstalledProbe = options.captureServiceInstalled;
     if (options?.trustedCaFingerprint) this.trustedCaFingerprint = options.trustedCaFingerprint;
+    if (options?.platform) this.platformOverride = options.platform;
+    if (options?.fileExists) this.fileExistsProbe = options.fileExists;
+    if (options?.serviceQuery) this.serviceQueryProbe = options.serviceQuery;
   }
 
   /**
@@ -232,19 +272,78 @@ export class FilterProxyManager {
   }
 
   /**
-   * True when the macOS capture install (P1 Task 3) owns the engine. The
-   * plist's presence is the whole signal — `/Library/LaunchDaemons` services
-   * live in the SYSTEM domain, which a user-context `launchctl list` cannot
-   * see, so a probing `launchctl` could never report the service anyway.
-   * Checked per call so installing or removing capture mid-session reports
-   * honestly on the next probe. The injected probe (the
-   * `captureServiceInstalled` constructor seam) is authoritative and bypasses
-   * the platform gate so non-darwin suites can drive the capture branches.
+   * True when the platform's capture install owns the engine. Per platform:
+   * darwin keys on the launchd plist (`/Library/LaunchDaemons` services live
+   * in the SYSTEM domain a user-context `launchctl list` cannot see — the
+   * file IS the whole signal); linux keys on the rendered systemd unit file
+   * the installer writes (same file-presence idiom); win32 asks the SCM via
+   * `sc.exe query` (a `STATE:` line means the service object exists in any
+   * run state; error 1060 / "does not exist" is the absent case; a failed
+   * spawn reads false rather than claiming capture). Checked per call so
+   * installing or removing capture mid-session reports honestly on the next
+   * probe. The injected seams are authoritative: `captureServiceInstalled`
+   * short-circuits the branches entirely; `platform`/`fileExists`/
+   * `serviceQuery` drive the real branch logic under test.
    */
   private isCaptureServiceInstalled(): boolean {
     if (this.captureServiceInstalledProbe) return this.captureServiceInstalledProbe();
-    if (process.platform !== 'darwin') return false;
-    return existsSync(LAUNCHD_PLIST);
+    const platform = this.platformOverride ?? process.platform;
+    const exists = this.fileExistsProbe ?? existsSync;
+    if (platform === 'darwin') return exists(LAUNCHD_PLIST);
+    if (platform === 'linux') return exists(SYSTEMD_PROXY_UNIT);
+    if (platform === 'win32') return this.windowsServiceInstalled(WINDOWS_PROXY_SERVICE);
+    return false;
+  }
+
+  /** User-facing name of the platform's capture install, for owner/verb strings. */
+  private captureServiceLabel(): string {
+    const platform = this.platformOverride ?? process.platform;
+    return platform === 'win32'
+      ? 'Windows capture service'
+      : platform === 'linux'
+        ? 'Linux capture service'
+        : 'macOS capture service';
+  }
+
+  /** The supervisor that restarts the capture engine — launchd/systemd/SCM. */
+  private captureSupervisorLabel(): string {
+    const platform = this.platformOverride ?? process.platform;
+    return platform === 'linux'
+      ? 'systemd Restart=always'
+      : platform === 'win32'
+        ? 'the SCM failure actions'
+        : 'launchd KeepAlive';
+  }
+
+  private windowsServiceInstalled(service: string): boolean {
+    const query =
+      this.serviceQueryProbe ??
+      ((svc: string) => {
+        const res = spawnSync('sc.exe', ['query', svc], {
+          encoding: 'utf8',
+          timeout: 10_000,
+          windowsHide: true,
+        });
+        return {
+          status: res.status,
+          stdout: String(res.stdout ?? ''),
+          stderr: String(res.stderr ?? ''),
+          error: res.error,
+        };
+      });
+    try {
+      const res = query(service);
+      if (res.error) return false; // sc.exe could not spawn — no claim
+      const text = `${res.stdout}\n${res.stderr}`;
+      // A STATE line means the service object exists — run state irrelevant.
+      if (/STATE\s*:/i.test(text)) return true;
+      // "The specified service does not exist as an installed service"
+      // (exit 1060 / ERROR_SERVICE_DOES_NOT_EXIST) — the honest absent case.
+      if (/does not exist|1060/i.test(text)) return false;
+      return res.status === 0;
+    } catch {
+      return false;
+    }
   }
 
   /** Ordered spawn-target candidates — daemonManager's join set verbatim. */
@@ -279,41 +378,63 @@ export class FilterProxyManager {
   }
 
   /**
-   * Ordered candidates for the capture installer script itself. Dev layout
-   * resolves the repo's `scripts/`; packaged builds ship `filterProxy.cjs`
-   * under `app.asar.unpacked` but do NOT yet ship `scripts/` — the
-   * resourcesPath candidate names where it would land so a packaged build
-   * that does ship it resolves it the same way.
+   * Ordered candidates for the capture installer script itself — the
+   * filename is per-platform (`install-{macos,linux}-capture.sh`,
+   * `install-windows-capture.ps1`). Dev layout resolves the repo's
+   * `scripts/`; packaged builds ship `filterProxy.cjs` under
+   * `app.asar.unpacked` but do NOT yet ship `scripts/` — the resourcesPath
+   * candidate names where it would land so a packaged build that does ship
+   * it resolves it the same way.
    */
-  candidateScriptPaths(): string[] {
+  candidateScriptPaths(scriptName?: string): string[] {
+    const script = scriptName ?? CAPTURE_SCRIPTS[this.platformOverride ?? process.platform]?.name;
+    if (!script) return [];
     return [
-      ...(process.resourcesPath ? [path.join(process.resourcesPath, 'scripts', 'install-macos-capture.sh')] : []),
-      path.resolve(moduleDir, '../../../scripts/install-macos-capture.sh'), // src/ → repo/scripts
-      path.resolve(moduleDir, '../../../../scripts/install-macos-capture.sh'), // .webpack/main/ → repo/scripts
-      path.resolve(process.cwd(), 'scripts/install-macos-capture.sh'), // cwd = repo root
-      path.resolve(process.cwd(), '../../scripts/install-macos-capture.sh'), // cwd = packages/electron-app → repo/scripts
+      ...(process.resourcesPath ? [path.join(process.resourcesPath, 'scripts', script)] : []),
+      path.resolve(moduleDir, '../../../scripts', script), // src/ → repo/scripts
+      path.resolve(moduleDir, '../../../../scripts', script), // .webpack/main/ → repo/scripts
+      path.resolve(process.cwd(), 'scripts', script), // cwd = repo root
+      path.resolve(process.cwd(), '../../scripts', script), // cwd = packages/electron-app → repo/scripts
     ];
   }
 
   /**
-   * The `install-macos-capture.sh` invocation rendered for THIS host —
-   * absolute script, engine bundle, runner and rulesPath — so the card's
-   * hint pastes verbatim on a machine with no repo checkout (the
-   * `daemon:get-service-script` precedent). `sudo` stays literal: the
-   * script needs root and the operator types it.
+   * The capture-installer invocation rendered for THIS host — absolute
+   * script, engine bundle, runner and rulesPath — so the card's hint pastes
+   * verbatim on a machine with no repo checkout (the
+   * `daemon:get-service-script` precedent). The privilege marker stays
+   * literal: posix scripts get `sudo bash`, the ps1 runs under an elevated
+   * PowerShell (there is no sudo verb to paste — the card names the
+   * requirement next to the block).
    */
   getCaptureInstallCommand(rulesPath?: string): { success: boolean; command?: string; message?: string } {
-    const scriptPath = this.candidateScriptPaths().find((p) => existsSync(p));
+    const spec = CAPTURE_SCRIPTS[this.platformOverride ?? process.platform];
+    if (!spec) {
+      return {
+        success: false,
+        message: `Transparent capture is not implemented on ${this.platformOverride ?? process.platform}.`,
+      };
+    }
+    const scriptPath = this.candidateScriptPaths(spec.name).find((p) => existsSync(p));
     const entryPath = this.resolveEntryPath();
     if (!entryPath || !scriptPath) {
       return {
         success: false,
         message: !entryPath
           ? 'Could not resolve the https-filter engine bundle — run npm run build first.'
-          : 'install-macos-capture.sh is not present — packaged builds do not ship the capture scripts yet.',
+          : `${spec.name} is not present — packaged builds do not ship the capture scripts yet.`,
       };
     }
     const resolvedRules = this.resolveRulesPath(rulesPath);
+    if (spec.shell === 'powershell') {
+      // NTFS forbids `"` in filenames, so double-quote wrapping needs no
+      // escaping; powershell parses `-File "<path>" "<arg…>"` natively.
+      const q = (v: string) => `"${v}"`;
+      const command =
+        `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(scriptPath)} ${q(entryPath)} ${q(process.execPath)}` +
+        (resolvedRules ? ` ${q(resolvedRules)}` : '');
+      return { success: true, command };
+    }
     const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
     const command =
       `sudo bash ${q(scriptPath)} ${q(entryPath)} ${q(process.execPath)}` +
@@ -396,25 +517,26 @@ export class FilterProxyManager {
       const owner = current.managedByApp
         ? 'this app'
         : current.captureServiceInstalled
-          ? 'the macOS capture service'
+          ? `the ${this.captureServiceLabel()}`
           : 'an external process';
       return { success: true, message: `Filter proxy engine is already active on port ${current.port} (managed by ${owner}).` };
     }
 
     // ONE ENGINE, EVER — an installed capture service with an unanswered
-    // probe is a transient KeepAlive gap, not a free port. Squatting here
-    // spawns a USER-euid engine on the launchd engine's ports, and that
-    // engine's own upstream dials are NOT exempt from the capture anchor's
-    // rdr (the `user != _blockingmachine` clause only exempts the service
-    // account) — it self-captures and livelocks, taking the web down. The
-    // right verbs are launchd's: re-run the installer or uninstall capture.
+    // probe is a transient supervisor gap, not a free port. Squatting here
+    // spawns a USER-euid engine on the capture engine's ports, and that
+    // engine's own upstream dials are NOT exempt from the capture redirect
+    // (darwin exempts `user != _blockingmachine`, linux the `blockingmachine`
+    // skuid, win32 the service binaries' ALE_APP_ID) — it self-captures and
+    // livelocks, taking the web down. The right verbs are the platform
+    // supervisor's: re-run the installer or uninstall capture.
     if (current.captureServiceInstalled) {
       this.starting = false;
       return {
         success: false,
         message:
           `Cannot start the filter proxy: the capture service owns :${this.controlPort}/:${this.dataPort} — ` +
-          'it recovers via launchd KeepAlive; if it is wedged, re-run install or uninstall capture first.',
+          `it recovers via ${this.captureSupervisorLabel()}; if it is wedged, re-run install or uninstall capture first.`,
       };
     }
 
@@ -542,11 +664,18 @@ export class FilterProxyManager {
     }
 
     if (this.isCaptureServiceInstalled()) {
+      const platform = this.platformOverride ?? process.platform;
+      const verb =
+        platform === 'linux'
+          ? 'systemctl stop blockingmachine-proxy.service (or the uninstaller)'
+          : platform === 'win32'
+            ? 'sc.exe stop BlockingmachineProxy (or the uninstaller)'
+            : 'launchctl bootout system/com.blockingmachine.proxy (or the uninstaller)';
       return {
         success: false,
         message:
-          'Filter proxy is managed by the macOS capture service — launchd owns the engine, so the verb is ' +
-          'launchctl bootout system/com.blockingmachine.proxy (or the Task 3 uninstaller), not a control-API shutdown.',
+          `Filter proxy is managed by the ${this.captureServiceLabel()} — ${this.captureSupervisorLabel()} owns the engine, so the verb is ` +
+          `${verb}, not a control-API shutdown.`,
       };
     }
 

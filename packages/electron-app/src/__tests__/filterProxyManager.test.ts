@@ -461,6 +461,118 @@ describe('FilterProxyManager — one-engine lifecycle gates', () => {
     expect(failed.message).toBeTruthy();
   });
 
+  test('isCaptureServiceInstalled probes per-platform via the injected seams', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch');
+    fetchMock.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+    // linux: presence of the rendered systemd unit file — the exact analog
+    // of the darwin plist check, driven by the fileExists seam.
+    const linuxInstalled = tracked(
+      new FilterProxyManager({
+        controlPort: 65431,
+        platform: 'linux',
+        fileExists: (p) => p === '/etc/systemd/system/blockingmachine-proxy.service',
+      }),
+    );
+    expect((await linuxInstalled.getStatus()).captureServiceInstalled).toBe(true);
+
+    const linuxAbsent = tracked(
+      new FilterProxyManager({ controlPort: 65431, platform: 'linux', fileExists: () => false }),
+    );
+    expect((await linuxAbsent.getStatus()).captureServiceInstalled).toBe(false);
+
+    // win32: `sc.exe query` — a STATE line means the service object exists
+    // in any run state; error 1060 is the honest not-installed answer.
+    const winInstalled = tracked(
+      new FilterProxyManager({
+        controlPort: 65431,
+        platform: 'win32',
+        serviceQuery: (svc) => ({
+          status: 0,
+          stdout: `SERVICE_NAME: ${svc}\n        STATE              : 4  RUNNING\n`,
+          stderr: '',
+        }),
+      }),
+    );
+    expect((await winInstalled.getStatus()).captureServiceInstalled).toBe(true);
+
+    const winStopped = tracked(
+      new FilterProxyManager({
+        controlPort: 65431,
+        platform: 'win32',
+        serviceQuery: () => ({
+          status: 0,
+          stdout: 'SERVICE_NAME: BlockingmachineProxy\n        STATE              : 1  STOPPED\n',
+          stderr: '',
+        }),
+      }),
+    );
+    expect((await winStopped.getStatus()).captureServiceInstalled).toBe(true); // exists ≠ running
+
+    const winAbsent = tracked(
+      new FilterProxyManager({
+        controlPort: 65431,
+        platform: 'win32',
+        serviceQuery: () => ({
+          status: 1060,
+          stdout: '',
+          stderr:
+            '[SC] EnumQueryServicesStatus:OpenService FAILED 1060:\n\n' +
+            'The specified service does not exist as an installed service.',
+        }),
+      }),
+    );
+    expect((await winAbsent.getStatus()).captureServiceInstalled).toBe(false);
+
+    // A spawn-level failure (no sc.exe at all) must read as not-installed,
+    // never as capture-owned.
+    const winBroken = tracked(
+      new FilterProxyManager({
+        controlPort: 65431,
+        platform: 'win32',
+        serviceQuery: () => ({ status: null, stdout: '', stderr: '', error: new Error('ENOENT') }),
+      }),
+    );
+    expect((await winBroken.getStatus()).captureServiceInstalled).toBe(false);
+
+    // A platform with no capture adapter answers false plainly.
+    const other = tracked(
+      new FilterProxyManager({ controlPort: 65431, platform: 'freebsd', fileExists: () => true }),
+    );
+    expect((await other.getStatus()).captureServiceInstalled).toBe(false);
+  });
+
+  test('getCaptureInstallCommand renders the per-platform installer line', () => {
+    const dir = mkdtempSync(join(tmpBase, 'install-cmd-plat-'));
+    const entry = writeFakeEngine(dir);
+    const rules = join(dir, 'rules', 'browser.txt');
+
+    // linux → the same `sudo bash <sh>` shape as darwin, linux script name.
+    const linux = new FilterProxyManager({ entryPath: entry, platform: 'linux' });
+    const lres = linux.getCaptureInstallCommand(rules);
+    expect(lres.success).toBe(true);
+    expect(lres.command!).toContain('install-linux-capture.sh');
+    expect(lres.command!.startsWith('sudo bash')).toBe(true);
+    expect(lres.command!).toContain(entry);
+    expect(lres.command!).toContain(rules);
+
+    // win32 → powershell -File with double-quoted absolute paths; there is
+    // no sudo verb — the card names the elevated-PowerShell requirement.
+    const win = new FilterProxyManager({ entryPath: entry, platform: 'win32' });
+    const wres = win.getCaptureInstallCommand(rules);
+    expect(wres.success).toBe(true);
+    expect(wres.command!).toContain('powershell -NoProfile -ExecutionPolicy Bypass -File');
+    expect(wres.command!).toContain('install-windows-capture.ps1');
+    expect(wres.command!).toContain(`"${entry}"`);
+    expect(wres.command!).toContain(`"${rules}"`);
+
+    // No adapter for the platform → an honest failure naming it.
+    const other = new FilterProxyManager({ entryPath: entry, platform: 'freebsd' });
+    const ores = other.getCaptureInstallCommand(rules);
+    expect(ores.success).toBe(false);
+    expect(ores.message).toContain('freebsd');
+  });
+
   test('caDrift flags a changed answering fingerprint against the trusted record', async () => {
     const fetchMock = jest.spyOn(globalThis, 'fetch');
     fetchMock.mockImplementation(async (input) => {

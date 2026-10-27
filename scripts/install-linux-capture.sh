@@ -31,7 +31,7 @@
 #   1. refuses unless EUID=0 (after arg parse, before any touch)
 #   2. refuses off-Linux, and refuses when `systemctl` is absent — the
 #      persistent-units design is systemd by construction (sysvinit,
-#      openrc, alpine: honest die naming them — openrc support is a flag,
+#      openrc, alpine: honest die naming them — openrc support is flag 118,
 #      not a silent fallback)
 #   3. refuses when anything already listens on :9293/:9294/:9295 — an
 #      engine squatting the capture ports means the services would fail
@@ -306,7 +306,7 @@ fi
 # systemd is a hard requirement by design: the persistence story is
 # units, not rc.local hand-waving. sysvinit / openrc / busybox-init
 # (alpine) have no systemctl — say so honestly rather than half-install.
-command -v systemctl >/dev/null 2>&1 || die "systemd required (no systemctl) — sysvinit/openrc/alpine are unsupported; openrc support is a tracked flag, not a silent fallback"
+command -v systemctl >/dev/null 2>&1 || die "systemd required (no systemctl) — sysvinit/openrc/alpine are unsupported; openrc support is tracked flag 118, not a silent fallback"
 
 # The squat check — before the account, directories, helper, units or
 # rules are touched. An engine already on the capture ports would make
