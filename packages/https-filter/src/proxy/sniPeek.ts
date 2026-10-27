@@ -43,8 +43,40 @@ const SERVER_NAME_HOST_NAME = 0x00;
 const MAX_PEEK_BYTES = 64 * 1024;
 
 /**
+ * Whether `buf` holds the complete first handshake *message*. A ClientHello
+ * larger than its first record's payload continues in following handshake
+ * records — deciding `sni:null` on record 1 alone lets a fragmented hello
+ * evade the verdict. Non-handshake records (CCS, alert) interleaved mid-hello
+ * are skipped, not counted. Returns false while more bytes may still arrive.
+ */
+function handshakeComplete(buf: Buffer): boolean {
+  if (buf.length < 9) {
+    return false;
+  }
+  const total = 4 + buf.readUIntBE(6, 3); // handshake header + declared body
+  let have = 0;
+  let p = 0;
+  while (have < total) {
+    if (p + 5 > buf.length) {
+      return false;
+    }
+    const len = buf.readUInt16BE(p + 3);
+    if (buf.length < p + 5 + len) {
+      return false; // the next record hasn't fully landed
+    }
+    if (buf[p] === HANDSHAKE_CONTENT_TYPE) {
+      have += len;
+    }
+    p += 5 + len;
+  }
+  return true;
+}
+
+/**
  * Whether `buf` is decided yet: a single non-handshake first byte, or a
- * complete first record, settles the peek; anything shorter keeps waiting.
+ * complete first record — extended to the complete first *handshake message*
+ * when record 1 opens a ClientHello that overflows it — settles the peek;
+ * anything shorter keeps waiting (still bounded by MAX_PEEK_BYTES/timeout).
  */
 function isPeekComplete(buf: Buffer): boolean {
   if (buf.length === 0) {
@@ -59,11 +91,47 @@ function isPeekComplete(buf: Buffer): boolean {
   if (buf.length >= MAX_PEEK_BYTES) {
     return true;
   }
-  if (buf.length < 5) {
+  if (buf.length < 9) {
     return false;
   }
   const recordLength = buf.readUInt16BE(3);
-  return buf.length >= 5 + recordLength;
+  if (buf.length < 5 + recordLength) {
+    return false;
+  }
+  if (buf[5] === HANDSHAKE_CLIENT_HELLO) {
+    return handshakeComplete(buf);
+  }
+  return true;
+}
+
+/**
+ * Reassemble the first handshake message across TLS records: record 1's
+ * payload, then each following handshake record's payload (non-handshake
+ * records skipped). Returns null when record 1 doesn't open a ClientHello;
+ * may return a *truncated* message when the buffer ends mid-flight — the
+ * walker bounds-checks every read against it.
+ */
+function reassembleClientHello(buf: Buffer): Buffer | null {
+  if (buf.length < 9 || buf[5] !== HANDSHAKE_CLIENT_HELLO) {
+    return null;
+  }
+  const total = 4 + buf.readUIntBE(6, 3);
+  const parts: Buffer[] = [];
+  let have = 0;
+  let p = 0;
+  while (have < total && p + 5 <= buf.length) {
+    const len = buf.readUInt16BE(p + 3);
+    const end = Math.min(buf.length, p + 5 + len);
+    if (buf[p] === HANDSHAKE_CONTENT_TYPE) {
+      parts.push(buf.subarray(p + 5, end));
+      have += end - (p + 5);
+    }
+    if (end < p + 5 + len) {
+      break; // partial tail record — return what's assembled
+    }
+    p = end;
+  }
+  return Buffer.concat(parts);
 }
 
 /**
@@ -83,41 +151,42 @@ function parseClientHello(buf: Buffer): { isTls: boolean; sni: string | null } {
   if (buf.length < 9) {
     return tls;
   }
-  // Stay inside the first record — a fragmented hello can't be trusted past it.
-  const recordEnd = Math.min(buf.length, 5 + buf.readUInt16BE(3));
-  if (buf[5] !== HANDSHAKE_CLIENT_HELLO) {
+  // Reassemble across continuation records — a fragmented hello's SNI can
+  // live entirely in record 2+; record-1-only parsing silently evades it.
+  const hs = reassembleClientHello(buf);
+  if (hs === null) {
     return tls;
   }
-  const handshakeEnd = Math.min(recordEnd, 9 + buf.readUIntBE(6, 3));
-  let p = 9;
+  const handshakeEnd = Math.min(hs.length, 4 + hs.readUIntBE(1, 3));
+  let p = 4;
   const has = (n: number): boolean => p + n <= handshakeEnd;
 
   // version(2) + random(32), then three length-prefixed fields.
   if (!has(34)) return tls;
   p += 34;
   if (!has(1)) return tls;
-  const sessionIdLen = buf[p];
+  const sessionIdLen = hs[p];
   p += 1;
   if (!has(sessionIdLen)) return tls;
   p += sessionIdLen;
   if (!has(2)) return tls;
-  const cipherLen = buf.readUInt16BE(p);
+  const cipherLen = hs.readUInt16BE(p);
   p += 2;
   if (!has(cipherLen)) return tls;
   p += cipherLen;
   if (!has(1)) return tls;
-  const compressionLen = buf[p];
+  const compressionLen = hs[p];
   p += 1;
   if (!has(compressionLen)) return tls;
   p += compressionLen;
 
   // Extension block: total u16, then type/u16 + len/u16 + data entries.
   if (!has(2)) return tls;
-  const extEnd = Math.min(p + 2 + buf.readUInt16BE(p), handshakeEnd);
+  const extEnd = Math.min(p + 2 + hs.readUInt16BE(p), handshakeEnd);
   p += 2;
   while (p + 4 <= extEnd) {
-    const extType = buf.readUInt16BE(p);
-    const extLen = buf.readUInt16BE(p + 2);
+    const extType = hs.readUInt16BE(p);
+    const extLen = hs.readUInt16BE(p + 2);
     const extData = p + 4;
     if (extData + extLen > extEnd) {
       break;
@@ -126,16 +195,16 @@ function parseClientHello(buf: Buffer): { isTls: boolean; sni: string | null } {
       // server_name_list: u16 total, then entries of type/u8 + len/u16 + name.
       if (extLen < 2) break;
       let q = extData + 2;
-      const listEnd = Math.min(extData + 2 + buf.readUInt16BE(extData), extData + extLen);
+      const listEnd = Math.min(extData + 2 + hs.readUInt16BE(extData), extData + extLen);
       while (q + 3 <= listEnd) {
-        const nameType = buf[q];
-        const nameLen = buf.readUInt16BE(q + 1);
+        const nameType = hs[q];
+        const nameLen = hs.readUInt16BE(q + 1);
         q += 3;
         if (q + nameLen > listEnd) {
           break;
         }
         if (nameType === SERVER_NAME_HOST_NAME) {
-          return { isTls: true, sni: buf.toString('ascii', q, q + nameLen) };
+          return { isTls: true, sni: hs.toString('ascii', q, q + nameLen) };
         }
         q += nameLen;
       }

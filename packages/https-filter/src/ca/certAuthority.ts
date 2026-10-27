@@ -51,6 +51,16 @@ const CA_SUBJECT: forge.pki.CertificateField[] = [
  * names either — the proxy passthroughs those flows rather than mint a
  * dNSName leaf for an address.
  */
+/**
+ * SNI normalization for verdict/policy/compare use — DNS is case-insensitive
+ * and wire SNI may carry a trailing dot (FQDN form). This does not validate;
+ * {@link isValidSni} is the forge gate. `blocked.com.` and `Blocked.COM` both
+ * normalize to `blocked.com` so the same name is judged, pinned, and forged.
+ */
+export function normalizeSni(sni: string): string {
+  return sni.toLowerCase().replace(/\.+$/, '');
+}
+
 export function isValidSni(sni: string): boolean {
   if (sni === 'localhost') {
     return true;

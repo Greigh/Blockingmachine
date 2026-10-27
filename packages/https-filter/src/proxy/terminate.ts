@@ -15,12 +15,16 @@
  * both protocols (registering a raw `'stream'` listener as well would
  * double-dispatch every h2 request).
  *
- * Pin learning (spec §5.3/§7): a client that distrusts the forged leaf aborts
- * during the handshake — observed here as `tlsClientError`, or the socket
- * closing/erroring before the first request ever arrived. Either fires the
- * `onHandshakeAbort` hook exactly once so the caller can enroll the host in
- * `pins.learned`. A close *after* a request means an HTTP-speaking client —
- * never a pinning signal.
+ * Pin learning (spec §5.3/§7): the pinning signal is a client distrusting the
+ * forged leaf — observed here as `tlsClientError` or the socket dying before
+ * `secureConnection` ever fired (handshake never completed). A
+ * `clientError`/`sessionError` before the first request means the completed
+ * TLS session wasn't speaking HTTP — the spec's non-HTTP auto-demote, same
+ * store. A *clean close after a completed handshake* is NOT a pinning signal —
+ * browsers abandon speculative/preconnect sockets exactly that way, and
+ * treating it as one also hands any local process a pin-anything evasion
+ * (`CONNECT victim.example` → hello → close → pinned). Either real trigger
+ * fires the `onHandshakeAbort` hook exactly once.
  */
 
 import http from 'node:http';
@@ -29,7 +33,7 @@ import http2 from 'node:http2';
 import type net from 'node:net';
 import type { Readable, Writable } from 'node:stream';
 import tls from 'node:tls';
-import type { CertAuthority } from '../ca/certAuthority.js';
+import { normalizeSni, type CertAuthority } from '../ca/certAuthority.js';
 
 /**
  * One decrypted request. `url` is the request-target exactly as received —
@@ -60,6 +64,8 @@ export interface RelayResponse {
   respond(status: number, headers?: OutgoingHttpHeaders, body?: string | Buffer): void;
   begin(status: number, headers: OutgoingHttpHeaders): Writable;
   destroy(): void;
+  /** Register a downstream-death hook — the relay kills the upstream dial. */
+  onClose(cb: () => void): void;
 }
 
 export type HttpHandler = (req: TerminatedRequest, res: RelayResponse) => void;
@@ -77,7 +83,12 @@ class CompatRelayResponse implements RelayResponse {
   constructor(
     private readonly res: http.ServerResponse | http2.Http2ServerResponse,
     readonly protocol: 'h1' | 'h2',
-  ) {}
+  ) {
+    // The response object surfaces socket-level failures as 'error' — an
+    // unhandled one is an uncaughtException on the whole engine. Destruction
+    // is the only sane answer and callers already own teardown.
+    this.res.on('error', () => {});
+  }
 
   get headersSent(): boolean {
     return this.res.headersSent;
@@ -129,6 +140,10 @@ class CompatRelayResponse implements RelayResponse {
   destroy(): void {
     this.res.destroy();
   }
+
+  onClose(cb: () => void): void {
+    this.res.once('close', cb);
+  }
 }
 
 /**
@@ -151,18 +166,22 @@ export function terminateToHttp(
   // the handshake, so the forged leaf goes in through server options.
   // SNICallback covers a wire SNI that disagrees with the peeked name —
   // same-name hits the forged default context, other valid names forge on
-  // demand (LRU-cached), invalid names fail the handshake honestly.
+  // demand (LRU-cached), invalid names fail the handshake honestly. The wire
+  // name is normalized first: a trailing-dot SNI (`name.`) must still match
+  // `ctx.sni` — otherwise a perfectly pinnable-looking handshake failure is
+  // manufactured out of a normalization miss, learning a false pin.
   const server = http2.createSecureServer({
     allowHTTP1: true,
     secureContext: defaultContext,
     ALPNProtocols: ['h2', 'http/1.1'],
     SNICallback: (servername, cb) => {
-      if (servername.toLowerCase() === ctx.sni) {
+      const normalized = normalizeSni(servername);
+      if (normalized === ctx.sni) {
         cb(null, defaultContext);
         return;
       }
       try {
-        const alt = authority.forgeLeaf(servername);
+        const alt = authority.forgeLeaf(normalized);
         cb(null, tls.createSecureContext({ key: alt.keyPem, cert: alt.certPem }));
       } catch (err) {
         cb(err as Error);
@@ -171,23 +190,59 @@ export function terminateToHttp(
   });
 
   let sawRequest = false;
+  let secure = false;
   let aborted = false;
   const abort = () => {
-    if (!sawRequest && !aborted) {
+    if (!aborted) {
       aborted = true;
       ctx.onHandshakeAbort?.();
     }
   };
-  // Client aborts the forged handshake (cert-pinning signal) or gives up
-  // before ever speaking HTTP — both count as "abort before first request".
+  server.on('secureConnection', () => {
+    secure = true;
+  });
+  // The pinning signal: the forged handshake is rejected (tlsClientError —
+  // the client's cert alert) or the socket dies before secureConnection ever
+  // fired — 'end' counts too: a FIN'd client can never finish the handshake.
+  // A close *after* a completed handshake is abandonment, not pinning.
   server.on('tlsClientError', abort);
-  socket.once('error', abort);
-  socket.once('close', abort);
+  socket.once('error', () => {
+    if (!secure) {
+      abort();
+    }
+  });
+  socket.once('close', () => {
+    if (!secure) {
+      abort();
+    }
+  });
+  socket.once('end', () => {
+    if (!secure) {
+      abort();
+    }
+  });
+  // The peek resolves inside a 'data' handler — a fast client can FIN/reset
+  // the socket before these listeners attach. Catch the already-happened
+  // close so the pinning signal is never lost to a registration race.
+  if (!secure && (socket.destroyed || socket.readableEnded)) {
+    abort();
+  }
 
-  // A compat parse failure ('clientError') or an h2 session error ends the
-  // flow honestly — never a hung socket.
-  server.on('clientError', (_err, sock) => sock.destroy());
-  server.on('sessionError', () => socket.destroy());
+  // compat parse failure / h2 session error ends the flow honestly — and if
+  // no request was ever served, the completed session wasn't speaking HTTP:
+  // spec §5.3's non-HTTP-TLS auto-demote lands in the same pin store.
+  server.on('clientError', (_err, sock) => {
+    if (!sawRequest) {
+      abort();
+    }
+    sock.destroy();
+  });
+  server.on('sessionError', () => {
+    if (!sawRequest) {
+      abort();
+    }
+    socket.destroy();
+  });
 
   server.on(
     'request',

@@ -46,7 +46,7 @@ import {
   createRequestEvaluator,
   type RequestEvaluator,
 } from '@blockingmachine/core';
-import { isValidSni, type CertAuthority } from '../ca/certAuthority.js';
+import { isValidSni, normalizeSni, type CertAuthority } from '../ca/certAuthority.js';
 import type { PolicyStore } from '../policy/policyStore.js';
 import {
   absoluteRequestUrl,
@@ -88,9 +88,14 @@ export interface StartProxyOptions {
   /**
    * Extra PEM roots merged over `tls.rootCertificates` for upstream
    * verification — a deployment/test hook, never a bypass:
-   * `rejectUnauthorized: true` holds regardless.
+   * `rejectUnauthorized: true` holds regardless. Note that passing an
+   * explicit `ca` list replaces Node's whole default trust set — including
+   * anything `NODE_EXTRA_CA_CERTS` added at process start — so deployments
+   * needing env-provided roots must fold them in here.
    */
   upstreamCaCerts?: string[];
+  /** Test/deploy knob — the upstream dial deadline (default 15s). */
+  upstreamConnectTimeoutMs?: number;
 }
 
 /** Bound on first-bytes dispatch — a connection that never speaks is reaped. */
@@ -107,17 +112,6 @@ const HEADER_END = '\r\n\r\n';
 
 function sanitizeHeaderValue(value: string): string {
   return value.replace(/[\r\n]/g, '');
-}
-
-/**
- * The name a verdict or a policy check runs on: SNI off the wire may carry a
- * trailing dot (FQDN form) — a *normalizable-but-invalid* name that must
- * still be judged, never skipped (a `blocked.com.` ClientHello would
- * otherwise blind-tunnel past `||blocked.com^`). The evaluator's own host
- * parse does the same strip; policy lookups do not.
- */
-function normalizeSni(sni: string): string {
-  return sni.toLowerCase().replace(/\.+$/, '');
 }
 
 /**
@@ -283,7 +277,10 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           res.respond(403, headers);
           return;
         }
-        relayRequest(req, res, flow.upstream, { upstreamCaCerts: opts.upstreamCaCerts });
+        relayRequest(req, res, flow.upstream, {
+          upstreamCaCerts: opts.upstreamCaCerts,
+          connectTimeoutMs: opts.upstreamConnectTimeoutMs,
+        });
       },
       {
         head: flow.head,
@@ -307,12 +304,21 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
    */
   function handlePlainHttp(sock: net.Socket, buf: Buffer): void {
     const parsed = parsePlainHttpTarget(buf);
+    // Unparseable → 400. Absolute-form target disagreeing with the Host
+    // header (RFC 7230 §5.4): evaluate BOTH authorities — a block on either
+    // answers 403, otherwise the flow can't be forwarded without smuggling
+    // one unjudged name past the splice → 400.
     if (parsed === null) {
       sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
       return;
     }
     const verdict = evaluator.evaluate(parsed.url);
-    if (verdict.action === 'blocked') {
+    let hostBlocked = false;
+    if (parsed.authorityMismatch && parsed.hostHeader !== null) {
+      hostBlocked =
+        evaluator.evaluate(`http://${parsed.hostHeader}/`).action === 'blocked';
+    }
+    if (verdict.action === 'blocked' || hostBlocked) {
       stats.flowsBlocked++;
       const rule =
         verdict.coveringRule === null
@@ -321,6 +327,12 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       sock.end(
         `HTTP/1.1 403 Forbidden\r\nContent-Length: 0${rule}\r\nConnection: close\r\n\r\n`,
       );
+      return;
+    }
+    if (parsed.authorityMismatch) {
+      // Both authorities individually allow — but forwarding absolute-form
+      // verbatim would still deliver a Host the splice never re-checks.
+      sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
       return;
     }
     blindTunnel(sock, parsed.host, parsed.port, buf);
@@ -345,7 +357,11 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
 
     // A literal IP never carries SNI — nothing to evaluate or peek (Review
     // Focus #1); pinned/bypassed hosts are the policy store's blind-tunnel
-    // predicate, honored before any verdict.
+    // predicate, honored before any verdict. Note this tunnels on the
+    // CONNECT *authority* alone — a flow whose peeked ClientHello later
+    // names a different (blocked) SNI still rides this splice; per spec's
+    // fail-open posture that recheck gap is accepted for P0 and recorded
+    // for P1.
     if (isIP(host) !== 0 || policy.isPinned(host) || policy.isBypassed(host)) {
       sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       blindTunnel(sock, host, port, rest);

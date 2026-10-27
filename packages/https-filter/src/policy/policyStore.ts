@@ -123,6 +123,11 @@ export class PolicyStore {
   /** Called by the TLS layer when a client aborts the forged handshake. */
   learnPin(host: string, reason: string): void {
     const normalized = requireHost(host);
+    // Already learned → no-op: the sync appendFileSync is on the socket hot
+    // path and repeat aborts would otherwise bloat the ledger.
+    if (this.pinned.has(normalized)) {
+      return;
+    }
     this.pinned.add(normalized);
     this.append(normalized, 'pin', reason);
   }

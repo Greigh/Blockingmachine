@@ -67,6 +67,44 @@ function tcpEchoServer(): net.Server {
   });
 }
 
+/**
+ * A minimal well-formed ClientHello for `servername`, split across two TLS
+ * records so the SNI extension lives in the second — the shape that used to
+ * parse `sni: null`. Byte layout per RFC 5246: record(hdr5+payload) wrapping
+ * handshake(type1+len3+body) = version(2) + random(32) + session_id(len1) +
+ * cipher_suites(len2) + compression(len1) + extensions(len2, [type2+len2+data]).
+ */
+function buildFragmentedClientHello(servername: string): Buffer {
+  const u16 = (n: number) => {
+    const b = Buffer.alloc(2);
+    b.writeUInt16BE(n);
+    return b;
+  };
+  const u24 = (n: number) => Buffer.from([(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff]);
+  const record = (payload: Buffer) =>
+    Buffer.concat([Buffer.from([0x16, 0x03, 0x01]), u16(payload.length), payload]);
+
+  const name = Buffer.from(servername, 'ascii');
+  const serverNameList = Buffer.concat([u16(1 + 2 + name.length), Buffer.from([0]), u16(name.length), name]);
+  const sniExt = Buffer.concat([u16(0), u16(serverNameList.length), serverNameList]);
+  const ciphers = u16(2);
+  const cipherList = Buffer.from([0x13, 0x01]); // TLS_AES_128_GCM_SHA256
+  const body = Buffer.concat([
+    Buffer.from([0x03, 0x03]), // client_version TLS 1.2
+    Buffer.alloc(32), // random — content irrelevant to the parser
+    Buffer.from([0]), // session_id length 0
+    ciphers,
+    cipherList,
+    Buffer.from([1, 0]), // compression_methods: [null]
+    u16(sniExt.length),
+    sniExt,
+  ]);
+  const handshake = Buffer.concat([Buffer.from([0x01]), u24(body.length), body]);
+  // Split inside the extension block so record 1 alone cannot yield the SNI.
+  const cut = 4 + body.length - (sniExt.length - 2);
+  return Buffer.concat([record(handshake.subarray(0, cut)), record(handshake.subarray(cut))]);
+}
+
 function tlsEchoServer(keyPem: string, certPem: string): net.Server {
   return tls.createServer({ key: keyPem, cert: certPem }, (socket) => {
     socket.on('data', (chunk) => socket.write(chunk));
@@ -242,6 +280,39 @@ describe('peekClientHello', () => {
     expect(result!.isTls).toBe(false);
     expect(result!.sni).toBeNull();
     expect(result!.head.toString('latin1')).toBe('GET / HTTP/1.1\r\n\r\n');
+
+    client.destroy();
+    await closeServer(listener);
+  });
+
+  test('a ClientHello fragmented across two records still yields its SNI', async () => {
+    const hello = buildFragmentedClientHello('frag.example');
+    let result: ClientHelloPeek | null = null;
+    let settled!: () => void;
+    const saw = new Promise<void>((resolve) => {
+      settled = resolve;
+    });
+    const listener = net.createServer((sock) => {
+      void peekClientHello(sock, 5_000).then((peeked) => {
+        result = peeked;
+        settled();
+      });
+    });
+    const port = await listen(listener);
+
+    const client = net.connect({ port, host: '127.0.0.1' });
+    await once(client, 'connect');
+    // Deliver the two records in two writes — a peek that only ever read
+    // record 1 would see a truncated extension block and come back sni:null.
+    client.write(hello.subarray(0, Math.floor(hello.length / 2)));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    client.write(hello.subarray(Math.floor(hello.length / 2)));
+    await withTimeout(saw, 6_000, 'fragmented peek');
+
+    expect(result).not.toBeNull();
+    expect(result!.isTls).toBe(true);
+    expect(result!.sni).toBe('frag.example');
+    expect(result!.head).toEqual(hello);
 
     client.destroy();
     await closeServer(listener);
