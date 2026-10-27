@@ -57,7 +57,7 @@ import {
 import { isValidSni, normalizeSni, type CertAuthority } from '../ca/certAuthority.js';
 import { LeafForgeQueue } from '../ca/leafForgeQueue.js';
 import type { InjectionBudget, ResponseEvent } from '../pipeline/response.js';
-import { applyRequestTransforms, inferContentType } from '../pipeline/transforms.js';
+import { applyRequestTransforms, inferContentType, inferThirdParty } from '../pipeline/transforms.js';
 import type { PolicyStore } from '../policy/policyStore.js';
 import {
   absoluteRequestUrl,
@@ -547,24 +547,34 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       (req, res) => {
         const url = absoluteRequestUrl(req, 'https');
         const contentType = inferContentType(req.headers);
-        // The client-declared resource type may only TIGHTEN a verdict,
-        // never relax it. `sec-fetch-dest`/`accept` are attacker-controlled
-        // bytes: evaluated alone, a typed `@@||h^$image`-style exception
-        // under a fabricated `dest: image` would flip an untyped block into
-        // an exception — the declared type arming a suppression. So a
-        // declared contentType earns a second, untyped evaluation: a block
-        // on EITHER wins, and when both block the typed verdict stands —
-        // its coveringRule is the more specific match. Only when neither
-        // blocks does the typed verdict govern (its transforms and
-        // exception semantics are the honest reading of the declared type).
-        // Undeclared type → one evaluation: untyped and typed are the same
-        // run, so the double pass is skipped.
+        // `sec-fetch-site` is the one initiator signal a proxy can see —
+        // client-volunteered fetch metadata, tri-stated by inferThirdParty
+        // (cross-/same-site → true, same-origin/none → false, else undefined).
+        const thirdParty = inferThirdParty(req.headers);
+        // The client-declared resource type and site relation may only
+        // TIGHTEN a verdict, never relax it. `sec-fetch-dest`/`accept`/
+        // `sec-fetch-site` are attacker-controlled bytes: evaluated alone,
+        // a typed `@@||h^$image`-style exception under a fabricated
+        // `dest: image` — or a `@@…$~third-party` exception under a
+        // fabricated `site: same-origin` — would flip an untyped block into
+        // an exception, the declared signal arming a suppression. So a
+        // declared contentType OR thirdParty earns a second, untyped
+        // evaluation: a block on EITHER wins, and when both block the typed
+        // verdict stands — its coveringRule is the more specific match.
+        // Only when neither blocks does the typed verdict govern (its
+        // transforms and exception semantics are the honest reading of the
+        // declared signals). Undeclared signals → one evaluation: untyped
+        // and typed are the same run, so the double pass is skipped.
         const typed = flowEvaluator.evaluate(url, {
           method: req.method,
           contentType,
+          thirdParty,
         });
         let verdict = typed;
-        if (contentType !== undefined && typed.action !== 'blocked') {
+        if (
+          (contentType !== undefined || thirdParty !== undefined) &&
+          typed.action !== 'blocked'
+        ) {
           const untyped = flowEvaluator.evaluate(url, { method: req.method });
           if (untyped.action === 'blocked') {
             verdict = untyped;
@@ -609,11 +619,14 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
             injectionBudget,
             // The evaluator's (url, ctx) call adapted to the pipeline's
             // context-object signature — same URL/method, content-type from
-            // the response's real media type.
+            // the response's real media type, third-party from the request's
+            // own `sec-fetch-site` (it can only tighten — the pipeline uses
+            // a 'blocked' outcome only).
             evaluateTyped: (ctx) =>
               flowEvaluator.evaluate(ctx.url, {
                 method: ctx.method,
                 contentType: ctx.contentType,
+                thirdParty,
               }),
             onEvent: onResponseEvent,
           },

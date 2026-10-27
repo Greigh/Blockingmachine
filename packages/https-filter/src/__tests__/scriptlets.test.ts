@@ -917,8 +917,10 @@ describe('flag-106 native toString spoofing', () => {
     // fake object leaves the realm's real JSON untouched
     page.globals.JSON = { parse: JSON.parse, stringify: JSON.stringify };
     runIn(page, [{ name: 'json-prune', args: ['a.b'] }]);
-    expect(String(page.globals.JSON.parse)).toBe('function parse() { [native code] }');
-    expect(page.globals.JSON.parse('{"a":{"b":1,"c":2}}')).toEqual({ a: { c: 2 } });
+    // `globals` is `Record<string, unknown>` — narrow the JSON facade for its members.
+    const pageJson = page.globals.JSON as typeof JSON;
+    expect(String(pageJson.parse)).toBe('function parse() { [native code] }');
+    expect(pageJson.parse('{"a":{"b":1,"c":2}}')).toEqual({ a: { c: 2 } });
   });
 
   test('xhr open/send and addEventListener wrappers mirror their originals', () => {

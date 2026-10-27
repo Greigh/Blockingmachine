@@ -78,9 +78,7 @@ const SEC_FETCH_DEST_TYPES: Readonly<Record<string, string>> = {
  * fallback applies only where the client's most-preferred type admits one
  * reading (`image/*` → image, `text/css` → stylesheet) — ambiguous or
  * absent signals stay `undefined`, so a wrong guess can never fire an
- * `$image`-style rule that shouldn't. No `thirdParty` inference lives here:
- * a network-layer proxy sees no initiator, so first-/third-party stays
- * unanswerable by design.
+ * `$image`-style rule that shouldn't.
  */
 export function inferContentType(headers: IncomingHttpHeaders): string | undefined {
   const dest = headers['sec-fetch-dest'];
@@ -106,6 +104,38 @@ export function inferContentType(headers: IncomingHttpHeaders): string | undefin
     }
   }
   return undefined;
+}
+
+/**
+ * The evaluator's `thirdParty` context, inferred from the request's
+ * `sec-fetch-site` header — the one initiator-relative signal a proxy CAN
+ * see because the client volunteers it (spec-defined fetch metadata, sent
+ * by every modern browser on requests it can describe). The tri-state is
+ * honest: `cross-site` is third-party outright, and `same-site` counts too
+ * — it covers same-site cross-HOST requests (`a.foo.com` → `b.foo.com`),
+ * which is exactly ABP's `$third-party` reading (the request host differs
+ * from the initiator's). `same-origin` and `none` (typed addresses,
+ * bookmarks, omni box) are first-party. Absent or unrecognized stays
+ * `undefined` — no guessing: a fabricated value can still only tighten a
+ * verdict, because the caller pairs this with the same untyped second pass
+ * `contentType` gets.
+ */
+export function inferThirdParty(headers: IncomingHttpHeaders): boolean | undefined {
+  const site = headers['sec-fetch-site'];
+  const siteValue = Array.isArray(site) ? site[0] : site;
+  if (typeof siteValue !== 'string') {
+    return undefined;
+  }
+  switch (siteValue.trim().toLowerCase()) {
+    case 'cross-site':
+    case 'same-site':
+      return true;
+    case 'same-origin':
+    case 'none':
+      return false;
+    default:
+      return undefined;
+  }
 }
 
 /**

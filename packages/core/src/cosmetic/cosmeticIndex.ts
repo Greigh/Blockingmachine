@@ -811,8 +811,10 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
   // host's decomposition shows a label left of the registrable domain.
   // `globalEntries` holds every stored global for the merge path;
   // `globalConditional` is the subset carrying `~` exclusions or a
-  // `:matches-path` scope — the only part of the global bucket a per-host
-  // lookup still has to veto-check per host.
+  // `:matches-path` scope — the only part
+  // of the global bucket a per-host lookup still has to veto-check per host;
+  // the unconditional rest resolves once at build into per-collection item
+  // lists the merge replays around conditional splice points (flag 114).
   const globalEntries: CosmeticEntry[] = [];
   const globalConditional: CosmeticEntry[] = [];
   const domainEntries = new Map<string, CosmeticEntry[]>();
@@ -837,6 +839,12 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
     styles: 0,
   };
 
+  // A global carrying no `~` exclusions and no `:matches-path` scope is
+  // host- AND path-independent — its candidate/exception items resolve
+  // once at build (flag 114); the conditional rest classify per lookup.
+  const isUnconditionalGlobal = (entry: CosmeticEntry): boolean =>
+    entry.excludes.length === 0 && entry.pathPattern === undefined;
+
   const store = (
     domains: ReturnType<typeof parseDomainList>,
     entry: CosmeticEntry,
@@ -847,9 +855,9 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
     if (domains.global || domains.includes.length === 0) {
       globalEntries.push(entry);
       // A `:matches-path` scope needs a per-lookup check just like a `~`
-      // exclusion — both live on the conditional side so the shared global
-      // payload stays the no-path, no-veto resolution.
-      if (entry.excludes.length > 0 || entry.pathPattern !== undefined) {
+      // exclusion — both live on the conditional side so the unconditional
+      // global sets stay host- AND path-independent.
+      if (!isUnconditionalGlobal(entry)) {
         globalConditional.push(entry);
         if (entry.pathPattern !== undefined) hasGlobalPathScoped = true;
       }
@@ -1199,68 +1207,106 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
   const payloadCache = new Map<string, CosmeticPayload | undefined>();
 
   /**
-   * Merge one host's candidate entries into the frozen payload it shares with
-   * repeat lookups — the exact filter/exception application the per-host cache
-   * stores. `vetoed` reports whether an entry's own `~` exclusions or a
-   * `:matches-path` scope keep it out of this answer; the shared global
-   * payload is built with `() => false` because every conditional entry that
-   * fires is part of it.
+   * The classified halves of a merge: candidate collections (insertion-ordered
+   * for hides/styles/scriptlets, deduped exactly as the old single-pass merge
+   * did) beside the exception collections that later cancel them. Split into
+   * collect+finalize so the host-independent global sets can be built ONCE and
+   * every per-host merge starts from them (flag 114) instead of re-walking
+   * `globalEntries`.
    */
-  const resolveEntries = (
-    bag: CosmeticEntry[],
-    vetoed: (entry: CosmeticEntry) => boolean,
-  ): CosmeticPayload | undefined => {
-    const hideCandidates = new Set<string>();
-    const hideExceptions = new Set<string>();
-    const styleCandidates: { key: string; css: string }[] = [];
-    const styleSeen = new Set<string>();
-    const styleExceptions = new Set<string>();
-    const scriptletCandidates: ScriptletCall[] = [];
-    const scriptletSeen = new Set<string>();
-    const scriptletExceptions: ScriptletCall[] = [];
+  interface CandidateSets {
+    hideCandidates: Set<string>;
+    hideExceptions: Set<string>;
+    styleCandidates: { key: string; css: string }[];
+    styleSeen: Set<string>;
+    styleExceptions: Set<string>;
+    scriptletCandidates: ScriptletCall[];
+    scriptletSeen: Set<string>;
+    scriptletExceptions: ScriptletCall[];
+  }
 
+  const emptyCandidateSets = (): CandidateSets => ({
+    hideCandidates: new Set<string>(),
+    hideExceptions: new Set<string>(),
+    styleCandidates: [],
+    styleSeen: new Set<string>(),
+    styleExceptions: new Set<string>(),
+    scriptletCandidates: [],
+    scriptletSeen: new Set<string>(),
+    scriptletExceptions: [],
+  });
+
+  /** JSON over a joined string so `["a b","c"]` can't alias `["a","b c"]`. */
+  const scriptletDedupeKey = (call: ScriptletCall): string =>
+    `${call.name}\0${JSON.stringify(call.args)}`;
+
+  /**
+   * Walk `bag` into `sets`, skipping entries `vetoed` rejects (a `~` exclusion
+   * vetoes only the rule it rode in on). The exact classification the old
+   * merge did per call — per-kind dedupe semantics preserved.
+   */
+  const collectEntries = (
+    bag: readonly CosmeticEntry[],
+    vetoed: (entry: CosmeticEntry) => boolean,
+    sets: CandidateSets,
+  ): void => {
     for (const entry of bag) {
-      // A `~` exclusion vetoes only the rule it rode in on.
       if (vetoed(entry)) continue;
       switch (entry.kind) {
         case "hide":
-          hideCandidates.add(entry.selector);
+          sets.hideCandidates.add(entry.selector);
           break;
         case "hideException":
-          hideExceptions.add(entry.selector);
+          sets.hideExceptions.add(entry.selector);
           break;
         case "style":
-          if (entry.css && !styleSeen.has(entry.css)) {
-            styleSeen.add(entry.css);
-            styleCandidates.push({ key: entry.selector, css: entry.css });
+          if (entry.css && !sets.styleSeen.has(entry.css)) {
+            sets.styleSeen.add(entry.css);
+            sets.styleCandidates.push({ key: entry.selector, css: entry.css });
           }
           break;
         case "styleException":
-          styleExceptions.add(entry.selector);
+          sets.styleExceptions.add(entry.selector);
           break;
         case "scriptlet": {
           const call = entry.call!;
-          // JSON over a joined string so `["a b","c"]` can't alias `["a","b c"]`.
-          const dedupe = `${call.name}\0${JSON.stringify(call.args)}`;
-          if (!scriptletSeen.has(dedupe)) {
-            scriptletSeen.add(dedupe);
-            scriptletCandidates.push(call);
+          const dedupe = scriptletDedupeKey(call);
+          if (!sets.scriptletSeen.has(dedupe)) {
+            sets.scriptletSeen.add(dedupe);
+            sets.scriptletCandidates.push(call);
           }
           break;
         }
         case "scriptletException":
-          if (entry.call) scriptletExceptions.push(entry.call);
+          if (entry.call) sets.scriptletExceptions.push(entry.call);
           break;
       }
     }
+  };
 
-    const hide = [...hideCandidates].filter((sel) => !hideExceptions.has(sel));
-    const styles = styleCandidates
-      .filter((style) => !styleExceptions.has(style.key))
+  /**
+   * Apply exceptions to candidates and freeze the payload — the exact
+   * filter/freeze half of the old merge. Takes the merged views so a caller
+   * can hand it host-candidates-first ordering plus already-built global
+   * candidate lists.
+   */
+  const finalizePayload = (merged: {
+    hideCandidates: Iterable<string>;
+    hideExceptions: ReadonlySet<string>;
+    styleCandidates: readonly { key: string; css: string }[];
+    styleExceptions: ReadonlySet<string>;
+    scriptletCandidates: readonly ScriptletCall[];
+    scriptletExceptions: readonly ScriptletCall[];
+  }): CosmeticPayload | undefined => {
+    const hide = [...merged.hideCandidates].filter(
+      (sel) => !merged.hideExceptions.has(sel),
+    );
+    const styles = merged.styleCandidates
+      .filter((style) => !merged.styleExceptions.has(style.key))
       .map((style) => style.css);
-    const scriptlets = scriptletCandidates.filter(
+    const scriptlets = merged.scriptletCandidates.filter(
       (call) =>
-        !scriptletExceptions.some(
+        !merged.scriptletExceptions.some(
           (ex) =>
             // `#@#+js()` — the empty-name sentinel — cancels every scriptlet.
             ex.name === "" ||
@@ -1299,12 +1345,135 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
     });
   };
 
+  /**
+   * Whole-bucket resolve — used where the caller walks one bag from scratch
+   * (the shared global payload). The per-host path below never calls it.
+   */
+  const resolveEntries = (
+    bag: readonly CosmeticEntry[],
+    vetoed: (entry: CosmeticEntry) => boolean,
+  ): CosmeticPayload | undefined => {
+    const sets = emptyCandidateSets();
+    collectEntries(bag, vetoed, sets);
+    return finalizePayload(sets);
+  };
+
   // One payload for every host with no domain/subdomain/entity hits and no
   // vetoing `~` exclusion: the global bucket resolved once. Domainless hosts
   // are the hot path of a general browsing session — this keeps `forHost`
   // from allocating a fresh ~40k-entry merge per new host.
   const globalSharedPayload =
     globalEntries.length > 0 ? resolveEntries(globalEntries, () => false) : undefined;
+
+  // The flag-114 half of that sharing: the unconditional globals classified
+  // once, as the ORDERED, deduped item lists each collection emits — plus a
+  // splice plan for the conditional globals: `emitIndex` records how many
+  // unconditional items of the entry's collection precede it in
+  // `globalEntries` order. A host WITH domain/entity hits (or a domainless
+  // host a `~` veto knocked off the fast path) classifies only its own hits
+  // plus the conditional globals — O(hits + conditional globals) of entry
+  // work — and replays the interleave, producing the same ordered candidate
+  // lists the old single-bag merge emitted rather than a partition reorder.
+  const uncondHide: string[] = [];
+  const uncondHideSeen = new Set<string>();
+  const uncondHideExceptions = new Set<string>();
+  const uncondStyles: { key: string; css: string }[] = [];
+  const uncondStyleSeen = new Set<string>();
+  const uncondStyleExceptions = new Set<string>();
+  const uncondScriptlets: ScriptletCall[] = [];
+  const uncondScriptletSeen = new Set<string>();
+  const uncondScriptletExceptions: ScriptletCall[] = [];
+  interface CondPlanItem {
+    entry: CosmeticEntry;
+    /** Unconditional items of this entry's collection that precede it. */
+    emitIndex: number;
+  }
+  const condPlan: CondPlanItem[] = [];
+  for (const entry of globalEntries) {
+    if (!isUnconditionalGlobal(entry)) {
+      // Exceptions are order-free sets — the index is only meaningful on the
+      // candidate kinds, which each read their own collection's fill count.
+      condPlan.push({
+        entry,
+        emitIndex:
+          entry.kind === "hide"
+            ? uncondHide.length
+            : entry.kind === "style"
+              ? uncondStyles.length
+              : entry.kind === "scriptlet"
+                ? uncondScriptlets.length
+                : 0,
+      });
+      continue;
+    }
+    switch (entry.kind) {
+      case "hide":
+        if (!uncondHideSeen.has(entry.selector)) {
+          uncondHideSeen.add(entry.selector);
+          uncondHide.push(entry.selector);
+        }
+        break;
+      case "hideException":
+        uncondHideExceptions.add(entry.selector);
+        break;
+      case "style":
+        if (entry.css && !uncondStyleSeen.has(entry.css)) {
+          uncondStyleSeen.add(entry.css);
+          uncondStyles.push({ key: entry.selector, css: entry.css });
+        }
+        break;
+      case "styleException":
+        uncondStyleExceptions.add(entry.selector);
+        break;
+      case "scriptlet": {
+        const call = entry.call!;
+        const dedupe = scriptletDedupeKey(call);
+        if (!uncondScriptletSeen.has(dedupe)) {
+          uncondScriptletSeen.add(dedupe);
+          uncondScriptlets.push(call);
+        }
+        break;
+      }
+      case "scriptletException":
+        if (entry.call) uncondScriptletExceptions.push(entry.call);
+        break;
+    }
+  }
+
+  /**
+   * Interleave the precomputed unconditional items with this host's
+   * non-vetoed conditional plan entries — each plan item emits immediately
+   * before the unconditional item at its `emitIndex`, so the merged stream
+   * carries the same ordered content the single-bag merge produced.
+   * First-non-vetoed-wins dedupe rides the shared `seen` set seeded with
+   * the host's own candidates.
+   */
+  const emitPlanned = <T>(
+    out: T[],
+    uncondItems: readonly T[],
+    plan: readonly CondPlanItem[],
+    seen: Set<string>,
+    keyOf: (item: T) => string,
+    fromEntry: (entry: CosmeticEntry) => T | undefined,
+  ): void => {
+    let p = 0;
+    for (let i = 0; i <= uncondItems.length; i++) {
+      while (p < plan.length && plan[p].emitIndex <= i) {
+        const item = fromEntry(plan[p].entry);
+        if (item !== undefined && !seen.has(keyOf(item))) {
+          seen.add(keyOf(item));
+          out.push(item);
+        }
+        p++;
+      }
+      if (i === uncondItems.length) break;
+      const item = uncondItems[i];
+      if (!seen.has(keyOf(item))) {
+        seen.add(keyOf(item));
+        out.push(item);
+      }
+    }
+  };
 
   const lookupHost = (
     host: string,
@@ -1409,14 +1578,102 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
       if (!vetoed) return globalSharedPayload;
     }
 
-    if (globalEntries.length) bag.push(...globalEntries);
-    if (bag.length === 0) return undefined;
-    // `~` exclusions and `:matches-path` scopes both veto per entry — the
-    // path-aware predicate is the flag-107 half of this lookup.
-    return resolveEntries(
-      bag,
-      (entry) => entry.excludes.some(tokenMatches) || outOfPathScope(entry),
+    if (bag.length === 0 && globalEntries.length === 0) return undefined;
+
+    // The merge path: this host's hits classify fresh, the conditional
+    // globals classify against THIS host's vetoes, and the unconditional
+    // globals emit from the precomputed lists — spliced at each plan item's
+    // `emitIndex` so the stream is byte-identical to the old single-bag
+    // merge's order: host candidates first (the bag layout), then globals
+    // in insertion order. Exception membership unions both sides, so a
+    // host-scoped `#@#` still cancels a global-sourced selector and a
+    // global `#@#` still gates a host rule's selector, exactly as the
+    // single-bag merge did. `:matches-path`-scoped globals ride
+    // `globalConditional`, so the same veto path-checks them.
+    const vetoed = (entry: CosmeticEntry): boolean =>
+      entry.excludes.some(tokenMatches) || outOfPathScope(entry);
+    const hostSets = emptyCandidateSets();
+    collectEntries(bag, vetoed, hostSets);
+
+    const mergedHide = [...hostSets.hideCandidates];
+    const mergedStyles = [...hostSets.styleCandidates];
+    const mergedScriptlets = [...hostSets.scriptletCandidates];
+    const mergedHideExceptions = new Set([
+      ...hostSets.hideExceptions,
+      ...uncondHideExceptions,
+    ]);
+    const mergedStyleExceptions = new Set([
+      ...hostSets.styleExceptions,
+      ...uncondStyleExceptions,
+    ]);
+    const mergedScriptletExceptions = [
+      ...hostSets.scriptletExceptions,
+      ...uncondScriptletExceptions,
+    ];
+    const hideSeen = new Set(hostSets.hideCandidates);
+    const styleSeen = new Set(hostSets.styleSeen);
+    const scriptletSeen = new Set(hostSets.scriptletSeen);
+    const planHide: typeof condPlan = [];
+    const planStyle: typeof condPlan = [];
+    const planScriptlet: typeof condPlan = [];
+    for (const item of condPlan) {
+      if (vetoed(item.entry)) continue;
+      switch (item.entry.kind) {
+        case "hide":
+          planHide.push(item);
+          break;
+        case "hideException":
+          mergedHideExceptions.add(item.entry.selector);
+          break;
+        case "style":
+          planStyle.push(item);
+          break;
+        case "styleException":
+          mergedStyleExceptions.add(item.entry.selector);
+          break;
+        case "scriptlet":
+          planScriptlet.push(item);
+          break;
+        case "scriptletException":
+          if (item.entry.call) mergedScriptletExceptions.push(item.entry.call);
+          break;
+      }
+    }
+    emitPlanned(
+      mergedHide,
+      uncondHide,
+      planHide,
+      hideSeen,
+      (sel) => sel,
+      (entry) => entry.selector,
     );
+    emitPlanned(
+      mergedStyles,
+      uncondStyles,
+      planStyle,
+      styleSeen,
+      (style) => style.css,
+      (entry) =>
+        entry.css !== undefined
+          ? { key: entry.selector, css: entry.css }
+          : undefined,
+    );
+    emitPlanned(
+      mergedScriptlets,
+      uncondScriptlets,
+      planScriptlet,
+      scriptletSeen,
+      scriptletDedupeKey,
+      (entry) => entry.call,
+    );
+    return finalizePayload({
+      hideCandidates: mergedHide,
+      hideExceptions: mergedHideExceptions,
+      styleCandidates: mergedStyles,
+      styleExceptions: mergedStyleExceptions,
+      scriptletCandidates: mergedScriptlets,
+      scriptletExceptions: mergedScriptletExceptions,
+    });
   };
 
   const index: CosmeticIndex = {

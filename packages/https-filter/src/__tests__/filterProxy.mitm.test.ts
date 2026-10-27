@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import tls from 'node:tls';
+import { brotliCompressSync, brotliDecompressSync, deflateSync, gunzipSync, gzipSync, inflateSync } from 'node:zlib';
 import {
   createCosmeticIndex,
   createRequestEvaluator,
@@ -1557,6 +1558,230 @@ describe('contentType inference (flag 96)', () => {
   });
 });
 
+describe('thirdParty inference — sec-fetch-site (flag 96)', () => {
+  // `||site-tp.example/p` is inert at CONNECT time — the SNI verdict runs
+  // with no request context, so a `$third-party` gate can never fire there.
+  // Terminated per-request evaluation sees the client-volunteered header:
+  // cross-site/same-site → third-party, same-origin/none → first-party,
+  // absent/garbage → undefined (no guessing).
+  const tpRules = [
+    '||site-tp.example/p$third-party',
+    '||site-fp.example/q$~third-party',
+    '||site-arm.example/r',
+    '@@||site-arm.example/r$~third-party',
+    // Covers the blind-splice test's localhost origin — a rule that WOULD
+    // fire under a real cross-site signal, proving the splice never reads it.
+    '||localhost/p$third-party',
+  ];
+
+  async function tpProxy(): Promise<RunningProxy> {
+    return startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator(tpRules),
+      policy,
+      upstreamCaCerts: [originCa.caCertPem],
+      upstreamConnectTimeoutMs: 2_000,
+    });
+  }
+
+  test('sec-fetch-site: cross-site and same-site fire a $third-party rule (h1 MITM)', async () => {
+    const p = await tpProxy();
+    const { server, port } = await httpsOrigin('site-tp.example');
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'site-tp.example',
+        ['http/1.1'],
+        p.port,
+      );
+      for (const site of ['cross-site', 'same-site']) {
+        const res = await withTimeout(
+          httpRequestOver(client, {
+            path: '/p',
+            host: 'site-tp.example',
+            headers: { 'sec-fetch-site': site },
+          }),
+          10_000,
+          `${site} request`,
+        );
+        expect(res.status).toBe(403);
+        expect(res.head.toLowerCase()).toContain(
+          'x-blockingmachine-rule: ||site-tp.example/p$third-party',
+        );
+      }
+      // first-party and undeclared contexts leave the rule unfired.
+      for (const headers of [
+        { 'sec-fetch-site': 'same-origin' },
+        { 'sec-fetch-site': 'none' },
+        { 'sec-fetch-site': 'totally-bogus' },
+        {},
+      ] as Record<string, string>[]) {
+        const res = await withTimeout(
+          httpRequestOver(client, { path: '/p', host: 'site-tp.example', headers }),
+          10_000,
+          'non-third-party request',
+        );
+        expect(res.status).toBe(200);
+        expect(res.body).toContain('origin GET /p');
+      }
+      client.destroy();
+    } finally {
+      await closeServer(server);
+      await p.close();
+    }
+  });
+
+  test('h2 parity: sec-fetch-site rides the compat headers into the same verdict', async () => {
+    const p = await tpProxy();
+    const { server, port } = await httpsOrigin('site-tp.example');
+    try {
+      const { client } = await connectThenTls(`localhost:${port}`, 'site-tp.example', ['h2'], p.port);
+      const session = http2.connect('https://site-tp.example', { createConnection: () => client });
+      try {
+        const blocked = new Promise<number>((resolve) => {
+          const req = session.request({
+            ':method': 'GET',
+            ':path': '/p',
+            ':scheme': 'https',
+            ':authority': 'site-tp.example',
+            'sec-fetch-site': 'same-site',
+          });
+          req.on('response', (headers) => resolve(Number(headers[':status'])));
+          req.resume();
+          req.end();
+        });
+        expect(await withTimeout(blocked, 10_000, 'h2 third-party verdict')).toBe(403);
+        const allowed = new Promise<number>((resolve) => {
+          const req = session.request({
+            ':method': 'GET',
+            ':path': '/p',
+            ':scheme': 'https',
+            ':authority': 'site-tp.example',
+            'sec-fetch-site': 'same-origin',
+          });
+          req.on('response', (headers) => resolve(Number(headers[':status'])));
+          req.resume();
+          req.end();
+        });
+        expect(await withTimeout(allowed, 10_000, 'h2 first-party verdict')).toBe(200);
+      } finally {
+        session.close();
+      }
+      client.destroy();
+    } finally {
+      await closeServer(server);
+      await p.close();
+    }
+  });
+
+  test('$~third-party blocks first-party contexts and frees cross-site ones', async () => {
+    const p = await tpProxy();
+    const { server, port } = await httpsOrigin('site-fp.example');
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'site-fp.example',
+        ['http/1.1'],
+        p.port,
+      );
+      const blocked = await withTimeout(
+        httpRequestOver(client, {
+          path: '/q',
+          host: 'site-fp.example',
+          headers: { 'sec-fetch-site': 'same-origin' },
+        }),
+        10_000,
+        'first-party request',
+      );
+      expect(blocked.status).toBe(403);
+      const freed = await withTimeout(
+        httpRequestOver(client, {
+          path: '/q',
+          host: 'site-fp.example',
+          headers: { 'sec-fetch-site': 'cross-site' },
+        }),
+        10_000,
+        'cross-site request',
+      );
+      expect(freed.status).toBe(200);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+      await p.close();
+    }
+  });
+
+  test('a fabricated same-origin cannot arm a $~third-party exception — the untyped block wins', async () => {
+    // `sec-fetch-site` is client bytes like `sec-fetch-dest`: the declared
+    // signal may only ever TIGHTEN. `||site-arm.example/r` blocks untyped;
+    // `@@||site-arm.example/r$~third-party` would except it under a
+    // first-party reading — a fabricated `same-origin` then relaxing a
+    // block the client could never lift. The second, untyped pass keeps
+    // the block.
+    const p = await tpProxy();
+    const { server, port } = await httpsOrigin('site-arm.example');
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'site-arm.example',
+        ['http/1.1'],
+        p.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, {
+          path: '/r',
+          host: 'site-arm.example',
+          headers: { 'sec-fetch-site': 'same-origin' },
+        }),
+        10_000,
+        'armed-exception request',
+      );
+      expect(res.status).toBe(403);
+      expect(res.head.toLowerCase()).toContain('x-blockingmachine-rule: ||site-arm.example/r');
+      client.destroy();
+    } finally {
+      await closeServer(server);
+      await p.close();
+    }
+  });
+
+  test('the plain-HTTP blind splice never reads sec-fetch-site — $third-party stays inert', async () => {
+    // Non-terminated paths carry request headers only as opaque bytes: the
+    // splice verdict evaluates URL+method, so a `$third-party` rule can
+    // never fire there — `thirdParty` stays honestly undefined where the
+    // proxy cannot see the signal.
+    const p = await tpProxy();
+    const origin = http.createServer((_req, res) => {
+      res.end('plain splice');
+    });
+    const port = await listen(origin);
+    try {
+      const sock = net.connect({ host: '127.0.0.1', port: p.port });
+      await once(sock, 'connect');
+      sock.write(
+        `GET http://localhost:${port}/p HTTP/1.1\r\nHost: localhost:${port}\r\nSec-Fetch-Site: cross-site\r\nConnection: close\r\n\r\n`,
+      );
+      const raw = await withTimeout(
+        new Promise<Buffer>((resolve) => {
+          const chunks: Buffer[] = [];
+          sock.on('data', (c: Buffer) => chunks.push(c));
+          sock.once('close', () => resolve(Buffer.concat(chunks)));
+        }),
+        10_000,
+        'plain-splice response',
+      );
+      expect(raw.toString('latin1')).toContain('HTTP/1.1 200');
+      expect(raw.toString('latin1')).toContain('plain splice');
+      sock.destroy();
+    } finally {
+      await closeServer(origin);
+      await p.close();
+    }
+  });
+});
+
 describe('response pipeline (P2 Task 3)', () => {
   // A dedicated engine carrying BOTH faces of one rule file — the request
   // evaluator and the cosmetic index — exactly as startFilterProxy wires it.
@@ -1692,7 +1917,7 @@ describe('response pipeline (P2 Task 3)', () => {
     }
   });
 
-  test("client's accept-encoding: gzip reaches the upstream as identity on an injectable host", async () => {
+  test("client's decodable accept-encoding reaches the upstream on an injectable host (flag 108)", async () => {
     const { server, port, lastRequest } = await htmlOrigin(
       'cosmetic.example',
       '<html><head></head><body>enc</body></html>',
@@ -1708,14 +1933,16 @@ describe('response pipeline (P2 Task 3)', () => {
         httpRequestOver(client, {
           path: '/',
           host: 'cosmetic.example',
-          headers: { 'accept-encoding': 'gzip, deflate', accept: 'text/html' },
+          headers: { 'accept-encoding': 'gzip, deflate, br, zstd', accept: 'text/html' },
         }),
         10_000,
-        'encoding-strip GET',
+        'encoding-offer GET',
       );
       expect(res.status).toBe(200);
-      // Injection needs decoded bytes — the relay strips to identity.
-      expect(lastRequest()?.headers['accept-encoding']).toBe('identity');
+      // The offer is intersected with the codecs the pipeline can decode —
+      // gzip/deflate/br ride through, the undecodable zstd is dropped; no
+      // more forced identity.
+      expect(lastRequest()?.headers['accept-encoding']).toBe('gzip, deflate, br');
       client.destroy();
     } finally {
       await closeServer(server);
@@ -2006,10 +2233,11 @@ describe('response pipeline (P2 Task 3)', () => {
     }
   });
 
-  test('a non-compliant upstream answering gzip on an injectable host passes through (inject-skip: encoded)', async () => {
-    // The request side forces `accept-encoding: identity`, but the upstream
-    // can still compress — splicing markup into gzip bytes would corrupt
-    // the body, so the response must pass through byte-identical.
+  test('a corrupt gzip body on an injectable host flushes through byte-identical (flag 108)', async () => {
+    // The codec path preserves original bytes on codec failure: the head
+    // claims gzip but the payload is not gunzippable, so decode throws and
+    // the untouched wire bytes flush — the response must pass through
+    // byte-identical, never a partial decode or a 502.
     const leaf = originCa.forgeLeaf('cosmetic.example');
     const body = 'GZIP-OPAQUE-PAYLOAD';
     const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
@@ -2040,6 +2268,184 @@ describe('response pipeline (P2 Task 3)', () => {
       expect(res.body).not.toContain('bm-c');
       expect(responseProxy.stats().injectionsSkipped).toBe(before.injectionsSkipped + 1);
       expect(responseProxy.stats().htmlInjected).toBe(before.htmlInjected);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  for (const [codec, compress, decompress] of [
+    ['gzip', gzipSync, gunzipSync],
+    ['deflate', deflateSync, inflateSync],
+    ['br', brotliCompressSync, brotliDecompressSync],
+  ] as const) {
+    test(`a ${codec} body is decoded, injected, and re-encoded under the same codec (flag 108)`, async () => {
+      const leaf = originCa.forgeLeaf('cosmetic.example');
+      const page =
+        '<html><head></head><body><div class="ad-slot">enc</div></body></html>';
+      const wire = compress(Buffer.from(page));
+      const server = https.createServer(
+        { key: leaf.keyPem, cert: leaf.certPem },
+        (_req, res) => {
+          res.writeHead(200, {
+            'content-type': 'text/html',
+            'content-encoding': codec,
+            'content-length': String(wire.length),
+          });
+          res.end(wire);
+        },
+      );
+      const port = await listen(server);
+      try {
+        const before = responseProxy.stats();
+        const { client } = await connectThenTls(
+          `localhost:${port}`,
+          'cosmetic.example',
+          ['http/1.1'],
+          responseProxy.port,
+        );
+        const raw = await withTimeout(
+          rawHttpOver(
+            client,
+            `GET / HTTP/1.1\r\nHost: cosmetic.example\r\nAccept: text/html\r\nAccept-Encoding: ${codec}\r\nConnection: close\r\n\r\n`,
+          ),
+          10_000,
+          `${codec} injected response`,
+        );
+        const idx = raw.indexOf('\r\n\r\n');
+        expect(idx).toBeGreaterThan(-1);
+        const head = raw.subarray(0, idx).toString('latin1').toLowerCase();
+        const wireBody = raw.subarray(idx + 4);
+        // The coding survives — the client decodes what it offered.
+        expect(head).toContain(`content-encoding: ${codec}`);
+        // …and the length is honestly restamped to the NEW wire bytes.
+        expect(head).toContain(`content-length: ${wireBody.length}`);
+        const decoded = decompress(wireBody).toString('utf8');
+        expect(decoded).toContain('<style id="bm-c">.ad-slot{display:none!important}</style>');
+        expect(decoded).toContain('bm_flag');
+        expect(responseProxy.stats().htmlInjected).toBe(before.htmlInjected + 1);
+        client.destroy();
+      } finally {
+        await closeServer(server);
+      }
+    });
+  }
+
+  test('an unsupported content-encoding still passes through (inject-skip: encoded)', async () => {
+    const leaf = originCa.forgeLeaf('cosmetic.example');
+    const body = 'ZSTD-OPAQUE-PAYLOAD';
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'text/html',
+        'content-encoding': 'zstd',
+        'content-length': String(body.length),
+      });
+      res.end(body);
+    });
+    const port = await listen(server);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'cosmetic.example' }),
+        10_000,
+        'unsupported-encoding GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toBe(body);
+      expect(res.head.toLowerCase()).toContain('content-encoding: zstd');
+      expect(res.body).not.toContain('bm-c');
+      expect(responseProxy.stats().injectionsSkipped).toBe(before.injectionsSkipped + 1);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('absent content-type + markup body injects — the bounded sniff (flag 109)', async () => {
+    const leaf = originCa.forgeLeaf('cosmetic.example');
+    const page =
+      '<!doctype html><html><head></head><body><div class="ad-slot">x</div></body></html>';
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      // No content-type at all — the buffered prefix must declare itself.
+      res.writeHead(200, { 'content-length': String(page.length) });
+      res.end(page);
+    });
+    const port = await listen(server);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'cosmetic.example' }),
+        10_000,
+        'absent-CT GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('<style id="bm-c">');
+      expect(responseProxy.stats().htmlInjected).toBe(before.htmlInjected + 1);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('text/plain + markup body injects; text/plain + NUL binary passes through (flag 109)', async () => {
+    const leaf = originCa.forgeLeaf('cosmetic.example');
+    const page = '<html><head></head><body><div class="ad-slot">t</div></body></html>';
+    const binary = Buffer.concat([
+      Buffer.from('PK\x03\x04', 'latin1'),
+      Buffer.from([0, 1, 2, 3, 4, 5]),
+      Buffer.alloc(256, 0x42),
+    ]);
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (req, res) => {
+      const isBin = req.url === '/bin';
+      const body = isBin ? binary : Buffer.from(page);
+      res.writeHead(200, {
+        'content-type': 'text/plain',
+        'content-length': String(body.length),
+      });
+      res.end(body);
+    });
+    const port = await listen(server);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/plain', host: 'cosmetic.example' }),
+        10_000,
+        'text/plain markup GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('<style id="bm-c">');
+      const bin = await withTimeout(
+        httpRequestOver(client, { path: '/bin', host: 'cosmetic.example' }),
+        10_000,
+        'text/plain binary GET',
+      );
+      expect(bin.status).toBe(200);
+      // httpRequestOver decodes utf8 — assert length honesty + no marker
+      // rather than byte equality (the NUL run mangles utf8). An untouched
+      // length proves the splice never ran — the sniff's NUL veto flushed
+      // the bytes verbatim (inject-skip: not-html).
+      expect(bin.head.toLowerCase()).toContain(`content-length: ${binary.length}`);
+      expect(bin.body).not.toContain('bm-c');
+      expect(responseProxy.stats().injectionsSkipped).toBe(before.injectionsSkipped + 1);
+      expect(responseProxy.stats().htmlInjected).toBe(before.htmlInjected + 1);
       client.destroy();
     } finally {
       await closeServer(server);
@@ -2202,6 +2608,70 @@ describe('response pipeline (P2 Task 3)', () => {
       expect(probe.bodyBytes().toString('utf8')).toBe(page);
       expect(events.some((e) => e.kind === 'inject-skip' && e.reason === 'error')).toBe(true);
       await probeEngineAlive('injthrow');
+    } finally {
+      await closeServer(origin);
+    }
+  });
+
+  test('a throwing onEvent listener never reaches the byte path — injection still lands (flag 113)', async () => {
+    // The event sink is diagnostics: a listener exception inside the
+    // stream's 'end' handler must not escape into the mutation accounting
+    // (an injected page miscounted as a skip) or the byte path (a wedge or
+    // a 502 on a page the upstream served fine).
+    const leaf = originCa.forgeLeaf('cosmetic.example');
+    const page = '<html><head></head><body><div class="ad-slot">v</div></body></html>';
+    const origin = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'text/html',
+        'content-length': String(page.length),
+      });
+      res.end(page);
+    });
+    const port = await listen(origin);
+    try {
+      const probe = fakeResponse();
+      const evaluator = createRequestEvaluator(rules);
+      const cosmetic = createCosmeticIndex(rules);
+      let listenerCalls = 0;
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        relayRequest(
+          {
+            method: 'GET',
+            url: '/',
+            host: 'cosmetic.example',
+            headers: {},
+            body: Readable.from([]),
+            protocol: 'h1',
+          },
+          probe.res,
+          { host: '127.0.0.1', port, servername: 'cosmetic.example' },
+          {
+            upstreamCaCerts: [originCa.caCertPem],
+            response: {
+              url: 'https://cosmetic.example/',
+              host: 'cosmetic.example',
+              method: 'GET',
+              verdict: evaluator.evaluate('https://cosmetic.example/'),
+              cosmeticIndex: cosmetic,
+              onEvent: () => {
+                listenerCalls++;
+                throw new Error('listener boom');
+              },
+            },
+          },
+        );
+        await waitFor(() => probe.statuses.length > 0 && probe.bodyBytes().length > page.length);
+        expect(probe.statuses[0]).toBe(200);
+        // The injection landed — the listener's throw rode past the splice,
+        // not into it.
+        expect(probe.bodyBytes().toString('utf8')).toContain('bm-c');
+        expect(listenerCalls).toBeGreaterThan(0); // the throw really fired
+        expect(probe.isDestroyed()).toBe(false);
+        await probeEngineAlive('evthrow');
+      } finally {
+        warnSpy.mockRestore();
+      }
     } finally {
       await closeServer(origin);
     }
@@ -2410,7 +2880,7 @@ describe('response pipeline (P2 Task 3)', () => {
     }
   });
 
-  test('a declared non-document context keeps its accept-encoding — no wasted identity strip', async () => {
+  test('a declared non-document context keeps its accept-encoding — no wasted narrowing', async () => {
     const { server, port, lastRequest } = await htmlOrigin(
       'cosmetic.example',
       '<html><head></head><body>x</body></html>',
@@ -2437,10 +2907,11 @@ describe('response pipeline (P2 Task 3)', () => {
       );
       expect(image.status).toBe(200);
       // An image-declared fetch can never render the markup — the gzip
-      // offer rides through instead of paying the identity strip.
+      // offer rides through verbatim rather than paying any narrow.
       expect(lastRequest()?.headers['accept-encoding']).toBe('gzip, deflate');
 
-      // The same host under a document declaration still forces identity.
+      // The same host under a document declaration narrows the offer to
+      // the decodable subset — which is all of it here.
       const doc = await withTimeout(
         httpRequestOver(client, {
           path: '/',
@@ -2455,7 +2926,7 @@ describe('response pipeline (P2 Task 3)', () => {
         'typed-encoding document GET',
       );
       expect(doc.status).toBe(200);
-      expect(lastRequest()?.headers['accept-encoding']).toBe('identity');
+      expect(lastRequest()?.headers['accept-encoding']).toBe('gzip, deflate');
       client.destroy();
     } finally {
       await closeServer(server);

@@ -31,6 +31,14 @@
  */
 
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from 'node:http';
+import {
+  brotliCompressSync,
+  brotliDecompressSync,
+  deflateSync,
+  gunzipSync,
+  gzipSync,
+  inflateSync,
+} from 'node:zlib';
 import type {
   CosmeticIndex,
   CosmeticPayload,
@@ -100,9 +108,18 @@ export type ResponseEvent =
        * `busy` — the proxy-wide injection budget was exhausted;
        * `no-known-content` — the host's only payload entries were
        * unknown-name scriptlets (nothing to emit, but the skip still
-       * carries the count so the card sees them).
+       * carries the count so the card sees them);
+       * `not-html` — the content-type was absent/`text/plain` and the
+       * bounded sniff found no markup in the buffered prefix.
        */
-      reason: 'overflow' | 'encoded' | 'error' | 'empty' | 'busy' | 'no-known-content';
+      reason:
+        | 'overflow'
+        | 'encoded'
+        | 'error'
+        | 'empty'
+        | 'busy'
+        | 'no-known-content'
+        | 'not-html';
       /** Unknown-name scriptlets the payload carried (`no-known-content`). */
       skippedScriptlets?: number;
     };
@@ -122,6 +139,17 @@ export interface ResponsePlan {
   blockRule?: string | null;
   /** The resolved host payload on `buffer-inject` — the relay renders it. */
   payload?: CosmeticPayload;
+  /**
+   * The single supported `content-encoding` the upstream applied — the
+   * relay decodes before splicing and re-encodes the same codec on success
+   * (flag 108). `undefined` means the bytes are already identity.
+   */
+  contentEncoding?: BodyCodec;
+  /**
+   * The content-type was absent or `text/plain` — injection rides on the
+   * bounded markup sniff of the buffered prefix (flag 109), not the label.
+   */
+  sniffHtml?: boolean;
   /**
    * Injection was eligible but skipped before buffering — counted by the
    * relay as an `inject-skip` event.
@@ -178,18 +206,77 @@ function baseMediaType(value: string | string[] | undefined): string {
   return typeof raw === 'string' ? raw.split(';', 1)[0].trim().toLowerCase() : '';
 }
 
-/** A body the pipeline cannot safely rewrite — anything but absent/`identity`. */
-function isEncoded(value: string | string[] | undefined): boolean {
+/**
+ * A content-coding the pipeline can decompress→inject→recompress (flag
+ * 108). `br` is brotli; `deflate` is zlib-wrapped deflate — the forms Node's
+ * `zlib` pairs with named functions.
+ */
+export type BodyCodec = 'gzip' | 'deflate' | 'br';
+
+/** The codec set {@link decodableEncodingOffer} intersects client offers against. */
+export const BODY_CODECS: ReadonlySet<string> = new Set(['gzip', 'deflate', 'br']);
+
+export type ContentEncoding = 'identity' | BodyCodec | 'unsupported';
+
+/**
+ * Classify a `content-encoding` header: absent/`identity`-only → 'identity'
+ * (bytes are spliceable as-is); exactly one non-identity coding we decode →
+ * that codec; anything else → 'unsupported' (a coding we cannot read, or a
+ * layered `gzip, br` chain — rare and intentionally not unrolled). A bare
+ * `identity` alongside a real coding (`gzip, identity` — legal, equivalent
+ * to the coding alone) folds to the coding.
+ */
+export function parseContentEncoding(
+  value: string | string[] | undefined,
+): ContentEncoding {
   const values = Array.isArray(value) ? value : value !== undefined ? [value] : [];
+  const codings: string[] = [];
   for (const raw of values) {
     for (const part of raw.split(',')) {
       const token = part.trim().toLowerCase();
       if (token !== '' && token !== 'identity') {
-        return true;
+        codings.push(token);
       }
     }
   }
-  return false;
+  if (codings.length === 0) {
+    return 'identity';
+  }
+  if (codings.length === 1 && BODY_CODECS.has(codings[0])) {
+    return codings[0] as BodyCodec;
+  }
+  return 'unsupported';
+}
+
+/**
+ * Decompress `body` under `codec`, bounded to {@link MAX_HTML_BUFFER} of
+ * decoded output — a small compressed body can expand past the buffer cap
+ * and the same bound must hold. zlib throws `ERR_BUFFER_TOO_LARGE` past the
+ * cap and a `Z_*`/format error on corrupt input; callers treat either as a
+ * pass-the-bytes-through signal, never a rewrite.
+ */
+export function decodeBody(codec: BodyCodec, body: Buffer): Buffer {
+  const opts = { maxOutputLength: MAX_HTML_BUFFER };
+  switch (codec) {
+    case 'gzip':
+      return gunzipSync(body, opts);
+    case 'deflate':
+      return inflateSync(body, opts);
+    case 'br':
+      return brotliDecompressSync(body, opts);
+  }
+}
+
+/** Re-encode the spliced body under the codec the upstream actually sent. */
+export function encodeBody(codec: BodyCodec, body: Buffer): Buffer {
+  switch (codec) {
+    case 'gzip':
+      return gzipSync(body);
+    case 'deflate':
+      return deflateSync(body);
+    case 'br':
+      return brotliCompressSync(body);
+  }
 }
 
 /**
@@ -330,16 +417,21 @@ export function decideResponse(input: {
     }
   }
 
+  // `text/html` declares markup outright; absent or `text/plain` labels get
+  // the same eligibility but carry `sniffHtml` — the buffered prefix must
+  // still open like markup before any splice lands (flag 109). Declared
+  // binary types (`application/octet-stream` et al.) are never sniffed.
+  const markupGate = mediaType === 'text/html' || mediaType === 'text/plain' || mediaType === '';
   if (
-    mediaType === 'text/html' &&
+    markupGate &&
     // Bodiless statuses/methods never buffer — there is no body to splice
     // into (see {@link statusAllowsBody}; `method` is case-insensitive —
     // the wire spells it `HEAD` but a client header is client bytes).
     statusAllowsBody(input.status) &&
     input.method.toUpperCase() !== 'HEAD' &&
     // A sec-fetch-dest-typed request that isn't a document/subdocument
-    // context getting text/html back is a dead context — nothing renders
-    // the markup, so injection is wasted CPU on bytes nobody consumes.
+    // context getting markup back is a dead context — nothing renders it,
+    // so injection is wasted CPU on bytes nobody consumes.
     // `undefined` (untyped request) stays eligible.
     (input.requestContentType === undefined ||
       input.requestContentType === 'document' ||
@@ -350,11 +442,13 @@ export function decideResponse(input: {
     const payload = input.cosmeticIndex?.forHost(input.host, input.url);
     if (payload !== undefined) {
       if (hasInjectableContent(payload)) {
-        if (isEncoded(input.headers['content-encoding'])) {
-          // The request side forces `accept-encoding: identity` for injectable
-          // hosts, but a non-compliant upstream can still compress — buffering
-          // gzip bytes and splicing markup in would corrupt the body, so an
-          // encoded response passes through (counted as a skipped injection).
+        const encoding = parseContentEncoding(input.headers['content-encoding']);
+        if (encoding === 'unsupported') {
+          // A layered or unknown coding can't be spliced — buffering
+          // and injecting would corrupt the body, so an unreadably
+          // encoded response passes through (counted as a skipped
+          // injection). Supported codecs take the decode→inject→
+          // re-encode path instead of skipping.
           return {
             action: 'passthrough',
             cspAdditions,
@@ -384,6 +478,8 @@ export function decideResponse(input: {
           cspAdditions,
           reason: 'cosmetic-payload',
           payload,
+          contentEncoding: encoding === 'identity' ? undefined : encoding,
+          sniffHtml: mediaType !== 'text/html',
         };
       }
       if (payload.skippedScriptlets > 0) {
@@ -464,7 +560,6 @@ function serializePolicy(directives: ParsedDirective[]): string {
 }
 
 const UNSAFE_INLINE = "'unsafe-inline'";
-const STRICT_DYNAMIC = "'strict-dynamic'";
 
 /**
  * Widen one element-context chain (`elem` → `base` → `default-src`) so the
@@ -480,17 +575,15 @@ const STRICT_DYNAMIC = "'strict-dynamic'";
  *    `'strict-dynamic'` and DO honor `'unsafe-inline'`: skipping it would
  *    deny exactly the engines the widen can still reach;
  *  - with neither present but `default-src` restricting, the base directive
- *    is synthesized as a clone of `default-src` plus `'unsafe-inline'`;
+ *    is synthesized as a clone of `default-src` plus `'unsafe-inline'` —
+ *    including when the clone inherits `'strict-dynamic'`: under CSP3 that
+ *    keyword makes the engine ignore `'unsafe-inline'` anyway, so the
+ *    carried token is inert noise there, while a CSP2-level engine (which
+ *    knows `'unsafe-inline'` but not `'strict-dynamic'`) gets the only
+ *    admit it can honor (flag 110). Skipping the clone denied the widen to
+ *    exactly the engines it could still reach;
  *  - with nothing on the chain at all, the context is already free — nothing
  *    is added.
- *
- * `strictDynamicApplies` marks the script chain (`'strict-dynamic'` is a
- * script concept — a `style-src` carrying it is inert under CSP3, so the
- * style chain's clone still works and is emitted): when `default-src`
- * carries `'strict-dynamic'`, cloning it forward into a fresh `script-src`
- * is skipped — the synthesized directive would ship the keyword that makes
- * CSP3 ignore the `'unsafe-inline'` it was cloned to carry: a widen that
- * only pretends to work, and no new directive is better than one that lies.
  *
  * Only `'unsafe-inline'` is ever appended, and only to script/style element
  * contexts — `sandbox`, `frame-ancestors`, `require-trusted-types-for`,
@@ -505,7 +598,6 @@ function widenChain(
   directives: ParsedDirective[],
   elemName: string,
   baseName: string,
-  strictDynamicApplies: boolean,
 ): boolean {
   let changed = false;
   const elem = directives.find((dir) => dir.name === elemName);
@@ -518,14 +610,6 @@ function widenChain(
     }
   }
   if (fallback !== undefined && base === undefined) {
-    if (strictDynamicApplies && fallback.tokens.includes(STRICT_DYNAMIC)) {
-      // The clone would inherit 'strict-dynamic' — CSP3 ignores the
-      // 'unsafe-inline' the clone exists to carry, so the synthesized
-      // directive is noise that only pretends to widen. (CSP2 misses the
-      // admit this way — a strict-dynamic page opted into the CSP3
-      // contract, and the existing fallback still gates it there.)
-      return changed;
-    }
     // The base level is synthesized whenever a restrictive default-src
     // remains the effective source: (a) nothing governs the context at all,
     // or (b) only `-elem` exists — CSP2-level engines skip `-elem` entirely
@@ -563,8 +647,8 @@ export function rewriteCspForInjection(
     const directives = parsePolicy(policy);
     // `||` would short-circuit the second chain when the first widened —
     // script and style are independent contexts; both must always run.
-    const widenedScript = widenChain(directives, 'script-src-elem', 'script-src', true);
-    const widenedStyle = widenChain(directives, 'style-src-elem', 'style-src', false);
+    const widenedScript = widenChain(directives, 'script-src-elem', 'script-src');
+    const widenedStyle = widenChain(directives, 'style-src-elem', 'style-src');
     const widened = widenedScript || widenedStyle;
     if (widened) {
       changed = true;
@@ -749,6 +833,79 @@ function openTagEnd(lowered: string, openIdx: number): number {
   return -1;
 }
 
+/** `tag` matches at `idx` — literal hit plus the name boundary (`<head` ≠ `<header`; EOS counts). */
+function tagAt(lowered: string, tag: string, idx: number): boolean {
+  if (!lowered.startsWith(tag, idx)) {
+    return false;
+  }
+  const next = lowered[idx + tag.length];
+  return next === undefined || TAG_NAME_END.has(next);
+}
+
+/**
+ * Text-context tag search (flag 111): the first `tag` occurrence that is
+ * NOT inside a `<script>…</script>` body, an `<!-- -->` comment, or a tag's
+ * quoted attribute region — the contexts where a literal `</head` is
+ * script-string or comment text, not markup. A bounded linear scan, not a
+ * parser:
+ *
+ *  - `<!--` skips to `-->` (unclosed → the rest is comment, scan ends);
+ *  - `<script` skips the open tag, then the element body to the first
+ *    `</script` — which is exactly where a real HTML parser ends script
+ *    text too, JS string quoting notwithstanding;
+ *  - every other `<x`/`</x` skips to its tag end via {@link openTagEnd},
+ *    quotes honored — `"</head>"` inside `<div title="…">` is attribute
+ *    text, never an anchor;
+ *  - anything else advances one char (`<` not opening a tag is inert text).
+ *
+ * An unterminated construct ends the scan unfound — the caller falls back
+ * to the first literal match in that ambiguous case (the pre-flag posture,
+ * never worse).
+ */
+function findTagInText(lowered: string, tag: string, from: number): number {
+  let i = from;
+  while (i < lowered.length) {
+    if (lowered[i] !== '<') {
+      i++;
+      continue;
+    }
+    if (lowered.startsWith('<!--', i)) {
+      const end = lowered.indexOf('-->', i + 4);
+      if (end < 0) {
+        return -1; // unterminated comment — ambiguous tail
+      }
+      i = end + 3;
+      continue;
+    }
+    const isEnd = lowered[i + 1] === '/';
+    const nameAt = isEnd ? i + 2 : i + 1;
+    const first = lowered[nameAt];
+    if (first === undefined || first < 'a' || first > 'z') {
+      i++; // `<!doctype`, `<?`, `< `, a stray `<` — not a tag open
+      continue;
+    }
+    // A real tag open — the needle is a tag, so check before skipping.
+    if (tagAt(lowered, tag, i)) {
+      return i;
+    }
+    const tagEnd = openTagEnd(lowered, i);
+    if (tagEnd < 0) {
+      return -1; // unterminated tag — ambiguous tail
+    }
+    if (!isEnd && tagAt(lowered, '<script', i)) {
+      const close = findTag(lowered, '</script', tagEnd + 1);
+      if (close < 0) {
+        return -1; // unclosed script — the rest is script text
+      }
+      const closeEnd = openTagEnd(lowered, close);
+      i = closeEnd < 0 ? close + '</script'.length : closeEnd + 1;
+      continue;
+    }
+    i = tagEnd + 1;
+  }
+  return -1;
+}
+
 type Anchor = { before: string } | { afterOpen: string };
 
 /**
@@ -773,14 +930,20 @@ const SCRIPT_ANCHORS: ReadonlyArray<Anchor> = [
 function resolveAnchor(lowered: string, anchors: ReadonlyArray<Anchor>): number {
   for (const anchor of anchors) {
     if ('before' in anchor) {
-      const idx = findTag(lowered, anchor.before, 0);
-      if (idx >= 0) {
-        return idx;
+      // Prefer the first occurrence in TEXT context; when the context scan
+      // finds none (the only hit lives inside a script/comment/attribute,
+      // or the tail is ambiguous), fall back to the first literal match —
+      // the pre-flag behavior, never worse.
+      const idx = findTagInText(lowered, anchor.before, 0);
+      const chosen = idx >= 0 ? idx : findTag(lowered, anchor.before, 0);
+      if (chosen >= 0) {
+        return chosen;
       }
     } else {
-      const idx = findTag(lowered, anchor.afterOpen, 0);
-      if (idx >= 0) {
-        const end = openTagEnd(lowered, idx);
+      const idx = findTagInText(lowered, anchor.afterOpen, 0);
+      const chosen = idx >= 0 ? idx : findTag(lowered, anchor.afterOpen, 0);
+      if (chosen >= 0) {
+        const end = openTagEnd(lowered, chosen);
         if (end >= 0) {
           return end + 1;
         }
@@ -849,6 +1012,56 @@ export function injectHtml(
     body: Buffer.concat(parts),
     injected: { style: styleText !== '', script: scriptText !== '' },
   };
+}
+
+/**
+ * Bounded markup sniff for mislabeled/absent content-types (flag 109):
+ * scan only the first ≤4 KiB — a NUL byte anywhere in the window means
+ * binary; leading whitespace and `<!-- -->` comments are skipped; then the
+ * body must open with `<!doctype html`, `<html`, `<head`, or `<body`
+ * (case-insensitive, name-bounded — `<header` is not `<head`). Only ever
+ * consulted when the host carries an injectable payload; declared binary
+ * types never reach it.
+ */
+const HTML_SNIFF_LIMIT = 4096;
+
+export function looksLikeHtml(body: Buffer): boolean {
+  const window = body.subarray(0, Math.min(body.length, HTML_SNIFF_LIMIT));
+  if (window.includes(0)) {
+    return false;
+  }
+  const text = window.toString('latin1').toLowerCase();
+  let i = 0;
+  for (;;) {
+    while (
+      i < text.length &&
+      (text[i] === ' ' ||
+        text[i] === '\t' ||
+        text[i] === '\r' ||
+        text[i] === '\n' ||
+        text[i] === '\f')
+    ) {
+      i++;
+    }
+    if (text.startsWith('<!--', i)) {
+      const end = text.indexOf('-->', i + 4);
+      if (end < 0) {
+        return false; // a comment to EOF — no markup token follows
+      }
+      i = end + 3;
+      continue;
+    }
+    break;
+  }
+  const opensWith = (token: string): boolean =>
+    text.startsWith(token, i) &&
+    (text[i + token.length] === undefined || TAG_NAME_END.has(text[i + token.length]));
+  return (
+    opensWith('<!doctype html') ||
+    opensWith('<html') ||
+    opensWith('<head') ||
+    opensWith('<body')
+  );
 }
 
 /**

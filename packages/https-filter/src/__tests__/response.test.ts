@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, test } from '@jest/globals';
+import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib';
 import type {
   CosmeticIndex,
   CosmeticPayload,
@@ -19,10 +20,16 @@ import {
   applyCspAdditions,
   buildInjectionText,
   decideResponse,
+  decodeBody,
+  encodeBody,
   hasInjectableContent,
   injectHtml,
+  looksLikeHtml,
+  MAX_HTML_BUFFER,
   mergeCspAdditionsIntoHeaders,
+  parseContentEncoding,
   rewriteCspForInjection,
+  type BodyCodec,
   type TypedEvalContext,
 } from '../pipeline/response.js';
 
@@ -76,9 +83,22 @@ describe('decideResponse — passthrough', () => {
     expect(plan.action).toBe('passthrough');
   });
 
-  test('html on an injectable host but content-encoded stays a stream (skip)', () => {
+  test('html on an injectable host under a supported codec still buffers', () => {
+    // `gzip` is decodable now (flag 108) — the plan carries the codec so the
+    // relay can decompress → splice → recompress instead of skipping.
     const plan = decideResponse({
       headers: { 'content-type': 'text/html', 'content-encoding': 'gzip' },
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: indexFor('example.com', payload({ hide: ['.ad'] })),
+    });
+    expect(plan.action).toBe('buffer-inject');
+    expect(plan.contentEncoding).toBe('gzip');
+  });
+
+  test('html on an injectable host but unsupported-encoded stays a stream (skip)', () => {
+    const plan = decideResponse({
+      headers: { 'content-type': 'text/html', 'content-encoding': 'zstd' },
       verdict: verdict(),
       ...BASE,
       cosmeticIndex: indexFor('example.com', payload({ hide: ['.ad'] })),
@@ -401,10 +421,10 @@ describe('decideResponse — injection budget', () => {
     expect(plan.injectSkipped).toBeUndefined();
   });
 
-  test('an encoded body skips without consuming a slot', () => {
+  test('an undecodable body skips without consuming a slot', () => {
     const budget = { inflight: 0, max: 1 };
     const plan = decideResponse({
-      headers: { ...html, 'content-encoding': 'gzip' },
+      headers: { ...html, 'content-encoding': 'zstd' },
       verdict: verdict(),
       ...BASE,
       cosmeticIndex: index,
@@ -415,23 +435,48 @@ describe('decideResponse — injection budget', () => {
   });
 });
 
-describe('decideResponse — content-encoding gate', () => {
+describe('decideResponse — content-encoding gate (flag 108)', () => {
   const index = indexFor('example.com', payload({ hide: ['.ad'] }));
   const html = { 'content-type': 'text/html' };
 
-  test('any non-identity token counts as encoded — including inside lists', () => {
-    const encodings: Array<string | string[]> = [
-      'gzip',
-      'GZip',
-      'gzip, identity',
-      'identity, br',
-      ['gzip', 'identity'],
-      ['identity', 'gzip'],
+  test('a single supported codec stays injectable and names it on the plan', () => {
+    const encodings: Array<[string | string[], string]> = [
+      ['gzip', 'gzip'],
+      ['GZip', 'gzip'],
+      ['deflate', 'deflate'],
+      ['br', 'br'],
+      // A bare `identity` alongside a real coding folds to the coding.
+      ['gzip, identity', 'gzip'],
+      ['identity, br', 'br'],
+      [['gzip', 'identity'], 'gzip'],
+      [['identity', 'deflate'], 'deflate'],
     ];
-    for (const encoding of encodings) {
+    for (const [encoding, codec] of encodings) {
       const plan = decideResponse({
         // The Node type spells it `string`, but h2 compat and raw header
         // arrays really do produce string[] values — the cast is honest.
+        headers: { ...html, 'content-encoding': encoding as string },
+        verdict: verdict(),
+        ...BASE,
+        cosmeticIndex: index,
+      });
+      expect(plan.action).toBe('buffer-inject');
+      expect(plan.contentEncoding).toBe(codec);
+    }
+  });
+
+  test('unsupported codings and layered chains still skip encoded', () => {
+    const encodings: Array<string | string[]> = [
+      'zstd',
+      'compress',
+      'x-custom',
+      'gzip, br', // layered chains are intentionally not unrolled
+      'br, gzip',
+      ['gzip', 'deflate'],
+      ['gzip', 'zstd'],
+    ];
+    for (const encoding of encodings) {
+      const plan = decideResponse({
         headers: { ...html, 'content-encoding': encoding as string },
         verdict: verdict(),
         ...BASE,
@@ -524,15 +569,18 @@ describe('rewriteCspForInjection', () => {
     );
   });
 
-  test("a 'strict-dynamic' default-src does not synthesize script-src — style-src still does", () => {
-    // Cloning 'strict-dynamic' into a fresh script-src produces a directive
-    // whose own keyword makes CSP3 ignore the 'unsafe-inline' it was built
-    // to carry — a widen that only pretends to work, skipped. The style
-    // chain's clone is unaffected: 'strict-dynamic' is a script concept,
-    // inert on style-src, so its 'unsafe-inline' still admits <style>.
+  test("a 'strict-dynamic' default-src still synthesizes script-src — and style-src (flag 110)", () => {
+    // The synthesized script-src carries 'strict-dynamic' along — under
+    // CSP3 that keyword makes the engine ignore the 'unsafe-inline' it was
+    // cloned to carry, so the token is inert noise there; under CSP2 (which
+    // knows 'unsafe-inline' but not 'strict-dynamic') it is the ONLY admit
+    // the widen can offer. The style chain's clone is unaffected:
+    // 'strict-dynamic' is a script concept, inert on style-src.
     const out = rewriteCspForInjection("default-src 'self' 'strict-dynamic'");
     expect(out.value).toBe(
-      "default-src 'self' 'strict-dynamic'; style-src 'self' 'strict-dynamic' 'unsafe-inline'",
+      "default-src 'self' 'strict-dynamic'; " +
+        "script-src 'self' 'strict-dynamic' 'unsafe-inline'; " +
+        "style-src 'self' 'strict-dynamic' 'unsafe-inline'",
     );
   });
 
@@ -758,5 +806,207 @@ describe('buildInjectionText', () => {
         payload({ scriptlets: [{ name: 'set-constant', args: ['a', '1'] }] }),
       ),
     ).toBe(true);
+  });
+});
+
+describe('parseContentEncoding / decodeBody / encodeBody (flag 108)', () => {
+  test('absent and identity-only headers classify identity', () => {
+    expect(parseContentEncoding(undefined)).toBe('identity');
+    expect(parseContentEncoding('')).toBe('identity');
+    expect(parseContentEncoding('identity')).toBe('identity');
+    expect(parseContentEncoding(' Identity , ')).toBe('identity');
+    expect(parseContentEncoding(['identity', 'identity'])).toBe('identity');
+  });
+
+  test('each supported codec round-trips decode(encode(x)) === x', () => {
+    const page = Buffer.from('<html><head></head><body>round-trip</body></html>');
+    const cases: Array<[BodyCodec, Buffer]> = [
+      ['gzip', gzipSync(page)],
+      ['deflate', deflateSync(page)],
+      ['br', brotliCompressSync(page)],
+    ];
+    for (const [codec, wire] of cases) {
+      const decoded = decodeBody(codec, wire);
+      expect(decoded.equals(page)).toBe(true);
+      expect(decodeBody(codec, encodeBody(codec, decoded)).equals(page)).toBe(true);
+    }
+  });
+
+  test('decode past the buffer cap throws ERR_BUFFER_TOO_LARGE', () => {
+    // A compressed body under the wire cap can expand past it — the decode
+    // must carry the same bound the accumulator does.
+    const big = Buffer.alloc(MAX_HTML_BUFFER + 1, 0x61); // 'a' — compresses tiny
+    const wire = gzipSync(big);
+    expect(wire.length).toBeLessThan(MAX_HTML_BUFFER);
+    expect(() => decodeBody('gzip', wire)).toThrow(/ERR_BUFFER_TOO_LARGE|larger than/i);
+  });
+
+  test('corrupt wire bytes throw — the caller flushes them verbatim', () => {
+    expect(() => decodeBody('gzip', Buffer.from('not-gzip-bytes'))).toThrow();
+    expect(() => decodeBody('br', Buffer.from('not-brotli'))).toThrow();
+    expect(() => decodeBody('deflate', Buffer.from('not-deflate'))).toThrow();
+  });
+});
+
+describe('decideResponse — HTML sniff gate (flag 109)', () => {
+  const index = indexFor('example.com', payload({ hide: ['.ad'] }));
+
+  test('absent and text/plain content-types stay injectable but carry the sniff flag', () => {
+    for (const headers of [
+      {},
+      { 'content-type': 'text/plain' },
+      { 'content-type': 'text/plain; charset=utf-8' },
+    ]) {
+      const plan = decideResponse({
+        headers,
+        verdict: verdict(),
+        ...BASE,
+        cosmeticIndex: index,
+      });
+      expect(plan.action).toBe('buffer-inject');
+      expect(plan.sniffHtml).toBe(true);
+    }
+  });
+
+  test('text/html does not sniff — the label already declares markup', () => {
+    const plan = decideResponse({
+      headers: { 'content-type': 'text/html' },
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: index,
+    });
+    expect(plan.action).toBe('buffer-inject');
+    expect(plan.sniffHtml).toBe(false);
+  });
+
+  test('declared binary types are never sniffed', () => {
+    for (const ct of [
+      'application/octet-stream',
+      'image/png',
+      'application/pdf',
+      'font/woff2',
+    ]) {
+      const plan = decideResponse({
+        headers: { 'content-type': ct },
+        verdict: verdict(),
+        ...BASE,
+        cosmeticIndex: index,
+      });
+      expect(plan.action).toBe('passthrough');
+      expect(plan.sniffHtml).toBeUndefined();
+    }
+  });
+});
+
+describe('looksLikeHtml (flag 109)', () => {
+  test('the markup openers are recognized — case-insensitive, name-bounded', () => {
+    expect(looksLikeHtml(Buffer.from('<!doctype html><html>…'))).toBe(true);
+    expect(looksLikeHtml(Buffer.from('<!DOCTYPE HTML PUBLIC "-//x">'))).toBe(true);
+    expect(looksLikeHtml(Buffer.from('<html><body>x</body></html>'))).toBe(true);
+    expect(looksLikeHtml(Buffer.from('<HEAD><title>t</title>'))).toBe(true);
+    expect(looksLikeHtml(Buffer.from('  <body>text</body>'))).toBe(true);
+    expect(looksLikeHtml(Buffer.from('\t\r\n<Html lang=en>'))).toBe(true);
+    // Name boundary: <header is not <head, <bodyguard is not <body.
+    expect(looksLikeHtml(Buffer.from('<header>site</header>'))).toBe(false);
+    expect(looksLikeHtml(Buffer.from('<bodyguard>'))).toBe(false);
+    expect(looksLikeHtml(Buffer.from('<htmlish>'))).toBe(false);
+  });
+
+  test('leading comments are skipped — the token after them decides', () => {
+    expect(looksLikeHtml(Buffer.from('<!-- gen -->\n<html>x</html>'))).toBe(true);
+    expect(looksLikeHtml(Buffer.from('<!-- a --><!-- b --><body>x</body>'))).toBe(true);
+    expect(looksLikeHtml(Buffer.from('<!-- never closed <html>'))).toBe(false);
+    expect(looksLikeHtml(Buffer.from('<!-- gen -->plain text'))).toBe(false);
+  });
+
+  test('a NUL byte anywhere in the window means binary — rejected', () => {
+    const bin = Buffer.concat([
+      Buffer.from('\x00\x01\x02<html>', 'latin1'),
+      Buffer.from('<body>x</body>'),
+    ]);
+    expect(looksLikeHtml(bin)).toBe(false);
+    // Even when the prefix LOOKS like markup, a NUL inside the window vetoes.
+    const sneaky = Buffer.concat([
+      Buffer.from('<html><head>'),
+      Buffer.from([0]),
+      Buffer.from('</head><body>x</body>'),
+    ]);
+    expect(looksLikeHtml(sneaky)).toBe(false);
+  });
+
+  test('plain text, JSON, and arbitrary binary stay non-markup', () => {
+    expect(looksLikeHtml(Buffer.from('hello world this is a log line'))).toBe(false);
+    expect(looksLikeHtml(Buffer.from('{"a": 1, "b": [2, 3]}'))).toBe(false);
+    expect(looksLikeHtml(Buffer.from('PK\x03\x04zip-bytes', 'latin1'))).toBe(false);
+    expect(looksLikeHtml(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]))).toBe(false);
+  });
+});
+
+describe('injectHtml — context-aware anchors (flag 111)', () => {
+  test('a "</head" inside a <script> string does not steal the anchor', () => {
+    // Regression: the first literal `</head` used to be the splice point —
+    // inside this script's string literal it would land markup inside JS.
+    const raw = Buffer.from(
+      '<html><head><script>console.log("</head")</script><title>t</title></head><body>x</body></html>',
+    );
+    const { body } = injectHtml(raw, { styleText: '.a{}' });
+    const text = body.toString('latin1');
+    const styleAt = text.indexOf('<style id="bm-c">');
+    const realClose = text.lastIndexOf('</head>');
+    // Lands immediately before the REAL closing head tag, not inside the
+    // script string — the inserted markup's own length separates them.
+    expect(styleAt).toBeGreaterThan(-1);
+    expect(styleAt).toBe(realClose - '<style id="bm-c">.a{}</style>'.length);
+    expect(text.indexOf('console.log("')).toBeLessThan(styleAt);
+  });
+
+  test('a "</head" inside an HTML comment does not steal the anchor', () => {
+    const raw = Buffer.from(
+      '<html><head><!-- </head leftover --><title>t</title></head><body>x</body></html>',
+    );
+    const { body } = injectHtml(raw, { styleText: '.a{}' });
+    const text = body.toString('latin1');
+    expect(text.indexOf('<style id="bm-c">')).toBe(
+      text.lastIndexOf('</head>') - '<style id="bm-c">.a{}</style>'.length,
+    );
+  });
+
+  test('a "</head" inside a quoted attribute does not steal the anchor', () => {
+    const raw = Buffer.from(
+      '<html><head><meta data-note="</head"><title>t</title></head><body>x</body></html>',
+    );
+    const { body } = injectHtml(raw, { styleText: '.a{}' });
+    const text = body.toString('latin1');
+    expect(text.indexOf('<style id="bm-c">')).toBe(
+      text.lastIndexOf('</head>') - '<style id="bm-c">.a{}</style>'.length,
+    );
+  });
+
+  test('an unterminated script falls back to the first literal match', () => {
+    // Ambiguous tail — the scanner refuses to guess, so the pre-flag
+    // first-literal search is the answer: still injects, never worse. The
+    // `</head>` inside the string is name-bounded (the `>` ends the name),
+    // so the literal search DOES match it — the old code spliced exactly here.
+    const raw = Buffer.from('<html><head><script>var s="</head>"');
+    const { body, injected } = injectHtml(raw, { styleText: '.a{}' });
+    expect(injected.style).toBe(true);
+    const text = body.toString('latin1');
+    // The splice landed immediately before the literal `</head>` inside the
+    // script string — exactly where the first-literal search always put it.
+    expect(text).toContain('</style></head>"');
+    expect(text.indexOf('var s="')).toBeLessThan(text.indexOf('<style id="bm-c">'));
+  });
+
+  test('the script anchor skips a fake "<head>" inside script text', () => {
+    const raw = Buffer.from(
+      '<body><script>var t="<head>"</script></body><html><head></head></html>',
+    );
+    const { body } = injectHtml(raw, { scriptText: 'x=1' });
+    const text = body.toString('latin1');
+    // SCRIPT_ANCHORS prefer afterOpen <head — the real one late in the
+    // body, not the string inside the early script.
+    const scriptAt = text.indexOf('<script>x=1</script>');
+    const realHead = text.lastIndexOf('<head>');
+    expect(scriptAt).toBeGreaterThan(realHead);
   });
 });

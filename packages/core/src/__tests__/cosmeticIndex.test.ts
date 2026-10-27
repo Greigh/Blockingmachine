@@ -833,3 +833,97 @@ describe("createCosmeticIndex — contract edges", () => {
     }
   });
 });
+
+describe("forHost — shared global payload + merged hosts (flag 114)", () => {
+  test("domainless hosts share one frozen payload object, not a re-merge", () => {
+    const index = createCosmeticIndex(["##.global", "hit.example##.hit"]);
+    const a = index.forHost("alpha.example");
+    const b = index.forHost("beta.example");
+    expect(a?.hide).toEqual([".global"]);
+    expect(a).toBe(b); // the one shared global payload — object identity
+    // …and the cached re-lookup is that same object again.
+    expect(index.forHost("alpha.example")).toBe(a);
+  });
+
+  test("a host with its own rules merges them host-first over the globals", () => {
+    const index = createCosmeticIndex([
+      "##.global",
+      "hit.example##.hit",
+    ]);
+    const merged = index.forHost("hit.example");
+    // Host-sourced selectors precede globals — the order the old
+    // single-bag merge produced.
+    expect(merged?.hide).toEqual([".hit", ".global"]);
+    // The merged result is itself cached — repeat lookups share it.
+    expect(index.forHost("hit.example")).toBe(merged);
+    // Other hosts keep their own merged payload, not the domainless one.
+    expect(index.forHost("alpha.example")?.hide).toEqual([".global"]);
+  });
+
+  test("a `~` exclusion on a global vetoes it only on the excluded host", () => {
+    const index = createCosmeticIndex([
+      "~skip.example##.ad",
+      "hit.example##.x",
+    ]);
+    // The vetoed host has no hits of its own and its only global is
+    // excluded — the merge yields nothing.
+    expect(index.forHost("skip.example")).toBeUndefined();
+    // Unaffected lookups are untouched — `hit.example` still carries the
+    // conditional global after its own rule (host-first merge order).
+    expect(index.forHost("hit.example")?.hide).toEqual([".x", ".ad"]);
+    expect(index.forHost("other.example")?.hide).toEqual([".ad"]);
+  });
+
+  test("conditional globals splice into the unconditional stream at their original position", () => {
+    // Order fidelity: the merge must emit globals in `globalEntries` order,
+    // not partition-order — a conditional sitting between two unconditional
+    // rules keeps its slot (the single-bag merge's semantics).
+    const index = createCosmeticIndex([
+      "##.u1",
+      "~ex.example##.c1",
+      "##.u2",
+      "hit.example##.hit",
+    ]);
+    expect(index.forHost("hit.example")?.hide).toEqual([
+      ".hit",
+      ".u1",
+      ".c1",
+      ".u2",
+    ]);
+    // The vetoed host loses only the conditional — position intact.
+    expect(index.forHost("ex.example")?.hide).toEqual([".u1", ".u2"]);
+  });
+
+  test("a host-scoped #@# still cancels a global-sourced selector on its host only", () => {
+    const index = createCosmeticIndex([
+      "##.reklama",
+      "ex.example#@#.reklama",
+      "ex.example##.own",
+    ]);
+    // The global selector dies on the exception's host; the host's own
+    // hide survives — exception membership unions across the merge.
+    expect(index.forHost("ex.example")?.hide).toEqual([".own"]);
+    expect(index.forHost("plain.example")?.hide).toEqual([".reklama"]);
+  });
+
+  test("style and scriptlet merge order/dedupe survive the shared-global overlay", () => {
+    const index = createCosmeticIndex([
+      "##.dup",
+      "hit.example##.dup", // first occurrence wins — the host slot
+      "#$#.g{color:red}",
+      "hit.example#$#.h{color:blue}",
+      "##+js(set-constant, g, 1)",
+      "hit.example##+js(set-constant, h, 2)",
+    ]);
+    const payload = index.forHost("hit.example");
+    expect(payload?.hide).toEqual([".dup"]);
+    expect(payload?.styles).toEqual([
+      ".h{color:blue}",
+      ".g{color:red}",
+    ]);
+    expect(payload?.scriptlets).toEqual([
+      { name: "set-constant", args: ["h", "2"] },
+      { name: "set-constant", args: ["g", "1"] },
+    ]);
+  });
+});

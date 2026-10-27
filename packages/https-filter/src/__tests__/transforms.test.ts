@@ -12,7 +12,11 @@
 
 import { describe, expect, test } from '@jest/globals';
 import type { RequestVerdict } from '@blockingmachine/core';
-import { applyRequestTransforms, inferContentType } from '../pipeline/transforms.js';
+import {
+  applyRequestTransforms,
+  inferContentType,
+  inferThirdParty,
+} from '../pipeline/transforms.js';
 
 type Transforms = RequestVerdict['transforms'];
 
@@ -164,5 +168,38 @@ describe('inferContentType', () => {
     ).toBeUndefined();
     expect(inferContentType({ accept: '*/*' })).toBeUndefined();
     expect(inferContentType({})).toBeUndefined();
+  });
+});
+
+describe('inferThirdParty (flag 96)', () => {
+  test('cross-site and same-site declare a third-party context', () => {
+    expect(inferThirdParty({ 'sec-fetch-site': 'cross-site' })).toBe(true);
+    expect(inferThirdParty({ 'sec-fetch-site': 'same-site' })).toBe(true);
+    // Case-folded like every fetch-metadata token.
+    expect(inferThirdParty({ 'sec-fetch-site': 'Cross-Site' })).toBe(true);
+  });
+
+  test('same-origin and none declare a first-party context', () => {
+    expect(inferThirdParty({ 'sec-fetch-site': 'same-origin' })).toBe(false);
+    expect(inferThirdParty({ 'sec-fetch-site': 'none' })).toBe(false);
+  });
+
+  test('absent or unrecognized values infer nothing — never a guess', () => {
+    expect(inferThirdParty({})).toBeUndefined();
+    expect(inferThirdParty({ 'sec-fetch-site': 'totally-bogus' })).toBeUndefined();
+    expect(inferThirdParty({ 'sec-fetch-site': '' })).toBeUndefined();
+    // An array header yields its first member — the conventional reading.
+    // (The declared type is `string`; a repeated wire header arrives as an
+    // array anyway, so the cast exercises the runtime shape.)
+    expect(
+      inferThirdParty({
+        'sec-fetch-site': ['cross-site'] as unknown as string,
+      }),
+    ).toBe(true);
+    expect(
+      inferThirdParty({
+        'sec-fetch-site': ['bogus', 'cross-site'] as unknown as string,
+      }),
+    ).toBeUndefined();
   });
 });

@@ -119,14 +119,6 @@ No action by anyone advances these today — they move when an upstream release 
 
 Code-level gaps the whole-branch review of the https-filter P0 engine (`packages/https-filter`) surfaced and consciously deferred — nothing external gates them; they need a work session, most of them alongside the P1 LAN-hub/UI milestones.
 
-### 96. Evaluator `thirdParty` is never populated in the proxy — `$third-party`-style rules under-match
-
-- **Where:** `filterProxy.ts` verdict calls — `{ method, contentType }` are now passed on terminated requests (`contentType` inferred by `inferContentType` from `sec-fetch-dest`/unambiguous `accept`, `dfdddf0`), but `thirdParty` stays `undefined`.
-- **What:** the initiator-relative modifiers (`$third-party`, `$first-party`, `$domain=`, `$denyallow=`) have no honest signal at the network layer — a proxy sees destinations, never the page that initiated them — so those rules conservatively under-match. `$image`/`$script`/etc. DO now fire on terminated flows where the client declares a resource type.
-- **Why left:** the residual needs a browser-side initiator signal (extension telemetry or an initiator header convention) — P1+ integration work, not a proxy-layer fix.
-- **Fix shape:** when an initiator source exists, plumb `thirdParty` + `domain=` initiator context through the evaluate options, then re-audit which modifiers the proxy can truthfully honor.
-- **Verify:** a `$third-party`-scoped rule fires on a request the proxy can prove is third-party — needs the initiator signal first.
-
 ### 100. The launchd engine and the app engine keep separate CA + ledger stores — a deliberate two-posture split that only the one-engine rule makes safe
 
 - **Where:** `scripts/install-macos-capture.sh` (`STORE_DIR=/Users/Shared/Blockingmachine/https-filter`, written into the proxy plist's `BM_STORE_DIR`) vs `FilterProxyManager`'s `app.getPath('userData')/https-filter` default in `packages/electron-app/src/filterProxyManager.ts`.
@@ -142,54 +134,6 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **Why left:** accepted residual — there is no watchdog for the watcher; launchd KeepAlive is the recovery path, and a second supervisor or a probe-gated pf rule is more machinery than the window is worth.
 - **Fix shape:** if the window ever bites in practice, the helper could arm a dedicated pf token/anchor-pair that a crash takes down with it (fork-and-hold a sentinel fd), or the anchor could be made conditional on a live-socket probe — both are anchor-design work, not config.
 - **Verify:** `kill -9` the helper under live traffic — connections RST until KeepAlive relaunches it; the rehearsal script's kickstart leg exercises the adjacent path.
-
-### 108. Injectable document-context flows force `accept-encoding: identity` upstream — no in-proxy decompress/recompress path exists
-
-- **Where:** `wantsIdentityEncoding` in `packages/https-filter/src/proxy/httpRelay.ts` (the request-side strip), plus the `injectSkipped: 'encoded'` passthrough in `decideResponse` — the escape hatch for an upstream that compresses anyway.
-- **What:** any flow that could be rewritten asks the upstream for identity bytes — the bandwidth cost of cosmetic injection and `$csp` merges; the upstream's gzip/br reach is deliberately surrendered on those flows. Narrowed in the P2 flags pass: a `sec-fetch-dest`-typed non-document request (`image`, `script`, …) no longer pays the strip at all — the same gate `decideResponse` applies to the buffer path short-circuits `wantsIdentityEncoding` first, so an image on an injectable host keeps its negotiated encoding. The residual is the flows that stay eligible: document/subdocument requests on injectable or `$csp` hosts.
-- **Why left:** accepted trade documented at the seam and in the plan — AdGuard/mitmproxy normalize the same way; an honest decompress-buffer-splice-recompress loop is real machinery, not a correctness gap.
-- **Fix shape:** `zlib`/`brotli` streams around the buffered body — forward the client's real `accept-encoding`, decompress non-identity bodies, splice, and recompress matching the encoding the upstream actually sent.
-- **Verify:** an injectable page upstream-compressed as gzip arrives at the client compressed AND injected — a `filterProxy.mitm.test.ts` leg; `injectionsSkipped` stops counting `encoded` skips on compliant upstreams.
-
-### 109. Pages served as `text/plain` or with no `content-type` never receive cosmetic injection
-
-- **Where:** `decideResponse` in `packages/https-filter/src/pipeline/response.ts` — `buffer-inject` gates on `mediaType === 'text/html'` only; `mapResponseContentType` lands `text/plain`/absent on `other`/no-token for the typed re-verdict.
-- **What:** a mislabeled or header-less HTML page streams verbatim — real-world coverage misses whatever sloppy origins serve; injection only ever runs on a declared HTML response.
-- **Why left:** deliberate under-injection — sniffing markup inside an arbitrary body and splicing into it risks corrupting bytes that genuinely are not HTML; the failure mode is missing cosmetics, not mangled pages.
-- **Fix shape:** if coverage ever demands it, sniff only when the buffered body opens like markup (`<!doctype`/`<html` after leading whitespace) AND the host carries a payload — never on `application/octet-stream` or declared binary types.
-- **Verify:** a `text/plain`-labeled page whose first bytes are `<html>` receives the injected `<style>`; a binary body under `text/plain` passes through byte-identical.
-
-### 110. A `default-src` carrying `'strict-dynamic'` gets no synthesized `script-src` — CSP2-level engines keep refusing the injected script
-
-- **Where:** `widenChain` in `packages/https-filter/src/pipeline/response.ts` — `strictDynamicApplies` skips the `default-src` clone on the script chain only (the style chain still synthesizes; `'strict-dynamic'` is inert there).
-- **What:** `default-src 'self' 'strict-dynamic'` with no `script-src` → the clone would ship the keyword that makes CSP3 ignore the `'unsafe-inline'` it exists to carry — a widen that only pretends to work, so it is not emitted. The residual: a CSP2-only engine (honors `'unsafe-inline'`, doesn't know `'strict-dynamic'`) loses a widen it could have used — the injected script stays refused there.
-- **Why left:** deliberate, and documented at the code path — no honest directive beats one that lies about widening; the client gives no signal of its CSP level, and a strict-dynamic page opted into the CSP3 contract anyway.
-- **Fix shape:** none planned — the entry records the accepted residual; if CSP2 reach ever matters, the only honest move is emitting the clone minus `'strict-dynamic'`, gated on a signal that does not exist today.
-- **Verify:** `response.test.ts` pins the skip ("a 'strict-dynamic' default-src does not synthesize script-src — style-src still does"); closing this flag means changing that assertion with a reasoned trade.
-
-### 111. The `</head` injection anchor is a first-literal match — an occurrence inside a script string or comment steers the splice point
-
-- **Where:** `findTag`/`resolveAnchor` in `packages/https-filter/src/pipeline/response.ts` — the first literal `</head`/`<head` wins regardless of the context it sits in.
-- **What:** a page whose head carries `"</head>"` inside a JS string literal or an `<!-- -->` comment gets the injected markup inside that string/comment instead of at the real head boundary — a wasted injection (never a security hole — the payload is inert markup and the string context neutralizes it), not a correctness guarantee.
-- **Why left:** upstream parity — uBO's HTML filtering does the same literal-anchor search; a context-aware scan needs a tokenizer over the head section, a bigger instrument than the observed miss rate justifies.
-- **Fix shape:** if it ever bites: skip `<!-- -->` spans and quoted script-text runs when resolving anchors — bounded extra work on the already-buffered ≤512 KiB body.
-- **Verify:** a fixture page with `console.log("</head")` in an inline script must splice the `<style>` at the real `</head>`, not inside the string — compared byte-for-byte against the uninstrumented origin's output around the anchor.
-
-### 113. A throwing `onEvent` listener escapes the response pipeline's 'end' handler — emit is deliberately outside the mutation try
-
-- **Where:** `bufferAndInject`'s `body.once('end', …)` in `packages/https-filter/src/proxy/httpRelay.ts` — `emit?.(…)` sits outside the mutation try by design (its own comment: a listener throw inside the try would be miscounted as `inject-skip`).
-- **What:** a throwing listener propagates out of the stream's `emit('end')` — an uncaught on the relay path. Today's only listener (`onResponseEvent` in `filterProxy.ts`) cannot throw — `ledgerEvent` try-guards `policy.recordEvent` and counter increments cannot — so the contract holds by construction, not by isolation.
-- **Why left:** wrapping emit inside the relay is a worse failure mode — either miscounted (a throw reads as injector failure → spurious `inject-skip`) or silently swallowed; the honest posture is a non-throwing-listener contract, which the single caller honors today.
-- **Fix shape:** if a second listener ever attaches (telemetry, UI hooks), wrap `emit?.()` in its own try/catch that logs-and-continues — placed post-mutation so accounting stays exact.
-- **Verify:** an injected listener that throws must not wedge or 502 the flow — response bytes still arrive and stats stay consistent; today that is a contract review, not a test.
-
-### 114. Hosts with domain/entity cosmetic hits still pay a fresh per-host merge over the whole global bucket
-
-- **Where:** `lookupHost` in `packages/core/src/cosmetic/cosmeticIndex.ts` — the slow path pushes every domain/subdomain/entity hit plus the full `globalEntries` bucket into `resolveEntries` and merges from scratch.
-- **What:** the P2 flags pass made the dominant case free — a host with no host-specific hits and no vetoing `~` exclusion returns one shared frozen `globalSharedPayload` (`forHost(a) === forHost(b)` for domainless hosts), with the LRU cache unchanged. The residual: a host that DOES hit a domain/entity rule still merges its hits against the entire global bucket (~40k entries on `browser.txt`) once per host, cached afterward under `PAYLOAD_CACHE_MAX` — so per-hit-host cost is linear in the global population rather than in just the hits.
-- **Why left:** the merge needs the pre-resolved global *candidates* (not the post-exception payload) because a domain-scoped `#@#` exception can cancel global-sourced selectors — resolving globals once and re-filtering per host is a two-structure design (candidate sets + exception sets), more machinery than the observed per-host cost justifies while the domainless hot path is already shared.
-- **Fix shape:** precompute global candidate/exception sets beside `globalSharedPayload` and have the hit path start from them instead of re-walking `globalEntries` — the per-host merge then costs O(hits + exceptions applied), not O(globals).
-- **Verify:** `cosmeticIndex.test.ts` pins the shared-payload identity, veto fallback, and domain-merge semantics; closing this means a benchmark or a count of entries visited per `forHost` on a hit host, not a behavior change.
 
 ### 117. Linux with no NSS certutil and no distro CA-store paths answers 'unsupported' (`linux-no-ca-store`)
 
@@ -296,6 +240,48 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **What:** `parseDomainList` keeps the leading `*.` qualifier when the remainder also ends in `.*` and emits a new `subEntity` token (`{ kind: "subEntity", name }`) beside `entity`; `subEntity` includes key into their own bucket consulted during the SLD walk only when `decomposeDomain` shows a label left of the registrable domain — `x.sony.com` and `y.sony.co.jp` match, the apex `sony.com` does not — and a `~*.sony.*` exclusion mirrors the same boundary, vetoing subdomains only while the apex keeps its rule.
 - **Where:** `packages/core/src/cosmetic/cosmeticIndex.ts` (`DomainToken.subEntity`, `parseDomainList`, `subEntityEntries`/`hasSubEntityRules`, the `tokenMatches` `subEntity` case).
 - **Verify:** `cosmeticIndex.test.ts` — `*.sony.*` fires on `x.sony.com`, `y.sony.co.jp` and `a.b.sony.com` but never on `sony.com`, `sony.co.jp`, `x.sonyplc.com` or `a.sony.com.evil.example`; `~*.sony.*` vetoes subdomains while the apex keeps its rule; the plain `sony.*` entity tests keep passing.
+
+### 96. Evaluator `thirdParty` was never populated in the proxy — closed by reading `sec-fetch-site` on terminated requests
+
+- **What:** `inferThirdParty` tri-states the one initiator signal a proxy CAN see — client-volunteered fetch metadata: `cross-site`/`same-site` → `true` (same-site still crosses ABP's host boundary reading — `a.foo.com` → `b.foo.com` is third-party), `same-origin`/`none` → `false`, absent or unrecognized → `undefined` — no guessing. The terminated verdict carries it beside `contentType` on the typed pass, and ANY declared signal (contentType OR thirdParty) still earns the second untyped evaluation — a fabricated `same-origin` can never arm a `@@…$~third-party` exception into relaxing an untyped block, the same attacker-controlled-bytes asymmetry `sec-fetch-dest` already gets. `evaluateTyped` in the response context closes over the request's own signal so the content-type re-verdict keeps it. CONNECT/SNI verdicts and the plain-HTTP blind splice stay `undefined` — no per-request headers exist for them to honestly read.
+- **Where:** `packages/https-filter/src/pipeline/transforms.ts` (`inferThirdParty`), `packages/https-filter/src/proxy/filterProxy.ts` (the typed+untyped evaluate pair and the `evaluateTyped` closure).
+- **Verify:** `filterProxy.mitm.test.ts` `thirdParty inference — sec-fetch-site` — h1 `$third-party` fires on `cross-site`/`same-site` and stays inert on `same-origin`/`none`/absent/garbage; h2 parity through the compat headers; a `$~third-party` block fires first-party and frees cross-site; a fabricated `same-origin` cannot arm the `~third-party` exception (the untyped block wins); a plain-HTTP splice carrying `Sec-Fetch-Site: cross-site` proves the non-terminated path keeps it undefined.
+
+### 108. Injectable flows forced `accept-encoding: identity` upstream — closed by a bounded decode → inject → re-encode path
+
+- **What:** the request side no longer strips to identity: `wantsDecodableEncoding`/`decodableEncodingOffer` forward the client's `accept-encoding` intersected with the codecs the pipeline can read (`gzip`/`deflate`/`br` plus `identity`; `q=0` refusals dropped, an offer left with nothing usable collapses to `identity`) on injection-eligible flows only — a `$csp`-only verdict no longer qualifies since it is a response-HEAD transform. `decideResponse` parses `content-encoding`: exactly one supported coding (a bare `identity` folds away) plans `buffer-inject` carrying the codec; layered chains and unknown codings still skip `encoded`. `bufferAndInject` decodes bounded (`maxOutputLength: MAX_HTML_BUFFER` — the 512 KiB cap holds on the decompressed side), splices the injection into the plaintext, re-encodes under the same codec, restamps `content-length`, and leaves `content-encoding` honest. Any codec failure or a decompression past the cap flushes the untouched wire bytes byte-identically (`inject-skip` `error`/`overflow`) — injection is an enhancement, never a reason to 502.
+- **Where:** `packages/https-filter/src/pipeline/response.ts` (`BodyCodec`/`BODY_CODECS`/`parseContentEncoding`/`decodeBody`/`encodeBody`, `ResponsePlan.contentEncoding`), `packages/https-filter/src/proxy/httpRelay.ts` (the offer narrowing and the decode → splice → re-encode 'end' handler).
+- **Verify:** `response.test.ts` — the codec gate matrix (single supported codings buffer with the codec named, `zstd`/layered chains still skip `encoded`, identity folds) plus `decodeBody`/`encodeBody` round-trips, the `ERR_BUFFER_TOO_LARGE` decompression bound, and corrupt-input throws; `filterProxy.mitm.test.ts` — gzip/deflate/br bodies arrive at the client compressed AND injected with an honest `content-length`, a corrupt gzip body flushes byte-identical, `zstd` skips `encoded`, and the forwarded offer narrows to the decodable subset only on document-eligible flows.
+
+### 109. `text/plain` and absent content-types never received injection — closed by a bounded markup sniff
+
+- **What:** `decideResponse` widens the buffer gate: absent or `text/plain` content-types (declared binary types are never sniffed) take `buffer-inject` with `sniffHtml` set; `text/html` keeps the no-sniff fast path. Before any splice, `looksLikeHtml` reads at most the first 4 KiB of the buffered body — a NUL byte anywhere in the window vetoes as binary, leading whitespace and `<!-- -->` comments are skipped, then the body must open with `<!doctype html`, `<html`, `<head`, or `<body` (case-insensitive, name-bounded — `<header` and `<bodyguard` do not count). A failed sniff emits `inject-skip` `not-html` and flushes the body byte-identical; only the sniff gate changed — the payload still has to exist and the budget still binds.
+- **Where:** `packages/https-filter/src/pipeline/response.ts` (`looksLikeHtml`/`HTML_SNIFF_LIMIT`, the `markupGate`/`sniffHtml` plan fields, the `not-html` event reason), `packages/https-filter/src/proxy/httpRelay.ts` (the sniff call ahead of `injectHtml`).
+- **Verify:** `response.test.ts` — the sniff-gated `decideResponse` matrix (absent/`text/plain` buffer with `sniffHtml`, `text/html` skips the flag, binary types never sniff) plus `looksLikeHtml` unit cases (every opener, name boundaries, comment skipping, the NUL veto, JSON/zip/PNG rejections); `filterProxy.mitm.test.ts` — an absent-content-type page and a `text/plain` HTML page both inject end-to-end, while `text/plain` + NUL binary passes through with the skip counted.
+
+### 110. A `default-src` carrying `'strict-dynamic'` got no synthesized `script-src` — closed by always cloning the fallback
+
+- **What:** `widenChain` drops the `strictDynamicApplies` gate (and the `STRICT_DYNAMIC` constant): a `default-src` with no `script-src` now synthesizes the base directive unconditionally — the style clone was already unconditional. The clone inherits `'strict-dynamic'` as inert noise: CSP3 engines ignore `'unsafe-inline'` under it either way, while a CSP2-level engine — which honors `'unsafe-inline'` and has never heard of `'strict-dynamic'` — gets the only admit the widen can offer it. Skipping the clone denied the widen to exactly the engines it could still reach.
+- **Where:** `packages/https-filter/src/pipeline/response.ts` (`widenChain` signature/body, `rewriteCspForInjection` call sites).
+- **Verify:** `response.test.ts` — `"default-src 'self' 'strict-dynamic'"` now emits `script-src 'self' 'strict-dynamic' 'unsafe-inline'` alongside the unchanged `style-src` clone; the `-elem`-level and already-`unsafe-inline` cases keep their behavior.
+
+### 111. The `</head` injection anchor was a first-literal match — closed by a bounded context-aware scan
+
+- **What:** `findTagInText` resolves anchors against text context instead of raw bytes: `<!--` spans skip to `-->`; `<script` skips its open tag (quotes honored via `openTagEnd`) then the element body to the first `</script` — exactly where a real HTML parser ends script text, JS string quoting notwithstanding; every other tag advances past its `>` so `"</head>"` inside a quoted attribute can't anchor; a stray `<` not opening a tag is inert text. An unterminated script, comment, or tag ends the scan unfound — the ambiguity posture — and `resolveAnchor` then falls back to the first literal `findTag` hit, the pre-flag behavior, never worse. The chain order (`</head` → `<head>` → `</body` → `</html`) and latin1 byte-offset accounting are unchanged.
+- **Where:** `packages/https-filter/src/pipeline/response.ts` (`findTagInText`, `tagAt`, `resolveAnchor`).
+- **Verify:** `response.test.ts` `injectHtml — context-aware anchors` — `console.log("</head")` in an inline script, `</head` inside `<!-- -->`, and `"</head"` inside a quoted attribute all splice at the real closing head tag; an unterminated script takes the literal fallback; the `afterOpen` `<head` anchor skips a `"<head>"` inside script text.
+
+### 113. A throwing `onEvent` listener could escape the response pipeline — closed by `emitEvent` log-and-swallow
+
+- **What:** every emission site in `httpRelay.ts` now routes through `emitEvent(emit, event)` — a try/catch wrapper that logs (`console.warn`) and swallows. Emits stay placed post-mutation — the 'end' handler's catch counts `inject-skip`, so a listener throw inside the mutation try would still misaccount — but a listener failure can no longer escape the stream handler into the byte path: no wedge, no 502, no spurious skip, and the response still completes. All four event kinds (`response-block`, `inject-skip`, `csp-rewrite`, `html-inject`) ride it.
+- **Where:** `packages/https-filter/src/proxy/httpRelay.ts` (`emitEvent`, replacing every `emit?.()` site).
+- **Verify:** `filterProxy.mitm.test.ts` — a relay driven with an unconditionally throwing listener still returns 200 + the injected body, the listener provably fired, the response is not destroyed, and the engine stays alive (`console.warn` spy-covered).
+
+### 114. Hit hosts paid a fresh merge over the whole global bucket — closed by precomputed global candidate sets
+
+- **What:** the merge split into `collectEntries` (classify entries into candidate vs exception sets) and `finalizePayload` (apply exceptions, freeze). Globals carrying no `~` exclusions and no `:matches-path` scope (`isUnconditionalGlobal`) classify ONCE at index build into per-collection ordered, deduped item lists; every conditional global records an `emitIndex` — the count of unconditional items of its collection that precede it in `globalEntries` order. `globalSharedPayload` still answers the domainless fast path unchanged. A host WITH domain/entity hits (or a domainless host a `~` veto knocks off the fast path) now classifies only its own hits plus the `globalConditional` entries not vetoed on that host — O(hits + conditional globals) of entry work — and `emitPlanned` splices each plan item back at its recorded slot: the emitted candidate stream is byte-identical to the old single-bag merge's order (host candidates first, then globals in insertion order), exceptions union across both sides, and first-non-vetoed-wins dedupe holds across the partition.
+- **Where:** `packages/core/src/cosmetic/cosmeticIndex.ts` (`isUnconditionalGlobal`/`store`, `CandidateSets`/`collectEntries`/`finalizePayload`, the unconditional item lists + `condPlan`/`emitIndex`, `emitPlanned`, the `lookupHost` merge tail).
+- **Verify:** `cosmeticIndex.test.ts` `forHost — shared global payload + merged hosts (flag 114)` — domainless hosts return the identical frozen object (`toBe`), hit hosts merge host-first over globals and cache that payload, a `~` exclusion vetoes only its own host, a host `#@#` cancels a global selector on its host only, a conditional global splices into the unconditional stream at its original position (order fidelity, not partition order), and style/scriptlet order + dedupe survive the overlay; the whole pre-existing `forHost` suite passes unchanged.
 
 ### 101. An app-quit orphaned engine persists until the next `stop()` — closed by a `BM_PARENT_PID` parent-death watchdog on the spawned engine
 

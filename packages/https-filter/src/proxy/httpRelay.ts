@@ -38,15 +38,20 @@ import http2 from 'node:http2';
 import type { Readable } from 'node:stream';
 import tls from 'node:tls';
 import {
+  BODY_CODECS,
   buildInjectionText,
   decideResponse,
+  decodeBody,
   deleteHeaderValue,
+  encodeBody,
   hasInjectableContent,
   injectHtml,
+  looksLikeHtml,
   MAX_HTML_BUFFER,
   mergeCspAdditionsIntoHeaders,
   setHeaderValue,
   widenInjectionCspHeaders,
+  type ResponseEvent,
   type ResponsePipelineInput,
   type ResponsePlan,
 } from '../pipeline/response.js';
@@ -154,6 +159,28 @@ function failClosed(res: RelayResponse, destroy: () => void): void {
   destroy();
 }
 
+/**
+ * `onEvent` listener isolation (flag 113): events are diagnostics, never a
+ * verdict — a throwing listener inside a stream 'end'/'response' handler
+ * must not escape into the byte path. Wraps the sink once per callsite so
+ * emits can stay placed post-mutation (accounting exact) AND a listener
+ * failure can never wedge or 502 a flow. Log-and-swallow is the only honest
+ * answer that keeps both.
+ */
+function emitEvent(
+  emit: ((event: ResponseEvent) => void) | undefined,
+  event: ResponseEvent,
+): void {
+  if (emit === undefined) {
+    return;
+  }
+  try {
+    emit(event);
+  } catch (err) {
+    console.warn('[httpRelay] response-event listener threw:', err);
+  }
+}
+
 /** The absolute URL a verdict runs on — preserves absolute-form targets. */
 export function absoluteRequestUrl(
   req: { url: string; host: string },
@@ -204,26 +231,22 @@ function requestAuthority(req: TerminatedRequest): string {
 }
 
 /**
- * Does this flow warrant `accept-encoding: identity` upstream? Buffered
- * injection needs decoded bytes, so any request that COULD produce a
- * rewritten response pays the identity strip: the host carries injectable
- * cosmetics, the verdict holds a `$csp` transform (the response head gets
- * rewritten and a page on that host may still be injectable), or the client
- * itself asked for `text/html`. The trade is upstream bandwidth — no
- * gzip/br on those flows; AdGuard/mitmproxy normalize the same way and an
- * in-proxy decompress/recompress is flag-worthy, not a correctness bug.
- * This only ever runs for terminated relays — CONNECT-tunnel and raw-SNI
- * flows never reach `requestHeaders`, so their encoding is untouched.
+ * Does this flow warrant a decodable `accept-encoding` upstream? Buffered
+ * injection needs bytes the pipeline can read, so any request that COULD
+ * produce a rewritten body gets its offer intersected to the codecs it
+ * supports (flag 108): the host carries injectable cosmetics, or the client
+ * itself asked for `text/html`. A `$csp`-only verdict no longer qualifies —
+ * it is a response-HEAD transform untouched by body coding. This only ever
+ * runs for terminated relays — CONNECT-tunnel and raw-SNI flows never reach
+ * `requestHeaders`, so their encoding is untouched.
  */
-function wantsIdentityEncoding(req: TerminatedRequest, ctx: ResponsePipelineInput): boolean {
+function wantsDecodableEncoding(req: TerminatedRequest, ctx: ResponsePipelineInput): boolean {
   // A request that declared itself a non-document type (`sec-fetch-dest:
   // image`, `script`, …) can never receive an injection — decideResponse
   // gates the buffer path on exactly this predicate — so an image/script
-  // fetch on an injectable host must not pay the identity strip for
-  // nothing. `$csp` is a header transform unaffected by body encoding, and
-  // an `accept: text/html` offer from a typed image request names its
-  // error pages, not a render context. `undefined` (untyped) stays
-  // eligible.
+  // fetch on an injectable host must not pay the narrow for nothing. An
+  // `accept: text/html` offer from a typed image request names its error
+  // pages, not a render context. `undefined` (untyped) stays eligible.
   if (
     ctx.requestContentType !== undefined &&
     ctx.requestContentType !== 'document' &&
@@ -238,28 +261,60 @@ function wantsIdentityEncoding(req: TerminatedRequest, ctx: ResponsePipelineInpu
   if (payload !== undefined && hasInjectableContent(payload)) {
     return true;
   }
-  if (ctx.verdict.transforms.csp !== undefined) {
-    return true;
-  }
   const accept = req.headers.accept;
   const acceptValue = Array.isArray(accept) ? accept[0] : accept;
   return typeof acceptValue === 'string' && acceptValue.toLowerCase().includes('text/html');
 }
 
 /**
+ * The `accept-encoding` forwarded on injectable flows (flag 108): the
+ * client's offer intersected with the codecs the response pipeline can
+ * decompress — `gzip`/`deflate`/`br` plus `identity` — `q=0`-refused
+ * entries dropped (forwarding a refusal would lie). An offer left with
+ * nothing usable collapses to `identity`: still honest (identity is always
+ * acceptable) and the only way the body stays decodable when the client's
+ * codecs are ones the pipeline can't read.
+ */
+function decodableEncodingOffer(headers: IncomingHttpHeaders): string {
+  const raw = headers['accept-encoding'];
+  const values = Array.isArray(raw) ? raw : raw !== undefined ? [raw] : [];
+  const offered: string[] = [];
+  for (const value of values) {
+    for (const part of value.split(',')) {
+      const token = part.trim();
+      if (token === '') {
+        continue;
+      }
+      const semi = token.indexOf(';');
+      const name = (semi < 0 ? token : token.slice(0, semi)).trim().toLowerCase();
+      // `q=0` (or `q=0.0`) refuses the coding — it must not count as offered.
+      const params = semi < 0 ? '' : token.slice(semi);
+      if (/q\s*=\s*0(?:\.0+)?(?:\s*;|\s*$)/.test(params)) {
+        continue;
+      }
+      if (name === 'identity' || BODY_CODECS.has(name)) {
+        offered.push(token);
+      }
+    }
+  }
+  return offered.length > 0 ? offered.join(', ') : 'identity';
+}
+
+/**
  * Request headers for the upstream dial: pseudo-headers (`:authority` etc.),
  * hop-by-hop fields, and `Connection`-listed names removed. The forwarded
  * authority is rewritten to the evaluated one — see {@link requestAuthority}.
- * When the response pipeline could rewrite (injectable host / `$csp` /
- * html-accepting client), `accept-encoding` collapses to `identity` — the
- * existing key is skipped whatever its case so the dict never carries two.
+ * When the response pipeline could rewrite the body (injectable host /
+ * html-accepting client), `accept-encoding` collapses to the decodable
+ * subset — the existing key is skipped whatever its case so the dict never
+ * carries two.
  */
 function requestHeaders(
   req: TerminatedRequest,
   upstreamH2: boolean,
   response?: ResponsePipelineInput,
 ): OutgoingHttpHeaders {
-  const forceIdentity = response !== undefined && wantsIdentityEncoding(req, response);
+  const decodable = response !== undefined && wantsDecodableEncoding(req, response);
   const connectionListed = connectionListedHeaders(req.headers);
   const out: OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
@@ -269,14 +324,14 @@ function requestHeaders(
       HOP_BY_HOP_HEADERS.has(lower) ||
       connectionListed.has(lower) ||
       lower === 'host' || // authority rewritten below — never copied verbatim
-      (forceIdentity && lower === 'accept-encoding') // replaced below
+      (decodable && lower === 'accept-encoding') // replaced below
     ) {
       continue;
     }
     out[name] = value as string | string[];
   }
-  if (forceIdentity) {
-    out['accept-encoding'] = 'identity';
+  if (decodable) {
+    out['accept-encoding'] = decodableEncodingOffer(req.headers);
   }
   const authority = requestAuthority(req);
   if (upstreamH2) {
@@ -399,7 +454,7 @@ function bufferAndInject(
     }
     body.pipe(target);
     if (cspChanged > 0) {
-      emit?.({ kind: 'csp-rewrite', host: pipeline.host, count: cspChanged });
+      emitEvent(emit, { kind: 'csp-rewrite', host: pipeline.host, count: cspChanged });
     }
   };
 
@@ -407,7 +462,7 @@ function bufferAndInject(
     chunks.push(chunk);
     buffered += chunk.length;
     if (buffered > MAX_HTML_BUFFER) {
-      emit?.({ kind: 'inject-skip', host: pipeline.host, reason: 'overflow' });
+      emitEvent(emit, { kind: 'inject-skip', host: pipeline.host, reason: 'overflow' });
       flushRaw();
     }
   };
@@ -424,75 +479,106 @@ function bufferAndInject(
       return;
     }
     flushed = true; // 'end' wins — no 'data' can follow it.
-    // Emits stay OUTSIDE the mutation try: the catch counts `inject-skip`,
-    // so a listener throw (the ledger is a client-named sink) after a
-    // delivered injection would misaccount a spurious skip — and the
-    // post-catch placement keeps emit() throws from ever reaching the
-    // byte path.
-    let outcome: 'injected' | 'empty' | 'failed' = 'failed';
+    // Emits stay OUTSIDE the mutation try AND ride through emitEvent's
+    // try/catch (flag 113): the catch counts `inject-skip`, so a listener
+    // throw after a delivered injection would miscount as a spurious skip
+    // inside the try — and unwrapped it could escape the stream's 'end'
+    // handler into the byte path entirely.
+    let outcome: 'injected' | 'empty' | 'overflow' | 'not-html' | 'failed' = 'failed';
     let cspChanged = 0;
     let text: ReturnType<typeof buildInjectionText> | undefined;
     let injected: { style: boolean; script: boolean } | undefined;
     try {
       // Inside the try: a concat failure (alloc) is an injector error like
       // any other — outside it, it would escape the handler uncaught.
-      const whole = Buffer.concat(chunks, buffered);
-      text = buildInjectionText(plan.payload as NonNullable<ResponsePlan['payload']>);
-      const result = injectHtml(whole, {
-        styleText: text.styleText,
-        scriptText: text.scriptText,
-      });
-      if (!result.injected.style && !result.injected.script) {
-        outcome = 'empty';
+      const wire = Buffer.concat(chunks, buffered);
+      // The codec path (flag 108): a supported content-coding decodes
+      // before the splice and re-encodes under the same codec on success.
+      // A decode past the buffer cap or any codec error throws — the
+      // untouched wire bytes flush below, byte-identical.
+      const whole =
+        plan.contentEncoding !== undefined ? decodeBody(plan.contentEncoding, wire) : wire;
+      if (plan.sniffHtml === true && !looksLikeHtml(whole)) {
+        // Absent/`text/plain` label and the buffered prefix isn't markup —
+        // the sniff gates the splice so a mislabeled binary or genuinely
+        // plain-text body passes through untouched (flag 109).
+        outcome = 'not-html';
       } else {
-        // The head has not crossed — mutate the fresh `responseHeaders()`
-        // dict before `res.begin` copies it onto the wire: widen existing
-        // CSP to admit the injected markup (only ever a widening, ledgered
-        // per change), merge any `$csp` additions, and re-publish the
-        // honest content-length.
-        const head = responseHeaders(headers);
-        const widened = widenInjectionCspHeaders(head);
-        const merged = mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
-        deleteHeaderValue(head, 'content-length');
-        setHeaderValue(head, 'content-length', String(result.body.length));
-        let target;
-        try {
-          target = res.begin(status, head);
-        } catch {
-          // Still a terminal path — the slot must go back before the
-          // fail-closed teardown or the counter leaks toward the cap.
-          releaseSlot();
-          failClosed(res, kill);
-          return;
+        text = buildInjectionText(plan.payload as NonNullable<ResponsePlan['payload']>);
+        const result = injectHtml(whole, {
+          styleText: text.styleText,
+          scriptText: text.scriptText,
+        });
+        if (!result.injected.style && !result.injected.script) {
+          outcome = 'empty';
+        } else {
+          const out =
+            plan.contentEncoding !== undefined
+              ? encodeBody(plan.contentEncoding, result.body)
+              : result.body;
+          // The head has not crossed — mutate the fresh `responseHeaders()`
+          // dict before `res.begin` copies it onto the wire: widen existing
+          // CSP to admit the injected markup (only ever a widening, ledgered
+          // per change), merge any `$csp` additions, and re-publish the
+          // honest content-length. `content-encoding` rides through
+          // verbatim — the same codec wraps the new bytes.
+          const head = responseHeaders(headers);
+          const widened = widenInjectionCspHeaders(head);
+          const merged = mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
+          deleteHeaderValue(head, 'content-length');
+          setHeaderValue(head, 'content-length', String(out.length));
+          let target;
+          try {
+            target = res.begin(status, head);
+          } catch {
+            // Still a terminal path — the slot must go back before the
+            // fail-closed teardown or the counter leaks toward the cap.
+            releaseSlot();
+            failClosed(res, kill);
+            return;
+          }
+          target.end(out);
+          cspChanged = widened + merged;
+          injected = result.injected;
+          outcome = 'injected';
         }
-        target.end(result.body);
-        cspChanged = widened + merged;
-        injected = result.injected;
-        outcome = 'injected';
       }
-    } catch {
-      outcome = 'failed';
+    } catch (err) {
+      // A decompress past the buffer cap is the overflow bound landing on
+      // the decoded size; any other throw is an injector/codec error.
+      outcome =
+        (err as { code?: string } | null | undefined)?.code === 'ERR_BUFFER_TOO_LARGE'
+          ? 'overflow'
+          : 'failed';
     }
     if (outcome !== 'injected') {
       // The payload resolved to nothing emittable (defensive — the plan
-      // gate already checks) or the injector threw: injection is an
-      // enhancement — its failure flushes the untouched body, never a 502
-      // for a page the upstream served fine. The 'end' latch must be
-      // released first — `flushed` was set above — or flushRaw() no-ops
-      // and the client hangs with the head unsent.
-      emit?.({
+      // gate already checks), the body wasn't markup after all, or the
+      // injector/codec threw: injection is an enhancement — its failure
+      // flushes the untouched body, never a 502 for a page the upstream
+      // served fine. The 'end' latch must be released first — `flushed`
+      // was set above — or flushRaw() no-ops and the client hangs with
+      // the head unsent.
+      emitEvent(emit, {
         kind: 'inject-skip',
         host: pipeline.host,
-        reason: outcome === 'empty' ? 'empty' : 'error',
+        reason:
+          outcome === 'empty'
+            ? 'empty'
+            : outcome === 'overflow'
+              ? 'overflow'
+              : outcome === 'not-html'
+                ? 'not-html'
+                : 'error',
       });
       flushed = false;
       flushRaw();
       return;
     }
     if (cspChanged > 0) {
-      emit?.({ kind: 'csp-rewrite', host: pipeline.host, count: cspChanged });
+      emitEvent(emit, { kind: 'csp-rewrite', host: pipeline.host, count: cspChanged });
     }
-    emit?.({
+    emitEvent(emit, {
       kind: 'html-inject',
       host: pipeline.host,
       style: (injected as NonNullable<typeof injected>).style,
@@ -549,7 +635,11 @@ function serveResponse(
 
   if (plan.action === 'block') {
     respondBlocked(res, plan.blockRule ?? null);
-    emit?.({ kind: 'response-block', host: pipeline?.host ?? '', rule: plan.blockRule ?? null });
+    emitEvent(emit, {
+      kind: 'response-block',
+      host: pipeline?.host ?? '',
+      rule: plan.blockRule ?? null,
+    });
     // Drain the unwanted body — the client already has its answer; the
     // upstream socket is per-request and dies when the stream resolves.
     body.resume();
@@ -560,7 +650,7 @@ function serveResponse(
   }
 
   if (plan.injectSkipped !== undefined) {
-    emit?.({
+    emitEvent(emit, {
       kind: 'inject-skip',
       host: pipeline?.host ?? '',
       reason: plan.injectSkipped,
@@ -601,7 +691,7 @@ function serveResponse(
   body.once('aborted', () => res.destroy());
   body.pipe(target);
   if (cspChanged > 0) {
-    emit?.({ kind: 'csp-rewrite', host: pipeline?.host ?? '', count: cspChanged });
+    emitEvent(emit, { kind: 'csp-rewrite', host: pipeline?.host ?? '', count: cspChanged });
   }
 }
 
