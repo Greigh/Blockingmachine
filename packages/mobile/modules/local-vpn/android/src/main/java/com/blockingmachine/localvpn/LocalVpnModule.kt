@@ -223,6 +223,7 @@ class LocalVpnModule : Module() {
         "dnsDroppedUnknown" to VpnFilterService.dnsStats.droppedUnknown.get(),
         "dnsTimeouts" to VpnFilterService.dnsStats.timedOut.get(),
         "dnsEvictions" to VpnFilterService.dnsStats.evicted.get(),
+        "dnsReceiveErrors" to VpnFilterService.dnsStats.receiveErrors.get(),
         "proxyRunning" to PacProxyService.running.get(),
         "proxyPort" to PacProxyService.boundPort,
         "proxyAllowed" to PacProxyService.allowedCount.get(),

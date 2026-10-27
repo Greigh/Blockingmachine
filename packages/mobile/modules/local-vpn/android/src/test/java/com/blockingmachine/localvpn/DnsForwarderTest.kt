@@ -4,12 +4,14 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.PortUnreachableException
 import java.net.SocketAddress
 import java.net.SocketException
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +44,9 @@ class DnsForwarderTest {
     private val closedFlag = AtomicBoolean(false)
     var failSend = false
 
+    /** The next N receive() calls throw PortUnreachable — an ICMP flap on the connected socket, not teardown. */
+    val failReceives = AtomicInteger(0)
+
     override fun connect(address: InetAddress?, port: Int) {
       connectedTo.set(InetSocketAddress(address, port))
     }
@@ -59,6 +64,10 @@ class DnsForwarderTest {
     override fun receive(p: DatagramPacket) {
       while (true) {
         if (closedFlag.get()) throw SocketException("Socket is closed")
+        if (failReceives.get() > 0) {
+          failReceives.decrementAndGet()
+          throw PortUnreachableException("ICMP port unreachable")
+        }
         val d = inbox.poll(25, TimeUnit.MILLISECONDS) ?: continue
         d.copyInto(p.data, p.offset)
         p.length = d.size
@@ -103,10 +112,23 @@ class DnsForwarderTest {
     rawDns = dnsBody(txid, tag),
   )
 
-  /** 13 bytes: txid + minimal header zeros + a marker byte for identity. */
-  private fun dnsBody(txid: Int, tag: Byte): ByteArray =
-    byteArrayOf((txid ushr 8).toByte(), txid.toByte()) +
-      ByteArray(10) + byteArrayOf(tag)
+  /**
+   * A minimal real DNS message carrying one question — a 1-char QNAME label
+   * holding [tag] as the body identity marker the asserts read back at index
+   * 13, QTYPE A, QCLASS IN. The question must be well-formed: the demux
+   * verifies a reply's question echoes the pending query's before it
+   * restores the client txid.
+   */
+  private fun dnsBody(txid: Int, tag: Byte): ByteArray = byteArrayOf(
+    (txid ushr 8).toByte(), txid.toByte(),
+    0x01, 0x00,                     // flags: RD
+    0x00, 0x01,                     // QDCOUNT = 1
+    0x00, 0x00, 0x00, 0x00,         // ANCOUNT, NSCOUNT
+    0x00, 0x00,                     // ARCOUNT
+    0x01, tag, 0x00,                // QNAME: one 1-byte label + root
+    0x00, 0x01,                     // QTYPE A
+    0x00, 0x01,                     // QCLASS IN
+  )
 
   /** A scripted upstream reply for [upstreamId] carrying [tag] as marker. */
   private fun reply(upstreamId: Int, tag: Byte): ByteArray = dnsBody(upstreamId, tag)
@@ -164,7 +186,7 @@ class DnsForwarderTest {
     var (q, dns) = emitted.poll()
     assertTrue(q === qb)
     assertEquals(0x2222, txidOf(dns)) // client's own txid restored
-    assertEquals(0x4B.toByte(), dns[12]) // rest of the body verbatim
+    assertEquals(0x4B.toByte(), dns[13]) // rest of the body verbatim (tag is the QNAME char)
 
     sock.inbox += reply(upA, 0x4A)
     await { emitted.isNotEmpty() }
@@ -172,7 +194,7 @@ class DnsForwarderTest {
     q = out.first; dns = out.second
     assertTrue(q === qa)
     assertEquals(0x1111, txidOf(dns))
-    assertEquals(0x4A.toByte(), dns[12])
+    assertEquals(0x4A.toByte(), dns[13])
 
     await { f.pendingCount() == 0 }
     assertEquals(0L, stats.droppedUnknown.get())
@@ -256,5 +278,53 @@ class DnsForwarderTest {
     f.forward(query(0x2222, 0x4B))
     assertEquals(1, sock.sent.size) // only the pre-close query ever left
     f.close() // idempotent
+  }
+
+  @Test
+  fun `transient receive errors are counted and the demux keeps working`() {
+    // An ICMP port-unreachable surfacing on the connected socket (upstream
+    // refused a datagram, LAN peer forging ICMP) must not kill the only
+    // receive loop — before the fix this exited the demux permanently while
+    // send() kept working: a silent device-wide DNS outage.
+    sock.failReceives.set(2)
+    val f = forwarder()
+    val qa = query(0x1111, 0x4A)
+    f.forward(qa)
+    val upA = txidOf(sock.sent.single())
+
+    sock.inbox += reply(upA, 0x4A)
+    await { emitted.isNotEmpty() }
+    val (q, dns) = emitted.poll()
+    assertTrue(q === qa)
+    assertEquals(0x1111, txidOf(dns))
+    assertEquals(2L, stats.receiveErrors.get())
+    assertEquals(0L, stats.droppedUnknown.get())
+    f.close()
+  }
+
+  @Test
+  fun `a reply whose question differs from the pending query drops without consuming the slot`() {
+    val f = forwarder()
+    val qa = query(0x1111, 0x4A)
+    f.forward(qa)
+    val upA = txidOf(sock.sent.single())
+
+    // Txid collision: the rewritten id matches but the question doesn't —
+    // a forgery or a pathological upstream. The slot must survive for the
+    // real reply rather than being consumed by the wrong answer.
+    val forged = reply(upA, 0x4A)
+    forged[13] = 0x7E // different QNAME char — same txid, different question
+    sock.inbox += forged
+    await { stats.droppedUnknown.get() == 1L }
+    assertEquals(1, f.pendingCount())
+    assertTrue(emitted.isEmpty())
+
+    sock.inbox += reply(upA, 0x4A) // the genuine reply, late
+    await { emitted.isNotEmpty() }
+    val (q, dns) = emitted.poll()
+    assertTrue(q === qa)
+    assertEquals(0x1111, txidOf(dns))
+    await { f.pendingCount() == 0 }
+    f.close()
   }
 }

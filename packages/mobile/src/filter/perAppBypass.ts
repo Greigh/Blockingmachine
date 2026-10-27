@@ -26,6 +26,15 @@ export function isValidPackageName(name: string): boolean {
   return name.length > 0 && name.length <= 255 && PACKAGE_NAME_RE.test(name);
 }
 
+/**
+ * The stored set after the self-exclusion checkbox flips — computed on the
+ * persisted list, so toggling never depends on (or clobbers) the free-text
+ * draft the user may still be editing.
+ */
+export function toggledSelfList(apps: readonly string[], self: string = SELF_PACKAGE): string[] {
+  return apps.includes(self) ? apps.filter((a) => a !== self) : [...apps, self];
+}
+
 export interface ParsedPackageList {
   /** Valid, de-duplicated package names in input order. */
   packages: string[];

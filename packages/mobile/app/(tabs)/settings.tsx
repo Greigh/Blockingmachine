@@ -35,7 +35,7 @@ import {
   type HubCa,
 } from '../../src/filter/httpsCapture';
 import { nativeRulesPath } from '../../src/filter/ruleset';
-import { parsePackageList, SELF_PACKAGE } from '../../src/filter/perAppBypass';
+import { parsePackageList, SELF_PACKAGE, toggledSelfList } from '../../src/filter/perAppBypass';
 import { ActionButton, Card, Pill, SectionTitle } from '../../src/components/ui';
 import { describeError, UserError, type FriendlyError } from '../../src/errors';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
@@ -423,13 +423,13 @@ function PerAppBypassCard() {
     });
   }, []);
 
-  const save = async (next: string[]) => {
+  const save = async (next: string[], opts?: { syncDraft?: boolean }) => {
     setBusy(true);
     setErr(null);
     try {
       const stored = await LocalVpn.setDisallowedApps(next);
       setApps(stored);
-      setDraft(stored.join(', '));
+      if (opts?.syncDraft !== false) setDraft(stored.join(', '));
       haptics.success();
     } catch (e) {
       haptics.error();
@@ -447,11 +447,11 @@ function PerAppBypassCard() {
 
   const toggleSelf = () => {
     if (apps === null) return;
-    const next = apps.includes(SELF_PACKAGE)
-      ? apps.filter((a) => a !== SELF_PACKAGE)
-      : [...apps, SELF_PACKAGE];
     setRejected([]);
-    void save(next);
+    // The toggle acts on the stored set, and a dirty draft is the user's
+    // in-progress edit — save without clobbering it. A draft still mirroring
+    // the stored set tracks the toggle so the box doesn't go stale.
+    void save(toggledSelfList(apps), { syncDraft: draft === apps.join(', ') });
   };
 
   const selfExcluded = !!apps?.includes(SELF_PACKAGE);

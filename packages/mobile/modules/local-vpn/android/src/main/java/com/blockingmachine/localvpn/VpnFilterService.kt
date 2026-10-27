@@ -19,6 +19,7 @@ import com.blockingmachine.localvpn.tcp.TcpStats
 import com.blockingmachine.localvpn.tcp.UdpDispatcher
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.Socket
@@ -224,42 +225,57 @@ class VpnFilterService : VpnService() {
     val buf = ByteArray(32767)
     // Flag 130: one shared upstream socket whose single receive loop demuxes
     // replies to waiting queries by rewritten txid — the per-query receive()
-    // this replaces cross-delivered concurrent replies.
-    val forwarder = DnsForwarder(
-      upstream = upstream,
-      emit = { q, dns -> emit(DnsPacket.buildResponse(q, blocked = false, relay = dns)) },
-      protect = { s: DatagramSocket -> protect(s) },
-      parentScope = cs,
-      stats = dnsStats,
-    )
+    // this replaces cross-delivered concurrent replies. Construction is
+    // guarded: the forwarder's ctor dials (socket + protect + connect), and
+    // any throw escaping this coroutine would surface as an uncaught
+    // exception — a crash, and under START_STICKY a crash loop. A tunnel
+    // that can't build its pipeline takes the establish()-failure posture:
+    // log, free what got built, honest shutdown.
+    var forwarder: DnsForwarder? = null
+    try {
+      forwarder = DnsForwarder(
+        upstream = upstream,
+        emit = { q, dns -> emit(DnsPacket.buildResponse(q, blocked = false, relay = dns)) },
+        protect = { s: DatagramSocket -> requireProtected(s) },
+        parentScope = cs,
+        stats = dnsStats,
+      )
 
-    val hub = hubHost
-    if (hub != null) {
-      // :80/:443 → the hub engine (PROXY-v2); every other TCP port → a
-      // protected pass-through to the original destination; UDP → the
-      // datagram relay (without it the broad routes black-hole everything
-      // that isn't DNS or QUIC).
-      val capture = TcpDispatcher(
-        emit = emit,
-        upstreamFactory = { key -> HubUpstream(key, hub, HUB_DATA_PORT, { s: Socket -> protect(s) }) },
-      )
-      val relay = TcpDispatcher(
-        emit = emit,
-        upstreamFactory = { key -> DirectUpstream(key, { s: Socket -> protect(s) }) },
-        portFilter = { true }, // capture claims :80/:443 first — this is the remainder
-      )
-      val udp = UdpDispatcher(
-        emit = emit,
-        protect = { s: DatagramSocket -> protect(s) },
-      )
-      captureDispatcher = capture
-      relayDispatcher = relay
-      udpDispatcher = udp
-      captureStats = capture.stats
-      captureRunning.set(true)
-      startTicker()
-      Log.i(TAG, "hub capture armed — TCP :80/:443 → $hub:$HUB_DATA_PORT, UDP relayed")
+      val hub = hubHost
+      if (hub != null) {
+        // :80/:443 → the hub engine (PROXY-v2); every other TCP port → a
+        // protected pass-through to the original destination; UDP → the
+        // datagram relay (without it the broad routes black-hole everything
+        // that isn't DNS or QUIC).
+        val capture = TcpDispatcher(
+          emit = emit,
+          upstreamFactory = { key -> HubUpstream(key, hub, HUB_DATA_PORT, { s: Socket -> requireProtected(s) }) },
+        )
+        val relay = TcpDispatcher(
+          emit = emit,
+          upstreamFactory = { key -> DirectUpstream(key, { s: Socket -> requireProtected(s) }) },
+          portFilter = { true }, // capture claims :80/:443 first — this is the remainder
+        )
+        val udp = UdpDispatcher(
+          emit = emit,
+          protect = { s: DatagramSocket -> requireProtected(s) },
+        )
+        captureDispatcher = capture
+        relayDispatcher = relay
+        udpDispatcher = udp
+        captureStats = capture.stats
+        captureRunning.set(true)
+        startTicker()
+        Log.i(TAG, "hub capture armed — TCP :80/:443 → $hub:$HUB_DATA_PORT, UDP relayed")
+      }
+    } catch (e: Exception) {
+      Log.e(TAG, "tunnel pipeline setup failed — shutting down: $e")
+      runCatching { forwarder?.close() }
+      shutdown() // also closes any dispatchers the arming already published
+      return
     }
+    // Non-null past the catch — the try assigns it or throws into the return.
+    val fwd = checkNotNull(forwarder)
 
     try {
       while (cs.isActive) {
@@ -300,11 +316,25 @@ class VpnFilterService : VpnService() {
         // Register with the demux and send — the receive loop relays the
         // answer back into the tunnel. A timeout/loss answers nothing, as
         // before: the client retransmits.
-        forwarder.forward(query)
+        fwd.forward(query)
       }
     } finally {
-      forwarder.close() // releases the shared socket + pending waiters
+      fwd.close() // releases the shared socket + pending waiters
     }
+  }
+
+  /**
+   * `VpnService.protect` returning false means the socket could NOT be
+   * exempted from the tunnel — the "protected" dial would route into the tun
+   * it serves and every upstream byte would loop. Fail the dial loudly
+   * instead of sending it down a black hole.
+   */
+  private fun requireProtected(s: DatagramSocket) {
+    if (!protect(s)) throw IOException("VpnService.protect() refused a DatagramSocket")
+  }
+
+  private fun requireProtected(s: Socket) {
+    if (!protect(s)) throw IOException("VpnService.protect() refused a Socket")
   }
 
   /** 100ms housekeeping for the dispatchers — retransmit-lite + idle reaps. */

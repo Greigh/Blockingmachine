@@ -14,6 +14,7 @@ export interface LocalVpnStatus {
   dnsDroppedUnknown: number;
   dnsTimeouts: number;
   dnsEvictions: number;
+  dnsReceiveErrors: number;
   proxyRunning: boolean;
   proxyPort: number;
   proxyAllowed: number;
@@ -61,6 +62,7 @@ const EMPTY_STATUS: LocalVpnStatus = {
   dnsDroppedUnknown: 0,
   dnsTimeouts: 0,
   dnsEvictions: 0,
+  dnsReceiveErrors: 0,
   proxyRunning: false,
   proxyPort: 0,
   proxyAllowed: 0,

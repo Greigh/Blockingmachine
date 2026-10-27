@@ -8,6 +8,7 @@ import {
   MAX_BYPASS_PACKAGES,
   parsePackageList,
   SELF_PACKAGE,
+  toggledSelfList,
 } from '../filter/perAppBypass';
 
 describe('isValidPackageName', () => {
@@ -80,5 +81,22 @@ describe('parsePackageList', () => {
     expect(packages).toEqual(['com.app0.x', 'com.app1.x', 'com.app2.x']);
     expect(rejected).toEqual(['com.app3.x', 'com.app4.x']);
     expect(MAX_BYPASS_PACKAGES).toBeGreaterThan(0);
+  });
+});
+
+describe('toggledSelfList', () => {
+  it('appends the self package when absent and removes it when present', () => {
+    expect(toggledSelfList(['com.one.app'])).toEqual(['com.one.app', SELF_PACKAGE]);
+    expect(toggledSelfList(['com.one.app', SELF_PACKAGE])).toEqual(['com.one.app']);
+    expect(toggledSelfList([])).toEqual([SELF_PACKAGE]);
+  });
+
+  it('does not duplicate self and leaves other entries untouched', () => {
+    const apps = [SELF_PACKAGE, 'com.two.app'];
+    // A double toggle restores the same SET — self may move to the end (the
+    // persisted store is an unordered StringSet anyway).
+    const twice = toggledSelfList(toggledSelfList(apps));
+    expect([...twice].sort()).toEqual([...apps].sort());
+    expect(new Set(twice).size).toBe(twice.length);
   });
 });
