@@ -4,8 +4,10 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.security.KeyChain
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.security.cert.CertificateFactory
 
 private const val VPN_CONSENT_REQUEST = 0xB10C
 
@@ -94,6 +96,64 @@ class LocalVpnModule : Module() {
           action = PacProxyService.ACTION_STOP
         }
       )
+      true
+    }
+
+    /**
+     * Arm hub HTTPS capture on the same tunnel: TCP :80/:443 is spliced to
+     * `<hubHost>:9294` (PROXY-v2), other TCP is relayed, QUIC is suppressed.
+     * Rides on ACTION_START — a running DNS filter keeps its ruleset.
+     */
+    AsyncFunction("startHttpsCapture") { hubHost: String ->
+      Intent(context, VpnFilterService::class.java).apply {
+        action = VpnFilterService.ACTION_START
+        putExtra(VpnFilterService.EXTRA_HUB_HOST, hubHost)
+      }.let {
+        context.startForegroundService(it)
+      }
+      true
+    }
+
+    /** Capture off, tunnel up — flows fall through to the pass-through relay. */
+    AsyncFunction("stopHttpsCapture") {
+      context.startService(
+        Intent(context, VpnFilterService::class.java).apply {
+          action = VpnFilterService.ACTION_STOP_CAPTURE
+        }
+      )
+      true
+    }
+
+    AsyncFunction("httpsCaptureStatus") {
+      val stats = VpnFilterService.captureStats
+      mapOf(
+        "running" to VpnFilterService.captureRunning.get(),
+        "flowsOpened" to (stats?.flowsOpened?.get() ?: 0L),
+        "flowsClosed" to (stats?.flowsClosed?.get() ?: 0L),
+        "quicDropped" to VpnFilterService.quicDropped.get(),
+      )
+    }
+
+    /**
+     * The legitimate user-CA install path: KeyChain's install intent drives
+     * the system certificate-install UI — the user consents on Android's own
+     * screen. The PEM is parsed to DER here (CertInstaller's expected form),
+     * which also validates the fetched document before it reaches the UI.
+     */
+    AsyncFunction("installCaCertificate") { name: String, pem: String ->
+      val der = CertificateFactory.getInstance("X.509")
+        .generateCertificate(pem.byteInputStream()).encoded
+      val intent = KeyChain.createInstallIntent().apply {
+        putExtra(KeyChain.EXTRA_CERTIFICATE, der)
+        putExtra(KeyChain.EXTRA_NAME, name)
+      }
+      val activity: Activity? = appContext.activityProvider?.currentActivity
+      if (activity != null) {
+        activity.startActivity(intent)
+      } else {
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+      }
       true
     }
 

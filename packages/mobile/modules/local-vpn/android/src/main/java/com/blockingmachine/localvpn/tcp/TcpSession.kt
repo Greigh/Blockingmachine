@@ -62,6 +62,14 @@ class FlowKey(
  * implementation MUST NOT block: enqueue bytes for a writer thread instead.
  */
 interface SessionUpstream {
+  /**
+   * The owning session hands itself over once constructed — upstreams that
+   * pump bytes back (a socket reader feeding [TcpSession.onUpstreamData])
+   * store it here. Called inside the session's constructor, before any
+   * packet or byte can arrive. Default no-op for upstreams that only sink.
+   */
+  fun attach(session: TcpSession) {}
+
   /** In-order client→server stream bytes. Implementations take the whole array. */
   fun write(bytes: ByteArray)
 
@@ -210,6 +218,12 @@ class TcpSession(
   private class Sent(var seq: Long, var data: ByteArray, var sentAtMs: Long, var retries: Int)
 
   private val unacked = ArrayDeque<Sent>()
+
+  init {
+    // Last thing the constructor does — every field above is initialized, so
+    // the upstream may safely start threads that call back into the session.
+    upstream.attach(this)
+  }
 
   /* ------------------------------------------------------------------ */
   /* Inbound — packets read from the tun fd                              */

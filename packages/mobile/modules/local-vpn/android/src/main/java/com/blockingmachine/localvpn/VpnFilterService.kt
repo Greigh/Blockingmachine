@@ -9,53 +9,86 @@ import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
-import android.system.OsConstants
 import android.util.Log
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+import com.blockingmachine.localvpn.tcp.DirectUpstream
+import com.blockingmachine.localvpn.tcp.HubUpstream
+import com.blockingmachine.localvpn.tcp.Packet
+import com.blockingmachine.localvpn.tcp.TcpDispatcher
+import com.blockingmachine.localvpn.tcp.TcpStats
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
- * Local-VPN DNS filter. Instead of routing all traffic through the tunnel (the
- * battery-heavy full-VPN design), it advertises a virtual resolver address as the
- * device's DNS server and routes only that address into the TUN fd. System DNS
- * lookups land on the tunnel; everything else never touches us.
+ * Local-VPN filter, in two postures:
  *
- * Blocked domains get NXDOMAIN; allowed ones are relayed to the real upstream
- * over a `protect()`ed socket so the forwarding traffic itself never re-enters
- * the tunnel. This covers all protocols that depend on DNS — including HTTPS —
- * at domain granularity. SNI-level TLS interception is deliberately out of
- * scope (it needs a userspace TCP stack); the CONNECT proxy handles the cases
- * where an app bypasses system DNS.
+ *  - DNS-only (default): advertises a virtual resolver address as the device's
+ *    DNS server and routes only that address into the TUN fd. Blocked domains
+ *    get NXDOMAIN; allowed ones relay upstream over a `protect()`ed socket.
+ *    Everything else never touches us.
+ *
+ *  - Hub capture (`EXTRA_HUB_HOST`): additionally routes ALL traffic so the
+ *    userspace TCP stack can impersonate flows aimed at TCP :80/:443 and
+ *    splice them to the hub engine — a `protect()`ed `Socket(hub, 9294)` with
+ *    a PROXY-v2 header carrying the app's real 5-tuple. Every other TCP port
+ *    gets a `protect()`ed pass-through relay to the original destination so
+ *    non-web connectivity is unchanged; UDP/443 (QUIC) is counted and dropped
+ *    so HTTP/3 falls back into the TCP path; other UDP/ICMP has no relay yet
+ *    and drops — the same effective posture as before, when it never entered
+ *    the tunnel (general UDP relay is a documented non-goal for this phase).
+ *
+ * `protect()` on every upstream dial is the loop-prevention guarantee that
+ * lets the broad routes coexist with the hub dial — those sockets can never
+ * re-enter the fd. Extras are sticky across ACTION_START: a re-START (e.g.
+ * enabling capture on a running DNS filter) changes only what it carries.
  */
 class VpnFilterService : VpnService() {
 
   companion object {
     const val ACTION_START = "com.blockingmachine.localvpn.START"
     const val ACTION_STOP = "com.blockingmachine.localvpn.STOP"
+    const val ACTION_STOP_CAPTURE = "com.blockingmachine.localvpn.STOP_CAPTURE"
     const val EXTRA_RULES_PATH = "rulesPath"
     const val EXTRA_UPSTREAM = "upstreamDns"
     const val EXTRA_LABEL = "label"
+    const val EXTRA_HUB_HOST = "hubHost"
 
     /** Virtual resolver advertised to apps; routed into the tunnel. */
     const val VIRTUAL_DNS = "10.0.0.53"
+
+    /** The hub engine's PROXY-v2 data listener — fixed convention. */
+    const val HUB_DATA_PORT = 9294
+
     private const val TUN_ADDR = "10.0.0.2"
+    private const val TUN_ADDR6 = "fd00::2"
     private const val CHANNEL_ID = "blockingmachine_vpn"
     private const val NOTIF_ID = 42
     private const val TAG = "BmVpnFilter"
 
+    /** Session housekeeping cadence — drives retransmit-lite + the idle reaper. */
+    private const val TICK_MS = 100L
+
     val running = AtomicBoolean(false)
     val blockedCount = AtomicLong(0)
     val forwardedCount = AtomicLong(0)
+    val quicDropped = AtomicLong(0)
+    val captureRunning = AtomicBoolean(false)
+
+    /** Live capture-flow counters while capture is armed — the module's status read. */
+    @Volatile
+    var captureStats: TcpStats? = null
+      private set
   }
 
   private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -63,27 +96,42 @@ class VpnFilterService : VpnService() {
   private var readerJob: Job? = null
   private var blocklist: Blocklist? = null
   private var upstream: InetAddress = InetAddress.getByName("8.8.8.8")
+  private var rulesPath: String? = null
+  private var label: String = "Blockingmachine"
+
+  @Volatile private var hubHost: String? = null
+  @Volatile private var captureDispatcher: TcpDispatcher? = null
+  @Volatile private var relayDispatcher: TcpDispatcher? = null
+  @Volatile private var ticker: Thread? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       ACTION_STOP -> { shutdown(); return START_NOT_STICKY }
+      ACTION_STOP_CAPTURE -> { stopCapture(); return START_NOT_STICKY }
       ACTION_START -> {
-        upstream = intent.getStringExtra(EXTRA_UPSTREAM)
+        intent.getStringExtra(EXTRA_UPSTREAM)
           ?.let { runCatching { InetAddress.getByName(it) }.getOrNull() }
-          ?: upstream
-        val rulesPath = intent.getStringExtra(EXTRA_RULES_PATH)
+          ?.let { upstream = it }
+        intent.getStringExtra(EXTRA_RULES_PATH)?.let { rulesPath = it }
+        intent.getStringExtra(EXTRA_LABEL)?.let { label = it }
+        // hasExtra distinguishes "not carried" (keep current) from an explicit
+        // empty host (clear capture) — the extra is sticky, not a one-shot.
+        if (intent.hasExtra(EXTRA_HUB_HOST)) {
+          hubHost = intent.getStringExtra(EXTRA_HUB_HOST)?.trim()?.takeIf { it.isNotEmpty() }
+        }
         blocklist = rulesPath?.let {
           runCatching { Blocklist.load(it) }
-            .onFailure { e -> Log.w(TAG, "ruleset load failed for $rulesPath: $e") }
+            .onFailure { e -> Log.w(TAG, "ruleset load failed for $it: $e") }
             .getOrNull()
         }
         if (blocklist == null) {
-          Log.w(TAG, "no ruleset at $rulesPath — VPN will forward unfiltered")
+          if (rulesPath != null) Log.w(TAG, "no ruleset at $rulesPath — VPN will forward unfiltered")
+          else Log.i(TAG, "no ruleset configured — VPN will forward unfiltered")
           blocklist = Blocklist.EMPTY
         } else {
           Log.i(TAG, "ruleset loaded: ${blocklist!!.size} rules")
         }
-        startTunnel(intent.getStringExtra(EXTRA_LABEL) ?: "Blockingmachine")
+        startTunnel(label)
         return START_STICKY
       }
     }
@@ -91,33 +139,76 @@ class VpnFilterService : VpnService() {
   }
 
   private fun startTunnel(label: String) {
+    // A re-START replaces the fd — tear the previous tunnel down first so the
+    // old reader can't keep feeding packets into stale dispatchers.
+    teardownTunnel()
     startForegroundServiceCompat(label)
 
-    val pfd = Builder()
+    val builder = Builder()
       .setSession("Blockingmachine")
       .addAddress(TUN_ADDR, 32)
       .addDnsServer(VIRTUAL_DNS)
-      // Route only the virtual resolver — real traffic stays off the tunnel.
-      .addRoute(VIRTUAL_DNS, 32)
       .setMtu(1500)
       .setBlocking(true)
-      .establish() ?: run {
-        Log.e(TAG, "VpnService.Builder.establish() returned null — VPN permission?")
-        shutdown()
-        return
-      }
+
+    if (hubHost != null) {
+      // Capture posture: route everything so TCP :80/:443 can be dispatched
+      // to the hub and the rest relayed. The hub IP needs no route exclusion —
+      // protect() on every upstream dial is the loop exemption by construction.
+      builder.addAddress(TUN_ADDR6, 128)
+        .addRoute("0.0.0.0", 0)
+        .addRoute("::", 0)
+    } else {
+      // Route only the virtual resolver — real traffic stays off the tunnel.
+      builder.addRoute(VIRTUAL_DNS, 32)
+    }
+
+    val pfd = builder.establish() ?: run {
+      Log.e(TAG, "VpnService.Builder.establish() returned null — VPN permission?")
+      shutdown()
+      return
+    }
     tun = pfd
     running.set(true)
-    updateNotification("$label · filtering DNS")
+    updateNotification(
+      if (hubHost != null) "$label · filtering DNS + HTTPS capture" else "$label · filtering DNS"
+    )
     readerJob = scope.launch { readLoop(pfd) }
   }
 
   private fun readLoop(pfd: ParcelFileDescriptor) {
     val input = FileInputStream(pfd.fileDescriptor)
     val output = FileOutputStream(pfd.fileDescriptor)
+    // The fd's single writer — dispatcher emits (this thread, per-session
+    // upstream readers, the ticker) and DNS responses all serialize here.
+    val emitLock = Any()
+    val emit: (ByteArray) -> Unit = { pkt ->
+      synchronized(emitLock) { runCatching { output.write(pkt) } }
+    }
     val buf = ByteArray(32767)
     val upstreamSock = DatagramSocket()
     protect(upstreamSock) // forwarding traffic must not loop back into the tunnel
+
+    val hub = hubHost
+    if (hub != null) {
+      // :80/:443 → the hub engine (PROXY-v2); every other TCP port → a
+      // protected pass-through to the original destination.
+      val capture = TcpDispatcher(
+        emit = emit,
+        upstreamFactory = { key -> HubUpstream(key, hub, HUB_DATA_PORT, { s: Socket -> protect(s) }) },
+      )
+      val relay = TcpDispatcher(
+        emit = emit,
+        upstreamFactory = { key -> DirectUpstream(key, { s: Socket -> protect(s) }) },
+        portFilter = { true }, // capture claims :80/:443 first — this is the remainder
+      )
+      captureDispatcher = capture
+      relayDispatcher = relay
+      captureStats = capture.stats
+      captureRunning.set(true)
+      startTicker()
+      Log.i(TAG, "hub capture armed — TCP :80/:443 → $hub:$HUB_DATA_PORT")
+    }
 
     while (scope.isActive) {
       val n = try {
@@ -127,13 +218,25 @@ class VpnFilterService : VpnService() {
       }
       if (n <= 0) continue
       val packet = buf.copyOf(n)
-      val query = DnsPacket.parseQuery(packet) ?: continue
+      val query = DnsPacket.parseQuery(packet)
+
+      if (query == null) {
+        // Non-DNS traffic only exists while the capture posture routes it in.
+        if (relayDispatcher == null) continue
+        if (Packet.peekUdpDstPort(packet) == 443) {
+          // QUIC suppression — counted; the TCP fallback lands in the stack.
+          quicDropped.incrementAndGet()
+          continue
+        }
+        if (captureDispatcher?.onPacket(packet) == true) continue
+        if (relayDispatcher?.onPacket(packet) == true) continue
+        continue
+      }
 
       if (blocklist?.isBlocked(query.domain) == true) {
         blockedCount.incrementAndGet()
         if (blockedCount.get() <= 20) Log.i(TAG, "blocked: ${query.domain}")
-        val out = DnsPacket.buildResponse(query, blocked = true)
-        output.write(out)
+        emit(DnsPacket.buildResponse(query, blocked = true))
         continue
       }
 
@@ -151,13 +254,59 @@ class VpnFilterService : VpnService() {
           upstreamSock.soTimeout = 5000
           upstreamSock.receive(resp)
           val dns = respBuf.copyOf(resp.length)
-          val out = DnsPacket.buildResponse(query, blocked = false, relay = dns)
-          synchronized(output) { output.write(out) }
+          emit(DnsPacket.buildResponse(query, blocked = false, relay = dns))
         } catch (e: Exception) {
           // Upstream timeout/failure → answer nothing; the client retransmits.
         }
       }
     }
+  }
+
+  /** 100ms housekeeping for both dispatchers — retransmit-lite + idle reaps. */
+  private fun startTicker() {
+    ticker = thread(name = "bm-tcp-tick", isDaemon = true) {
+      while (true) {
+        val c = captureDispatcher
+        val r = relayDispatcher
+        if (c == null && r == null) break
+        runCatching { c?.onTick(); r?.onTick() }
+        try {
+          Thread.sleep(TICK_MS)
+        } catch (e: InterruptedException) {
+          break
+        }
+      }
+    }
+  }
+
+  /**
+   * Capture off, tunnel up: the closed dispatcher refuses new packets so
+   * :80/:443 flows fall through to the pass-through relay — traffic keeps
+   * working, just no longer spliced through the hub.
+   */
+  private fun stopCapture() {
+    hubHost = null
+    captureDispatcher?.close()
+    captureDispatcher = null
+    captureStats = null
+    captureRunning.set(false)
+    if (running.get()) updateNotification("$label · filtering DNS") else stopSelf()
+  }
+
+  /** Tear down the current tunnel — safe to call with none established. */
+  private fun teardownTunnel() {
+    readerJob?.cancel()
+    readerJob = null
+    ticker?.interrupt()
+    ticker = null
+    captureDispatcher?.close()
+    captureDispatcher = null
+    relayDispatcher?.close()
+    relayDispatcher = null
+    captureStats = null
+    captureRunning.set(false)
+    tun?.close()
+    tun = null
   }
 
   private fun startForegroundServiceCompat(label: String) {
@@ -200,9 +349,7 @@ class VpnFilterService : VpnService() {
 
   private fun shutdown() {
     running.set(false)
-    readerJob?.cancel()
-    tun?.close()
-    tun = null
+    teardownTunnel()
     stopForeground(true)
     stopSelf()
   }

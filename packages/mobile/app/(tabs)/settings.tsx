@@ -4,7 +4,7 @@
  * service name so a household with both a hub and an add-on stays legible.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -24,6 +24,13 @@ import { useClient } from '../../src/api/useClient';
 import { useServers } from '../../src/state/servers';
 import { useFilter } from '../../src/state/filter';
 import { LocalVpn, isLocalVpnSupported } from '../../src/filter/localVpn';
+import {
+  fetchHubCa,
+  hostFromUrl,
+  isValidIpLiteral,
+  loadHubHost,
+  saveHubHost,
+} from '../../src/filter/httpsCapture';
 import { nativeRulesPath } from '../../src/filter/ruleset';
 import { ActionButton, Card, Pill, SectionTitle } from '../../src/components/ui';
 import { describeError, UserError, type FriendlyError } from '../../src/errors';
@@ -199,6 +206,162 @@ function LocalFilterCard({ ready }: { ready: boolean }) {
   );
 }
 
+/**
+ * Android-only card: route this device's web traffic through a LAN hub's HTTPS
+ * engine. TCP :80/:443 is spliced onto a `protect()`ed socket to
+ * `<hub>:9294` (PROXY-v2), every other TCP port relays through unchanged, and
+ * UDP/443 (QUIC) is dropped so HTTP/3 falls back into the TCP path. The hub
+ * must be bound to its LAN address (BM_BIND_HOST) for :9294/:9293 to answer.
+ */
+function HttpsCaptureCard() {
+  const { activeServer } = useServers();
+  const capture = useQuery({
+    queryKey: ['httpscapture'],
+    queryFn: () => LocalVpn.httpsCaptureStatus(),
+    refetchInterval: 4000,
+  });
+  const [hub, setHub] = useState('');
+  const [savedHub, setSavedHub] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<FriendlyError | null>(null);
+  const [caLine, setCaLine] = useState<string | null>(null);
+  const s = capture.data;
+  const running = !!s?.running;
+
+  useEffect(() => {
+    void loadHubHost().then((h) => {
+      setSavedHub(h);
+      if (h) setHub(h);
+    });
+  }, []);
+
+  // The paired server is usually the capture hub — offer its host as the
+  // default when it is already a literal address (names can't be verified
+  // to resolve identically inside the tunnel).
+  useEffect(() => {
+    if (savedHub || hub) return;
+    const host = activeServer ? hostFromUrl(activeServer.baseUrl) : null;
+    if (host && isValidIpLiteral(host)) setHub(host);
+  }, [activeServer, savedHub, hub]);
+
+  const act = async (key: string, fn: () => Promise<unknown>) => {
+    setBusy(key);
+    setErr(null);
+    setCaLine(null);
+    try {
+      await Promise.race([
+        fn(),
+        new Promise((_, reject) => setTimeout(() => reject(new UserError('The system didn\u2019t answer — try again.')), 45_000)),
+      ]);
+      haptics.success();
+    } catch (e) {
+      haptics.error();
+      setErr(describeError(e));
+    } finally {
+      setBusy(null);
+      void capture.refetch();
+    }
+  };
+
+  const start = () =>
+    act('capture', async () => {
+      const host = hub.trim();
+      if (!isValidIpLiteral(host)) {
+        throw new UserError('Enter the hub\u2019s LAN IP address (e.g. 192.168.1.20) — HTTPS capture needs a numeric address, not a name.');
+      }
+      const granted = await LocalVpn.requestVpnConsent();
+      if (!granted) throw new UserError('VPN access was declined — HTTPS capture needs it to run. Tap Start to try again.');
+      await saveHubHost(host);
+      setSavedHub(host);
+      await LocalVpn.startHttpsCapture(host);
+    });
+
+  const stop = () => act('capture', () => LocalVpn.stopHttpsCapture());
+
+  const installCa = () =>
+    act('ca', async () => {
+      const host = (savedHub ?? hub).trim();
+      if (!host) throw new UserError('Set the hub IP first.');
+      const ca = await fetchHubCa(host);
+      await LocalVpn.installCaCertificate('Blockingmachine Hub CA', ca.certPem);
+      setCaLine(
+        `Install prompt sent — Android asks you to confirm.${ca.sha256Fingerprint ? ` CA sha256: ${ca.sha256Fingerprint}` : ''}`,
+      );
+    });
+
+  return (
+    <Card>
+      <View style={styles.rowBetween}>
+        <SectionTitle icon="lock-closed-outline" label="HTTPS capture" style={{ marginBottom: 0 }} />
+        {running ? <Pill label="capturing" tone="ok" /> : null}
+      </View>
+      <Text style={styles.meta}>
+        Route this device&rsquo;s web traffic (ports 80/443) through a hub&rsquo;s HTTPS engine — hostname blocking for every app, content filtering where the CA is trusted. The hub must listen on your LAN.
+      </Text>
+      {err ? (
+        <>
+          <Text style={styles.syncError}>{err.title}</Text>
+          {err.detail ? <Text style={styles.syncErrorDetail}>{err.detail}</Text> : null}
+        </>
+      ) : null}
+      {running ? (
+        <>
+          <Text style={styles.meta}>
+            {`Hub ${savedHub ?? hub}:9294 · ${s!.flowsOpened.toLocaleString()} flows · ${s!.flowsClosed.toLocaleString()} closed · ${s!.quicDropped.toLocaleString()} QUIC dropped`}
+          </Text>
+          <View style={styles.buttonRow}>
+            <View style={styles.buttonFlex}>
+              <ActionButton
+                label="Install hub CA"
+                disabled={busy === 'ca'}
+                loading={busy === 'ca'}
+                onPress={() => void installCa()}
+              />
+            </View>
+            <View style={styles.buttonFlex}>
+              <ActionButton
+                label="Stop capture"
+                tone="ghost"
+                disabled={busy === 'capture'}
+                loading={busy === 'capture'}
+                onPress={() => void stop()}
+              />
+            </View>
+          </View>
+          {caLine ? <Text style={styles.meta}>{caLine}</Text> : null}
+        </>
+      ) : (
+        <>
+          <TextInput
+            style={styles.input}
+            value={hub}
+            onChangeText={setHub}
+            placeholder="hub IP — e.g. 192.168.1.20"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+          <View style={styles.buttonRow}>
+            <View style={styles.buttonFlex}>
+              <ActionButton
+                label="Start capture"
+                disabled={!hub.trim() || busy === 'capture'}
+                loading={busy === 'capture'}
+                onPress={() => void start()}
+              />
+            </View>
+          </View>
+        </>
+      )}
+      <Text style={styles.meta}>
+        Browsers and opted-in apps get content filtering after you install the hub&rsquo;s CA on this device — other apps get hostname-level blocking (Android user-CA restriction).
+      </Text>
+    </Card>
+  );
+}
+
+
 export default function SettingsScreen() {
   const { servers, activeServerId, activeToken, setActive, removeServer, setToken } =
     useServers();
@@ -349,6 +512,7 @@ export default function SettingsScreen() {
       </Card>
 
       {isLocalVpnSupported() ? <LocalFilterCard ready={filter.ready} /> : null}
+      {isLocalVpnSupported() ? <HttpsCaptureCard /> : null}
 
       {activeServerId ? (
         <Card>

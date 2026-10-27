@@ -16,8 +16,11 @@ class TcpStats {
  * Flow router between the tun fd and per-flow [TcpSession]s (P4 T1).
  *
  * `onPacket` is called with each IP packet read from the tunnel. Packets whose
- * TCP destination port is 80 or 443 are consumed here — everything else
- * returns `false` so the service can keep its existing pass-through posture.
+ * TCP destination port satisfies [portFilter] (default: 80 and 443 — the
+ * capture pair) are consumed here — everything else returns `false` so the
+ * service can route it to its pass-through posture. After [close] the
+ * dispatcher refuses packets outright, letting traffic fall through to the
+ * relay path instead of resurrecting flows.
  *
  * A session is born on a bare SYN (the [upstreamFactory] seam hands T2 a
  * `protect()`ed socket dial to the hub); a non-SYN packet for an unknown flow
@@ -41,10 +44,16 @@ class TcpDispatcher(
   private val upstreamFactory: (FlowKey) -> SessionUpstream,
   private val nowMs: () -> Long = { System.nanoTime() / 1_000_000L },
   private val maxSessions: Int = 1024,
+  private val portFilter: (Int) -> Boolean = { it == 80 || it == 443 },
 ) {
 
   val stats = TcpStats()
   val sessions = ConcurrentHashMap<FlowKey, TcpSession>()
+
+  /** Set by [close] — a closed dispatcher refuses packets so the caller's
+   *  fallback path (pass-through relay) can claim them. */
+  @Volatile
+  private var closed = false
 
   /** Insertion-ordered touch log for LRU eviction — guarded by [lruLock]. */
   private val lruLock = Any()
@@ -56,8 +65,9 @@ class TcpDispatcher(
    * packet turned out unparseable: it was aimed at us).
    */
   fun onPacket(ip: ByteArray): Boolean {
+    if (closed) return false
     val dstPort = Packet.peekTcpDstPort(ip) ?: return false
-    if (dstPort != 80 && dstPort != 443) return false
+    if (!portFilter(dstPort)) return false
     val seg = Packet.parseTcp(ip) ?: return true
     val key = FlowKey(seg)
 
@@ -104,6 +114,7 @@ class TcpDispatcher(
    * or dies mid-sweep is handled next tick.
    */
   fun onTick() {
+    if (closed) return
     val now = nowMs()
     for ((k, s) in sessions.entries) {
       if (s.onTick(now)) removeSession(k, s)
@@ -120,8 +131,9 @@ class TcpDispatcher(
     return min
   }
 
-  /** Tear every flow down (service shutdown). */
+  /** Tear every flow down (service shutdown / capture stop). Idempotent. */
   fun close() {
+    closed = true
     for ((k, s) in sessions.entries) {
       s.abortWithRst()
       removeSession(k, s)

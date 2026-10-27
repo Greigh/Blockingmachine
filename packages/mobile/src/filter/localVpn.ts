@@ -17,6 +17,13 @@ export interface LocalVpnStatus {
   proxyBlocked: number;
 }
 
+export interface HttpsCaptureStatus {
+  running: boolean;
+  flowsOpened: number;
+  flowsClosed: number;
+  quicDropped: number;
+}
+
 interface NativeLocalVpn {
   needsVpnConsent(): Promise<boolean>;
   requestVpnConsent(): Promise<boolean>;
@@ -24,6 +31,10 @@ interface NativeLocalVpn {
   stopVpn(): Promise<boolean>;
   startProxy(rulesPath: string, port: number): Promise<boolean>;
   stopProxy(): Promise<boolean>;
+  startHttpsCapture(hubHost: string): Promise<boolean>;
+  stopHttpsCapture(): Promise<boolean>;
+  httpsCaptureStatus(): Promise<HttpsCaptureStatus>;
+  installCaCertificate(name: string, certPem: string): Promise<boolean>;
   status(): Promise<LocalVpnStatus>;
   addListener(event: 'onVpnConsentResult', cb: (e: { granted: boolean }) => void): { remove(): void };
 }
@@ -46,6 +57,13 @@ const EMPTY_STATUS: LocalVpnStatus = {
   proxyPort: 0,
   proxyAllowed: 0,
   proxyBlocked: 0,
+};
+
+const EMPTY_CAPTURE: HttpsCaptureStatus = {
+  running: false,
+  flowsOpened: 0,
+  flowsClosed: 0,
+  quicDropped: 0,
 };
 
 export const LocalVpn = {
@@ -81,6 +99,13 @@ export const LocalVpn = {
   stopVpn: () => get().stopVpn(),
   startProxy: (rulesPath: string, port = 8890) => get().startProxy(rulesPath, port),
   stopProxy: () => get().stopProxy(),
+  /** Arm hub HTTPS capture on the tunnel — the hub engine then owns :80/:443 verdicts. */
+  startHttpsCapture: (hubHost: string) => get().startHttpsCapture(hubHost),
+  stopHttpsCapture: () => get().stopHttpsCapture(),
+  httpsCaptureStatus: (): Promise<HttpsCaptureStatus> =>
+    isLocalVpnSupported() ? get().httpsCaptureStatus().catch(() => EMPTY_CAPTURE) : Promise.resolve(EMPTY_CAPTURE),
+  /** Fire Android's certificate-install UI with a hub CA PEM — a real user consent. */
+  installCaCertificate: (name: string, certPem: string) => get().installCaCertificate(name, certPem),
   status: (): Promise<LocalVpnStatus> =>
     isLocalVpnSupported() ? get().status().catch(() => EMPTY_STATUS) : Promise.resolve(EMPTY_STATUS),
 };

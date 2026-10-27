@@ -18,6 +18,7 @@ object Packet {
   const val FAMILY_V4 = 4
   const val FAMILY_V6 = 6
   const val PROTO_TCP = 6
+  const val PROTO_UDP = 17
 
   // TCP flag bits — the flags byte sits at TCP offset 13 (data offset lives in
   // the high nibble of offset 12; we never emit the NS bit).
@@ -280,6 +281,29 @@ object Packet {
       }
       6 -> {
         if (ip.size < 44 || u8(ip, 6) != PROTO_TCP) null
+        else u16(ip, 42)
+      }
+      else -> null
+    }
+  }
+
+  /**
+   * UDP twin of [peekTcpDstPort] — a routing peek only (no checksum), used by
+   * the service for QUIC suppression. Fragments return null on the same
+   * posture as TCP: fragment-1's port can't speak for its siblings.
+   */
+  fun peekUdpDstPort(ip: ByteArray): Int? {
+    if (ip.isEmpty()) return null
+    return when (ip[0].toInt() ushr 4) {
+      4 -> {
+        if (ip.size < 20) return null
+        val ihl = (ip[0].toInt() and 0x0F) * 4
+        if (ihl < 20 || u8(ip, 9) != PROTO_UDP || ip.size < ihl + 4) null
+        else if (u16(ip, 6) and 0x3FFF != 0) null
+        else u16(ip, ihl + 2)
+      }
+      6 -> {
+        if (ip.size < 44 || u8(ip, 6) != PROTO_UDP) null
         else u16(ip, 42)
       }
       else -> null

@@ -139,6 +139,33 @@ class TcpDispatcherTest {
   }
 
   @Test
+  fun `custom port filter turns the dispatcher into a pass-through`() {
+    // The service's relay dispatcher is the same class with the filter flipped:
+    // it claims every TCP port the capture dispatcher refuses.
+    val relay = TcpDispatcher(
+      emit = { emitted += it },
+      upstreamFactory = { TcpSessionTest.FakeUpstream().also { upstreams += it } },
+      nowMs = { now },
+      portFilter = { it != 80 && it != 443 },
+    )
+    assertFalse(relay.onPacket(syn(50000)))          // :443 stays with capture
+    assertFalse(relay.onPacket(pkt(50000, 80, 100, 0, Packet.FLAG_SYN)))
+    assertTrue(relay.onPacket(pkt(50000, 8080, 100, 0, Packet.FLAG_SYN, options = Packet.mssOption(1460))))
+    assertEquals(1, relay.activeCount())
+    assertTrue(Packet.parseTcp(emitted.last())!!.has(Packet.FLAG_SYN))
+  }
+
+  @Test
+  fun `closed dispatcher refuses packets so the fallback can claim them`() {
+    dispatcher.onPacket(syn(50000))
+    dispatcher.close()
+    emitted.clear()
+    assertFalse(dispatcher.onPacket(syn(50001)))
+    assertTrue(emitted.isEmpty())
+    assertEquals(0, dispatcher.activeCount())
+  }
+
+  @Test
   fun `dial race — the losing session aborts its upstream`() {
     // Thread A dials upstream then stalls inside the factory; thread B runs the
     // same SYN to completion and wins the map slot. A's putIfAbsent loses —

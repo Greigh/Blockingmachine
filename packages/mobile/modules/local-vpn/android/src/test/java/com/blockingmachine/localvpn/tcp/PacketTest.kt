@@ -286,6 +286,31 @@ class PacketTest {
   }
 
   @Test
+  fun `peekUdpDstPort reads v4 and v6 datagram ports`() {
+    // IPv4 UDP/443 — the QUIC shape the service suppresses.
+    val v4 = byteArrayOf(0x45, 0, 0, 28, 0, 0, 0, 0, 64, 17, 0, 0) +
+      v4src + v4dst +
+      byteArrayOf(0xc8.toByte(), 0x3a, 0x01, 0xbb.toByte(), 0, 8, 0, 0)
+    assertEquals(443, Packet.peekUdpDstPort(v4))
+
+    // IPv6 UDP — next-header 17, ports at fixed offset 40.
+    val v6 = ByteArray(48)
+    v6[0] = 0x60; v6[6] = 17
+    v6[42] = 0x01; v6[43] = 0xbb.toByte()
+    assertEquals(443, Packet.peekUdpDstPort(v6))
+  }
+
+  @Test
+  fun `peekUdpDstPort rejects non-udp, fragments, and truncation`() {
+    assertNull(Packet.peekUdpDstPort(v4SynGolden)) // TCP proto
+    assertNull(Packet.peekUdpDstPort(ByteArray(0)))
+    assertNull(Packet.peekUdpDstPort(byteArrayOf(0x45, 0, 0))) // truncated
+    val frag = byteArrayOf(0x45, 0, 0, 28, 0, 0, 0x20, 0, 64, 17, 0, 0) +
+      v4src + v4dst + ByteArray(8)
+    assertNull(Packet.peekUdpDstPort(frag)) // MF set — same posture as TCP
+  }
+
+  @Test
   fun `peekTcpDstPort passes fragments through`() {
     // Fragment-1 carries the TCP header (dst 443) but must NOT be consumed —
     // its siblings carry no port and pass, so eating the first alone wedges
