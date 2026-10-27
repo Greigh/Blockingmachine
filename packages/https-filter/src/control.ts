@@ -150,7 +150,10 @@ export function startControlServer(deps: ControlApiDeps): Promise<RunningControl
    * applied, so `pinned`/`bypassed` in the reply stay honest either way.
    */
   const lastEntry = (host: string, action: 'bypass' | 'remove'): PolicyEntry | null => {
-    const entries = policy.list();
+    // listPolicy, not list: `proxy_event` audit lines sit in the same journal
+    // but are not mutations — a response-pipeline event landing after a
+    // bypass must not shadow the mutation this reply is supposed to echo.
+    const entries = policy.listPolicy();
     const last = entries.length > 0 ? entries[entries.length - 1] : undefined;
     return last !== undefined && last.host === host && last.action === action ? last : null;
   };
@@ -340,7 +343,12 @@ export function startControlServer(deps: ControlApiDeps): Promise<RunningControl
         }
 
         case '/v1/proxy/pins': {
-          json(res, 200, { pins: policy.list(), corruptLineCount: policy.corruptLineCount });
+          // `proxy_event` audit lines share the journal but are not policy —
+          // the pins contract stays `pin`/`bypass`/`remove` only.
+          json(res, 200, {
+            pins: policy.listPolicy(),
+            corruptLineCount: policy.corruptLineCount,
+          });
           return;
         }
 

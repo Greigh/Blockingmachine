@@ -32,7 +32,15 @@ import { appendFileSync } from 'node:fs';
 import { chmod, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-export type PolicyAction = 'pin' | 'bypass' | 'remove';
+/**
+ * `proxy_event` is the audit line (design doc §5: "proxy_event entries go to
+ * the JSONL ledger only — hostnames and rule IDs, never bodies") — response
+ * blocks, CSP rewrites, HTML injections recorded for tamper-evident
+ * inspection. It applies to NO set on replay — `isPinned`/`isBypassed` never
+ * answer from an event line — and `/v1/proxy/pins` keeps it out of the
+ * policy view via {@link PolicyStore.listPolicy}.
+ */
+export type PolicyAction = 'pin' | 'bypass' | 'remove' | 'proxy_event';
 
 export interface PolicyEntry {
   ts: number;
@@ -46,7 +54,19 @@ interface PolicyRecord extends PolicyEntry {
   prevHash: string | null;
 }
 
-const ACTIONS: ReadonlySet<string> = new Set<PolicyAction>(['pin', 'bypass', 'remove']);
+const ACTIONS: ReadonlySet<string> = new Set<PolicyAction>([
+  'pin',
+  'bypass',
+  'remove',
+  'proxy_event',
+]);
+
+/**
+ * Bound on a `proxy_event` reason — the same discipline `/v1/proxy/pins/*`
+ * applies to operator notes: a ledger reason is a short tag like
+ * 'html-inject' or 'response-block ||x^$image', not a document.
+ */
+const MAX_EVENT_REASON_LENGTH = 200;
 
 /**
  * The text-form bound on a DNS name — the same 253 `isValidSni` enforces on
@@ -105,6 +125,12 @@ export class PolicyStore {
   /** Bytes of the last line on disk — the chain anchor for the next append. */
   private lastRawLine: string | null = null;
   private corruptLines = 0;
+  /**
+   * Session-level dedupe for `proxy_event` writes — the ledger is audit, not
+   * metrics (counts live in `proxy.stats()`), so only the FIRST
+   * (host, reason) pair per session becomes a line.
+   */
+  private readonly eventDedupe = new Set<string>();
 
   private constructor(filePath: string | null) {
     this.filePath = filePath;
@@ -182,9 +208,44 @@ export class PolicyStore {
     this.append(normalized, 'remove', reason);
   }
 
+  /**
+   * Append a `proxy_event` audit line — the response-depth verdicts (a
+   * response blocked on its real content-type, a CSP widened for injected
+   * markup, an HTML page that received cosmetics). Hostname + short reason
+   * only, per the ledger's privacy convention; the reason carries the
+   * covering rule where one exists and is bounded like any ledger note.
+   * Only the first (host, reason) pair per session appends — audit is not
+   * metrics.
+   */
+  recordEvent(host: string, reason: string): void {
+    const normalized = requireHost(host);
+    const bounded =
+      reason.length > MAX_EVENT_REASON_LENGTH
+        ? reason.slice(0, MAX_EVENT_REASON_LENGTH)
+        : reason;
+    const key = `${normalized}\n${bounded}`;
+    if (this.eventDedupe.has(key)) {
+      return;
+    }
+    this.eventDedupe.add(key);
+    this.append(normalized, 'proxy_event', bounded);
+  }
+
   /** The applied ledger, oldest first — chain internals stripped. */
   list(): PolicyEntry[] {
     return this.entries.map((entry) => ({ ...entry }));
+  }
+
+  /**
+   * `list()` restricted to the policy actions — `proxy_event` lines are in
+   * the ledger for audit but are not pin/bypass decisions, so the
+   * `/v1/proxy/pins` view (and anything else asking "what policy applies")
+   * reads this instead.
+   */
+  listPolicy(): PolicyEntry[] {
+    return this.entries
+      .filter((entry) => entry.action !== 'proxy_event')
+      .map((entry) => ({ ...entry }));
   }
 
   /**
@@ -229,10 +290,11 @@ export class PolicyStore {
       this.pinned.add(host);
     } else if (record.action === 'bypass') {
       this.bypassed.add(host);
-    } else {
+    } else if (record.action === 'remove') {
       this.pinned.delete(host);
       this.bypassed.delete(host);
     }
+    // 'proxy_event' is audit-only — it lands in `entries` and touches no set.
     const { prevHash: _prevHash, ...entry } = record;
     this.entries.push({ ...entry, host });
   }

@@ -35,7 +35,21 @@
 import http from 'node:http';
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from 'node:http';
 import http2 from 'node:http2';
+import type { Readable } from 'node:stream';
 import tls from 'node:tls';
+import {
+  buildInjectionText,
+  decideResponse,
+  deleteHeaderValue,
+  hasInjectableContent,
+  injectHtml,
+  MAX_HTML_BUFFER,
+  mergeCspAdditionsIntoHeaders,
+  setHeaderValue,
+  widenInjectionCspHeaders,
+  type ResponsePipelineInput,
+  type ResponsePlan,
+} from '../pipeline/response.js';
 import type { RelayResponse, TerminatedRequest } from './terminate.js';
 
 /** Where a terminated flow's requests are dialed. */
@@ -65,6 +79,13 @@ export interface RelayOptions {
    * streaming in either direction.
    */
   responseTimeoutMs?: number;
+  /**
+   * The response-depth context — the request-side verdict, cosmetic index,
+   * and typed re-eval seam that `decideResponse` consumes once the upstream
+   * response head arrives (P2 Task 3). Absent → the relay is response-blind
+   * and every body streams verbatim exactly as before.
+   */
+  response?: ResponsePipelineInput;
 }
 
 /** Upstream dial deadline — a blackholed target must not park fds. */
@@ -183,11 +204,44 @@ function requestAuthority(req: TerminatedRequest): string {
 }
 
 /**
+ * Does this flow warrant `accept-encoding: identity` upstream? Buffered
+ * injection needs decoded bytes, so any request that COULD produce a
+ * rewritten response pays the identity strip: the host carries injectable
+ * cosmetics, the verdict holds a `$csp` transform (the response head gets
+ * rewritten and a page on that host may still be injectable), or the client
+ * itself asked for `text/html`. The trade is upstream bandwidth — no
+ * gzip/br on those flows; AdGuard/mitmproxy normalize the same way and an
+ * in-proxy decompress/recompress is flag-worthy, not a correctness bug.
+ * This only ever runs for terminated relays — CONNECT-tunnel and raw-SNI
+ * flows never reach `requestHeaders`, so their encoding is untouched.
+ */
+function wantsIdentityEncoding(req: TerminatedRequest, ctx: ResponsePipelineInput): boolean {
+  const payload = ctx.cosmeticIndex?.forHost(ctx.host);
+  if (payload !== undefined && hasInjectableContent(payload)) {
+    return true;
+  }
+  if (ctx.verdict.transforms.csp !== undefined) {
+    return true;
+  }
+  const accept = req.headers.accept;
+  const acceptValue = Array.isArray(accept) ? accept[0] : accept;
+  return typeof acceptValue === 'string' && acceptValue.toLowerCase().includes('text/html');
+}
+
+/**
  * Request headers for the upstream dial: pseudo-headers (`:authority` etc.),
  * hop-by-hop fields, and `Connection`-listed names removed. The forwarded
  * authority is rewritten to the evaluated one — see {@link requestAuthority}.
+ * When the response pipeline could rewrite (injectable host / `$csp` /
+ * html-accepting client), `accept-encoding` collapses to `identity` — the
+ * existing key is skipped whatever its case so the dict never carries two.
  */
-function requestHeaders(req: TerminatedRequest, upstreamH2: boolean): OutgoingHttpHeaders {
+function requestHeaders(
+  req: TerminatedRequest,
+  upstreamH2: boolean,
+  response?: ResponsePipelineInput,
+): OutgoingHttpHeaders {
+  const forceIdentity = response !== undefined && wantsIdentityEncoding(req, response);
   const connectionListed = connectionListedHeaders(req.headers);
   const out: OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
@@ -196,11 +250,15 @@ function requestHeaders(req: TerminatedRequest, upstreamH2: boolean): OutgoingHt
       lower.startsWith(':') ||
       HOP_BY_HOP_HEADERS.has(lower) ||
       connectionListed.has(lower) ||
-      lower === 'host' // authority rewritten below — never copied verbatim
+      lower === 'host' || // authority rewritten below — never copied verbatim
+      (forceIdentity && lower === 'accept-encoding') // replaced below
     ) {
       continue;
     }
     out[name] = value as string | string[];
+  }
+  if (forceIdentity) {
+    out['accept-encoding'] = 'identity';
   }
   const authority = requestAuthority(req);
   if (upstreamH2) {
@@ -238,6 +296,215 @@ function responseHeaders(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
   return out;
 }
 
+/**
+ * The synthetic 403 the verdict paths share — the same shape the request-side
+ * block in `filterProxy.ts` emits (`X-Blockingmachine-Rule` names the covering
+ * rule when one exists, CR/LF-stripped because it lands on a header).
+ */
+function respondBlocked(res: RelayResponse, coveringRule: string | null): void {
+  const headers: OutgoingHttpHeaders = { 'content-length': '0' };
+  if (coveringRule !== null && coveringRule !== '') {
+    headers['X-Blockingmachine-Rule'] = coveringRule.replace(/[\r\n]/g, '');
+  }
+  res.respond(403, headers);
+}
+
+/**
+ * The buffered half of `serveResponse`: accumulate body bytes up to
+ * {@link MAX_HTML_BUFFER}, then splice the cosmetic payload and send the
+ * rewritten head. Overflow flushes the buffered bytes THROUGH verbatim —
+ * never a partial injection — and counts `inject-skip`; an injector throw
+ * does the same, because injection is an enhancement and never a reason to
+ * 502. `res.begin` failures still degrade to 502 + teardown (the fail-closed
+ * contract every other path in this file honors).
+ */
+function bufferAndInject(
+  res: RelayResponse,
+  status: number,
+  headers: IncomingHttpHeaders,
+  body: Readable,
+  kill: () => void,
+  plan: ResponsePlan,
+  pipeline: ResponsePipelineInput,
+): void {
+  const emit = pipeline.onEvent;
+  const chunks: Buffer[] = [];
+  let buffered = 0;
+  let flushed = false;
+
+  const flushRaw = () => {
+    if (flushed) {
+      return;
+    }
+    flushed = true;
+    body.off('data', onData);
+    // The head never crossed — `$csp` additions still apply (they are a
+    // header transform, honest on untouched bytes), and content-length stays
+    // upstream's because the body passes through byte-identical.
+    const head = responseHeaders(headers);
+    if (plan.cspAdditions.length > 0) {
+      mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
+    }
+    let target;
+    try {
+      target = res.begin(status, head);
+    } catch {
+      body.destroy();
+      failClosed(res, kill);
+      return;
+    }
+    for (const chunk of chunks) {
+      target.write(chunk);
+    }
+    body.pipe(target);
+  };
+
+  const onData = (chunk: Buffer) => {
+    chunks.push(chunk);
+    buffered += chunk.length;
+    if (buffered > MAX_HTML_BUFFER) {
+      emit?.({ kind: 'inject-skip', host: pipeline.host, reason: 'overflow' });
+      flushRaw();
+    }
+  };
+
+  body.on('data', onData);
+  body.once('end', () => {
+    if (flushed) {
+      return;
+    }
+    flushed = true; // 'end' wins — no 'data' can follow it.
+    const whole = Buffer.concat(chunks, buffered);
+    try {
+      const text = buildInjectionText(plan.payload as NonNullable<ResponsePlan['payload']>);
+      const { body: out, injected } = injectHtml(whole, {
+        styleText: text.styleText,
+        scriptText: text.scriptText,
+      });
+      if (!injected.style && !injected.script) {
+        // The payload resolved to nothing emittable (defensive — the plan
+        // gate already checks) — deliver the bytes raw, count the skip.
+        emit?.({ kind: 'inject-skip', host: pipeline.host, reason: 'empty' });
+        flushed = false;
+        flushRaw();
+        return;
+      }
+      // The head has not crossed — mutate the fresh `responseHeaders()` dict
+      // before `res.begin` copies it onto the wire: widen existing CSP to
+      // admit the injected markup (only ever a widening, ledgered per change),
+      // merge any `$csp` additions, and re-publish the honest content-length.
+      const head = responseHeaders(headers);
+      const rewrites = widenInjectionCspHeaders(head);
+      if (plan.cspAdditions.length > 0) {
+        mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
+      }
+      deleteHeaderValue(head, 'content-length');
+      setHeaderValue(head, 'content-length', String(out.length));
+      let target;
+      try {
+        target = res.begin(status, head);
+      } catch {
+        failClosed(res, kill);
+        return;
+      }
+      target.end(out);
+      if (rewrites > 0) {
+        emit?.({ kind: 'csp-rewrite', host: pipeline.host, count: rewrites });
+      }
+      emit?.({
+        kind: 'html-inject',
+        host: pipeline.host,
+        style: injected.style,
+        scriptlets: text.scriptletCount,
+        skippedScriptlets: text.skippedScriptlets,
+      });
+    } catch {
+      // Injection is an enhancement — its failure flushes the untouched body,
+      // never a 502 for a page the upstream served fine.
+      emit?.({ kind: 'inject-skip', host: pipeline.host, reason: 'error' });
+      flushRaw();
+    }
+  });
+  body.once('error', () => {
+    res.destroy();
+    kill();
+  });
+  body.once('aborted', () => res.destroy());
+}
+
+/**
+ * The single seam where an upstream response head crosses to the client —
+ * both the h1 and h2 legs converge here so the response-depth verdict runs
+ * once. `passthrough` streams verbatim (with `$csp` header merges when the
+ * verdict collected them); `block` answers the synthetic 403 and drains the
+ * unwanted body; `buffer-inject` hands the stream to the bounded bufferer.
+ */
+function serveResponse(
+  res: RelayResponse,
+  status: number,
+  headers: IncomingHttpHeaders,
+  body: Readable,
+  kill: () => void,
+  pipeline?: ResponsePipelineInput,
+): void {
+  const plan =
+    pipeline === undefined
+      ? ({ action: 'passthrough', cspAdditions: [], reason: 'no-pipeline' } as ResponsePlan)
+      : decideResponse({
+          headers,
+          verdict: pipeline.verdict,
+          url: pipeline.url,
+          host: pipeline.host,
+          method: pipeline.method,
+          requestContentType: pipeline.requestContentType,
+          cosmeticIndex: pipeline.cosmeticIndex,
+          evaluateTyped: pipeline.evaluateTyped,
+        });
+  const emit = pipeline?.onEvent;
+
+  if (plan.action === 'block') {
+    respondBlocked(res, plan.blockRule ?? null);
+    emit?.({ kind: 'response-block', host: pipeline?.host ?? '', rule: plan.blockRule ?? null });
+    // Drain the unwanted body — the client already has its answer; the
+    // upstream socket is per-request and dies when the stream resolves.
+    body.resume();
+    body.once('end', kill);
+    body.once('error', kill);
+    body.once('aborted', kill);
+    return;
+  }
+
+  if (plan.injectSkipped !== undefined) {
+    emit?.({ kind: 'inject-skip', host: pipeline?.host ?? '', reason: plan.injectSkipped });
+  }
+
+  if (plan.action === 'buffer-inject' && plan.payload !== undefined && pipeline !== undefined) {
+    bufferAndInject(res, status, headers, body, kill, plan, pipeline);
+    return;
+  }
+
+  const head = responseHeaders(headers);
+  if (plan.cspAdditions.length > 0) {
+    mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
+  }
+  let target;
+  try {
+    // A status the downstream protocol can't express (101 on h2) or an
+    // upstream header the compat layer rejects throws synchronously here.
+    target = res.begin(status, head);
+  } catch {
+    body.destroy();
+    failClosed(res, kill);
+    return;
+  }
+  body.once('error', () => {
+    res.destroy();
+    kill();
+  });
+  body.once('aborted', () => res.destroy());
+  body.pipe(target);
+}
+
 /** h1 upstream: `http.request` rides the pre-connected socket (no `agent` key —
  * that is the only spot where Node honors `createConnection`). */
 function relayOverH1(
@@ -245,6 +512,7 @@ function relayOverH1(
   res: RelayResponse,
   sock: tls.TLSSocket,
   responseTimeoutMs: number,
+  pipeline?: ResponsePipelineInput,
 ): void {
   let upstream: http.ClientRequest;
   try {
@@ -253,7 +521,7 @@ function relayOverH1(
     upstream = http.request({
       method: req.method,
       path: originFormPath(req.url),
-      headers: requestHeaders(req, false),
+      headers: requestHeaders(req, false, pipeline),
       createConnection: () => sock,
     });
   } catch {
@@ -283,22 +551,14 @@ function relayOverH1(
   upstream.once('response', (upRes) => {
     answered = true;
     clearTimeout(responseDeadline);
-    let target;
-    try {
-      // A status the downstream protocol can't express (101 on h2) or an
-      // upstream header the compat layer rejects throws synchronously here.
-      target = res.begin(upRes.statusCode ?? 502, responseHeaders(upRes.headers));
-    } catch {
-      upRes.destroy();
-      failClosed(res, () => sock.destroy());
-      return;
-    }
-    upRes.once('error', () => {
-      res.destroy();
-      sock.destroy();
-    });
-    upRes.once('aborted', () => res.destroy());
-    upRes.pipe(target);
+    serveResponse(
+      res,
+      upRes.statusCode ?? 502,
+      upRes.headers,
+      upRes,
+      () => sock.destroy(),
+      pipeline,
+    );
   });
   // Forwarded headers strip Upgrade/Connection, so a 101 should surface as
   // 'response' — but a protocol-correct client can't rely on hostile bytes:
@@ -322,6 +582,7 @@ function relayOverH2(
   res: RelayResponse,
   sock: tls.TLSSocket,
   responseTimeoutMs: number,
+  pipeline?: ResponsePipelineInput,
 ): void {
   let session: http2.ClientHttp2Session;
   try {
@@ -343,7 +604,7 @@ function relayOverH2(
   let stream: http2.ClientHttp2Stream;
   try {
     // session.request validates header names/values — hostile bytes throw.
-    stream = session.request(requestHeaders(req, true) as http2.OutgoingHttpHeaders);
+    stream = session.request(requestHeaders(req, true, pipeline) as http2.OutgoingHttpHeaders);
   } catch {
     failClosed(res, kill);
     return;
@@ -365,17 +626,14 @@ function relayOverH2(
   stream.once('response', (headers) => {
     responded = true;
     clearTimeout(responseDeadline);
-    let target;
-    try {
-      target = res.begin(
-        Number((headers as IncomingHttpHeaders)[':status'] ?? 502),
-        responseHeaders(headers as IncomingHttpHeaders),
-      );
-    } catch {
-      failClosed(res, kill);
-      return;
-    }
-    stream.pipe(target);
+    serveResponse(
+      res,
+      Number((headers as IncomingHttpHeaders)[':status'] ?? 502),
+      headers as IncomingHttpHeaders,
+      stream,
+      kill,
+      pipeline,
+    );
   });
   stream.once('error', () => {
     clearTimeout(responseDeadline);
@@ -433,10 +691,10 @@ export function relayRequest(
     sock.setTimeout(0);
     try {
       if (sock.alpnProtocol === 'h2') {
-        relayOverH2(req, res, sock, responseTimeout);
+        relayOverH2(req, res, sock, responseTimeout, options?.response);
       } else {
         // false (no ALPN) and 'http/1.1' both mean the h1 path.
-        relayOverH1(req, res, sock, responseTimeout);
+        relayOverH1(req, res, sock, responseTimeout, options?.response);
       }
     } catch {
       failClosed(res, () => sock.destroy());

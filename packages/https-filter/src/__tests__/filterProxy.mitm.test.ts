@@ -23,8 +23,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import tls from 'node:tls';
-import { createRequestEvaluator } from '@blockingmachine/core';
+import { createCosmeticIndex, createRequestEvaluator } from '@blockingmachine/core';
 import { CertAuthority } from '../ca/certAuthority.js';
+import { MAX_HTML_BUFFER } from '../pipeline/response.js';
 import { PolicyStore } from '../policy/policyStore.js';
 import { startProxy, type RunningProxy } from '../proxy/filterProxy.js';
 import { relayRequest } from '../proxy/httpRelay.js';
@@ -1526,6 +1527,341 @@ describe('contentType inference (flag 96)', () => {
     } finally {
       await closeServer(server);
       await addProxy.close();
+    }
+  });
+});
+
+describe('response pipeline (P2 Task 3)', () => {
+  // A dedicated engine carrying BOTH faces of one rule file — the request
+  // evaluator and the cosmetic index — exactly as startFilterProxy wires it.
+  const rules = [
+    'cosmetic.example##.ad-slot',
+    "cosmetic.example#%#//scriptlet('set-constant', 'bm_flag', 'true')",
+    'cosmetich2.example##.ad-h2',
+    'cosmetich2.example##+js(set-constant, h2_flag, 1)',
+    '||ctblock.example^$image',
+    "||csp.example^$csp=script-src 'none'",
+  ];
+  let responsePolicy: PolicyStore;
+  let responseProxy: RunningProxy;
+
+  beforeAll(async () => {
+    responsePolicy = PolicyStore.ephemeral();
+    responseProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator(rules),
+      cosmeticIndex: createCosmeticIndex(rules),
+      policy: responsePolicy,
+      upstreamCaCerts: [originCa.caCertPem],
+      upstreamConnectTimeoutMs: 2_000,
+    });
+  });
+
+  afterAll(async () => {
+    await responseProxy.close();
+  });
+
+  /** h1 HTTPS origin serving `body` with the given headers — records the request head. */
+  async function htmlOrigin(
+    sni: string,
+    body: string,
+    headers: Record<string, string> = {},
+  ): Promise<{ server: https.Server; port: number; lastRequest: () => http.IncomingMessage | null }> {
+    const leaf = originCa.forgeLeaf(sni);
+    let seen: http.IncomingMessage | null = null;
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (req, res) => {
+      seen = req;
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'content-length': String(Buffer.byteLength(body)),
+        ...headers,
+      });
+      res.end(body);
+    });
+    const port = await listen(server);
+    return { server, port, lastRequest: () => seen };
+  }
+
+  test('h1: injectable host gets the <style> + <script> blocks and a widened CSP', async () => {
+    const page =
+      '<html><head><title>t</title></head><body><div class="ad-slot">x</div></body></html>';
+    const { server, port } = await htmlOrigin('cosmetic.example', page, {
+      'content-security-policy': "script-src 'self'; style-src 'self'",
+    });
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'cosmetic.example' }),
+        10_000,
+        'injected GET',
+      );
+      expect(res.status).toBe(200);
+      // Element-hiding style block with its selector folded into one rule.
+      expect(res.body).toContain('<style id="bm-c">.ad-slot{display:none!important}</style>');
+      expect(res.body.indexOf('<style id="bm-c">')).toBeLessThan(res.body.indexOf('</head>'));
+      // The scriptlet runtime + the invocation, inside the head.
+      expect(res.body).toContain('__bm_sc');
+      expect(res.body).toContain('set-constant');
+      expect(res.body).toContain('bm_flag');
+      // The upstream CSP was widened (never narrowed) for the inline markup.
+      expect(res.head.toLowerCase()).toContain('content-security-policy:');
+      expect(res.head.toLowerCase()).toContain("'unsafe-inline'");
+      // The injected body is honestly length-stamped.
+      expect(res.head.toLowerCase()).toContain(`content-length: ${Buffer.byteLength(res.body)}`);
+      const after = responseProxy.stats();
+      expect(after.htmlInjected).toBe(before.htmlInjected + 1);
+      expect(after.scriptletsInvoked).toBe(before.scriptletsInvoked + 1);
+      expect(after.cspRewrites).toBe(before.cspRewrites + 1);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('h2 upstream parity: an ALPN-h2 origin gets the same injection', async () => {
+    const leaf = originCa.forgeLeaf('cosmetich2.example');
+    const origin = http2.createSecureServer({
+      key: leaf.keyPem,
+      cert: leaf.certPem,
+      allowHTTP1: true,
+      ALPNProtocols: ['h2', 'http/1.1'],
+    });
+    origin.on('request', (_req, res) => {
+      const page = '<html><head></head><body><p class="ad-h2">x</p></body></html>';
+      res.writeHead(200, { 'content-type': 'text/html', 'content-length': String(page.length) });
+      res.end(page);
+    });
+    const port = await listen(origin);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetich2.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'cosmetich2.example' }),
+        10_000,
+        'h2-upstream injected GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('<style id="bm-c">.ad-h2{display:none!important}</style>');
+      expect(res.body).toContain('h2_flag');
+      expect(responseProxy.stats().htmlInjected).toBe(before.htmlInjected + 1);
+      client.destroy();
+    } finally {
+      await closeServer(origin);
+    }
+  });
+
+  test("client's accept-encoding: gzip reaches the upstream as identity on an injectable host", async () => {
+    const { server, port, lastRequest } = await htmlOrigin(
+      'cosmetic.example',
+      '<html><head></head><body>enc</body></html>',
+    );
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, {
+          path: '/',
+          host: 'cosmetic.example',
+          headers: { 'accept-encoding': 'gzip, deflate', accept: 'text/html' },
+        }),
+        10_000,
+        'encoding-strip GET',
+      );
+      expect(res.status).toBe(200);
+      // Injection needs decoded bytes — the relay strips to identity.
+      expect(lastRequest()?.headers['accept-encoding']).toBe('identity');
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('response-CT re-verdict: untyped request + image/png response → 403 + counter + ledger', async () => {
+    const leaf = originCa.forgeLeaf('ctblock.example');
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      const body = 'PNGDATA';
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': String(body.length) });
+      res.end(body);
+    });
+    const port = await listen(server);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'ctblock.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      // No sec-fetch-dest and a neutral Accept — the request-side verdict is
+      // untyped, so `||ctblock.example^$image` cannot fire until the response
+      // names its real type.
+      const res = await withTimeout(
+        httpRequestOver(client, {
+          path: '/p.png',
+          host: 'ctblock.example',
+          headers: { accept: '*/*' },
+        }),
+        10_000,
+        'ct-reverdict GET',
+      );
+      expect(res.status).toBe(403);
+      expect(res.head.toLowerCase()).toContain('x-blockingmachine-rule: ||ctblock.example^$image');
+      expect(responseProxy.stats().responsesBlocked).toBe(before.responsesBlocked + 1);
+      await waitFor(() =>
+        responsePolicy
+          .list()
+          .some(
+            (e) =>
+              e.action === 'proxy_event' &&
+              e.host === 'ctblock.example' &&
+              (e.reason ?? '').startsWith('response-block'),
+          ),
+      );
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('over-cap html flushes byte-identical — never a partial injection', async () => {
+    const filler = 'x'.repeat(MAX_HTML_BUFFER + 1024);
+    const bigBody = `<html><body>${filler}</body></html>`;
+    const { server, port } = await htmlOrigin('cosmetic.example', bigBody);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'cosmetic.example' }),
+        15_000,
+        'over-cap GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toBe(bigBody);
+      expect(res.body).not.toContain('bm-c');
+      expect(responseProxy.stats().injectionsSkipped).toBe(before.injectionsSkipped + 1);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('$csp rule: the response gains the merged header even without injection', async () => {
+    const leaf = originCa.forgeLeaf('csp.example');
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      const body = 'plain';
+      res.writeHead(200, { 'content-type': 'text/plain', 'content-length': String(body.length) });
+      res.end(body);
+    });
+    const port = await listen(server);
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'csp.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'csp.example', headers: { accept: '*/*' } }),
+        10_000,
+        'csp GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toBe('plain');
+      expect(res.head.toLowerCase()).toContain("content-security-policy: script-src 'none'");
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('a 10 MB binary streams — first byte well ahead of the body completing', async () => {
+    const leaf = originCa.forgeLeaf('bigfile.example');
+    const SIZE = 10 * 1024 * 1024;
+    const CHUNK = 128 * 1024;
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-length': String(SIZE),
+      });
+      // Dribble 50ms per chunk (~4s total) — a buffering relay could not
+      // deliver byte 1 before the whole body landed.
+      let sent = 0;
+      const push = () => {
+        const n = Math.min(CHUNK, SIZE - sent);
+        sent += n;
+        res.write(Buffer.alloc(n, 'y'));
+        if (sent < SIZE) {
+          setTimeout(push, 50);
+        } else {
+          res.end();
+        }
+      };
+      push();
+    });
+    const port = await listen(server);
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'bigfile.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const started = Date.now();
+      const collected = new Promise<{ ttfb: number; bytes: number }>((resolve) => {
+        let ttfb = -1;
+        let bytes = 0;
+        let headSeen = false;
+        client.on('data', (chunk: Buffer) => {
+          if (ttfb < 0) {
+            ttfb = Date.now() - started;
+          }
+          let rest = chunk;
+          if (!headSeen) {
+            // Count the body only — the response head rides the first chunk.
+            const idx = chunk.indexOf('\r\n\r\n');
+            if (idx < 0) {
+              return;
+            }
+            headSeen = true;
+            rest = chunk.subarray(idx + 4);
+          }
+          bytes += rest.length;
+          if (bytes >= SIZE) {
+            resolve({ ttfb, bytes });
+          }
+        });
+      });
+      client.write(
+        'GET /blob HTTP/1.1\r\nHost: bigfile.example\r\nAccept: */*\r\nConnection: close\r\n\r\n',
+      );
+      const out = await withTimeout(collected, 20_000, '10MB streaming read');
+      expect(out.bytes).toBe(SIZE);
+      expect(out.ttfb).toBeLessThan(2_000);
+      client.destroy();
+    } finally {
+      await closeServer(server);
     }
   });
 });

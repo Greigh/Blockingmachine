@@ -37,8 +37,9 @@
  *    Per-request verdicts then run on every decrypted request — keep-alive
  *    connections may change Host (Review Focus #4).
  *
- * `reload(rawRules)` rebuilds the evaluator off the hot path and swaps the
- * reference — `RequestEvaluator` is immutable, so in-flight flows finish on
+ * `reload(rawRules, cosmeticIndex?)` rebuilds the evaluator off the hot path
+ * and swaps the reference (the cosmetic index riding alongside when the
+ * caller supplies one) — both are immutable, so in-flight flows finish on
  * the ruleset they started with. `setPaused(true)` is the protection toggle
  * the control API drives: every verdict point then blind-tunnels instead of
  * judging or terminating — protection off, connectivity never breaks
@@ -50,10 +51,12 @@
 import net, { isIP } from 'node:net';
 import {
   createRequestEvaluator,
+  type CosmeticIndex,
   type RequestEvaluator,
 } from '@blockingmachine/core';
 import { isValidSni, normalizeSni, type CertAuthority } from '../ca/certAuthority.js';
 import { LeafForgeQueue } from '../ca/leafForgeQueue.js';
+import type { ResponseEvent } from '../pipeline/response.js';
 import { applyRequestTransforms, inferContentType } from '../pipeline/transforms.js';
 import type { PolicyStore } from '../policy/policyStore.js';
 import {
@@ -83,6 +86,28 @@ export interface ProxyStats {
    * stays a flow rate: chatty keep-alives must not push it past 100.
    */
   requestsBlocked: number;
+  /**
+   * Per-response blocks inside terminated flows (P2 Task 3) — the
+   * response-content-type re-verdict refusing a body the request-side
+   * verdict allowed. Kept apart from `requestsBlocked` for the same
+   * rate-accounting reason: a response block is a request the upstream
+   * answered, not one we refused to send.
+   */
+  responsesBlocked: number;
+  /** Pages whose HTML actually received injected markup (not merely eligible). */
+  htmlInjected: number;
+  /** Supported scriptlet invocations emitted across all injections. */
+  scriptletsInvoked: number;
+  /** Scriptlet calls dropped because the name has no runtime implementation. */
+  skippedScriptlets: number;
+  /**
+   * Eligible-HTML responses delivered un-injected: body overflow past
+   * `MAX_HTML_BUFFER`, an empty render, or an injector error — all
+   * fail-open passes, counted so the gap is observable.
+   */
+  injectionsSkipped: number;
+  /** CSP header values widened for injection (counted only on real changes). */
+  cspRewrites: number;
   flowsTunneled: number;
   flowsTerminated: number;
   pinsLearned: number;
@@ -97,7 +122,13 @@ export interface RunningProxy {
   readonly port: number;
   close(): Promise<void>;
   stats(): ProxyStats;
-  reload(rawRules: string[]): void;
+  /**
+   * Swap the ruleset. `cosmeticIndex` rides alongside — the response
+   * pipeline's half of the same line file — so both faces of the ruleset
+   * change on the same call; omitted (direct `startProxy` callers without
+   * cosmetics) leaves the prior index in place.
+   */
+  reload(rawRules: string[], cosmeticIndex?: CosmeticIndex): void;
   /**
    * Protection pause — the `/v1/proxy/toggle` seam. While paused every
    * verdict point blind-tunnels: no evaluation, no termination, no forge —
@@ -122,6 +153,12 @@ export interface StartProxyOptions {
   /** Forges the leaf each terminated flow serves — required. */
   authority: CertAuthority;
   evaluator: RequestEvaluator;
+  /**
+   * The cosmetic index for the same ruleset (P2 Task 3) — absent, the
+   * response pipeline never sees injectable hosts and every response
+   * streams verbatim (still judged for `$csp` and content-type blocks).
+   */
+  cosmeticIndex?: CosmeticIndex;
   policy: PolicyStore;
   /**
    * Extra PEM roots merged over `tls.rootCertificates` for upstream
@@ -160,6 +197,20 @@ const HEADER_END = '\r\n\r\n';
 
 function sanitizeHeaderValue(value: string): string {
   return value.replace(/[\r\n]/g, '');
+}
+
+/**
+ * The hostname an absolute request URL resolves to — the authority the
+ * evaluator judged and the cosmetic index keys on. Unparseable (never seen
+ * in practice — the URL was just evaluated) falls back to the header
+ * authority stripped of its port.
+ */
+function urlHost(url: string, fallbackAuthority: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return splitHostPort(fallbackAuthority, 443)?.host ?? fallbackAuthority;
+  }
 }
 
 /**
@@ -234,6 +285,9 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   // self-target guard must compare the *bound* port, captured below.
   let boundDataPort = dataPort;
   let evaluator = opts.evaluator;
+  // Snapshotted per flow next to `flowEvaluator` — a mid-flow reload must
+  // not swap the cosmetic payload under in-flight responses either.
+  let cosmeticIndex = opts.cosmeticIndex;
   let paused = false;
   /**
    * Engine teardown in progress — set by `close()` before the tracked
@@ -252,12 +306,60 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     flowsTotal: 0,
     flowsBlocked: 0,
     requestsBlocked: 0,
+    responsesBlocked: 0,
+    htmlInjected: 0,
+    scriptletsInvoked: 0,
+    skippedScriptlets: 0,
+    injectionsSkipped: 0,
+    cspRewrites: 0,
     flowsTunneled: 0,
     flowsTerminated: 0,
     pinsLearned: 0,
     rulesSize: evaluator.size,
   };
   const sockets = new Set<net.Socket>();
+
+  /**
+   * The response pipeline's stat/ledger sink — the relay emits
+   * {@link ResponseEvent}s; counters bump here, and the ledgerable kinds
+   * (block / inject / csp-rewrite) land one `proxy_event` line per host per
+   * session (the store dedupes — the journal is an audit trail, not a
+   * counter). `inject-skip` is a counter only: expected noise, not an audit
+   * fact.
+   */
+  const ledgerEvent = (host: string, reason: string): void => {
+    // An empty host is a relay-side guard path, not a ledger fact — and
+    // `recordEvent` (rightly) refuses it.
+    if (host !== '') {
+      policy.recordEvent(host, reason);
+    }
+  };
+  const onResponseEvent = (event: ResponseEvent): void => {
+    switch (event.kind) {
+      case 'response-block':
+        stats.responsesBlocked++;
+        // The covering rule is list text (like a learned pin's reason tag),
+        // never page data — hostname-only still holds.
+        ledgerEvent(
+          event.host,
+          `response-block${event.rule !== null && event.rule !== '' ? ` ${event.rule}` : ''}`,
+        );
+        return;
+      case 'html-inject':
+        stats.htmlInjected++;
+        stats.scriptletsInvoked += event.scriptlets;
+        stats.skippedScriptlets += event.skippedScriptlets;
+        ledgerEvent(event.host, 'html-inject');
+        return;
+      case 'csp-rewrite':
+        stats.cspRewrites += event.count;
+        ledgerEvent(event.host, 'csp-rewrite');
+        return;
+      case 'inject-skip':
+        stats.injectionsSkipped++;
+        return;
+    }
+  };
 
   function track(sock: net.Socket): void {
     sockets.add(sock);
@@ -383,6 +485,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     }
     stats.flowsTerminated++;
     const flowEvaluator = evaluator;
+    const flowCosmeticIndex = cosmeticIndex;
     // The pinning signal is the CLIENT refusing the forged leaf — a close
     // before `secureConnection` that the client chose. A close this engine
     // chose reads identically on the wire but is not distrust: `close()`
@@ -435,7 +538,9 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         }
         // allowed/exception both relay — request-side transforms (removeparam/
         // removeheader) run first. `transforms.csp` is a response-header
-        // rewrite whose side is P2, so it passes through unapplied here.
+        // rewrite: it rides the `response` context into the relay, where the
+        // response-head seam applies it (P2 Task 3) alongside the
+        // content-type re-verdict and cosmetic injection.
         const transformed = applyRequestTransforms(
           req.url,
           req.headers,
@@ -445,6 +550,26 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           upstreamCaCerts: opts.upstreamCaCerts,
           connectTimeoutMs: opts.upstreamConnectTimeoutMs,
           responseTimeoutMs: opts.upstreamResponseTimeoutMs,
+          response: {
+            url,
+            // The verdict-judged authority is the absolute URL's hostname —
+            // absolute-form can override `Host`, and the port must come off
+            // either way (the cosmetic index keys on bare hostnames).
+            host: urlHost(url, req.host),
+            method: req.method,
+            verdict,
+            requestContentType: contentType,
+            cosmeticIndex: flowCosmeticIndex,
+            // The evaluator's (url, ctx) call adapted to the pipeline's
+            // context-object signature — same URL/method, content-type from
+            // the response's real media type.
+            evaluateTyped: (ctx) =>
+              flowEvaluator.evaluate(ctx.url, {
+                method: ctx.method,
+                contentType: ctx.contentType,
+              }),
+            onEvent: onResponseEvent,
+          },
         });
       },
       {
@@ -961,10 +1086,13 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       resolve({
         port,
         stats: () => ({ ...stats }),
-        reload(rawRules: string[]) {
+        reload(rawRules: string[], newCosmeticIndex?: CosmeticIndex) {
           // Rebuild off the hot path, then swap — in-flight flows finish on
-          // the evaluator they started with.
+          // the evaluator and cosmetic index they started with.
           evaluator = createRequestEvaluator(rawRules);
+          if (newCosmeticIndex !== undefined) {
+            cosmeticIndex = newCosmeticIndex;
+          }
           stats.rulesSize = evaluator.size;
         },
         setPaused(next: boolean) {

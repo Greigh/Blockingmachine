@@ -10,7 +10,7 @@
 import { readFile } from 'node:fs/promises';
 import type http from 'node:http';
 import { join } from 'node:path';
-import { createRequestEvaluator } from '@blockingmachine/core';
+import { createCosmeticIndex, createRequestEvaluator } from '@blockingmachine/core';
 import { CertAuthority } from './ca/certAuthority.js';
 import type { KeyWrapBackend } from './ca/keyWrap.js';
 import { startControlServer } from './control.js';
@@ -149,6 +149,10 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
     controlPort,
     authority,
     evaluator: createRequestEvaluator(rules),
+    // Same rule file, second face: the cosmetic index the response
+    // pipeline consults per host. One index build feeds both — a reload
+    // swaps them together.
+    cosmeticIndex: createCosmeticIndex(rules),
     policy,
   });
 
@@ -157,7 +161,7 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
       throw new Error('no rulesPath configured');
     }
     const lines = (await readFile(config.rulesPath, 'utf8')).split('\n');
-    proxy.reload(lines);
+    proxy.reload(lines, createCosmeticIndex(lines));
     return proxy.stats().rulesSize;
   };
 
