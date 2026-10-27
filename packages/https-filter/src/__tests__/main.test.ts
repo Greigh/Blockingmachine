@@ -13,13 +13,14 @@
 
 import { afterEach, beforeAll, describe, expect, jest, test } from '@jest/globals';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { configFromEnv } from '../main.js';
+import { configFromEnv, parentPidAlive, startParentWatchdog } from '../main.js';
 
 jest.setTimeout(60_000);
 
@@ -104,6 +105,19 @@ function exitCode(child: ChildProcess): Promise<number> {
     if (child.exitCode !== null) return resolve(child.exitCode);
     child.once('exit', (code) => resolve(code ?? -1));
   });
+}
+
+/** A pid guaranteed to answer ESRCH right now — scanned, not guessed. */
+function deadPid(): number {
+  for (let pid = 40_000; pid <= 99_999; pid += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ESRCH') return pid;
+      // EPERM — a live pid owned by another euid; keep scanning.
+    }
+  }
+  throw new Error('no dead pid found in the scanned range');
 }
 
 /** Poll the control port until it answers or the child dies — spawn() returning is not "up". */
@@ -233,6 +247,109 @@ describe('configFromEnv', () => {
       expect(parsed.ok).toBe(true);
       if (parsed.ok) expect(parsed.config.controlBindHost).toBe(good);
     }
+  });
+
+  test('BM_PARENT_PID parses a decimal pid; garbage/0/negative read as unset', () => {
+    const armed = configFromEnv({ BM_STORE_DIR: '/tmp/x', BM_PARENT_PID: '4242' });
+    expect(armed.ok).toBe(true);
+    if (armed.ok) expect(armed.config.parentPid).toBe(4242);
+
+    // Every non-decimal-pid spelling falls through to unset — a misparsed
+    // value must never arm a watchdog against a healthy engine. pid 0 is
+    // rejected outright: kill(0, sig) probes the caller's own process
+    // GROUP, which always reads alive and would silently never fire.
+    for (const bogus of ['0', '-5', 'abc', '12.3', '  ', '1e4', '0x10', '99999999999']) {
+      const parsed = configFromEnv({ BM_STORE_DIR: '/tmp/x', BM_PARENT_PID: bogus });
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.config.parentPid).toBeUndefined();
+    }
+
+    const unset = configFromEnv({ BM_STORE_DIR: '/tmp/x' });
+    expect(unset.ok).toBe(true);
+    if (unset.ok) expect(unset.config.parentPid).toBeUndefined();
+  });
+});
+
+describe('parent watchdog (BM_PARENT_PID)', () => {
+  /**
+   * A signal-0 probe stub — the platform-real `process.kill` outcomes
+   * without fixtures: success = alive, ESRCH = gone, EPERM = alive under a
+   * different euid (the service-account posture), anything else = the probe
+   * itself failed and must never retire an engine.
+   */
+  function probeThrowing(code: string) {
+    return (): boolean => {
+      const err = new Error(code) as NodeJS.ErrnoException;
+      err.code = code;
+      throw err;
+    };
+  }
+
+  test('parentPidAlive: ESRCH alone reads gone — EPERM and other failures read alive', () => {
+    expect(parentPidAlive(4242, () => true)).toBe(true);
+    expect(parentPidAlive(4242, probeThrowing('EPERM'))).toBe(true);
+    expect(parentPidAlive(4242, probeThrowing('EACCES'))).toBe(true);
+    expect(parentPidAlive(4242, probeThrowing('ESRCH'))).toBe(false);
+  });
+
+  test('a parent already dead fires onParentGone at arm time — no interval wait', () => {
+    let gone = 0;
+    const w = startParentWatchdog(4242, () => {
+      gone += 1;
+    }, 10, probeThrowing('ESRCH'));
+    expect(gone).toBe(1);
+    w.stop();
+    expect(gone).toBe(1); // stop() after the fact cannot re-fire
+  });
+
+  test('an alive-then-dead parent fires exactly once on the interval tick', async () => {
+    let probes = 0;
+    const flip = (): boolean => {
+      probes += 1;
+      if (probes >= 4) {
+        const err = new Error('gone') as NodeJS.ErrnoException;
+        err.code = 'ESRCH';
+        throw err;
+      }
+      return true;
+    };
+    let gone = 0;
+    const w = startParentWatchdog(
+      4242,
+      () => {
+        gone += 1;
+      },
+      25,
+      flip,
+    );
+    // Probes 1–3 (arm + first two ~25ms ticks) read alive — by 50ms at most
+    // two ticks have run, so ESRCH cannot have been seen yet.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(gone).toBe(0);
+    // Probe 4 (~75ms) reads ESRCH — fire once, then the watchdog disarms
+    // itself: later ticks must not re-enter shutdown.
+    await new Promise((r) => setTimeout(r, 120));
+    expect(gone).toBe(1);
+    const callsAtFire = probes;
+    await new Promise((r) => setTimeout(r, 80));
+    expect(gone).toBe(1);
+    expect(probes).toBe(callsAtFire);
+    w.stop();
+  });
+
+  test('EPERM across every probe never fires — an unsignalable parent is still alive', async () => {
+    let gone = 0;
+    const w = startParentWatchdog(
+      4242,
+      () => {
+        gone += 1;
+      },
+      15,
+      probeThrowing('EPERM'),
+    );
+    await new Promise((r) => setTimeout(r, 70));
+    expect(gone).toBe(0);
+    w.stop();
   });
 });
 
@@ -371,6 +488,100 @@ describe('dist/main.js spawned', () => {
     expect(code).toBe(2);
     expect(stderr()).toContain('BM_CONTROL_BIND_HOST');
     expect(stderr()).toContain('loopback');
+  });
+
+  test('BM_PARENT_PID of a dead process exits 0 — the engine refuses to start orphaned', async () => {
+    // The boot-time probe (before any CA/store work) reads ESRCH and exits
+    // without ever binding — a detached child whose parent died between
+    // spawn and startup must not become an orphan.
+    const storeDir = await tempDir('bm-proxy-orphan-');
+    const dataPort = await freePort();
+    const controlPort = await freePort();
+    const { child, stderr } = spawnEngine({
+      BM_STORE_DIR: storeDir,
+      BM_DATA_PORT: String(dataPort),
+      BM_CONTROL_PORT: String(controlPort),
+      BM_PARENT_PID: String(deadPid()),
+    });
+    const code = await exitCode(child);
+    expect(code).toBe(0);
+    expect(stderr()).toContain('BM_PARENT_PID');
+    expect(stderr()).toContain('gone');
+  });
+
+  test('BM_PARENT_PID of a live process stays up — the watchdog probes and keeps serving', async () => {
+    // A real live parent: a scratch child that just sleeps. The engine
+    // must boot AND stay up past the boot probe — signal 0 on a live pid
+    // succeeds (same euid), so no shutdown is initiated.
+    const dummy = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30_000)'], { stdio: 'ignore' });
+    children.push(dummy);
+    const storeDir = await tempDir('bm-proxy-parent-');
+    const dataPort = await freePort();
+    const controlPort = await freePort();
+    const { child } = spawnEngine({
+      BM_STORE_DIR: storeDir,
+      BM_DATA_PORT: String(dataPort),
+      BM_CONTROL_PORT: String(controlPort),
+      BM_PARENT_PID: String(dummy.pid),
+    });
+    const status = await waitForStatus(child, controlPort);
+    expect(status.status).toBe('running');
+    // A beat past the boot probe and into interval territory — still up.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(child.exitCode).toBeNull();
+    child.kill('SIGTERM');
+    expect(await exitCode(child)).toBe(0);
+  });
+
+  test('BM_PARENT_PID=1 stays up — EPERM reads as alive, never as gone', async () => {
+    // pid 1 (launchd/init) is owned by root: a non-root suite probes EPERM,
+    // a root suite probes success — BOTH read alive, so the engine stays
+    // up either way. The EPERM-never-gone semantic itself is pinned above
+    // by the injected-kill unit tests.
+    const storeDir = await tempDir('bm-proxy-pidone-');
+    const dataPort = await freePort();
+    const controlPort = await freePort();
+    const { child } = spawnEngine({
+      BM_STORE_DIR: storeDir,
+      BM_DATA_PORT: String(dataPort),
+      BM_CONTROL_PORT: String(controlPort),
+      BM_PARENT_PID: '1',
+    });
+    const status = await waitForStatus(child, controlPort);
+    expect(status.status).toBe('running');
+    await new Promise((r) => setTimeout(r, 500));
+    expect(child.exitCode).toBeNull();
+    child.kill('SIGTERM');
+    expect(await exitCode(child)).toBe(0);
+  });
+
+  test('a parent dying mid-run retires the engine inside the watchdog bound', async () => {
+    // The flag-101 scenario end-to-end: engine up under a live parent, the
+    // parent dies, the unref'd ~10s probe reads ESRCH and the engine runs
+    // its own graceful shutdown (exit 0) without any stop() call.
+    const dummy = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+    children.push(dummy);
+    const storeDir = await tempDir('bm-proxy-middeath-');
+    const dataPort = await freePort();
+    const controlPort = await freePort();
+    const { child, stderr } = spawnEngine({
+      BM_STORE_DIR: storeDir,
+      BM_DATA_PORT: String(dataPort),
+      BM_CONTROL_PORT: String(controlPort),
+      BM_PARENT_PID: String(dummy.pid),
+    });
+    await waitForStatus(child, controlPort);
+
+    dummy.kill('SIGKILL');
+    // Reap the zombie first — kill(2) signal 0 succeeds on a zombie pid,
+    // so ESRCH only appears after libuv's exit reaping.
+    await once(dummy, 'exit');
+
+    // Resolves on the child's exit — bounded by the ~10s probe interval
+    // plus the graceful close, well under the suite timeout.
+    const code = await exitCode(child);
+    expect(code).toBe(0);
+    expect(stderr()).toContain('gone');
   });
 
   test('BM_KEYWRAP=off leaves no OS-keystore trace — CA reports keyWrapped:false', async () => {

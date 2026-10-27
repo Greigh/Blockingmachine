@@ -229,6 +229,25 @@ describe('macos capture scripts — hygiene', () => {
     expect(text).toMatch(/launchctl kickstart -k system\/com\.blockingmachine\.natlook/);
     expect(text).toMatch(/pfctl -a "\$ANCHOR_NAME" -F all/);
   });
+
+  test('rehearse --root-squat leg drives the real installer under root and asserts the refusal', () => {
+    const text = readFileSync(REHEARSE, 'utf8');
+    expect(text).toContain('--root-squat');
+    // The leg runs the REAL installer (not --preflight-only) so the refusal
+    // is proven mid-flow, under the script's own root context.
+    expect(text).toContain('bash "$INSTALL" "$BUNDLE_PATH" "$ENGINE_RUNNER" 2>&1');
+    expect(text).toContain('an engine already listens on :9293/:9294');
+    // The squat listener binds :9294 and is verified through the SAME lsof
+    // probe the installer runs — a vacuous bind cannot pass the leg.
+    expect(text).toMatch(/lsof -nP -iTCP:"\$ENGINE_PORT" -sTCP:LISTEN/);
+    // Post-state assertions: no new service account, and every artifact
+    // the installer would touch absent-or-byte-identical (fingerprint tsv).
+    expect(text).toMatch(/dscl \. -read "\/Users\/_blockingmachine"/);
+    expect(text).toContain('before.tsv');
+    // Squat-mode cleanup is scoped to the squatter — it must never run the
+    // rehearsal's uninstall/flush path on a real install.
+    expect(text).toMatch(/ROOT_SQUAT -eq 1/);
+  });
 });
 
 (hasBash ? describe : describe.skip)('macos capture scripts — render-only artifacts', () => {

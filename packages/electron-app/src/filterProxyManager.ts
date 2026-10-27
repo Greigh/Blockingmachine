@@ -596,6 +596,10 @@ export class FilterProxyManager {
       BM_DATA_PORT: String(this.dataPort),
       BM_CONTROL_PORT: String(this.controlPort),
       BM_BIND_HOST: this.bindHost,
+      // Detached + unref'd outlives an app quit — flag-101's watchdog bounds
+      // that orphan to ~10s: our pid rides BM_PARENT_PID and the engine
+      // self-retires the moment its signal-0 probe reads ESRCH.
+      BM_PARENT_PID: String(process.pid),
       ...(rulesPath ? { BM_RULES_PATH: rulesPath } : {}),
     };
 
@@ -708,9 +712,11 @@ export class FilterProxyManager {
     }
 
     // Orphaned user-context engine: nothing this manager spawned, no capture
-    // service, but an engine still answers the control port. It cannot be
-    // killed (no handle, and kill(2) is not the posture anyway) — the
-    // shutdown route it exposes is the graceful retire.
+    // service, but an engine still answers the control port — a child from
+    // before BM_PARENT_PID (or one launched by other means); fresh spawns
+    // carry the watchdog pid and self-retire ~10s after an app quit. This
+    // one cannot be killed (no handle, and kill(2) is not the posture
+    // anyway) — the shutdown route it exposes is the graceful retire.
     const current = await this.getStatus();
     if (current.status === 'stopped') {
       return {

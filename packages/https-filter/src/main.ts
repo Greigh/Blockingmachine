@@ -37,6 +37,21 @@
  *                    false`, zero OS-keystore contact); unset or any other
  *                    value auto-resolves the platform keystore. Test/dev
  *                    rigs that must never touch a real keychain set 'off'.
+ *   BM_PARENT_PID    optional — decimal pid of the spawning parent, probed
+ *                    with signal 0 once at boot then every ~10 s on an
+ *                    unref'd interval: ESRCH (parent gone) runs the same
+ *                    graceful shutdown the signals and /v1/proxy/shutdown
+ *                    take; EPERM (alive, another euid) keeps going. The app
+ *                    sets it on the detached child it spawns so an app quit
+ *                    cannot orphan an engine still holding both listeners
+ *                    and the unauthenticated shutdown route (flag 101 —
+ *                    the bound is ~10 s, not "until the next stop()"). The
+ *                    launchd plist never sets it: launchd IS the supervisor
+ *                    and KeepAlive governs. Garbage reads as unset — a
+ *                    misparsed pid must never arm a watchdog against a
+ *                    healthy engine. Residual: a pid recycled into another
+ *                    live process reads alive — reuse postpones the bound,
+ *                    it cannot break it.
  *
  * Garbage port values fall back to the defaults rather than binding a surprise
  * port. One stderr line announces the bound ports on success — that line is how
@@ -68,6 +83,12 @@ export interface SpawnedProxyConfig {
   dataPort: number;
   controlPort: number;
   /**
+   * `BM_PARENT_PID` — pid of the spawning parent, watched by the flag-101
+   * watchdog (`startParentWatchdog`); absent or unparseable leaves the
+   * field unset and no watchdog arms.
+   */
+  parentPid?: number;
+  /**
    * `null` pins key-wrap off (BM_KEYWRAP=off|none|0); absent auto-resolves
    * the OS keystore. Env can only express the pin — callers that need a
    * bespoke backend construct `FilterProxyConfig` directly.
@@ -96,6 +117,84 @@ function envPort(raw: string | undefined, fallback: number): number {
   return parsed <= 65535 ? parsed : fallback;
 }
 
+/**
+ * Decimal pid or nothing — `parseInt`/`Number` would accept '123abc'/'0x10'
+ * the same way they butcher ports, so digits only and ≥ 1 (pid 0 probes the
+ * caller's own process GROUP, never a parent). Garbage reads as unset: a
+ * misparsed value must never arm a watchdog against a healthy engine.
+ */
+function envPid(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const text = raw.trim();
+  if (!/^\d{1,10}$/.test(text)) return undefined;
+  const pid = Number(text);
+  return pid >= 1 ? pid : undefined;
+}
+
+/** Watchdog cadence — the flag-101 orphan bound is this interval. */
+const PARENT_WATCHDOG_INTERVAL_MS = 10_000;
+
+/**
+ * Signal-0 liveness of the watched parent pid. Only ESRCH reads "gone":
+ * EPERM means the pid lives but is owned by another euid — a live parent
+ * the engine merely may not signal — and any other probe failure must
+ * never retire a healthy engine. `kill` is injectable so the semantics
+ * pin deterministically without platform-specific fixtures.
+ */
+export function parentPidAlive(
+  parentPid: number,
+  kill: (pid: number, signal?: number | string) => boolean = process.kill,
+): boolean {
+  try {
+    kill(parentPid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+export interface ParentWatchdog {
+  /** Disarms the probe — the shutdown paths call it as they run. */
+  stop(): void;
+}
+
+/**
+ * Arms the BM_PARENT_PID watchdog (flag 101): probes once immediately — a
+ * parent that died during the (slow, CA-minting) boot must not wait a full
+ * interval to be noticed — then every `intervalMs` on an unref'd timer so
+ * the watchdog itself never holds the engine's event loop open.
+ * `onParentGone` is the idempotent shutdown the signals and the control
+ * route share; it fires at most once per watchdog.
+ */
+export function startParentWatchdog(
+  parentPid: number,
+  onParentGone: () => void,
+  intervalMs: number = PARENT_WATCHDOG_INTERVAL_MS,
+  kill: (pid: number, signal?: number | string) => boolean = process.kill,
+): ParentWatchdog {
+  let fired = false;
+  let timer: NodeJS.Timeout | undefined;
+  const stop = (): void => {
+    fired = true;
+    if (timer !== undefined) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  };
+  const probe = (): void => {
+    if (!fired && !parentPidAlive(parentPid, kill)) {
+      stop();
+      onParentGone();
+    }
+  };
+  probe(); // boot-time check — catches a parent already gone
+  if (!fired) {
+    timer = setInterval(probe, intervalMs);
+    timer.unref();
+  }
+  return { stop };
+}
+
 export function configFromEnv(env: NodeJS.ProcessEnv): EnvParse {
   const storeDir = env.BM_STORE_DIR?.trim();
   if (!storeDir) {
@@ -117,6 +216,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv): EnvParse {
     };
   }
   const keyWrap = env.BM_KEYWRAP?.trim().toLowerCase();
+  const parentPid = envPid(env.BM_PARENT_PID);
   return {
     ok: true,
     config: {
@@ -126,6 +226,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv): EnvParse {
       controlBindHost: controlBindHost || DEFAULT_BIND_HOST,
       dataPort: envPort(env.BM_DATA_PORT, DEFAULT_DATA_PORT),
       controlPort: envPort(env.BM_CONTROL_PORT, DEFAULT_CONTROL_PORT),
+      ...(parentPid !== undefined ? { parentPid } : {}),
       ...(keyWrap === 'off' || keyWrap === 'none' || keyWrap === '0'
         ? { keyWrapBackend: null }
         : {}),
@@ -139,15 +240,24 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     stderrLine(`fatal: ${parsed.error}`);
     process.exit(2);
   }
+  // A parent already gone is caught before any CA/store work — the "came
+  // up" contract exists for the parent's sake, and a dead parent cannot
+  // hear it. Exit 0: nothing failed, the contract just never existed.
+  if (parsed.config.parentPid !== undefined && !parentPidAlive(parsed.config.parentPid)) {
+    stderrLine(`BM_PARENT_PID ${parsed.config.parentPid} is already gone — exiting without startup`);
+    process.exit(0);
+  }
   // `running`/`shutdown` are declared before startFilterProxy so the config
   // can hand the control API's shutdown route the same close+exit path the
   // signals take — the route can only fire once the control port listens,
   // which is after `running` is assigned.
   let running: RunningFilterProxy;
   let closing = false;
+  let watchdog: ParentWatchdog | undefined;
   const shutdown = (signal: string) => {
     if (closing) return; // a second signal during close must not re-enter it
     closing = true;
+    watchdog?.stop(); // the probe's job ends when ANY teardown begins
     stderrLine(`${signal} received — shutting down`);
     running
       .close()
@@ -178,6 +288,15 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   stderrLine(
     `listening: control ${parsed.config.controlBindHost}:${running.controlPort} data ${parsed.config.bindHost}:${running.proxy.port}`,
   );
+
+  // Flag-101 bound: a detached + unref'd child outlives an app quit holding
+  // both listeners and the unauthenticated shutdown route — until now that
+  // orphan lived until the next stop(). The watchdog retires it on ESRCH
+  // through the same idempotent shutdown the signals and the route share.
+  if (parsed.config.parentPid !== undefined) {
+    const parentPid = parsed.config.parentPid;
+    watchdog = startParentWatchdog(parentPid, () => shutdown(`BM_PARENT_PID ${parentPid} gone`));
+  }
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

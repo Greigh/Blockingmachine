@@ -5,7 +5,7 @@
 #
 # THIS SCRIPT MUST BE RUN AS ROOT:
 #
-#     sudo scripts/macos-capture-rehearse.sh <engineBundlePath> <engineRunner>
+#     sudo scripts/macos-capture-rehearse.sh [--root-squat] <engineBundlePath> <engineRunner>
 #
 # It does not and will not self-escalate — no sudo/osascript wrappers are
 # invoked from inside; an operator (or the app's administrator-privileges
@@ -41,6 +41,20 @@
 #      a publicly-rooted cert proves traffic flows direct upstream
 #  10. uninstall (uninstall-macos-capture.sh), report PASS
 #
+# --root-squat variant (flag 103): proves the installer's squat refusal
+# inside the REAL install path under root — the --preflight-only test seam
+# drives port_preflight alone, without root; this leg binds a stub listener
+# on :9294 and runs the actual installer under this script's root context,
+# asserting all three honest outcomes:
+#   * exit 1, naming the squatter ("an engine already listens on :9293/:9294")
+#   * no _blockingmachine account or group created
+#   * zero artifacts touched — anchor, both plists, state file, helper,
+#     pf-anchor.sh, store/log/app-support dirs each absent-or-byte-identical
+# It never proceeds to the rehearsal sequence, and its cleanup only reaps
+# the squatter — it cannot flush/bootout/uninstall a real install the way
+# the rehearsal's trap does by design. Same non-auto-run posture: a flag an
+# operator passes under sudo, never invoked from inside anything.
+#
 # Env knobs (operator overrides; not secrets):
 #   REHEARSE_ALLOWED_URL   default https://example.com/
 #   REHEARSE_WAIT_ENGINE_S default 60
@@ -57,6 +71,7 @@ UNINSTALL="$SCRIPT_DIR/uninstall-macos-capture.sh"
 
 ANCHOR_NAME="com.apple/com.blockingmachine"
 CONTROL="http://127.0.0.1:9293"
+ENGINE_PORT=9294
 STORE_DIR="/Users/Shared/Blockingmachine/https-filter"
 RULES_FILE="$STORE_DIR/rehearsal-block.rules"
 BLOCKED_HOST="rehearsal-block.example.com"
@@ -83,11 +98,29 @@ json_int() {
 
 WORK=""
 CLEANUP_DONE=0
+SQUAT_PID=""
+# --root-squat is detected BEFORE the trap installs: cleanup must know the
+# mode on every exit path, including arg-parse failures. (Detected here so
+# cleanup's squat branch is correct even if we die before the arg shift.)
+ROOT_SQUAT=0
+for _a in "$@"; do
+  if [[ "$_a" == "--root-squat" ]]; then ROOT_SQUAT=1; fi
+done
 cleanup() {
   local rc=$?
   if [[ $CLEANUP_DONE -eq 1 ]]; then return; fi
   CLEANUP_DONE=1
   trap - EXIT INT TERM
+  if [[ $ROOT_SQUAT -eq 1 ]]; then
+    # The variant installs nothing — the only thing to reap is the
+    # squatter. Deliberately NOT the rehearsal's flush/bootout/uninstall:
+    # a real install on this machine must survive a --root-squat run
+    # untouched.
+    echo "[rehearse] cleanup: killing squat listener (rc=$rc)"
+    if [[ -n "$SQUAT_PID" ]]; then kill "$SQUAT_PID" 2>/dev/null || true; fi
+    if [[ -n "$WORK" && -d "$WORK" ]]; then rm -rf "$WORK"; fi
+    return
+  fi
   echo "[rehearse] cleanup: flushing anchor + booting out daemons (rc=$rc)"
   pfctl -a "$ANCHOR_NAME" -F all >/dev/null 2>&1 || true
   launchctl bootout system/com.blockingmachine.natlook >/dev/null 2>&1 || true
@@ -107,18 +140,113 @@ usage() {
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; fi
+if [[ "${1:-}" == "--root-squat" ]]; then shift; fi
 [[ $# -ge 2 ]] || usage
 [[ $EUID -eq 0 ]] || { echo "[rehearse] must run as root: sudo $0 <engineBundlePath> <engineRunner>" >&2; exit 2; }
 [[ "$(uname -s)" == "Darwin" ]] || { echo "[rehearse] macOS only" >&2; exit 2; }
 
 BUNDLE_PATH="$1"
 ENGINE_RUNNER="$2"
-[[ -f "$BUNDLE_PATH" ]] || { echo "[rehearse] engine bundle not found: $BUNDLE_PATH" >&2; exit 2; }
+# The variant passes these argv straight to the installer — which dies at
+# its own port preflight long before the bundle path is read, so a real
+# file is required for the full rehearsal only.
+if [[ $ROOT_SQUAT -eq 0 ]]; then
+  [[ -f "$BUNDLE_PATH" ]] || { echo "[rehearse] engine bundle not found: $BUNDLE_PATH" >&2; exit 2; }
+fi
 command -v curl >/dev/null || { echo "[rehearse] curl required" >&2; exit 2; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/bm-rehearse.XXXXXX")"
 chmod 0755 "$WORK" # _blockingmachine must traverse to read nothing here, but keep it sane
 CA_PEM="$WORK/engine-ca.pem"
+
+# ------------------------------------------------------------------ #
+# --root-squat: prove the installer's squat refusal under root (flag 103)
+# ------------------------------------------------------------------ #
+
+if [[ $ROOT_SQUAT -eq 1 ]]; then
+  # Everything the real install path would mutate — fingerprinted so the
+  # post-run assertion is "absent or byte-identical", never "looks fine".
+  ARTIFACTS=(
+    "/etc/pf.anchors/com.blockingmachine"
+    "/etc/blockingmachine-capture.state"
+    "/Library/LaunchDaemons/com.blockingmachine.natlook.plist"
+    "/Library/LaunchDaemons/com.blockingmachine.proxy.plist"
+    "/Library/Application Support/Blockingmachine/natlook-helper"
+    "/Library/Application Support/Blockingmachine/pf-anchor.sh"
+    "/Library/Application Support/Blockingmachine"
+    "$STORE_DIR"
+    "/Library/Logs/Blockingmachine"
+  )
+
+  # fingerprint <path> — "ABSENT", "DIR:<mtime>", or
+  # "FILE:<sha256>:<mtime>:<size>"; a same-path rewrite still counts as a
+  # touch, and a refused installer writes nothing at all.
+  fingerprint() {
+    local p="$1"
+    if [[ ! -e "$p" ]]; then echo "ABSENT"; return; fi
+    if [[ -d "$p" ]]; then echo "DIR:$(stat -f '%m' "$p")"; return; fi
+    echo "FILE:$(shasum -a 256 "$p" | awk '{print $1}'):$(stat -f '%m:%z' "$p")"
+  }
+  user_exists() { dscl . -read "/Users/_blockingmachine" >/dev/null 2>&1; }
+  group_exists() { dscl . -read "/Groups/_blockingmachine" >/dev/null 2>&1; }
+
+  begin "squat leg — snapshot pre-state, then bind a stub listener on :$ENGINE_PORT"
+  pre_user=0; if user_exists; then pre_user=1; fi
+  pre_group=0; if group_exists; then pre_group=1; fi
+  : > "$WORK/before.tsv"
+  for p in "${ARTIFACTS[@]}"; do
+    printf '%s\t%s\n' "$p" "$(fingerprint "$p")" >> "$WORK/before.tsv"
+  done
+
+  # The stub squatter: python3 (always a bound socket, no client needed),
+  # nc fallback. The lsof gate below is the SAME probe the installer runs —
+  # if the kernel does not see a listener, the refusal asserts vacuously.
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$ENGINE_PORT" <<'PY' &
+import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1])))
+s.listen(1)
+time.sleep(300)
+PY
+    SQUAT_PID=$!
+  elif command -v nc >/dev/null 2>&1; then
+    nc -k -l 127.0.0.1 "$ENGINE_PORT" >/dev/null 2>&1 &
+    SQUAT_PID=$!
+  else
+    fail "need python3 or nc to hold the squat listener on :$ENGINE_PORT"
+  fi
+  sleep 1
+  lsof -nP -iTCP:"$ENGINE_PORT" -sTCP:LISTEN >/dev/null 2>&1 \
+    || fail "squat listener never bound :$ENGINE_PORT"
+  log "squatter bound :$ENGINE_PORT (pid $SQUAT_PID)"
+
+  begin "install under squat — must exit 1 naming the squatter"
+  rc=0
+  install_out="$(bash "$INSTALL" "$BUNDLE_PATH" "$ENGINE_RUNNER" 2>&1)" || rc=$?
+  [[ $rc -eq 1 ]] || fail "installer exited $rc under a squatted :$ENGINE_PORT (want 1) — output: $install_out"
+  [[ "$install_out" == *"an engine already listens on :9293/:9294"* ]] \
+    || fail "installer died without the squat refusal — output: $install_out"
+  log "installer refused, naming the squatter"
+
+  begin "post-state — no new account/group, zero touched artifacts"
+  if [[ $pre_user -eq 0 ]] && user_exists; then
+    fail "installer created the _blockingmachine user despite refusing"
+  fi
+  if [[ $pre_group -eq 0 ]] && group_exists; then
+    fail "installer created the _blockingmachine group despite refusing"
+  fi
+  while IFS=$'\t' read -r p fp; do
+    now="$(fingerprint "$p")"
+    [[ "$now" == "$fp" ]] || fail "installer touched $p — was '$fp', now '$now'"
+  done < "$WORK/before.tsv"
+
+  kill "$SQUAT_PID" 2>/dev/null || true
+  SQUAT_PID=""
+  echo "[rehearse] PASS — install under a squatted :${ENGINE_PORT} died cleanly: named the squatter, wrote nothing, created no account"
+  exit 0
+fi
 
 # ------------------------------------------------------------------ #
 
