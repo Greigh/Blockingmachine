@@ -96,6 +96,18 @@ interface RunResult {
 }
 
 /**
+ * The spawn seam behind a backend — argv array, optional stdin, bounded by
+ * the caller's timeout. Injectable so tests can drive backend logic
+ * (locked-keychain probes, failure exits) without touching a real OS
+ * credential store. The production default is {@link runFile}.
+ */
+export type KeyWrapRunner = (
+  file: string,
+  args: string[],
+  opts?: { input?: Buffer; env?: NodeJS.ProcessEnv; timeoutMs?: number },
+) => Promise<RunResult>;
+
+/**
  * argv-array spawn with optional stdin and a kill-on-timeout bound — the
  * repo's no-shell convention. The returned error never echoes args/stdin:
  * store calls carry secret material on stdin and argv contents are nobody's
@@ -233,21 +245,66 @@ const POWERSHELL_BIN = 'powershell.exe';
  * riding a command line would hand it to exactly the adversary the wrap
  * exists against. `-U` makes re-store an in-place update, so a renewed
  * secret never doubles the entry.
+ *
+ * Every `load`/`store` is gated by {@link assertKeychainUnlocked}: neither
+ * `find-generic-password` nor `add-generic-password` suppresses user
+ * interaction on its own, so against a *locked* login keychain either call
+ * can raise a GUI unlock prompt and park for tens of seconds inside a
+ * daemon spawn. `security show-keychain-info` reads the default keychain's
+ * settings without touching items — the one probe that cannot itself
+ * prompt — and reports the lock state on its output line or via a nonzero
+ * exit; seeing either, the backend reports unavailable by throwing, which
+ * is exactly the load-failure shape the callers already degrade on
+ * (plaintext on a fresh open, `CaKeyUnwrapError` on an existing envelope,
+ * refuse-rotate-into-plaintext).
  */
 export class SecurityCliBackend implements KeyWrapBackend {
   readonly name = 'macos-keychain(security-cli)';
   private readonly service: string;
   private readonly account: string;
+  private readonly run: KeyWrapRunner;
 
-  constructor(opts: { service?: string; account?: string } = {}) {
+  constructor(opts: { service?: string; account?: string; runner?: KeyWrapRunner } = {}) {
     this.service = opts.service ?? KEYCHAIN_SERVICE;
     this.account = opts.account ?? KEYCHAIN_ACCOUNT;
+    this.run = opts.runner ?? runFile;
+  }
+
+  /**
+   * Locked-keychain preflight — `show-keychain-info` with no keychain
+   * argument inspects the default (login) keychain's settings, which needs
+   * no item access and so cannot raise the GUI prompt the guarded calls
+   * would. A nonzero exit or a status line naming the lock means every
+   * find/add below would park on the prompt until the spawn bound kills
+   * it; the backend throws as unavailable instead. "Locked" is matched as
+   * a word — a healthy settings line can carry `lock-on-sleep`/`timeout=`,
+   * and `unlocked` must never trip it.
+   */
+  private async assertKeychainUnlocked(): Promise<void> {
+    let result: RunResult;
+    try {
+      result = await this.run(SECURITY_BIN, ['show-keychain-info']);
+    } catch (err) {
+      throw new Error(
+        `security show-keychain-info could not run — key-wrap backend unavailable: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    const output = `${result.stdout.toString('utf8')}\n${result.stderr.toString('utf8')}`;
+    if (result.code !== 0 || /\blocked\b/i.test(output)) {
+      throw new Error(
+        'the login keychain is locked — key-wrap backend unavailable ' +
+          '(a find/add on it would block on a GUI unlock prompt)',
+      );
+    }
   }
 
   async load(): Promise<Buffer | null> {
+    await this.assertKeychainUnlocked();
     let result: RunResult;
     try {
-      result = await runFile(SECURITY_BIN, [
+      result = await this.run(SECURITY_BIN, [
         'find-generic-password',
         '-a',
         this.account,
@@ -258,8 +315,9 @@ export class SecurityCliBackend implements KeyWrapBackend {
     } catch {
       return null;
     }
-    // Exit 44 is errSecItemNotFound; any other nonzero (locked keychain,
-    // errSecInteractionNotAllowed) reads as "no usable secret" the same way.
+    // Exit 44 is errSecItemNotFound; any other nonzero (a keychain that
+    // locked since the probe, errSecInteractionNotAllowed) reads as "no
+    // usable secret" the same way.
     if (result.code !== 0) {
       return null;
     }
@@ -267,7 +325,8 @@ export class SecurityCliBackend implements KeyWrapBackend {
   }
 
   async store(secret: Buffer): Promise<void> {
-    const result = await runFile(SECURITY_BIN, ['-i'], {
+    await this.assertKeychainUnlocked();
+    const result = await this.run(SECURITY_BIN, ['-i'], {
       input: Buffer.from(
         `add-generic-password -a ${this.account} -s ${this.service} -w ${secret.toString('base64')} -U\n`,
         'utf8',

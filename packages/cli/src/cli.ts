@@ -528,14 +528,16 @@ proxyProgram
   .command("unpin")
   .description("Retract a learned pin — the host's flows terminate again")
   .argument("<host>", "Hostname to remove from the pin/bypass ledger")
+  .option("--reason <text>", "Short note recorded on the ledger line")
   .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
-  .action(async (host: string, cmdOptions: { port: string }) => {
+  .action(async (host: string, cmdOptions: { port: string; reason?: string }) => {
     try {
       const config = await loadConfig();
       const cmd = new ProxyCommand({ config, logger });
       const result = await cmd.execute({
         action: "unpin",
         host,
+        reason: cmdOptions.reason,
         port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
       });
       if (!result.success) {
@@ -580,14 +582,16 @@ proxyProgram
   .command("bypass-remove")
   .description("Retract a host's bypass — verdicts apply to it again")
   .argument("<host>", "Hostname to remove from the pin/bypass ledger")
+  .option("--reason <text>", "Short note recorded on the ledger line")
   .option("--port <number>", "Control API port", String(DEFAULT_PROXY_CONTROL_PORT))
-  .action(async (host: string, cmdOptions: { port: string }) => {
+  .action(async (host: string, cmdOptions: { port: string; reason?: string }) => {
     try {
       const config = await loadConfig();
       const cmd = new ProxyCommand({ config, logger });
       const result = await cmd.execute({
         action: "bypass-remove",
         host,
+        reason: cmdOptions.reason,
         port: parseInt(cmdOptions.port, 10) || DEFAULT_PROXY_CONTROL_PORT,
       });
       if (!result.success) {

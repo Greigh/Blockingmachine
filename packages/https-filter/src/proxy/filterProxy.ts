@@ -235,6 +235,14 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   let boundDataPort = dataPort;
   let evaluator = opts.evaluator;
   let paused = false;
+  /**
+   * Engine teardown in progress — set by `close()` before the tracked
+   * sockets are destroyed. A socket dying before `secureConnection` is the
+   * pinning signal ONLY when the client chose to die on the forged leaf;
+   * shutdown kills read identically on the wire, so the abort hook consults
+   * this flag and never lets teardown mint a persistent pin.
+   */
+  let closing = false;
   // Dedupe + serialize the synchronous RSA-2048 leaf forge (flag 94): one
   // keygen per name under a spray, and queued bursts yield the loop between
   // mints instead of chaining them inside one synchronous drain.
@@ -375,16 +383,44 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     }
     stats.flowsTerminated++;
     const flowEvaluator = evaluator;
+    // The pinning signal is the CLIENT refusing the forged leaf — a close
+    // before `secureConnection` that the client chose. A close this engine
+    // chose reads identically on the wire but is not distrust: `close()`
+    // destroys every tracked socket (flagged by `closing`), and a
+    // `terminateToHttp` rejection — a forge failure above all — lands in the
+    // `.catch` below, which flags before destroying. Both suppressions live
+    // here rather than inside the TLS layer because the hook's owner knows
+    // which deaths it caused; real client aborts still pin.
+    let pinSuppressed = false;
     void terminateToHttp(
       flow.sock,
       forgeQueue,
       (req, res) => {
-        const verdict = flowEvaluator.evaluate(absoluteRequestUrl(req, 'https'), {
+        const url = absoluteRequestUrl(req, 'https');
+        const contentType = inferContentType(req.headers);
+        // The client-declared resource type may only TIGHTEN a verdict,
+        // never relax it. `sec-fetch-dest`/`accept` are attacker-controlled
+        // bytes: evaluated alone, a typed `@@||h^$image`-style exception
+        // under a fabricated `dest: image` would flip an untyped block into
+        // an exception — the declared type arming a suppression. So a
+        // declared contentType earns a second, untyped evaluation: a block
+        // on EITHER wins, and when both block the typed verdict stands —
+        // its coveringRule is the more specific match. Only when neither
+        // blocks does the typed verdict govern (its transforms and
+        // exception semantics are the honest reading of the declared type).
+        // Undeclared type → one evaluation: untyped and typed are the same
+        // run, so the double pass is skipped.
+        const typed = flowEvaluator.evaluate(url, {
           method: req.method,
-          // The client's declared resource type feeds $image/$script/… —
-          // inferred only from what the wire truthfully declares.
-          contentType: inferContentType(req.headers),
+          contentType,
         });
+        let verdict = typed;
+        if (contentType !== undefined && typed.action !== 'blocked') {
+          const untyped = flowEvaluator.evaluate(url, { method: req.method });
+          if (untyped.action === 'blocked') {
+            verdict = untyped;
+          }
+        }
         if (verdict.action === 'blocked') {
           // Per-request unit — keep-alive flows carry many requests, so
           // this must not land in flowsBlocked (a flow counter) and inflate
@@ -416,12 +452,24 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         sni: flow.sni,
         onHandshakeAbort: () => {
           // The pinning signal — pin-check itself ran upstream of this seam;
-          // there is no unlearn path out of a terminated flow.
+          // there is no unlearn path out of a terminated flow. An abort the
+          // engine caused (teardown, the forge failure this `.catch` cleans
+          // up after) is suppressed above — it reads as client distrust but
+          // is not, and a false pin is persistent.
+          if (closing || pinSuppressed) {
+            return;
+          }
           policy.learnPin(flow.sni, 'handshake-abort');
           stats.pinsLearned++;
         },
       },
-    ).catch(() => flow.sock.destroy());
+    ).catch(() => {
+      // terminateToHttp threw before serving — a forge rejection, most of
+      // all. Flag BEFORE destroying so the close this causes cannot learn a
+      // pin: the socket's death is ours, whatever its listeners observe.
+      pinSuppressed = true;
+      flow.sock.destroy();
+    });
   }
 
   /**
@@ -435,16 +483,39 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     parsed: PlainHttpTarget,
   ): { action: 'blocked'; rule: string | null } | { action: 'mismatch' } | { action: 'allowed' } {
     const verdict = evaluator.evaluate(parsed.url, { method: parsed.method });
-    let hostBlocked = false;
+    let hostRule: string | null = null;
     if (parsed.authorityMismatch && parsed.hostHeader !== null) {
-      hostBlocked =
-        evaluator.evaluate(`http://${parsed.hostHeader}/`, { method: parsed.method })
-          .action === 'blocked';
+      const hostVerdict = evaluator.evaluate(`http://${parsed.hostHeader}/`, {
+        method: parsed.method,
+      });
+      if (hostVerdict.action === 'blocked') {
+        hostRule = hostVerdict.coveringRule;
+      }
     }
-    if (verdict.action === 'blocked' || hostBlocked) {
-      return { action: 'blocked', rule: verdict.coveringRule };
+    if (verdict.action === 'blocked' || hostRule !== null) {
+      // The request-target's covering rule leads when it blocked — it is
+      // the authority the request line named — but a Host-only block still
+      // emits its own rule, so a 403 always says which list decided it.
+      return { action: 'blocked', rule: verdict.coveringRule ?? hostRule };
     }
     return parsed.authorityMismatch ? { action: 'mismatch' } : { action: 'allowed' };
+  }
+
+  /**
+   * The bypass predicate both plain-HTTP entry points share: the
+   * request-target host, and the Host header's host when it names a
+   * different authority. A bypassed authority escapes judgment — the
+   * verdict never runs and the flow tunnels like a pinned one would. Pins
+   * are leaf-distrust learned on TLS handshakes — no leaf is ever served
+   * on :80, so a pin cannot apply here.
+   */
+  function plainHttpAuthorityBypassed(parsed: PlainHttpTarget): boolean {
+    const hostAuthority =
+      parsed.hostHeader === null ? null : splitHostPort(parsed.hostHeader, 80);
+    return (
+      policy.isBypassed(parsed.host) ||
+      (hostAuthority !== null && policy.isBypassed(hostAuthority.host))
+    );
   }
 
   /**
@@ -477,6 +548,13 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // Paused: verdicts off — forward verbatim like the allowed path, including
     // the authority-mismatch guard (nothing is being judged anyway).
     if (paused) {
+      blindTunnel(sock, parsed.host, parsed.port, buf);
+      return;
+    }
+    // The same bypass gate the PROXY-v2 :80 path applies — a bypassed
+    // authority must not be judged just because the client aimed the
+    // request straight at the port instead of riding a helper redirect.
+    if (plainHttpAuthorityBypassed(parsed)) {
       blindTunnel(sock, parsed.host, parsed.port, buf);
       return;
     }
@@ -534,16 +612,11 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       blindTunnel(sock, target.dstHost, target.dstPort, head);
       return;
     }
-    // A bypassed authority escapes judgment — the request-target host, and
-    // the Host header's host when it names a different authority. Pins are
-    // leaf-distrust learned on TLS handshakes — no leaf is ever served on
-    // :80, so a pin cannot apply here.
-    const hostAuthority =
-      parsed.hostHeader === null ? null : splitHostPort(parsed.hostHeader, 80);
-    if (
-      policy.isBypassed(parsed.host) ||
-      (hostAuthority !== null && policy.isBypassed(hostAuthority.host))
-    ) {
+    // A bypassed authority escapes judgment — the shared gate covers the
+    // request-target host and a disagreeing Host header alike. Pins stay
+    // unconsulted: no leaf is ever served on :80, so leaf-distrust cannot
+    // apply here.
+    if (plainHttpAuthorityBypassed(parsed)) {
       blindTunnel(sock, target.dstHost, target.dstPort, head);
       return;
     }
@@ -899,6 +972,11 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         },
         isPaused: () => paused,
         async close() {
+          // Flag first: the destroys below fire 'close' on sockets that may
+          // be parked in the forge wait or mid-handshake — a death before
+          // `secureConnection` is the pinning signal, and teardown must not
+          // mint persistent false pins on its way down.
+          closing = true;
           for (const sock of sockets) {
             sock.destroy();
           }

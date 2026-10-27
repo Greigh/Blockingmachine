@@ -601,9 +601,11 @@ describe('plain-HTTP absolute-form forwarding', () => {
     sock.destroy();
   });
 
-  test('absolute-form target allowed but the Host header is blocked → 403', async () => {
+  test('absolute-form target allowed but the Host header is blocked → 403 + the Host rule surfaces', async () => {
     // Evaluate-both-and-require-agreement: the Host side is judged too —
-    // a blocked Host must not ride inside an allowed request line.
+    // a blocked Host must not ride inside an allowed request line. The 403
+    // emits the Host side's covering rule: the request-target side allowed,
+    // so `rule` falls back to the rule that actually decided the block.
     const sock = net.connect({ host: '127.0.0.1', port: proxy.port });
     await once(sock, 'connect');
     sock.write(
@@ -611,7 +613,67 @@ describe('plain-HTTP absolute-form forwarding', () => {
     );
     const head = await withTimeout(readHttpHead(sock), 5_000, 'blocked host response');
     expect(head).toContain('HTTP/1.1 403 Forbidden');
+    expect(head).toContain('X-Blockingmachine-Rule: ||blocked.example^');
     sock.destroy();
+  });
+
+  test('a bypassed authority tunnels on a DIRECT plain-HTTP request — no verdict runs', async () => {
+    // The dispatch-path bypass gate: `GET http://h/x` aimed straight at the
+    // data port used to be judged even when `h` sat in the bypass set —
+    // every other entry path tunnels it. A dedicated proxy pins the rule:
+    // the `127.0.0.1` host rule would block the request, the bypass flips it
+    // to a blind splice, and removing the bypass restores the 403. (An IP
+    // host keeps the origin dialable; a single-label rule like `localhost`
+    // never reaches the evaluator at all.)
+    const bypassPolicy = PolicyStore.ephemeral();
+    const bypassProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator(['127.0.0.1']),
+      policy: bypassPolicy,
+    });
+    const origin = http.createServer((req, res) => {
+      res.end(`bypassed ${req.method} ${req.url}`);
+    });
+    const originPort = await listen(origin);
+    try {
+      bypassPolicy.addBypass('127.0.0.1');
+      const sock = net.connect({ host: '127.0.0.1', port: bypassProxy.port });
+      await once(sock, 'connect');
+      sock.write(
+        `GET http://127.0.0.1:${originPort}/x HTTP/1.1\r\nHost: 127.0.0.1:${originPort}\r\nConnection: close\r\n\r\n`,
+      );
+      const echoed = await withTimeout(
+        new Promise<Buffer>((resolve) => {
+          const chunks: Buffer[] = [];
+          sock.on('data', (c: Buffer) => chunks.push(c));
+          sock.once('close', () => resolve(Buffer.concat(chunks)));
+        }),
+        10_000,
+        'bypassed plain response',
+      );
+      // The splice forwarded verbatim — the origin's own 200, not a 403,
+      // and the request line it echoes is the absolute-form one, unspliced.
+      expect(echoed.toString('latin1')).toContain('HTTP/1.1 200');
+      expect(echoed.toString('latin1')).toContain('bypassed GET http://127.0.0.1:');
+
+      // Sanity: with the bypass retracted, the same rule blocks on the
+      // direct path — the bypass gate is what carried the flow above.
+      bypassPolicy.remove('127.0.0.1');
+      const sock2 = net.connect({ host: '127.0.0.1', port: bypassProxy.port });
+      await once(sock2, 'connect');
+      sock2.write(
+        `GET http://127.0.0.1:${originPort}/x HTTP/1.1\r\nHost: 127.0.0.1:${originPort}\r\n\r\n`,
+      );
+      const head2 = await withTimeout(readHttpHead(sock2), 5_000, 'unbypassed response');
+      expect(head2).toContain('HTTP/1.1 403 Forbidden');
+      sock2.destroy();
+      sock.destroy();
+    } finally {
+      await closeServer(origin);
+      await bypassProxy.close();
+    }
   });
 
   test('a plain-HTTP request aimed at the data port itself → 400, no self-tunnel chain', async () => {
@@ -941,6 +1003,107 @@ describe('hardened failure handling', () => {
   });
 });
 
+describe('pin suppression on engine-initiated teardown', () => {
+  test('close() while a flow is parked in the forge wait learns NO pin', async () => {
+    // A socket dying before `secureConnection` is the pinning signal only
+    // when the CLIENT chose to die on the forged leaf. `close()` destroying
+    // a socket still awaiting its queued leaf reads identically on the wire
+    // — and must not mint a persistent false pin on the way down. The forge
+    // is held pending by a spy (forgeConcurrency: 1): the parked `await
+    // forger.forge` is exactly the state a flow queued behind another mint
+    // sits in.
+    const heldPolicy = PolicyStore.ephemeral();
+    const heldProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator([]),
+      policy: heldPolicy,
+      forgeConcurrency: 1,
+    });
+    const realForgeLeaf = authority.forgeLeaf.bind(authority);
+    const parked = new Promise<never>(() => {});
+    const forgeSpy = jest
+      .spyOn(authority, 'forgeLeaf')
+      .mockImplementation((sni: string) =>
+        sni === 'forgeheld.example'
+          ? (parked as unknown as ReturnType<typeof realForgeLeaf>)
+          : realForgeLeaf(sni),
+      );
+    try {
+      const hello = await captureClientHello('forgeheld.example');
+      const raw = net.connect({ host: '127.0.0.1', port: heldProxy.port });
+      await once(raw, 'connect');
+      raw.write(
+        'CONNECT forgeheld.example:443 HTTP/1.1\r\nHost: forgeheld.example:443\r\n\r\n',
+      );
+      const head = await withTimeout(readHttpHead(raw), 5_000, 'CONNECT response');
+      expect(head).toContain('200');
+      raw.write(hello);
+      // Wait until the flow is verifiably suspended at `await forger.forge`,
+      // then tear the engine down underneath it.
+      await waitFor(() =>
+        forgeSpy.mock.calls.some((call) => call[0] === 'forgeheld.example'),
+      );
+      await heldProxy.close();
+      // The destroy fired 'close' before secureConnection — the pinning
+      // shape — but the death was the engine's, not leaf distrust.
+      expect(heldPolicy.isPinned('forgeheld.example')).toBe(false);
+      expect(heldProxy.stats().pinsLearned).toBe(0);
+      raw.destroy();
+    } finally {
+      forgeSpy.mockRestore();
+    }
+  });
+
+  test('a forge rejection learns NO pin — the teardown destroy is not client distrust', async () => {
+    // terminateToHttp failing before the handshake (a forgeLeaf throw,
+    // above all) lands in terminateFlow's catch, which destroys the
+    // socket — a death before `secureConnection` the client did not choose.
+    // Without suppression the destroy fires the same pinning signal a
+    // distrusting client does, and a persistent false pin lands on the
+    // ledger.
+    const rejectPolicy = PolicyStore.ephemeral();
+    const rejectProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator([]),
+      policy: rejectPolicy,
+    });
+    const realForgeLeaf = authority.forgeLeaf.bind(authority);
+    const forgeSpy = jest
+      .spyOn(authority, 'forgeLeaf')
+      .mockImplementation((sni: string) => {
+        if (sni === 'forgereject.example') {
+          throw new Error('injected forge failure');
+        }
+        return realForgeLeaf(sni);
+      });
+    try {
+      const hello = await captureClientHello('forgereject.example');
+      const raw = net.connect({ host: '127.0.0.1', port: rejectProxy.port });
+      await once(raw, 'connect');
+      raw.write(
+        'CONNECT forgereject.example:443 HTTP/1.1\r\nHost: forgereject.example:443\r\n\r\n',
+      );
+      const head = await withTimeout(readHttpHead(raw), 5_000, 'CONNECT response');
+      expect(head).toContain('200');
+      raw.write(hello);
+      // The rejection destroys the flow — then give any would-be pin
+      // landing off that close its chance to exist.
+      await withTimeout(once(raw, 'close'), 5_000, 'rejected flow close');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(rejectPolicy.isPinned('forgereject.example')).toBe(false);
+      expect(rejectProxy.stats().pinsLearned).toBe(0);
+      raw.destroy();
+    } finally {
+      forgeSpy.mockRestore();
+      await rejectProxy.close();
+    }
+  });
+});
+
 describe('leaf-forge admission (flag 94)', () => {
   test('a distinct-SNI burst pays at most one forge per name through the queue', async () => {
     const forgeSpy = jest.spyOn(authority, 'forgeLeaf');
@@ -1146,6 +1309,81 @@ describe('upstream response deadline (flag 99)', () => {
       await dripProxy.close();
     }
   });
+
+  test('a client upload slower than the bound still completes — the deadline arms at request finish, not dispatch', async () => {
+    // Arming at dispatch charged the CLIENT's body time to the upstream's
+    // window: a >300ms legit upload 502'd mid-pipe. Armed on the outbound
+    // request's 'finish' instead, the bound only measures the upstream's
+    // silence after a fully-sent request.
+    const slowProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator([]),
+      policy,
+      upstreamCaCerts: [originCa.caCertPem],
+      upstreamConnectTimeoutMs: 2_000,
+      upstreamResponseTimeoutMs: 300,
+    });
+    const leaf = originCa.forgeLeaf('slowup.example');
+    const origin = https.createServer(
+      { key: leaf.keyPem, cert: leaf.certPem },
+      (req, res) => {
+        req.resume();
+        req.on('end', () => {
+          const body = `done ${req.method} ${req.url}`;
+          res.writeHead(200, {
+            'content-type': 'text/plain',
+            'content-length': String(body.length),
+          });
+          res.end(body);
+        });
+      },
+    );
+    const port = await listen(origin);
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'slowup.example',
+        ['http/1.1'],
+        slowProxy.port,
+      );
+      const response = new Promise<{ status: number; head: string; body: string }>(
+        (resolve) => {
+          let buf = Buffer.alloc(0);
+          client.on('data', (chunk: Buffer) => {
+            buf = Buffer.concat([buf, chunk]);
+            const idx = buf.indexOf('\r\n\r\n');
+            if (idx < 0) return;
+            const head = buf.subarray(0, idx).toString('latin1');
+            const lenMatch = /content-length:\s*(\d+)/i.exec(head);
+            const bodyLen = lenMatch === null ? 0 : Number(lenMatch[1]);
+            if (buf.length < idx + 4 + bodyLen) return;
+            resolve({
+              status: Number(head.split(' ')[1]),
+              head,
+              body: buf.subarray(idx + 4, idx + 4 + bodyLen).toString('utf8'),
+            });
+          });
+        },
+      );
+      client.write(
+        'POST /upload HTTP/1.1\r\nHost: slowup.example\r\nContent-Length: 12\r\n\r\n',
+      );
+      client.write('012345');
+      // Drip the rest past the 300ms bound — charged to the client under
+      // dispatch arming, still in the clear under finish-armed.
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      client.write('ABCDEF');
+      const res = await withTimeout(response, 10_000, 'slow-upload response');
+      expect(res.status).toBe(200);
+      expect(res.body).toBe('done POST /upload');
+      client.destroy();
+    } finally {
+      await closeServer(origin);
+      await slowProxy.close();
+    }
+  });
 });
 
 describe('contentType inference (flag 96)', () => {
@@ -1194,6 +1432,100 @@ describe('contentType inference (flag 96)', () => {
     } finally {
       await closeServer(server);
       await ctProxy.close();
+    }
+  });
+
+  test('a typed @@ exception cannot arm off a client-declared type — the untyped block still wins', async () => {
+    // `sec-fetch-dest` is client bytes. `||tracker.example/tracker.png`
+    // blocks the request on its own; `@@||tracker.example/tracker.png$image`
+    // would except it *if* the declared type were the only evaluation — a
+    // fabricated `dest: image` then relaxes a block the client could never
+    // lift. The conservative shape runs BOTH: a block on either leg wins, so
+    // the declared type may only ever tighten a verdict. (Path-scoped rules,
+    // because a host-wide `||tracker.example^` would drop the flow at the
+    // SNI verdict — the per-request evaluator never sees it.)
+    const armProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator([
+        '||tracker.example/tracker.png',
+        '@@||tracker.example/tracker.png$image',
+      ]),
+      policy,
+      upstreamCaCerts: [originCa.caCertPem],
+      upstreamConnectTimeoutMs: 2_000,
+    });
+    const { server, port } = await httpsOrigin('tracker.example');
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'tracker.example',
+        ['http/1.1'],
+        armProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, {
+          path: '/tracker.png',
+          host: 'tracker.example',
+          headers: { 'sec-fetch-dest': 'image' },
+        }),
+        10_000,
+        'armed-exception request',
+      );
+      expect(res.status).toBe(403);
+      // The untyped leg's rule is the one that actually blocked — the typed
+      // leg's exception never surfaced to the client.
+      expect(res.head.toLowerCase()).toContain(
+        'x-blockingmachine-rule: ||tracker.example/tracker.png',
+      );
+      client.destroy();
+    } finally {
+      await closeServer(server);
+      await armProxy.close();
+    }
+  });
+
+  test('the tighten direction stays intact — untyped-allowed + $image block + dest:image → 403', async () => {
+    // The same double evaluation must not lose the ADD direction: the typed
+    // leg's own block still wins over the untyped leg's allow.
+    const addProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator(['||img-add.example^$image']),
+      policy,
+      upstreamCaCerts: [originCa.caCertPem],
+      upstreamConnectTimeoutMs: 2_000,
+    });
+    const { server, port } = await httpsOrigin('img-add.example');
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'img-add.example',
+        ['http/1.1'],
+        addProxy.port,
+      );
+      const blocked = await withTimeout(
+        httpRequestOver(client, {
+          path: '/p.png',
+          host: 'img-add.example',
+          headers: { 'sec-fetch-dest': 'image' },
+        }),
+        10_000,
+        'typed-add request',
+      );
+      expect(blocked.status).toBe(403);
+      const allowed = await withTimeout(
+        httpRequestOver(client, { path: '/p.png', host: 'img-add.example' }),
+        10_000,
+        'undeclared request',
+      );
+      expect(allowed.status).toBe(200);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+      await addProxy.close();
     }
   });
 });

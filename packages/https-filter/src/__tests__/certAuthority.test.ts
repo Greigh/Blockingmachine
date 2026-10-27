@@ -139,6 +139,30 @@ describe('rotate', () => {
     const newLeaf = forge.pki.certificateFromPem(leafAfter.certPem);
     expect(newCa.verify(newLeaf)).toBe(true);
   });
+
+  test('two concurrent rotate() calls serialize — one rotation, one consistent store', async () => {
+    // Both rotations write through the same fixed `.tmp` paths; without the
+    // in-flight guard a second call interleaves its tmp writes into the
+    // first's and can leave a torn cert/key pair on disk. The guard makes
+    // the second caller join the in-flight rotation instead of starting one.
+    const dir = await mkdtemp(join(tmpdir(), 'bm-ca-race-'));
+    try {
+      const authority = await CertAuthority.open({ storeDir: dir, keyWrapBackend: null });
+      const before = authority.caCertPem;
+      await Promise.all([authority.rotate(), authority.rotate()]);
+
+      expect(authority.caCertPem).not.toBe(before);
+      // The persisted pair is coherent — a torn store fails open()'s pair
+      // check outright rather than verifying.
+      const reopened = await CertAuthority.open({ storeDir: dir, keyWrapBackend: null });
+      expect(reopened.caCertPem).toBe(authority.caCertPem);
+      const caCert = forge.pki.certificateFromPem(reopened.caCertPem);
+      const leaf = forge.pki.certificateFromPem(reopened.forgeLeaf('raced.example').certPem);
+      expect(caCert.verify(leaf)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('store refusal + recovery', () => {

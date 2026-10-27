@@ -33,6 +33,7 @@ import {
   wrapKeyMaterial,
   WRAP_SECRET_LENGTH,
   type KeyWrapBackend,
+  type KeyWrapRunner,
 } from '../ca/keyWrap.js';
 
 const execFileAsync = promisify(execFile);
@@ -346,6 +347,118 @@ describe('resolveBackend', () => {
     // Host-dependent: CI and most dev machines have no secret-tool → null;
     // a libsecret box gets the real backend. Either is a legitimate answer.
     expect(backend === null || backend instanceof SecretToolBackend).toBe(true);
+  });
+});
+
+describe('the macOS locked-keychain preflight', () => {
+  const storedB64 = randomBytes(WRAP_SECRET_LENGTH).toString('base64');
+  /**
+   * A runner whose `show-keychain-info` answers `probe` verbatim while the
+   * guarded calls record + succeed — the locked assertions are as much
+   * about what NEVER ran (the prompting find/add) as about what threw. The
+   * real login keychain is never touched, let alone locked.
+   */
+  function runnerFor(probe: { code: number; output: string }) {
+    const calls: string[][] = [];
+    const run: KeyWrapRunner = async (_file, args) => {
+      calls.push(args);
+      if (args[0] === 'show-keychain-info') {
+        return {
+          code: probe.code,
+          stdout: Buffer.from(probe.output, 'utf8'),
+          stderr: Buffer.from('', 'utf8'),
+        };
+      }
+      if (args[0] === 'find-generic-password') {
+        return {
+          code: 0,
+          stdout: Buffer.from(`${storedB64}\n`, 'utf8'),
+          stderr: Buffer.from('', 'utf8'),
+        };
+      }
+      return { code: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
+    };
+    return { calls, run };
+  }
+
+  test('a nonzero probe makes load throw — and the prompting find never runs', async () => {
+    // errSecBase 36-adjacent "user canceled"/lock failures surface nonzero;
+    // whatever the exact code, a find on a locked keychain would raise the
+    // GUI unlock prompt and park inside the spawn bound.
+    const { calls, run } = runnerFor({ code: 36, output: 'keychain is locked' });
+    const backend = new SecurityCliBackend({ runner: run });
+    await expect(backend.load()).rejects.toThrow(/locked/i);
+    expect(calls.map((args) => args[0])).toEqual(['show-keychain-info']);
+  });
+
+  test('a lock reported on stdout with a zero exit is still refused on store', async () => {
+    const { calls, run } = runnerFor({
+      code: 0,
+      output: 'Keychain "login.keychain-db" is locked.',
+    });
+    const backend = new SecurityCliBackend({ runner: run });
+    await expect(backend.store(randomBytes(WRAP_SECRET_LENGTH))).rejects.toThrow(
+      /locked/i,
+    );
+    // add-generic-password — the call that would prompt — never ran.
+    expect(calls.map((args) => args[0])).toEqual(['show-keychain-info']);
+  });
+
+  test('healthy settings output — lock-on-sleep / unlocked wording — runs the normal find path', async () => {
+    // The lock match is word-boundary-exact: a healthy settings line can
+    // carry `lock-on-sleep`/`timeout=`/`unlocked` and must not false-trip.
+    const { calls, run } = runnerFor({
+      code: 0,
+      output: 'Keychain "login.keychain-db" unlocked, lock-on-sleep timeout=300s\n',
+    });
+    const backend = new SecurityCliBackend({ runner: run });
+    await expect(backend.load()).resolves.toEqual(Buffer.from(storedB64, 'base64'));
+    expect(calls.map((args) => args[0])).toEqual([
+      'show-keychain-info',
+      'find-generic-password',
+    ]);
+  });
+
+  test('a probe that cannot run reports unavailable the same way', async () => {
+    const backend = new SecurityCliBackend({
+      runner: async () => {
+        throw new Error('spawn ENOENT');
+      },
+    });
+    await expect(backend.load()).rejects.toThrow(/unavailable/i);
+  });
+
+  test('a backend whose load throws degrades open() exactly like a locked keychain — plaintext fresh, CaKeyUnwrapError on an envelope', async () => {
+    // The preflight surfaces through load/store as an unavailable backend,
+    // and open()'s existing failure semantics do the rest: a fresh store
+    // falls back to 0600 plaintext while an existing `ca.key.enc` fails
+    // closed — the locked probe and any other load failure are
+    // indistinguishable by design.
+    const lockedBackend: KeyWrapBackend = {
+      name: 'locked-backend',
+      load: () => Promise.reject(new Error('the login keychain is locked')),
+      store: () => Promise.reject(new Error('the login keychain is locked')),
+    };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const dir = await scratch('bm-kw-lockedfresh-');
+      const authority = await CertAuthority.open({
+        storeDir: dir,
+        keyWrapBackend: lockedBackend,
+      });
+      expect(authority.keyWrapped).toBe(false);
+      expect(existsSync(join(dir, PEM_FILE))).toBe(true);
+      expect(existsSync(join(dir, ENC_FILE))).toBe(false);
+
+      const dir2 = await scratch('bm-kw-lockedenc-');
+      const good = new MockKeyWrapBackend();
+      await CertAuthority.open({ storeDir: dir2, keyWrapBackend: good });
+      await expect(
+        CertAuthority.open({ storeDir: dir2, keyWrapBackend: lockedBackend }),
+      ).rejects.toThrow(CaKeyUnwrapError);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

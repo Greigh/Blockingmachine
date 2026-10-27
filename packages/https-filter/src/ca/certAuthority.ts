@@ -252,6 +252,13 @@ export class CertAuthority {
   private readonly storeDir: string;
   private keyWrap: KeyWrapState;
   private readonly leafCache = new Map<string, LeafMaterial>();
+  /**
+   * The in-flight rotation, when one is running — `rotate` persists through
+   * shared `*.tmp` paths, so a second concurrent call must never interleave
+   * its writes; it awaits this same outcome instead (one rotation, one
+   * consistent store).
+   */
+  private rotateInFlight: Promise<void> | null = null;
 
   private constructor(
     storeDir: string,
@@ -274,19 +281,13 @@ export class CertAuthority {
   /**
    * Whether the on-disk CA key is the `ca.key.enc` envelope (AES-256-GCM
    * under an OS-stored secret) rather than `ca.key.pem` plaintext — spec
-   * §5.1's encryption-at-rest signal.
-   *
-   * MERGE SEAM (flag 97): surface this on `GET /v1/proxy/ca` by spreading
-   * `authority.keyWrapped`/`authority.keyWrapBackend` into the `caInfo()`
-   * literal in control.ts — owned by a parallel workstream, so the wiring
-   * is deliberately left for the merge pass. This class is the only place
-   * wrap state lives; the getters read straight off it.
+   * §5.1's encryption-at-rest signal, surfaced on `GET /v1/proxy/ca`.
    */
   get keyWrapped(): boolean {
     return this.keyWrap.wrapped;
   }
 
-  /** Backend name behind the wrap (e.g. `macos-keychain(security-cli)`), or `undefined` on a plaintext store. See {@link keyWrapped} for the control-plane seam. */
+  /** Backend name behind the wrap (e.g. `macos-keychain(security-cli)`), or `undefined` on a plaintext store. */
   get keyWrapBackend(): string | undefined {
     return this.keyWrap.wrapped ? (this.keyWrap.backend?.name ?? undefined) : undefined;
   }
@@ -445,7 +446,27 @@ export class CertAuthority {
     return material;
   }
 
+  /**
+   * Replace the CA identity, serialized: two rotations racing would share
+   * the `ca.pem.tmp`/`ca.key.*.tmp` paths and could interleave into a torn
+   * store (one rotation's cert beside the other's key). A second call while
+   * one is in flight awaits the same outcome rather than running a parallel
+   * persist — one rotation settles, then the next call rotates cleanly.
+   */
   async rotate(): Promise<void> {
+    if (this.rotateInFlight !== null) {
+      return this.rotateInFlight;
+    }
+    const rotation = this.rotateOnce();
+    this.rotateInFlight = rotation;
+    try {
+      await rotation;
+    } finally {
+      this.rotateInFlight = null;
+    }
+  }
+
+  private async rotateOnce(): Promise<void> {
     // Persist before swapping in-memory state: a failed write leaves the
     // previous (working) CA live instead of a forged-nowhere identity.
     const { cert, key } = await generateCaIdentity();

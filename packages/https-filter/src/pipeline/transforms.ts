@@ -31,12 +31,16 @@ import type { RequestVerdict } from '@blockingmachine/core';
 
 /**
  * `sec-fetch-dest` → the evaluator's ABP contentType tokens. The header is
- * client-declared fetch metadata — a lie buys a hostile client nothing an
- * absent header doesn't, so it is an honest hint for resource-type
- * modifiers. Only mappings with one reading are listed: `empty` (fetch,
- * XHR, beacons, EventSource all report it) is deliberately absent —
- * xmlhttprequest/ping/other are all live guesses, and wrong attribution is
- * worse than none.
+ * client-declared fetch metadata — safe to feed the evaluator only because
+ * the verdict consumes it asymmetrically: a declared type may TIGHTEN a
+ * verdict (an `$image` block can fire) but never RELAX one (the untyped
+ * evaluation runs alongside and its block still wins), so a fabricated
+ * `dest` cannot arm a typed `@@…$image`-style exception. The caller's
+ * typed/untyped double pass is what makes that true — this map only ever
+ * produces the typed half. Only mappings with one reading are listed:
+ * `empty` (fetch, XHR, beacons, EventSource all report it) is deliberately
+ * absent — xmlhttprequest/ping/other are all live guesses, and wrong
+ * attribution is worse than none.
  */
 const SEC_FETCH_DEST_TYPES: Readonly<Record<string, string>> = {
   document: 'document',

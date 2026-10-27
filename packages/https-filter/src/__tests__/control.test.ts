@@ -342,6 +342,12 @@ describe('control API routes', () => {
     expect(body.sha256Fingerprint).toBe(expected);
     expect(body.sha256Fingerprint).toBe(new X509Certificate(body.certPem).fingerprint256);
     expect(body.notAfter).toBe(new X509Certificate(body.certPem).validTo);
+    // The wire shape carries the at-rest posture too — this suite boots
+    // with keyWrapBackend:null (forced plaintext), so the honest answer is
+    // `false` and no backend name. A wrapped store would report true + the
+    // backend (keyWrap.test.ts covers that leg against a mock backend).
+    expect(body.keyWrapped).toBe(false);
+    expect(body.keyWrapBackend).toBeUndefined();
   });
 
   test('POST /v1/proxy/ca/rotate mints a new CA identity', async () => {

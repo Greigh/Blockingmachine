@@ -102,6 +102,12 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
       console.log(`  Valid from:          ${validFrom}`);
     }
     console.log(`  Valid until:         ${payload.notAfter}`);
+    // At-rest posture of the CA private key — OS-wrapped behind the named
+    // backend, or the legacy 0600 plaintext file when no backend exists.
+    const keyAtRest = payload.keyWrapped
+      ? `OS-wrapped${payload.keyWrapBackend ? ` (${payload.keyWrapBackend})` : ""}`
+      : "plaintext (0600)";
+    console.log(`  CA key at rest:      ${keyAtRest}`);
     console.log("");
   }
 }

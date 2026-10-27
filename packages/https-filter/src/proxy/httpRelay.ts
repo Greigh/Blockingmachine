@@ -61,7 +61,8 @@ export interface RelayOptions {
   connectTimeoutMs?: number;
   /**
    * Upstream first-byte deadline override (default 30s) — bound on the wait
-   * for the 'response' event after request dispatch, NOT on body streaming.
+   * for the 'response' event once the request is fully sent, NOT on body
+   * streaming in either direction.
    */
   responseTimeoutMs?: number;
 }
@@ -71,8 +72,9 @@ const UPSTREAM_CONNECT_TIMEOUT_MS = 15_000;
 /**
  * Upstream first-byte deadline — an upstream that handshakes then never
  * answers must not park the request (and the downstream client) until the
- * client gives up. Cleared the instant 'response' fires; a long-running
- * body streams unbounded below it.
+ * client gives up. Armed when the request is fully sent (the client's own
+ * upload time is never charged to the upstream's window) and cleared the
+ * instant 'response' fires; a long-running body streams unbounded below it.
  */
 const UPSTREAM_RESPONSE_TIMEOUT_MS = 30_000;
 
@@ -258,15 +260,28 @@ function relayOverH1(
     failClosed(res, () => sock.destroy());
     return;
   }
-  // First-byte deadline (flag 99): armed at request dispatch, cleared the
-  // moment 'response' fires — a handshook-but-silent upstream answers 502 +
-  // destroy inside the bound instead of parking until the client gives up.
-  const responseDeadline = setTimeout(
-    () => failClosed(res, () => sock.destroy()),
-    responseTimeoutMs,
-  );
-  responseDeadline.unref();
+  // First-byte deadline (flag 99): armed when the request is fully SENT —
+  // 'finish' fires once the client's whole upload is flushed to the kernel —
+  // not at dispatch. Armed at dispatch, a >30s legitimate upload would burn
+  // the upstream's answer window before the window could even start and 502
+  // mid-pipe. A body that never finishes sending stays bounded by the
+  // socket's own teardown (downstream death kills the dial — see
+  // res.onClose/req.body error below). Cleared the moment 'response' fires;
+  // a streaming response body is unaffected.
+  let responseDeadline: NodeJS.Timeout | undefined;
+  let answered = false;
+  upstream.once('finish', () => {
+    if (answered) {
+      return; // upstream answered before the upload completed — nothing to arm
+    }
+    responseDeadline = setTimeout(
+      () => failClosed(res, () => sock.destroy()),
+      responseTimeoutMs,
+    );
+    responseDeadline.unref();
+  });
   upstream.once('response', (upRes) => {
+    answered = true;
     clearTimeout(responseDeadline);
     let target;
     try {
@@ -289,6 +304,7 @@ function relayOverH1(
   // 'response' — but a protocol-correct client can't rely on hostile bytes:
   // anything routed here is still an uninspectable switch → fail closed.
   upstream.once('upgrade', () => {
+    answered = true;
     clearTimeout(responseDeadline);
     failClosed(res, () => sock.destroy());
   });
@@ -332,15 +348,23 @@ function relayOverH2(
     failClosed(res, kill);
     return;
   }
-  // First-byte deadline (flag 99) — same posture as the h1 path: armed at
-  // stream dispatch, cleared at 'response' or on any teardown that already
-  // resolved the request. Body streaming is unaffected below it.
-  const responseDeadline = setTimeout(() => failClosed(res, kill), responseTimeoutMs);
-  responseDeadline.unref();
+  // First-byte deadline (flag 99) — same posture as the h1 path: armed when
+  // the outbound side of the stream finishes ('finish' — the request's
+  // endStream went out, so the client's own upload time never counts against
+  // the upstream's window), cleared at 'response' or on any teardown that
+  // already resolved the request. Body streaming is unaffected below it.
+  let responseDeadline: NodeJS.Timeout | undefined;
   let responded = false;
+  stream.once('finish', () => {
+    if (responded) {
+      return;
+    }
+    responseDeadline = setTimeout(() => failClosed(res, kill), responseTimeoutMs);
+    responseDeadline.unref();
+  });
   stream.once('response', (headers) => {
-    clearTimeout(responseDeadline);
     responded = true;
+    clearTimeout(responseDeadline);
     let target;
     try {
       target = res.begin(

@@ -47,7 +47,10 @@ export interface ProxyCommandOptions {
    * server-side.
    */
   host?: string;
-  /** `bypass` only: an optional short note the ledger line records. */
+  /**
+   * All three ledger mutations: an optional short note the ledger line
+   * records (`remove` accepts it exactly like `bypass` does).
+   */
   reason?: string;
 }
 
@@ -100,9 +103,7 @@ export class ProxyCommand extends BaseCommand<ProxyCommandOptions> {
         );
       }
       request.body =
-        options.action === "bypass" && options.reason !== undefined
-          ? { host, reason: options.reason }
-          : { host };
+        options.reason !== undefined ? { host, reason: options.reason } : { host };
     }
 
     try {
