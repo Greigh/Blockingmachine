@@ -1173,3 +1173,136 @@ describe('httpsfilter:ca-* IPC handlers', () => {
     expect(caTrustOps.removeCa).toHaveBeenCalledWith(CA_JSON.certPem);
   });
 });
+
+// ============================================================================
+// httpsfilter:status|start|stop|toggle-pause|pins|pin-remove (P1 Task 5)
+// ============================================================================
+// The handlers delegate to the filterProxyManager singleton, whose control
+// calls are loopback fetches — the same `jest.spyOn(fetch)` stub the ca-*
+// block uses. `start` is exercised only on the already-active path: the
+// spawn path belongs to filterProxyManager.test.ts's fixture engine, and a
+// mocked-fetch 'stopped' here would spawn a real child under jest.
+describe('httpsfilter:* lifecycle + policy IPC handlers', () => {
+  const STATUS_JSON = {
+    status: 'running',
+    dataPort: 9294,
+    controlPort: 9293,
+    protectionEnabled: true,
+    paused: false,
+    policyDegraded: false,
+    rulesLoaded: 42,
+    uptimeSeconds: 7,
+    stats: {
+      flowsTotal: 10,
+      flowsBlocked: 2,
+      requestsBlocked: 3,
+      flowsTunneled: 4,
+      flowsTerminated: 6,
+      pinsLearned: 1,
+      rulesSize: 42,
+      blockRatePercent: 30,
+    },
+  };
+  let fetchSpy: jest.SpiedFunction<typeof fetch>;
+
+  const jsonResponse = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  beforeEach(() => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch');
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  test('status maps the engine payload and carries the platform hint', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse(200, STATUS_JSON));
+    const res = await invoke('httpsfilter:status');
+    expect(res.status).toBe('running');
+    expect(res.port).toBe(9294);
+    expect(res.rulesLoaded).toBe(42);
+    expect(res.stats.flowsTerminated).toBe(6);
+    expect(res.platform).toBe(process.platform);
+    expect(String(fetchSpy.mock.calls[0][0])).toContain('/v1/proxy/status');
+  });
+
+  test('status reports stopped (with platform) when the engine is unreachable', async () => {
+    fetchSpy.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    const res = await invoke('httpsfilter:status');
+    expect(res.status).toBe('stopped');
+    expect(res.platform).toBe(process.platform);
+  });
+
+  test('start answers already-active rather than double-spawning a live engine', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse(200, STATUS_JSON));
+    const res = await invoke('httpsfilter:start');
+    expect(res.success).toBe(true);
+    expect(res.message).toContain('already active');
+  });
+
+  test('stop refuses honestly when the app owns no engine process', async () => {
+    const res = await invoke('httpsfilter:stop');
+    // No child was spawned in this boot — the answer is either the
+    // launchd/capture-service pointer or the external-owner message; both
+    // are honest refusals with a named remedy, never a silent success.
+    expect(res.success).toBe(false);
+    expect(res.message.length).toBeGreaterThan(0);
+  });
+
+  test('toggle-pause POSTs {enabled:false} to the engine toggle', async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(200, { success: true, protectionEnabled: false, paused: true }),
+    );
+    const res = await invoke('httpsfilter:toggle-pause', false);
+    expect(res).toEqual({ success: true, protectionEnabled: false });
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/v1/proxy/toggle');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ enabled: false });
+  });
+
+  test('pins returns the ledger; a dead engine answers success:false with an empty list', async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(200, {
+        pins: [
+          { ts: 1, host: 'a.example', action: 'pin', reason: 'handshake-abort' },
+          { ts: 2, host: 'b.example', action: 'bypass' },
+        ],
+        corruptLineCount: 1,
+      }),
+    );
+    const res = await invoke('httpsfilter:pins');
+    expect(res.success).toBe(true);
+    expect(res.pins).toHaveLength(2);
+    expect(res.corruptLineCount).toBe(1);
+
+    fetchSpy.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    const dead = await invoke('httpsfilter:pins');
+    expect(dead.success).toBe(false);
+    expect(dead.pins).toEqual([]);
+  });
+
+  test('pin-remove POSTs {host} and refuses invalid hosts before any fetch', async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(200, { success: true, host: 'a.example', pinned: false, bypassed: false }),
+    );
+    const ok = await invoke('httpsfilter:pin-remove', 'a.example');
+    expect(ok.success).toBe(true);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/v1/proxy/pins/remove');
+    expect(JSON.parse(String(init.body))).toEqual({ host: 'a.example' });
+
+    fetchSpy.mockClear();
+    for (const bad of [42, '', '   ', 'x'.repeat(254), null, undefined, { host: 'a.example' }]) {
+      const res = await invoke('httpsfilter:pin-remove', bad);
+      expect(res.success).toBe(false);
+      expect(res.message).toContain('hostname');
+    }
+    // None of the invalid payloads reached the engine.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

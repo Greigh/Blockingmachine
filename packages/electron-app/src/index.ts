@@ -2892,6 +2892,10 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           // "enabled" — a stopped daemon is protecting nothing, and claiming otherwise
           // made the tray's own "Daemon not running" disagree with the API.
           const daemonStatus = await daemonManager.getStatus();
+          // Same story for the HTTPS filter engine: its control API binds
+          // loopback like the daemon's, so LAN remotes (the mobile app) read
+          // its status through this payload the way they read daemonStatus.
+          const proxyStatus = await filterProxyManager.getStatus();
           const statusPayload = {
             status: 'online',
             service: 'Blockingmachine Hub',
@@ -2916,6 +2920,11 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
               enabled: daemonStatus.status !== 'stopped' && Boolean(daemonStatus.protectionEnabled),
               pausedUntil: null,
               daemonStatus: daemonStatus.status,
+            },
+            httpsFilter: {
+              status: proxyStatus.status,
+              protectionEnabled: proxyStatus.protectionEnabled,
+              rulesLoaded: proxyStatus.rulesLoaded,
             },
             aiRadar: {
               enabled: storeRef.get('aiWatchdogConfig')?.enabled ?? false,
@@ -4114,6 +4123,10 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             `[IPC Main] Segregated Browser endpoints saved: browser.txt (${outputs.browserCount} rules)`
           );
 
+          // Automatically hot-reload the HTTPS filter proxy if running — its
+          // request-rules file is the browser.txt just written above.
+          filterProxyManager.reloadRules().catch(() => {});
+
           if (outputs.hotlistContent) {
             await writeFileAtomic(hotlistPath, outputs.hotlistContent);
             console.log(`[IPC Main] Hot set saved: hotlist.txt`);
@@ -5037,7 +5050,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     // install a MITM root.
     const caTrustReply = async (
       fn: (certPem: string) => Promise<{ success: boolean; state: string; message: string; needsAdmin?: boolean }>,
-    ): Promise<{ success: boolean; state: string; message: string; sha256Fingerprint?: string; needsAdmin?: boolean }> => {
+    ): Promise<{ success: boolean; state: string; message: string; sha256Fingerprint?: string; keyWrapped?: boolean; notAfter?: string; needsAdmin?: boolean }> => {
       const ca = await filterProxyManager.getCaInfo();
       if (!ca) {
         return {
@@ -5048,7 +5061,12 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
       try {
         const reply = await fn(ca.certPem);
-        return { ...reply, sha256Fingerprint: ca.sha256Fingerprint };
+        return {
+          ...reply,
+          sha256Fingerprint: ca.sha256Fingerprint,
+          keyWrapped: ca.keyWrapped,
+          notAfter: ca.notAfter,
+        };
       } catch (err: any) {
         return { success: false, state: 'error', message: err?.message || String(err) };
       }
@@ -5164,6 +5182,66 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         };
       }),
     );
+
+    // ====================================================================
+    // HTTPS Filter Proxy — engine lifecycle + policy IPC (P1 Task 5)
+    // ====================================================================
+    // Same `{success, message}` convention the daemon:* handlers keep; status
+    // is the manager's FilterProxyStatus plus `platform` so the renderer can
+    // gate the darwin-only capture-install hint. `start` names the compiled
+    // request-rules file the way daemonFeedFilePaths names dns.txt — the
+    // browser.txt segregation beside savePath — falling back to the manager's
+    // own candidates when no output dir is configured yet.
+    ipcMain.handle('httpsfilter:status', async () => {
+      const status = await filterProxyManager.getStatus();
+      return { ...status, platform: process.platform };
+    });
+
+    ipcMain.handle('httpsfilter:start', async () => {
+      const savePath = store.get('savePath');
+      const rulesPath =
+        typeof savePath === 'string' && isAbsolute(savePath)
+          ? join(dirname(savePath), 'browser.txt')
+          : undefined;
+      return await filterProxyManager.start({ rulesPath });
+    });
+
+    ipcMain.handle('httpsfilter:stop', async () => {
+      return await filterProxyManager.stop();
+    });
+
+    // Pause means "tunnel everything without verdicts" — the engine's own
+    // /v1/proxy/toggle, never a connectivity hold. Absent/undefined flips.
+    ipcMain.handle('httpsfilter:toggle-pause', async (_event, enabled?: boolean) => {
+      return await filterProxyManager.toggle(enabled);
+    });
+
+    ipcMain.handle('httpsfilter:pins', async () => {
+      const res = await filterProxyManager.getPins();
+      if (!res) {
+        return {
+          success: false,
+          pins: [],
+          corruptLineCount: 0,
+          message: 'HTTPS filter proxy engine is not running — pins are unavailable.',
+        };
+      }
+      return { success: true, pins: res.pins, corruptLineCount: res.corruptLineCount };
+    });
+
+    ipcMain.handle('httpsfilter:pin-remove', async (_event, host: unknown) => {
+      // The control API 400s on an empty/oversize host — refuse it at the IPC
+      // edge first so the failure names the argument, not the route (the
+      // CLI's own pre-flight convention; POLICY_HOST_MAX_LENGTH is 253).
+      const normalized = typeof host === 'string' ? host.trim() : '';
+      if (normalized === '' || normalized.length > 253) {
+        return {
+          success: false,
+          message: 'pin-remove needs a non-empty hostname of at most 253 characters.',
+        };
+      }
+      return await filterProxyManager.removePin(normalized);
+    });
 
     ipcMain.handle('test-sinkhole-connection', async (_event, service: 'pihole' | 'adguard' | 'webhook') => {
       const startTime = Date.now();

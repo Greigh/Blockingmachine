@@ -61,6 +61,19 @@ export interface FilterProxyCaInfo {
   keyWrapBackend?: string;
 }
 
+/**
+ * One applied ledger line from `GET /v1/proxy/pins` — the engine's own
+ * PolicyEntry shape: `pin` (learned on a client handshake abort), `bypass`
+ * (user-directed tunnel), `remove` (a retraction — the pane collapses the
+ * stream to per-host effective state rather than showing the journal).
+ */
+export interface FilterProxyPinEntry {
+  ts: number;
+  host: string;
+  action: 'pin' | 'bypass' | 'remove';
+  reason?: string;
+}
+
 const LAUNCHD_PLIST = '/Library/LaunchDaemons/com.blockingmachine.proxy.plist';
 
 export class FilterProxyManager {
@@ -469,5 +482,61 @@ export class FilterProxyManager {
       clearTimeout(timeout);
     }
     return null;
+  }
+
+  /**
+   * GET /v1/proxy/pins — the pin/bypass ledger, oldest first (the pane
+   * derives "currently pinned/bypassed" itself: a host's LAST action wins,
+   * and `remove` rows are the retractions, not entries to list). Null when
+   * the engine is unreachable — getCaInfo's dead-port convention.
+   */
+  async getPins(): Promise<{ pins: FilterProxyPinEntry[]; corruptLineCount: number } | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    try {
+      const res = await fetch(`http://${this.bindHost}:${this.controlPort}/v1/proxy/pins`, {
+        signal: controller.signal,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          pins: Array.isArray(data.pins) ? data.pins : [],
+          corruptLineCount: typeof data.corruptLineCount === 'number' ? data.corruptLineCount : 0,
+        };
+      }
+    } catch {
+      // ignore
+    } finally {
+      clearTimeout(timeout);
+    }
+    return null;
+  }
+
+  /**
+   * POST /v1/proxy/pins/remove — retract whatever policy covers `host`
+   * (learned pin, user bypass, or both — `PolicyStore.remove` clears both
+   * sets, which is why the CLI's unpin and bypass-remove ride this one
+   * route). Host validation lives at the control API and the IPC edge; the
+   * manager forwards verbatim like the CLI does.
+   */
+  async removePin(host: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await fetch(`http://${this.bindHost}:${this.controlPort}/v1/proxy/pins/remove`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok) {
+        return { success: true, message: `Policy for ${host} removed.` };
+      }
+      return {
+        success: false,
+        message: (data && typeof data.error === 'string' && data.error) ||
+          `Filter proxy responded with HTTP ${res.status}`,
+      };
+    } catch (err: any) {
+      return { success: false, message: `Failed to reach filter proxy control API: ${err?.message || err}` };
+    }
   }
 }

@@ -105,6 +105,27 @@ describe('BlockingmachineClient', () => {
     expect(JSON.parse(init.body)).toEqual({ enabled: false });
   });
 
+  it('carries the hub HTTPS filter status block through /v1/status', async () => {
+    // The engine's control API binds the hub's loopback — the phone reads its
+    // state off the status payload the same way it reads protection.daemonStatus.
+    const impl = jest.fn().mockResolvedValue(
+      jsonResponse(200, {
+        ...okStatus,
+        httpsFilter: { status: 'running', protectionEnabled: true, rulesLoaded: 42 },
+      }),
+    );
+    const status = await clientWith(impl).getStatus();
+    expect(status.httpsFilter?.status).toBe('running');
+    expect(status.httpsFilter?.protectionEnabled).toBe(true);
+    expect(status.httpsFilter?.rulesLoaded).toBe(42);
+  });
+
+  it('tolerates a status payload with no httpsFilter block (older hub / add-on)', async () => {
+    const impl = jest.fn().mockResolvedValue(jsonResponse(200, okStatus));
+    const status = await clientWith(impl).getStatus();
+    expect(status.httpsFilter).toBeUndefined();
+  });
+
   it('posts {action} to /v1/control/daemon and returns the daemon status', async () => {
     const impl = jest.fn().mockResolvedValue(
       jsonResponse(200, { success: true, action: 'start', daemonStatus: 'running' }),

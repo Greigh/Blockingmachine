@@ -279,4 +279,67 @@ describe('FilterProxyManager', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ enabled: false });
     expect(result).toEqual({ success: true, protectionEnabled: false });
   });
+
+  test('getPins() maps the ledger payload and tolerates missing fields', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch');
+    const entries = [
+      { ts: 1, host: 'a.example', action: 'pin', reason: 'handshake-abort' },
+      { ts: 2, host: 'b.example', action: 'bypass' },
+      { ts: 3, host: 'a.example', action: 'remove' },
+    ];
+    fetchMock.mockResolvedValue(jsonResponse(200, { pins: entries, corruptLineCount: 2 }));
+
+    const manager = tracked(new FilterProxyManager({ controlPort: 65431 }));
+    const res = await manager.getPins();
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('http://127.0.0.1:65431/v1/proxy/pins');
+    expect(res?.pins).toEqual(entries);
+    expect(res?.corruptLineCount).toBe(2);
+
+    // A payload with no pins array normalises to empty rather than throwing.
+    fetchMock.mockResolvedValue(jsonResponse(200, {}));
+    const empty = await manager.getPins();
+    expect(empty).toEqual({ pins: [], corruptLineCount: 0 });
+  });
+
+  test('getPins() is null when the engine is unreachable or non-ok', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch');
+    fetchMock.mockResolvedValue(jsonResponse(503, { error: 'down' }));
+    const manager = tracked(new FilterProxyManager({ controlPort: 65431 }));
+    expect(await manager.getPins()).toBeNull();
+
+    fetchMock.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    expect(await manager.getPins()).toBeNull();
+  });
+
+  test('removePin() POSTs {host} to /v1/proxy/pins/remove', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch');
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { success: true, host: 'a.example', pinned: false, bypassed: false }),
+    );
+
+    const manager = tracked(new FilterProxyManager({ controlPort: 65431 }));
+    const result = await manager.removePin('a.example');
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('http://127.0.0.1:65431/v1/proxy/pins/remove');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ host: 'a.example' });
+    expect(result.success).toBe(true);
+  });
+
+  test('removePin() surfaces the control API error body and transport failures', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch');
+    fetchMock.mockResolvedValue(jsonResponse(400, { success: false, error: 'host must be a non-empty hostname' }));
+    const manager = tracked(new FilterProxyManager({ controlPort: 65431 }));
+    const bad = await manager.removePin('');
+    expect(bad.success).toBe(false);
+    expect(bad.message).toContain('non-empty hostname');
+
+    fetchMock.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    const down = await manager.removePin('a.example');
+    expect(down.success).toBe(false);
+    expect(down.message).toContain('control API');
+  });
 });

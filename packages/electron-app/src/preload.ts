@@ -268,6 +268,14 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('httpsfilter:ca-install', options),
   uninstallHttpsFilterCa: () => ipcRenderer.invoke('httpsfilter:ca-uninstall'),
 
+  // HTTPS filter proxy — engine lifecycle + policy surface (P1 Task 5)
+  getHttpsFilterStatus: () => ipcRenderer.invoke('httpsfilter:status'),
+  startHttpsFilter: () => ipcRenderer.invoke('httpsfilter:start'),
+  stopHttpsFilter: () => ipcRenderer.invoke('httpsfilter:stop'),
+  toggleHttpsFilterPause: (enabled?: boolean) => ipcRenderer.invoke('httpsfilter:toggle-pause', enabled),
+  getHttpsFilterPins: () => ipcRenderer.invoke('httpsfilter:pins'),
+  removeHttpsFilterPin: (host: string) => ipcRenderer.invoke('httpsfilter:pin-remove', host),
+
   // Secure channel-checked fallback for legacy listeners
   receive: (channel: string, callback: (...args: unknown[]) => void) => {
     if (ALLOWED_CHANNELS.has(channel)) {

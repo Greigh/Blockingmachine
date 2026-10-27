@@ -491,6 +491,53 @@ export interface DaemonStatusInfo {
 }
 
 /**
+ * The HTTPS filter proxy's status union — the HTTPS Filtering card's pill.
+ * `status` is 'stopped' (dead control port), 'starting' (spawned, not yet
+ * answering), 'running'/'paused' (the engine's own report), or 'degraded'
+ * (running but the pin ledger fell back to ephemeral). `platform` is added
+ * by the main process so darwin-only hints stay gated.
+ */
+export interface HttpsFilterStatus {
+  status: 'stopped' | 'starting' | 'running' | 'degraded' | 'paused';
+  /** CONNECT/PROXY-v2/plain-HTTP data listener port. */
+  port: number;
+  controlPort: number;
+  rulesLoaded: number;
+  protectionEnabled: boolean;
+  policyDegraded: boolean;
+  uptimeSeconds: number;
+  /** True when this app spawned the answering engine (vs launchd/external). */
+  managedByApp: boolean;
+  /** True when the macOS capture install owns the engine via launchd. */
+  captureServiceInstalled: boolean;
+  /** Main-process platform — the capture-install hint is darwin-only. */
+  platform?: string;
+  corruptLineCount?: number;
+  stats?: {
+    flowsTotal: number;
+    flowsBlocked: number;
+    requestsBlocked: number;
+    flowsTunneled: number;
+    flowsTerminated: number;
+    pinsLearned: number;
+    rulesSize: number;
+    blockRatePercent: number;
+  };
+}
+
+/**
+ * One applied pin-ledger line from `GET /v1/proxy/pins` — `pin` learned on a
+ * client handshake abort, `bypass` user-directed, `remove` a retraction. The
+ * pane collapses the stream to per-host effective state (last action wins).
+ */
+export interface HttpsFilterPin {
+  ts: number;
+  host: string;
+  action: 'pin' | 'bypass' | 'remove';
+  reason?: string;
+}
+
+/**
  * What the dashboard's live-services strip reads — every service the hub
  * currently runs or hears from. `extension.lastContactAt` is null until the
  * extension POSTs telemetry for the first time; it is a heartbeat, not a
@@ -720,12 +767,18 @@ export interface ElectronAPI {
     state: string;
     message: string;
     sha256Fingerprint?: string;
+    /** Engine CA posture — whether the CA key is OS-keychain wrapped. */
+    keyWrapped?: boolean;
+    /** CA expiry as the engine reports it (e.g. 'Jan  1 00:00:00 2036 GMT'). */
+    notAfter?: string;
   }>;
   installHttpsFilterCa?: (options?: { elevate?: boolean }) => Promise<{
     success: boolean;
     state: string;
     message: string;
     sha256Fingerprint?: string;
+    keyWrapped?: boolean;
+    notAfter?: string;
     /** True when only the admin-consent path remains — surface the prompt. */
     needsAdmin?: boolean;
   }>;
@@ -734,7 +787,23 @@ export interface ElectronAPI {
     state: string;
     message: string;
     sha256Fingerprint?: string;
+    keyWrapped?: boolean;
+    notAfter?: string;
   }>;
+
+  // HTTPS filter proxy — engine lifecycle + policy (P1 Task 5).
+  getHttpsFilterStatus?: () => Promise<HttpsFilterStatus>;
+  startHttpsFilter?: () => Promise<{ success: boolean; message: string }>;
+  stopHttpsFilter?: () => Promise<{ success: boolean; message: string }>;
+  /** Pause = the engine blind-tunnels every flow; resume restores verdicts. */
+  toggleHttpsFilterPause?: (enabled?: boolean) => Promise<{ success: boolean; protectionEnabled: boolean }>;
+  getHttpsFilterPins?: () => Promise<{
+    success: boolean;
+    pins: HttpsFilterPin[];
+    corruptLineCount: number;
+    message?: string;
+  }>;
+  removeHttpsFilterPin?: (host: string) => Promise<{ success: boolean; message: string }>;
 }
 
 // Global declarations

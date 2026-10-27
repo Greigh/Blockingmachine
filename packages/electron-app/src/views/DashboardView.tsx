@@ -15,6 +15,7 @@ import {
 import type { ProcessingResult, FilterSource, CompilationSnapshot, FeedServerStatus } from '../types';
 import { BrandLogo } from '../components/BrandLogo';
 import { ProtectionCard } from '../components/ProtectionCard';
+import { HttpsFilterCard } from '../components/HttpsFilterCard';
 
 interface DashboardViewProps {
   savePath: string;
@@ -327,6 +328,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* DNS Protection — the daemon control that used to live only in the tray */}
       <ProtectionCard onNavigate={onNavigate} />
+
+      {/* HTTPS Filtering — the MITM engine's lifecycle, CA trust and pin ledger (P1 Task 5) */}
+      <HttpsFilterCard />
 
       {/* Snapshot Summary Cards (Pre-run overview) */}
       <div className="overview-stats-grid">

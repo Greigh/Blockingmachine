@@ -57,6 +57,18 @@ export interface FeedServerInfo {
   [extra: string]: unknown;
 }
 
+/**
+ * The hub's HTTPS filter engine, read-only for the remote. The engine's own
+ * control API binds the hub's loopback (like the DNS daemon's), so its status
+ * reaches the phone inside /v1/status exactly the way `protection.daemonStatus`
+ * does — 'stopped' | 'starting' | 'running' | 'paused' | 'degraded'.
+ */
+export interface HttpsFilterState {
+  status?: string;
+  protectionEnabled?: boolean;
+  rulesLoaded?: number;
+}
+
 export interface StatusPayload {
   status: string;
   service: string;
@@ -66,6 +78,8 @@ export interface StatusPayload {
   lastCompile: string | null;
   feedServer?: FeedServerInfo;
   protection: ProtectionState;
+  /** Hub only — the HTTPS filter engine's status, read off its loopback control API. */
+  httpsFilter?: HttpsFilterState;
   aiRadar?: AiRadarState;
   browserTelemetry?: BrowserTelemetryAggregate;
   /** Hub only. */

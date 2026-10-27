@@ -245,6 +245,18 @@ export default function DashboardScreen() {
           {data?.protection?.daemonStatus ? (
             <Pill label={`daemon: ${data.protection.daemonStatus}`} tone="muted" />
           ) : null}
+          {data?.httpsFilter?.status ? (
+            <Pill
+              label={`https filter: ${data.httpsFilter.status}`}
+              tone={
+                data.httpsFilter.status === 'running'
+                  ? 'ok'
+                  : data.httpsFilter.status === 'degraded'
+                    ? 'warn'
+                    : 'muted'
+              }
+            />
+          ) : null}
         </View>
         {daemonStopped ? (
           <View style={styles.buttonRow}>
