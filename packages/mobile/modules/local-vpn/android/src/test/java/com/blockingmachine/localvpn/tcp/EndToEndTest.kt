@@ -69,4 +69,59 @@ class EndToEndTest {
     assertEquals(1, dispatcher.stats.flowsOpened.get())
     assertEquals(1, dispatcher.stats.flowsClosed.get())
   }
+
+  /* ------------------------------------------------------------ */
+
+  private val SRC6 = hex("fd000000000000000000000000000002")
+  private val DST6 = hex("20010db8000000000000000000000005")
+
+  private fun hex(s: String): ByteArray =
+    ByteArray(s.length / 2) { ((Character.digit(s[2 * it], 16) shl 4) or Character.digit(s[2 * it + 1], 16)).toByte() }
+
+  private fun pkt6(seq: Long, ack: Long, flags: Int,
+                   payload: ByteArray = ByteArray(0), wnd: Int = 65535,
+                   options: ByteArray = ByteArray(0)): ByteArray =
+    Packet.buildTcpSegment(Packet.FAMILY_V6, SRC6, DST6, SPORT, DPORT, seq, ack, flags, wnd, payload, options)
+
+  @Test
+  fun `v6 full flow — handshake, data both ways, half-close`() {
+    val tunOut = mutableListOf<ByteArray>()
+    val upstream = TcpSessionTest.FakeUpstream()
+    val dispatcher = TcpDispatcher(
+      emit = { tunOut += it },
+      upstreamFactory = { upstream },
+    )
+    fun seg() = Packet.parseTcp(tunOut.last())!!
+
+    // SYN in → SYN-ACK out (v6 pseudo-header checksum verifies both ways).
+    dispatcher.onPacket(pkt6(CISSN, 0, Packet.FLAG_SYN, options = Packet.mssOption(1440)))
+    val synAck = seg()
+    assertTrue(synAck.has(Packet.FLAG_SYN) && synAck.has(Packet.FLAG_ACK))
+    assertEquals(Packet.FAMILY_V6, synAck.family)
+    assertEquals(CISSN + 1, synAck.ack)
+    val serverIssn = synAck.seq
+
+    // Handshake ACK + payload → upstream.write.
+    dispatcher.onPacket(pkt6(CISSN + 1, serverIssn + 1, Packet.FLAG_ACK))
+    dispatcher.onPacket(pkt6(CISSN + 1, serverIssn + 1, Packet.FLAG_ACK or Packet.FLAG_PSH,
+      payload = "GET /v6 HTTP/1.1\r\n".toByteArray()))
+    assertArrayEquals("GET /v6 HTTP/1.1\r\n".toByteArray(), upstream.stream())
+
+    // Upstream bytes → v6 packets out.
+    dispatcher.sessions.values.single().onUpstreamData("HTTP/1.1 200 OK\r\n\r\n".toByteArray())
+    val data = seg()
+    assertEquals(serverIssn + 1, data.seq)
+    assertArrayEquals("HTTP/1.1 200 OK\r\n\r\n".toByteArray(), data.payload)
+
+    // Client FIN → closeOut; upstream EOF → our FIN; final ACK → reaped.
+    dispatcher.onPacket(pkt6(CISSN + 19, data.seq + data.payload.size, Packet.FLAG_FIN or Packet.FLAG_ACK))
+    assertTrue(upstream.closedOut)
+    dispatcher.sessions.values.single().onUpstreamEof()
+    val fin = seg()
+    assertTrue(fin.has(Packet.FLAG_FIN))
+    dispatcher.onPacket(pkt6(CISSN + 20, fin.seq + 1, Packet.FLAG_ACK))
+    assertEquals(0, dispatcher.activeCount())
+    assertEquals(1, dispatcher.stats.flowsOpened.get())
+    assertEquals(1, dispatcher.stats.flowsClosed.get())
+  }
 }

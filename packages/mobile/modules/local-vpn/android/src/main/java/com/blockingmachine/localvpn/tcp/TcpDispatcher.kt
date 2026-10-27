@@ -25,6 +25,10 @@ class TcpStats {
  * listener. The table is bounded ([maxSessions]) with LRU eviction — the
  * evicted flow gets RST'd so the app sees a clean failure instead of a hang.
  *
+ * [upstreamFactory] runs on the tun reader thread — it MUST NOT block:
+ * return an already-connected socket or a queue-backed upstream whose dial
+ * completes on another thread.
+ *
  * `onTick` drives each session's retransmit-lite + idle reap; wire it to a
  * ~50–100ms service-side timer.
  *
@@ -68,7 +72,7 @@ class TcpDispatcher(
         return true
       }
       evictIfNeeded()
-      session = try {
+      val fresh = try {
         TcpSession(key, emit, upstreamFactory(key), nowMs = nowMs, stats = stats)
       } catch (e: Exception) {
         // Upstream dial seam failed at birth — RST like a refused connection.
@@ -76,8 +80,17 @@ class TcpDispatcher(
         emit(Packet.buildRstReply(seg))
         return true
       }
-      sessions[key] = session
-      stats.flowsOpened.incrementAndGet()
+      // Two racing readers can both dial upstream for the same flow — the
+      // loser of putIfAbsent must not leak its upstream socket (abortWithRst
+      // emits nothing while the session is still CLOSED).
+      val prev = sessions.putIfAbsent(key, fresh)
+      if (prev == null) {
+        session = fresh
+        stats.flowsOpened.incrementAndGet()
+      } else {
+        fresh.abortWithRst()
+        session = prev
+      }
     }
     touch(key)
     session.onPacket(ip)

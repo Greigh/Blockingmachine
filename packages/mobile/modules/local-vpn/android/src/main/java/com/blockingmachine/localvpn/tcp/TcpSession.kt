@@ -117,6 +117,15 @@ class TcpSession(
     /** Bound on out-of-order buffered bytes per flow — a peer ignoring our window can't grow memory. */
     const val REASM_CAP = 256 * 1024
 
+    /** Bound on reassembly entries — the byte cap alone permits ~256k tiny TreeMap nodes (≈10–20MB/flow). */
+    const val REASM_ENTRIES_CAP = 1024
+
+    /**
+     * Floor for a peer-advertised send MSS — an MSS option of 0 (or absurdly
+     * small) would zero-step the emit loop and livelock the reader thread.
+     */
+    const val MIN_PEER_MSS = 64
+
     /** Bound on queued upstream→client bytes when the client's window is shut. */
     const val SEND_CAP = 256 * 1024
 
@@ -155,10 +164,12 @@ class TcpSession(
 
   private val lock = Any()
 
+  @Volatile
   var state = State.CLOSED
     private set
 
-  /** Fully torn down — the dispatcher drops the entry. */
+  /** Fully torn down — the dispatcher drops the entry. Read unsynchronized there. */
+  @Volatile
   var terminated = false
     private set
 
@@ -210,7 +221,12 @@ class TcpSession(
     synchronized(lock) {
       if (terminated) return
       lastActivityMs = nowMs()
-      if (seg.has(Packet.FLAG_RST)) { terminateAborted(); return } // RST never gets a reply
+      if (seg.has(Packet.FLAG_RST)) {
+        // RFC 5961 §3.2: only an RST landing exactly on rcvNxt aborts; anything
+        // else is answered with a challenge ACK so a blind RST can't kill the flow.
+        if (seqDiff(seg.seq, rcvNxt) == 0) terminateAborted() else emitAck()
+        return
+      }
       when (state) {
         State.CLOSED -> onSyn(seg)
         State.SYN_RECV -> onSynRecv(seg)
@@ -226,9 +242,9 @@ class TcpSession(
     rcvNxt = seqAdd(seg.seq, 1)
     clientWnd = seg.window
     val clientMss = Packet.advertisedMss(seg.options)
-    sendMss = minOf(clientMss ?: defaultSendMss(), defaultSendMss())
-    // SYN-ACK: options = bare MSS (negotiated-min) — SACK/TS/WS dropped.
-    val mss = minOf(Packet.OUR_MSS, clientMss ?: Packet.OUR_MSS)
+    sendMss = maxOf(MIN_PEER_MSS, minOf(clientMss ?: defaultSendMss(), defaultSendMss()))
+    // SYN-ACK: options = bare MSS (negotiated-min, floored) — SACK/TS/WS dropped.
+    val mss = maxOf(MIN_PEER_MSS, minOf(Packet.OUR_MSS, clientMss ?: Packet.OUR_MSS))
     ourSynAck = emitSegment(
       Packet.FLAG_SYN or Packet.FLAG_ACK,
       EMPTY,
@@ -316,8 +332,11 @@ class TcpSession(
       val finSeq = seqAdd(seg.seq, seg.payload.size)
       // finSeq behind rcvNxt = retransmit of an already-consumed FIN.
       if (seqGe(finSeq, rcvNxt) && (clientFinSeq < 0 || seqLt(finSeq, clientFinSeq))) clientFinSeq = finSeq
-      checkClientFin()
     }
+    // Unconditional: a FIN arriving ahead of a reassembly gap only records
+    // clientFinSeq — the non-FIN segment that later fills the gap must still
+    // consume it. No-op when no FIN is pending.
+    checkClientFin()
   }
 
   private fun acceptInbound(data: ByteArray) {
@@ -344,7 +363,8 @@ class TcpSession(
    * means overflow → the caller RSTs the flow.
    */
   private fun bufferSegment(seq: Long, data: ByteArray): Boolean {
-    if (seqDiff(seq, rcvNxt) > REASM_CAP) return false
+    val ahead = seqDiff(seq, rcvNxt)
+    if (ahead <= 0 || ahead > REASM_CAP) return false // also kills the 2^31-ambiguous key
     var s = seq
     var d = data
     // Trim the part an already-buffered entry covers (retransmit overlap).
@@ -365,6 +385,7 @@ class TcpSession(
       }
     }
     if (reassemBytes + d.size > REASM_CAP) return false
+    if (!reassem.containsKey(s) && reassem.size >= REASM_ENTRIES_CAP) return false
     reassem[s]?.let { reassemBytes -= it.size } // exact-seq duplicate replaces in place
     reassem[s] = d
     reassemBytes += d.size
@@ -445,8 +466,10 @@ class TcpSession(
       val inFlight = seqDiff(sndNxt, sndUna)
       val usable = clientWnd - inFlight
       if (usable <= 0) return // client window shut — the queue flushes on the next ACK
-      val head = sendQ.removeFirst()
+      val head = sendQ.peekFirst() ?: return
       val n = minOf(usable, sendMss, head.size)
+      if (n <= 0) return // defensive: a zero-step would spin this loop (MIN_PEER_MSS makes it unreachable)
+      sendQ.removeFirst()
       sendQBytes -= head.size
       val chunk: ByteArray
       if (n == head.size) {
@@ -464,6 +487,9 @@ class TcpSession(
 
   private fun maybeEmitFin() {
     if (!upstreamEof || ourFinSeq >= 0 || sendQ.isNotEmpty()) return
+    // FIN only flies on a flow that can legally send one — an upstream EOF
+    // arriving mid-handshake stays latched; the post-handshake call emits it.
+    if (state != State.ESTABLISHED && state != State.CLOSE_WAIT) return
     emitSegment(Packet.FLAG_FIN or Packet.FLAG_ACK, EMPTY)
     ourFinSeq = sndNxt
     sndNxt = seqAdd(sndNxt, 1)

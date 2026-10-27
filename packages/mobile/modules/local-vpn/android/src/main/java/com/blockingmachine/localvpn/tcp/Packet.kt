@@ -273,6 +273,9 @@ object Packet {
         if (ip.size < 20) return null
         val ihl = (ip[0].toInt() and 0x0F) * 4
         if (ihl < 20 || u8(ip, 9) != PROTO_TCP || ip.size < ihl + 4) null
+        // Fragments pass through whole — fragment-1 carries the port but eating
+        // it while its siblings pass would wedge the peer's reassembly.
+        else if (u16(ip, 6) and 0x3FFF != 0) null
         else u16(ip, ihl + 2)
       }
       6 -> {

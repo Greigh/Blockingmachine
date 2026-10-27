@@ -327,4 +327,156 @@ class TcpSessionTest {
     assertTrue(upstream.aborted)
     assertTrue(lastSeg().has(Packet.FLAG_RST))
   }
+
+  /* ----------------- review regressions (22e9c5c) ------------- */
+
+  @Test
+  fun `fin ahead of reassembly gap still consumes on gap fill`() {
+    handshook()
+    // FIN+data arrives ahead of a 3-byte gap — buffered, finSeq only recorded.
+    session.onPacket(clientPacket(CISSN + 4, ISSN + 1, Packet.FLAG_FIN or Packet.FLAG_ACK, payload = "DEF".toByteArray()))
+    assertFalse(upstream.closedOut)
+    // The gap fills on a NON-FIN segment — the pending FIN must be consumed here.
+    session.onPacket(clientPacket(CISSN + 1, ISSN + 1, Packet.FLAG_ACK, payload = "ABC".toByteArray()))
+    assertArrayEquals("ABCDEF".toByteArray(), upstream.stream())
+    assertTrue(upstream.closedOut)
+    assertEquals(TcpSession.State.CLOSE_WAIT, session.state)
+
+    // Half-close still lets upstream data through.
+    session.onUpstreamData("tail".toByteArray())
+    assertArrayEquals("tail".toByteArray(), allSegs().first { it.payload.isNotEmpty() }.payload)
+
+    session.onUpstreamEof()
+    assertEquals(TcpSession.State.LAST_ACK, session.state)
+    val fin = lastSeg()
+    assertTrue(fin.has(Packet.FLAG_FIN))
+    session.onPacket(clientPacket(CISSN + 8, fin.seq + 1, Packet.FLAG_ACK))
+    assertTrue(session.terminated)
+    assertEquals(TcpSession.State.CLOSED, session.state)
+  }
+
+  @Test
+  fun `syn advertising mss 0 is floored and emit stays bounded`() {
+    session.onPacket(syn(mss = 0))
+    assertArrayEquals(Packet.mssOption(TcpSession.MIN_PEER_MSS), lastSeg().options)
+    emitted.clear()
+    session.onPacket(clientPacket(CISSN + 1, ISSN + 1, Packet.FLAG_ACK))
+    emitted.clear()
+    // Before the floor this livelocked: n=0 chunks requeue the head forever.
+    session.onUpstreamData(ByteArray(200) { 'x'.code.toByte() })
+    val payloads = allSegs().filter { it.payload.isNotEmpty() }
+    assertEquals(4, payloads.size) // 64 + 64 + 64 + 8
+    assertTrue(payloads.all { it.payload.size <= TcpSession.MIN_PEER_MSS })
+    assertEquals(200, payloads.sumOf { it.payload.size })
+  }
+
+  @Test
+  fun `blind rst gets a challenge ack and the flow survives`() {
+    handshook()
+    session.onPacket(clientPacket(CISSN + 1001, ISSN + 1, Packet.FLAG_RST))
+    assertFalse(session.terminated)
+    assertFalse(upstream.aborted)
+    val challenge = lastSeg()
+    assertTrue(challenge.has(Packet.FLAG_ACK))
+    assertFalse(challenge.has(Packet.FLAG_RST))
+    assertEquals(CISSN + 1, challenge.ack) // advertises the real rcvNxt
+    // The flow is unharmed — in-order data still lands.
+    session.onPacket(clientPacket(CISSN + 1, ISSN + 1, Packet.FLAG_ACK or Packet.FLAG_PSH, payload = "ok".toByteArray()))
+    assertArrayEquals("ok".toByteArray(), upstream.stream())
+  }
+
+  @Test
+  fun `rst exactly at rcvNxt still terminates`() {
+    handshook()
+    session.onPacket(clientPacket(CISSN + 1, ISSN + 1, Packet.FLAG_RST))
+    assertTrue(session.terminated)
+    assertTrue(upstream.aborted)
+  }
+
+  @Test
+  fun `reassembly entry-count cap rst-kills`() {
+    handshook()
+    // 1-byte OOO segments stay trivially under the byte cap — only the entry
+    // cap stops ~256k TreeMap nodes per flow.
+    repeat(TcpSession.REASM_ENTRIES_CAP) { i ->
+      session.onPacket(clientPacket(CISSN + 2 + i, ISSN + 1, Packet.FLAG_ACK, payload = byteArrayOf(0x61)))
+      assertFalse(session.terminated)
+    }
+    session.onPacket(
+      clientPacket(CISSN + 2L + TcpSession.REASM_ENTRIES_CAP, ISSN + 1, Packet.FLAG_ACK, payload = byteArrayOf(0x62))
+    )
+    assertTrue(session.terminated)
+    assertTrue(upstream.aborted)
+    assertTrue(lastSeg().has(Packet.FLAG_RST))
+  }
+
+  @Test
+  fun `upstream eof during syn-recv stays latched and fins after established`() {
+    session.onPacket(syn())
+    emitted.clear()
+    session.onUpstreamEof()
+    assertTrue(emitted.isEmpty()) // no FIN may precede the handshake
+    assertEquals(TcpSession.State.SYN_RECV, session.state)
+    session.onPacket(clientPacket(CISSN + 1, ISSN + 1, Packet.FLAG_ACK))
+    val fin = lastSeg()
+    assertTrue(fin.has(Packet.FLAG_FIN))
+    assertEquals(ISSN + 1, fin.seq)
+    assertEquals(TcpSession.State.FIN_WAIT_1, session.state)
+  }
+
+  @Test
+  fun `simultaneous close — crossing fins land in time-wait`() {
+    handshook()
+    session.onUpstreamEof()
+    val fin = lastSeg()
+    assertEquals(TcpSession.State.FIN_WAIT_1, session.state)
+
+    // The client's FIN crosses ours — its ACK does not yet cover ourFinSeq.
+    session.onPacket(clientPacket(CISSN + 1, fin.seq, Packet.FLAG_FIN or Packet.FLAG_ACK))
+    assertTrue(upstream.closedOut)
+    assertEquals(TcpSession.State.FIN_WAIT_1, session.state) // CLOSING, folded
+
+    // The follow-up ACK covering our FIN resolves to TIME_WAIT.
+    session.onPacket(clientPacket(CISSN + 2, fin.seq + 1, Packet.FLAG_ACK))
+    assertEquals(TcpSession.State.TIME_WAIT, session.state)
+    assertTrue(session.onTick(now + TcpSession.TIME_WAIT_MS + 1))
+    assertTrue(session.terminated)
+  }
+
+  @Test
+  fun `sequence wraparound — issn near 2^32 crosses mid-flow`() {
+    val wrapIssn = 0xFFFF_FFF0L
+    val s = TcpSession(key, { emitted += it }, upstream, initialSeq = wrapIssn, nowMs = clock, stats = stats)
+    s.onPacket(syn())
+    assertEquals(wrapIssn, lastSeg().seq)
+    val sNxt = (wrapIssn + 1) and 0xFFFF_FFFFL
+    s.onPacket(clientPacket(CISSN + 1, sNxt, Packet.FLAG_ACK))
+    assertEquals(TcpSession.State.ESTABLISHED, s.state)
+    emitted.clear()
+
+    // A 64-byte send from 0xFFFFFFF1 straddles the 2^32 boundary.
+    s.onUpstreamData(ByteArray(64) { 'z'.code.toByte() })
+    val data = lastSeg()
+    assertEquals(sNxt, data.seq)
+    assertEquals(64, data.payload.size)
+
+    // The cumulative ACK at the wrapped value is accepted, not RST'd.
+    val wrappedAck = (sNxt + 64) and 0xFFFF_FFFFL
+    s.onPacket(clientPacket(CISSN + 1, wrappedAck, Packet.FLAG_ACK))
+    assertFalse(s.terminated)
+
+    // Inbound still orders correctly while the outbound side is wrapped.
+    s.onPacket(clientPacket(CISSN + 1, wrappedAck, Packet.FLAG_ACK or Packet.FLAG_PSH, payload = "hi".toByteArray()))
+    assertArrayEquals("hi".toByteArray(), upstream.stream())
+    assertEquals(CISSN + 3L, lastSeg().ack)
+
+    // FIN at the wrapped sndNxt; the client's ACK of it is wrap-compared too.
+    emitted.clear()
+    s.onUpstreamEof()
+    val fin = lastSeg()
+    assertTrue(fin.has(Packet.FLAG_FIN))
+    assertEquals(wrappedAck, fin.seq)
+    s.onPacket(clientPacket(CISSN + 3, ((fin.seq + 1) and 0xFFFF_FFFFL), Packet.FLAG_ACK))
+    assertEquals(TcpSession.State.FIN_WAIT_2, s.state)
+  }
 }

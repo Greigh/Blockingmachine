@@ -285,6 +285,19 @@ class PacketTest {
     assertNull(Packet.peekTcpDstPort(ByteArray(0)))
   }
 
+  @Test
+  fun `peekTcpDstPort passes fragments through`() {
+    // Fragment-1 carries the TCP header (dst 443) but must NOT be consumed —
+    // its siblings carry no port and pass, so eating the first alone wedges
+    // the peer's IP reassembly.
+    val firstFrag = v4SynGolden.copyOf()
+    firstFrag[6] = 0x20 // MF set, offset 0 — first fragment
+    assertNull(Packet.peekTcpDstPort(firstFrag))
+    val laterFrag = v4SynGolden.copyOf()
+    laterFrag[6] = 0x00; laterFrag[7] = 0x01 // fragment offset > 0
+    assertNull(Packet.peekTcpDstPort(laterFrag))
+  }
+
   /* ---------------------------------------------------------- */
   /* RST reply shape (RFC 5961)                                  */
   /* ---------------------------------------------------------- */

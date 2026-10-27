@@ -1,5 +1,8 @@
 package com.blockingmachine.localvpn.tcp
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -133,5 +136,37 @@ class TcpDispatcherTest {
     dispatcher.close()
     assertEquals(0, dispatcher.activeCount())
     assertTrue(upstreams.all { it.aborted })
+  }
+
+  @Test
+  fun `dial race — the losing session aborts its upstream`() {
+    // Thread A dials upstream then stalls inside the factory; thread B runs the
+    // same SYN to completion and wins the map slot. A's putIfAbsent loses —
+    // its session must be aborted, not dropped on the floor with a live socket.
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val once = AtomicBoolean(true)
+    val racing = TcpDispatcher(
+      emit = { emitted += it },
+      upstreamFactory = {
+        val u = TcpSessionTest.FakeUpstream().also { upstreams += it }
+        if (once.getAndSet(false)) { entered.countDown(); assertTrue(release.await(5, TimeUnit.SECONDS)) }
+        u
+      },
+      nowMs = { now },
+      maxSessions = 3,
+    )
+    val synPkt = syn(50000)
+    val a = Thread { racing.onPacket(synPkt) }
+    a.start()
+    assertTrue(entered.await(5, TimeUnit.SECONDS))
+    val b = Thread { racing.onPacket(synPkt) }
+    b.start(); b.join(5_000)
+    release.countDown(); a.join(5_000)
+
+    assertEquals(1, racing.activeCount())
+    assertEquals(2, upstreams.size)
+    assertEquals(1, upstreams.count { it.aborted }) // exactly the loser's dial was freed
+    assertEquals(1, racing.stats.flowsOpened.get())
   }
 }
