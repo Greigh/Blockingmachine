@@ -6,21 +6,20 @@
  * would blank the entire web. Every selector that reaches a stylesheet must pass
  * through here first, whether it came from the visual picker, the context menu,
  * or storage written by an older version.
+ *
+ * The structural-escape half of the check (the dangerous-character and length
+ * tests) lives in `@blockingmachine/core` — the HTTPS-filter proxy injects the
+ * same compiled lists and must not fork the safety contract. What stays here is
+ * the picker layer on top of it: the universal-selector, bare-tag and
+ * specificity guards that exist to stop a *user's* bad pick, not a list
+ * author's broad selector, which upstream engines legitimately ship.
  */
+
+import { checkSelectorStructure } from '@blockingmachine/core/selectorSafety';
 
 /** Attributes that carry no styling intent but often identify a region. */
 const UNIVERSAL_SELECTOR = /^\s*(\*|html|body|:root)\s*$/i;
 const BARE_TAG = /^[a-z][a-z0-9-]*$/i;
-/**
- * Characters that could terminate the rule or open a declaration block.
- *
- * `>` is deliberately absent (it is the child combinator, and style text is not
- * parsed as markup), and so is `\`, which is how legitimate selectors escape
- * quotes. The characters that can actually break out of a rule — `{`, `}`, `;`,
- * `@`, comment openers — are blocked outright, so escaping cannot help.
- */
-const DANGEROUS_CHARS = /[{}<;@]|\/\*/;
-const MAX_SELECTOR_LENGTH = 400;
 
 export interface SelectorValidation {
   ok: boolean;
@@ -33,11 +32,9 @@ export interface SelectorValidation {
  * available for the match-count guard.
  */
 export function checkSelectorSyntax(selector: unknown): SelectorValidation {
-  if (typeof selector !== 'string') return { ok: false, reason: 'not a string' };
-  const trimmed = selector.trim();
-  if (!trimmed) return { ok: false, reason: 'empty' };
-  if (trimmed.length > MAX_SELECTOR_LENGTH) return { ok: false, reason: 'too long' };
-  if (DANGEROUS_CHARS.test(trimmed)) return { ok: false, reason: 'contains structural characters' };
+  const structural = checkSelectorStructure(selector);
+  if (!structural.ok) return structural;
+  const trimmed = String(selector).trim();
   if (UNIVERSAL_SELECTOR.test(trimmed)) return { ok: false, reason: 'targets the whole document' };
   if (BARE_TAG.test(trimmed)) {
     // `aside` alone hides every aside on every site that loads this rule.

@@ -68,7 +68,10 @@ module.exports = {
       '@blockingmachine/core/ruleHost': path.resolve(__dirname, '../core/src/ruleHost.ts'),
       // The suffix tables behind the context menu's registrable-domain call — the
       // classifier's own copy, so the menu cannot mint a broader apex than the model's.
-      '@blockingmachine/core/entropy': path.resolve(__dirname, '../core/src/ai/entropy.ts')
+      '@blockingmachine/core/entropy': path.resolve(__dirname, '../core/src/ai/entropy.ts'),
+      // The structural selector check behind cosmeticRules.ts — bundled from source so
+      // the content script keeps one module and never sees core's node-dependent index.
+      '@blockingmachine/core/selectorSafety': path.resolve(__dirname, '../core/src/cosmetic/selectorSafety.ts')
     }
   },
   module: {

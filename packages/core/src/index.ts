@@ -24,7 +24,11 @@ export {
   RuleDeduplicator,
   type MergedRuleMetadata,
 } from "./RuleDeduplicator.js";
-export { createRuleMetadata, cleanDomainPattern, resolveSourceInfo } from "./createMetadata.js";
+export {
+  createRuleMetadata,
+  cleanDomainPattern,
+  resolveSourceInfo,
+} from "./createMetadata.js";
 export {
   filterLists,
   sourceCategories,
@@ -122,6 +126,28 @@ export {
   type RequestEvaluator,
   type RequestVerdict,
 } from "./evaluateRequest.js";
+
+// Cosmetic/scriptlet rule index + the shared structural selector check — the
+// response-depth half of the filter list (P2 task 1). The extension imports the
+// structural check through the `@blockingmachine/core/selectorSafety` subpath so
+// it never bundles this index (or the entropy tables it consults).
+export {
+  checkSelectorStructure,
+  checkListSelectorStructure,
+  DANGEROUS_SELECTOR_CHARS,
+  MAX_LIST_SELECTOR_LENGTH,
+  MAX_SELECTOR_LENGTH,
+  type SelectorSafetyResult,
+} from "./cosmetic/selectorSafety.js";
+export {
+  canonicalScriptletName,
+  CANONICAL_SCRIPTLET_NAMES,
+  createCosmeticIndex,
+  type CosmeticIndex,
+  type CosmeticIndexStats,
+  type CosmeticPayload,
+  type ScriptletCall,
+} from "./cosmetic/cosmeticIndex.js";
 
 // OS trust-store ops on the HTTPS-filter proxy CA (P1 Task 4) — the cli's
 // `cert` verbs and the electron `httpsfilter:ca-*` IPC both consume these.

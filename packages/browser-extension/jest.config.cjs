@@ -38,6 +38,9 @@ const moduleNameMapper = {
   // The suffix tables the context menu's registrable-domain call reads — from source, so
   // the menu resolves shared-hosting tenants exactly the way the classifier does.
   '^@blockingmachine/core/entropy$': '<rootDir>/../core/src/ai/entropy.ts',
+  // The structural selector check the cosmetic path shares with the proxy — from source,
+  // so the injection-vector contract cannot diverge between the two consumers.
+  '^@blockingmachine/core/selectorSafety$': '<rootDir>/../core/src/cosmetic/selectorSafety.ts',
   '^(\\.{1,2}/.*)\\.js$': '$1',
 };
 

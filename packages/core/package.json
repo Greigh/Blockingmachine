@@ -51,6 +51,16 @@
       "types": "./dist/tierPlanInput.d.ts",
       "import": "./dist/tierPlanInput.js",
       "require": "./dist/tierPlanInput.js"
+    },
+    "./cosmetic": {
+      "types": "./dist/cosmetic/index.d.ts",
+      "import": "./dist/cosmetic/index.js",
+      "require": "./dist/cosmetic/index.js"
+    },
+    "./selectorSafety": {
+      "types": "./dist/cosmetic/selectorSafety.d.ts",
+      "import": "./dist/cosmetic/selectorSafety.js",
+      "require": "./dist/cosmetic/selectorSafety.js"
     }
   },
   "license": "BSD-3-Clause",

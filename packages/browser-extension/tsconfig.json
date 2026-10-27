@@ -15,7 +15,8 @@
       "@blockingmachine/core/element-ai": ["../core/src/ai/elementClassifier.ts"],
       "@blockingmachine/core/domain-ai": ["../core/src/ai/MiniAiClassifier.ts"],
       "@blockingmachine/core/ruleHost": ["../core/src/ruleHost.ts"],
-      "@blockingmachine/core/entropy": ["../core/src/ai/entropy.ts"]
+      "@blockingmachine/core/entropy": ["../core/src/ai/entropy.ts"],
+      "@blockingmachine/core/selectorSafety": ["../core/src/cosmetic/selectorSafety.ts"]
     },
     "types": ["chrome"]
   },
