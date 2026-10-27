@@ -37,8 +37,12 @@
  *
  * `reload(rawRules)` rebuilds the evaluator off the hot path and swaps the
  * reference — `RequestEvaluator` is immutable, so in-flight flows finish on
- * the ruleset they started with. `close()` stops accepting and destroys
- * every tracked socket (client and upstream alike).
+ * the ruleset they started with. `setPaused(true)` is the protection toggle
+ * the control API drives: every verdict point then blind-tunnels instead of
+ * judging or terminating — protection off, connectivity never breaks
+ * (in-flight terminated flows finish on the pipe they already have).
+ * `close()` stops accepting and destroys every tracked socket (client and
+ * upstream alike).
  */
 
 import net, { isIP } from 'node:net';
@@ -70,6 +74,11 @@ export interface ProxyStats {
   flowsTunneled: number;
   flowsTerminated: number;
   pinsLearned: number;
+  /**
+   * Rules in the live evaluator — seeded at start, refreshed by `reload()`.
+   * `evaluator.size` is otherwise unobservable once a reload swaps it.
+   */
+  rulesSize: number;
 }
 
 export interface RunningProxy {
@@ -77,6 +86,13 @@ export interface RunningProxy {
   close(): Promise<void>;
   stats(): ProxyStats;
   reload(rawRules: string[]): void;
+  /**
+   * Protection pause — the `/v1/proxy/toggle` seam. While paused every
+   * verdict point blind-tunnels: no evaluation, no termination, no forge —
+   * connectivity is never held hostage to the filter.
+   */
+  setPaused(paused: boolean): void;
+  isPaused(): boolean;
 }
 
 export interface StartProxyOptions {
@@ -182,6 +198,7 @@ function parseConnectAuthority(authority: string): { host: string; port: number 
 export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   const { bindHost, dataPort, policy, authority } = opts;
   let evaluator = opts.evaluator;
+  let paused = false;
 
   const stats: ProxyStats = {
     flowsTotal: 0,
@@ -189,6 +206,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     flowsTunneled: 0,
     flowsTerminated: 0,
     pinsLearned: 0,
+    rulesSize: evaluator.size,
   };
   const sockets = new Set<net.Socket>();
 
@@ -321,11 +339,18 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
       return;
     }
-    const verdict = evaluator.evaluate(parsed.url);
+    // Paused: verdicts off — forward verbatim like the allowed path, including
+    // the authority-mismatch guard (nothing is being judged anyway).
+    if (paused) {
+      blindTunnel(sock, parsed.host, parsed.port, buf);
+      return;
+    }
+    const verdict = evaluator.evaluate(parsed.url, { method: parsed.method });
     let hostBlocked = false;
     if (parsed.authorityMismatch && parsed.hostHeader !== null) {
       hostBlocked =
-        evaluator.evaluate(`http://${parsed.hostHeader}/`).action === 'blocked';
+        evaluator.evaluate(`http://${parsed.hostHeader}/`, { method: parsed.method })
+          .action === 'blocked';
     }
     if (verdict.action === 'blocked' || hostBlocked) {
       stats.flowsBlocked++;
@@ -366,12 +391,13 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
 
     // A literal IP never carries SNI — nothing to evaluate or peek (Review
     // Focus #1); pinned/bypassed hosts are the policy store's blind-tunnel
-    // predicate, honored before any verdict. Note this tunnels on the
-    // CONNECT *authority* alone — a flow whose peeked ClientHello later
-    // names a different (blocked) SNI still rides this splice; per spec's
-    // fail-open posture that recheck gap is accepted for P0 and recorded
-    // for P1.
-    if (isIP(host) !== 0 || policy.isPinned(host) || policy.isBypassed(host)) {
+    // predicate, honored before any verdict; a paused proxy tunnels
+    // everything — protection off, connectivity never breaks. Note this
+    // tunnels on the CONNECT *authority* alone — a flow whose peeked
+    // ClientHello later names a different (blocked) SNI still rides this
+    // splice; per spec's fail-open posture that recheck gap is accepted for
+    // P0 and recorded for P1.
+    if (paused || isIP(host) !== 0 || policy.isPinned(host) || policy.isBypassed(host)) {
       sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       blindTunnel(sock, host, port, rest);
       return;
@@ -443,6 +469,13 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     target: { dstHost: string; dstPort: number } | null,
     rest: Buffer,
   ): Promise<void> {
+    // Paused: protection off — splice to the announced destination untouched.
+    // A PROXY-v2 frame carries it; skip the peek entirely and replay the
+    // dispatch buffer verbatim.
+    if (paused && target !== null) {
+      blindTunnel(sock, target.dstHost, target.dstPort, rest);
+      return;
+    }
     const peeked = await collectClientHello(sock, PEEK_TIMEOUT_MS, rest);
     // Non-TLS bytes forward honestly — helpers also redirect port 80 — but
     // only when a header announced a destination.
@@ -455,6 +488,18 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       return;
     }
     const sni = peeked.sni;
+
+    // Paused with no announced destination (helper-spliced TLS): the wire's
+    // only destination hint is a valid SNI — tunnel it on :443, still blind.
+    if (paused) {
+      const normalized = sni !== null ? normalizeSni(sni) : null;
+      if (normalized !== null && isValidSni(normalized)) {
+        blindTunnel(sock, normalized, 443, peeked.head);
+      } else {
+        sock.destroy();
+      }
+      return;
+    }
 
     // The verdict runs on the *normalized* name whenever one was announced —
     // validity is not a gate: `blocked.com.` must drop, and pinned/bypassed
@@ -615,7 +660,12 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           // Rebuild off the hot path, then swap — in-flight flows finish on
           // the evaluator they started with.
           evaluator = createRequestEvaluator(rawRules);
+          stats.rulesSize = evaluator.size;
         },
+        setPaused(next: boolean) {
+          paused = next;
+        },
+        isPaused: () => paused,
         async close() {
           for (const sock of sockets) {
             sock.destroy();

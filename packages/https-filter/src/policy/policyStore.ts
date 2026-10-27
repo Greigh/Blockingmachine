@@ -86,7 +86,8 @@ async function readIfExists(path: string): Promise<string | null> {
 }
 
 export class PolicyStore {
-  private readonly filePath: string;
+  /** null ⇔ ephemeral — predicates and entries work, nothing touches disk. */
+  private readonly filePath: string | null;
   private readonly pinned = new Set<string>();
   private readonly bypassed = new Set<string>();
   private readonly entries: PolicyEntry[] = [];
@@ -94,7 +95,7 @@ export class PolicyStore {
   private lastRawLine: string | null = null;
   private corruptLines = 0;
 
-  private constructor(filePath: string) {
+  private constructor(filePath: string | null) {
     this.filePath = filePath;
   }
 
@@ -109,6 +110,17 @@ export class PolicyStore {
       store.replay(raw);
     }
     return store;
+  }
+
+  /**
+   * Volatile store — same predicates and ledger semantics, no file at all.
+   * The degraded-policy fallback when `open` cannot create/read its path
+   * (spec §7: a damaged ledger degrades to re-learning, never a proxy that
+   * won't start): pin learning and bypass toggles still apply for the
+   * session, nothing persists and nothing is replayed.
+   */
+  static ephemeral(): PolicyStore {
+    return new PolicyStore(null);
   }
 
   /** Lines replay skipped — torn writes, wrong shapes, chain breaks. */
@@ -214,6 +226,14 @@ export class PolicyStore {
       prevHash: this.lastRawLine === null ? null : sha256Hex(this.lastRawLine),
     };
     const line = JSON.stringify(record);
+    if (this.filePath === null) {
+      // Ephemeral store — the entry still lists, the chain anchor still
+      // advances so a later open() of a real file behaves identically.
+      this.lastRawLine = line;
+      const { prevHash: _prevHash, ...entry } = record;
+      this.entries.push(entry);
+      return;
+    }
     try {
       appendFileSync(this.filePath, line + '\n', { mode: 0o600 });
     } catch (err) {
