@@ -92,7 +92,7 @@ describe('decideResponse — csp additions ride every action', () => {
   test('$csp transform collected on a passthrough', () => {
     const plan = decideResponse({
       headers: { 'content-type': 'application/octet-stream' },
-      verdict: verdict({ transforms: transforms({ csp: "script-src 'none'" }) }),
+      verdict: verdict({ transforms: transforms({ csp: ["script-src 'none'"] }) }),
       ...BASE,
     });
     expect(plan.action).toBe('passthrough');
@@ -102,12 +102,22 @@ describe('decideResponse — csp additions ride every action', () => {
   test('$csp transform collected on an injectable page', () => {
     const plan = decideResponse({
       headers: { 'content-type': 'text/html' },
-      verdict: verdict({ transforms: transforms({ csp: "frame-src 'none'" }) }),
+      verdict: verdict({ transforms: transforms({ csp: ["frame-src 'none'"] }) }),
       ...BASE,
       cosmeticIndex: indexFor('example.com', payload({ hide: ['.ad'] })),
     });
     expect(plan.action).toBe('buffer-inject');
     expect(plan.cspAdditions).toEqual(["frame-src 'none'"]);
+  });
+
+  test('every collected $csp value rides through as its own addition', () => {
+    const additions = ["script-src 'none'", "frame-src 'none'", "img-src https:"];
+    const plan = decideResponse({
+      headers: { 'content-type': 'application/octet-stream' },
+      verdict: verdict({ transforms: transforms({ csp: additions }) }),
+      ...BASE,
+    });
+    expect(plan.cspAdditions).toEqual(additions);
   });
 });
 
@@ -237,17 +247,38 @@ describe('decideResponse — buffer-inject gating', () => {
     expect(plan.payload?.hide).toEqual(['.ad']);
   });
 
-  test('payload of only unknown scriptlets is not injectable', () => {
+  test('payload of only unknown scriptlets is not injectable — but still accounted', () => {
     const plan = decideResponse({
       headers: { 'content-type': 'text/html' },
       verdict: verdict(),
       ...BASE,
       cosmeticIndex: indexFor(
         'example.com',
-        payload({ scriptlets: [{ name: 'not-a-real-scriptlet', args: [] }], skippedScriptlets: 1 }),
+        payload({
+          scriptlets: [
+            { name: 'not-a-real-scriptlet', args: [] },
+            { name: 'also-fake', args: [] },
+          ],
+          skippedScriptlets: 2,
+        }),
       ),
     });
+    // Nothing to emit — but the skipped count must ride the plan or the
+    // stats/card reads unknown-scriptlet coverage as zero, not partial.
     expect(plan.action).toBe('passthrough');
+    expect(plan.injectSkipped).toBe('no-known-content');
+    expect(plan.skippedScriptlets).toBe(2);
+  });
+
+  test('a payload carrying only empty results (no scriptlets at all) stays silent', () => {
+    const plan = decideResponse({
+      headers: { 'content-type': 'text/html' },
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: indexFor('example.com', payload()),
+    });
+    expect(plan.action).toBe('passthrough');
+    expect(plan.injectSkipped).toBeUndefined();
   });
 
   test('content-type case and parameters do not fool the html check', () => {
@@ -316,6 +347,71 @@ describe('decideResponse — injection gating on status, method, declared contex
       });
       expect(plan.action).toBe('buffer-inject');
     }
+  });
+});
+
+describe('decideResponse — injection budget', () => {
+  const index = indexFor('example.com', payload({ hide: ['.ad'] }));
+  const html = { 'content-type': 'text/html' };
+
+  test('a spent budget answers passthrough + inject-skip busy', () => {
+    const plan = decideResponse({
+      headers: html,
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: index,
+      injectionBudget: { inflight: 1, max: 1 },
+    });
+    expect(plan.action).toBe('passthrough');
+    expect(plan.injectSkipped).toBe('busy');
+    // A refused slot must not look held.
+  });
+
+  test('a free slot is acquired on the buffer-inject decision', () => {
+    const budget = { inflight: 0, max: 1 };
+    const plan = decideResponse({
+      headers: html,
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: index,
+      injectionBudget: budget,
+    });
+    expect(plan.action).toBe('buffer-inject');
+    expect(budget.inflight).toBe(1);
+    // …and the next eligible response sees the budget spent.
+    const second = decideResponse({
+      headers: html,
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: index,
+      injectionBudget: budget,
+    });
+    expect(second.action).toBe('passthrough');
+    expect(second.injectSkipped).toBe('busy');
+  });
+
+  test('no budget configured stays unbounded', () => {
+    const plan = decideResponse({
+      headers: html,
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: index,
+    });
+    expect(plan.action).toBe('buffer-inject');
+    expect(plan.injectSkipped).toBeUndefined();
+  });
+
+  test('an encoded body skips without consuming a slot', () => {
+    const budget = { inflight: 0, max: 1 };
+    const plan = decideResponse({
+      headers: { ...html, 'content-encoding': 'gzip' },
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: index,
+      injectionBudget: budget,
+    });
+    expect(plan.injectSkipped).toBe('encoded');
+    expect(budget.inflight).toBe(0);
   });
 });
 
@@ -473,7 +569,9 @@ describe('applyCspAdditions', () => {
     expect(out).toBe("script-src 'none', script-src https:");
   });
 
-  test('comma-separated addition policies each land as their own policy', () => {
+  test('a comma-bearing addition still serializes as separate co-equal policies', () => {
+    // The contract is one-policy-per-addition (splitRule can never leave a
+    // `,` inside a `$csp` value) — but a stray comma still joins identically.
     const out = applyCspAdditions("default-src 'self'", [
       "script-src 'none', img-src 'none'",
     ]);

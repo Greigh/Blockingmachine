@@ -76,6 +76,13 @@ export interface FilterProxyConfig {
    * (main.ts) substitutes its signal-path shutdown so the process exits too.
    */
   onShutdownRequest?: () => void;
+  /**
+   * Proxy-wide cap on concurrent HTML-injection buffers (default 64 ≈ 32 MiB
+   * of worst-case held pages). A saturated budget streams eligible pages
+   * verbatim rather than queueing unbounded memory — passed straight through
+   * to `startProxy`.
+   */
+  injectionBudget?: number;
 }
 
 export interface RunningFilterProxy {
@@ -153,6 +160,7 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
     // pipeline consults per host. One index build feeds both — a reload
     // swaps them together.
     cosmeticIndex: createCosmeticIndex(rules),
+    injectionBudget: config.injectionBudget,
     policy,
   });
 

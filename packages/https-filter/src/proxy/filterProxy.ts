@@ -56,7 +56,7 @@ import {
 } from '@blockingmachine/core';
 import { isValidSni, normalizeSni, type CertAuthority } from '../ca/certAuthority.js';
 import { LeafForgeQueue } from '../ca/leafForgeQueue.js';
-import type { ResponseEvent } from '../pipeline/response.js';
+import type { InjectionBudget, ResponseEvent } from '../pipeline/response.js';
 import { applyRequestTransforms, inferContentType } from '../pipeline/transforms.js';
 import type { PolicyStore } from '../policy/policyStore.js';
 import {
@@ -190,7 +190,19 @@ export interface StartProxyOptions {
   peekTimeoutMs?: number;
   /** Test knob — leaf-forge concurrency bound (default 1, serialized). */
   forgeConcurrency?: number;
+  /**
+   * Proxy-wide bound on concurrent HTML-injection buffers (default 64).
+   * Each live injection holds up to `MAX_HTML_BUFFER` bytes while its body
+   * accumulates, so an unbounded count is an unbounded memory surface — the
+   * sibling of `forgeConcurrency` for response depth (flag 108's sibling).
+   * `0` disables injection buffering entirely (every eligible page skips
+   * `busy`); negative/absent values take the default.
+   */
+  injectionBudget?: number;
 }
+
+/** Default cap on simultaneous injection buffers — ~32 MiB of worst-case held pages. */
+const INJECTION_BUDGET_DEFAULT = 64;
 
 /** Bound on first-bytes dispatch — a connection that never speaks is reaped. */
 const DISPATCH_TIMEOUT_MS = 10_000;
@@ -310,6 +322,15 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   // keygen per name under a spray, and queued bursts yield the loop between
   // mints instead of chaining them inside one synchronous drain.
   const forgeQueue = new LeafForgeQueue(authority, { concurrency: opts.forgeConcurrency });
+  // The response-depth sibling of the forge bound: every live injection
+  // buffer may hold up to MAX_HTML_BUFFER bytes, so simultaneous buffers
+  // are capped proxy-wide — an eligible response that finds the budget
+  // spent streams verbatim (`inject-skip` `busy`) rather than queueing
+  // unbounded memory.
+  const injectionBudget: InjectionBudget = {
+    inflight: 0,
+    max: opts.injectionBudget ?? INJECTION_BUDGET_DEFAULT,
+  };
 
   const stats: ProxyStats = {
     flowsTotal: 0,
@@ -376,6 +397,12 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         return;
       case 'inject-skip':
         stats.injectionsSkipped++;
+        // A `no-known-content` skip carries the unknown-name count — the
+        // card's skipped-scriptlets figure must see scriptlets even when no
+        // known co-passenger earned an `html-inject` line.
+        if (event.skippedScriptlets !== undefined) {
+          stats.skippedScriptlets += event.skippedScriptlets;
+        }
         return;
     }
   };
@@ -579,6 +606,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
             verdict,
             requestContentType: contentType,
             cosmeticIndex: flowCosmeticIndex,
+            injectionBudget,
             // The evaluator's (url, ctx) call adapted to the pipeline's
             // context-object signature — same URL/method, content-type from
             // the response's real media type.

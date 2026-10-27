@@ -96,7 +96,50 @@ describe('createRequestEvaluator', () => {
     const evaluator = createRequestEvaluator(["||x.com^$csp=script-src 'none'"]);
     const verdict = evaluator.evaluate('https://x.com/');
     expect(verdict.action).toBe('allowed');
-    expect(verdict.transforms.csp).toBe("script-src 'none'");
+    expect(verdict.transforms.csp).toEqual(["script-src 'none'"]);
+  });
+
+  test('every matching $csp rule contributes its own policy — not first-wins', () => {
+    const evaluator = createRequestEvaluator([
+      "||x.com^$csp=script-src 'none'",
+      "||x.com^$csp=frame-src 'none'",
+      '*$csp=img-src https:',
+    ]);
+    const verdict = evaluator.evaluate('https://x.com/');
+    expect(verdict.action).toBe('allowed');
+    expect(verdict.transforms.csp).toEqual([
+      "script-src 'none'",
+      "frame-src 'none'",
+      'img-src https:',
+    ]);
+  });
+
+  test('a bare @@$csp exception clears the type; a valued one clears only its own policy', () => {
+    const bare = createRequestEvaluator([
+      "||x.com^$csp=script-src 'none'",
+      '@@||x.com^$csp',
+    ]);
+    expect(bare.evaluate('https://x.com/').transforms.csp).toBeUndefined();
+    const valued = createRequestEvaluator([
+      "||x.com^$csp=script-src 'none'",
+      "||x.com^$csp=frame-src 'none'",
+      "@@||x.com^$csp=frame-src 'none'",
+    ]);
+    expect(valued.evaluate('https://x.com/').transforms.csp).toEqual(["script-src 'none'"]);
+  });
+
+  test('modifier names are case-insensitive; modifier VALUES keep their case', () => {
+    // `$CSP` parses as `$csp`, but a hash/nonce/report-URI value is
+    // case-sensitive — a whole-tail lowercase would corrupt the policy.
+    const evaluator = createRequestEvaluator([
+      "||x.com^$CSP=script-src 'sha256-AbCdEf1234='",
+      '||x.com^$RemoveParam=FBCLID',
+      '||x.com^$RemoveHeader=X-Custom-Token',
+    ]);
+    const verdict = evaluator.evaluate('https://x.com/?FBCLID=1&fbclid=2');
+    expect(verdict.transforms.csp).toEqual(["script-src 'sha256-AbCdEf1234='"]);
+    expect(verdict.transforms.removeParams).toEqual(['FBCLID']);
+    expect(verdict.transforms.removeHeaders).toEqual(['X-Custom-Token']);
   });
 
   test('interception modifiers still block: $redirect', () => {

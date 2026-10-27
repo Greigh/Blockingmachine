@@ -669,7 +669,11 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
   // entry so a `~` vetoes its own rule only. `*.foo.com` include tokens key
   // into `subdomainEntries` — the suffix walk consults them only for proper
   // subdomains, so the apex itself is not covered (AdGuard `*.` semantics).
+  // `globalEntries` holds every stored global for the merge path;
+  // `globalConditional` is the subset carrying `~` exclusions — the only part
+  // of the global bucket a domainless-host lookup still has to check per host.
   const globalEntries: CosmeticEntry[] = [];
+  const globalConditional: CosmeticEntry[] = [];
   const domainEntries = new Map<string, CosmeticEntry[]>();
   const subdomainEntries = new Map<string, CosmeticEntry[]>();
   const entityEntries = new Map<string, CosmeticEntry[]>();
@@ -687,8 +691,12 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
     domains: ReturnType<typeof parseDomainList>,
     entry: CosmeticEntry,
   ) => {
+    // A `~*` exclusion vetoes its own rule on every host — storing the entry
+    // would only make every later lookup re-verify a rule that can never fire.
+    if (entry.excludes.some((token) => token.kind === "all")) return;
     if (domains.global || domains.includes.length === 0) {
       globalEntries.push(entry);
+      if (entry.excludes.length > 0) globalConditional.push(entry);
       return;
     }
     for (const token of domains.includes) {
@@ -902,62 +910,17 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
   const PAYLOAD_CACHE_MAX = 512;
   const payloadCache = new Map<string, CosmeticPayload | undefined>();
 
-  const lookupHost = (host: string): CosmeticPayload | undefined => {
-    const h = normalizeHost(host);
-    if (!h) return undefined;
-
-    const bag: CosmeticEntry[] = [];
-    // Suffix walk: `a.b.example.com` sees `example.com` and `b.example.com`
-    // entries but never `notexample.com`'s. `*.`-scoped entries apply only
-    // when the matched suffix is a strict ancestor (start > 0) — the apex
-    // itself is excluded.
-    for (let start = 0; ;) {
-      const key = start === 0 ? h : h.slice(start);
-      const bucket = domainEntries.get(key);
-      if (bucket) bag.push(...bucket);
-      if (start > 0) {
-        const subBucket = subdomainEntries.get(key);
-        if (subBucket) bag.push(...subBucket);
-      }
-      const dot = h.indexOf(".", start);
-      if (dot < 0) break;
-      start = dot + 1;
-    }
-
-    let sld: string | undefined;
-    const sldOf = (): string | undefined => {
-      if (sld === undefined) {
-        const decomposed = decomposeDomain(h);
-        sld = decomposed.tld ? decomposed.sld : "";
-      }
-      return sld;
-    };
-
-    if (hasEntityRules) {
-      const name = sldOf();
-      if (name) {
-        const bucket = entityEntries.get(name);
-        if (bucket) bag.push(...bucket);
-      }
-    }
-    if (globalEntries.length) bag.push(...globalEntries);
-    if (bag.length === 0) return undefined;
-
-    const tokenMatches = (token: DomainToken): boolean => {
-      switch (token.kind) {
-        case "host":
-          return hostTokenMatches(token.suffix, h);
-        case "sub":
-          // `~*.foo.com` vetoes subdomains only — the apex keeps the rule.
-          return h.endsWith(`.${token.suffix}`);
-        case "all":
-          // `~*` — matches every host, so the rule applies nowhere.
-          return true;
-        case "entity":
-          return sldOf() === token.name;
-      }
-    };
-
+  /**
+   * Merge one host's candidate entries into the frozen payload it shares with
+   * repeat lookups — the exact filter/exception application the per-host cache
+   * stores. `vetoed` reports whether an entry's own `~` exclusions keep it out
+   * of this answer; the shared global payload is built with `() => false`
+   * because every conditional entry that fires is part of it.
+   */
+  const resolveEntries = (
+    bag: CosmeticEntry[],
+    vetoed: (entry: CosmeticEntry) => boolean,
+  ): CosmeticPayload | undefined => {
     const hideCandidates = new Set<string>();
     const hideExceptions = new Set<string>();
     const styleCandidates: { key: string; css: string }[] = [];
@@ -969,7 +932,7 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
 
     for (const entry of bag) {
       // A `~` exclusion vetoes only the rule it rode in on.
-      if (entry.excludes.some(tokenMatches)) continue;
+      if (vetoed(entry)) continue;
       switch (entry.kind) {
         case "hide":
           hideCandidates.add(entry.selector);
@@ -1045,6 +1008,86 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
       ) as ScriptletCall[],
       skippedScriptlets,
     });
+  };
+
+  // One payload for every host with no domain/subdomain/entity hits and no
+  // vetoing `~` exclusion: the global bucket resolved once. Domainless hosts
+  // are the hot path of a general browsing session — this keeps `forHost`
+  // from allocating a fresh ~40k-entry merge per new host.
+  const globalSharedPayload =
+    globalEntries.length > 0 ? resolveEntries(globalEntries, () => false) : undefined;
+
+  const lookupHost = (host: string): CosmeticPayload | undefined => {
+    const h = normalizeHost(host);
+    if (!h) return undefined;
+
+    const bag: CosmeticEntry[] = [];
+    // Suffix walk: `a.b.example.com` sees `example.com` and `b.example.com`
+    // entries but never `notexample.com`'s. `*.`-scoped entries apply only
+    // when the matched suffix is a strict ancestor (start > 0) — the apex
+    // itself is excluded.
+    for (let start = 0; ;) {
+      const key = start === 0 ? h : h.slice(start);
+      const bucket = domainEntries.get(key);
+      if (bucket) bag.push(...bucket);
+      if (start > 0) {
+        const subBucket = subdomainEntries.get(key);
+        if (subBucket) bag.push(...subBucket);
+      }
+      const dot = h.indexOf(".", start);
+      if (dot < 0) break;
+      start = dot + 1;
+    }
+
+    let sld: string | undefined;
+    const sldOf = (): string | undefined => {
+      if (sld === undefined) {
+        const decomposed = decomposeDomain(h);
+        sld = decomposed.tld ? decomposed.sld : "";
+      }
+      return sld;
+    };
+
+    if (hasEntityRules) {
+      const name = sldOf();
+      if (name) {
+        const bucket = entityEntries.get(name);
+        if (bucket) bag.push(...bucket);
+      }
+    }
+
+    const tokenMatches = (token: DomainToken): boolean => {
+      switch (token.kind) {
+        case "host":
+          return hostTokenMatches(token.suffix, h);
+        case "sub":
+          // `~*.foo.com` vetoes subdomains only — the apex keeps the rule.
+          return h.endsWith(`.${token.suffix}`);
+        case "all":
+          // `~*` — matches every host, so the rule applies nowhere.
+          return true;
+        case "entity":
+          return sldOf() === token.name;
+      }
+    };
+
+    // Fast path: nothing host-specific hit, so the answer is the pre-resolved
+    // global payload — unless a conditional global's `~` vetoes this host, in
+    // which case the merge must run with that entry absent.
+    if (bag.length === 0 && globalEntries.length > 0) {
+      let vetoed = false;
+      for (const entry of globalConditional) {
+        if (entry.excludes.some(tokenMatches)) {
+          vetoed = true;
+          break;
+        }
+      }
+      if (!vetoed) return globalSharedPayload;
+    }
+
+    if (globalEntries.length) bag.push(...globalEntries);
+    if (bag.length === 0) return undefined;
+    return resolveEntries(bag, (entry) => entry.excludes.some(tokenMatches));
   };
 
   const index: CosmeticIndex = {

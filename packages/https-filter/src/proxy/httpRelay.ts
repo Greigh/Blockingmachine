@@ -216,6 +216,21 @@ function requestAuthority(req: TerminatedRequest): string {
  * flows never reach `requestHeaders`, so their encoding is untouched.
  */
 function wantsIdentityEncoding(req: TerminatedRequest, ctx: ResponsePipelineInput): boolean {
+  // A request that declared itself a non-document type (`sec-fetch-dest:
+  // image`, `script`, …) can never receive an injection — decideResponse
+  // gates the buffer path on exactly this predicate — so an image/script
+  // fetch on an injectable host must not pay the identity strip for
+  // nothing. `$csp` is a header transform unaffected by body encoding, and
+  // an `accept: text/html` offer from a typed image request names its
+  // error pages, not a render context. `undefined` (untyped) stays
+  // eligible.
+  if (
+    ctx.requestContentType !== undefined &&
+    ctx.requestContentType !== 'document' &&
+    ctx.requestContentType !== 'subdocument'
+  ) {
+    return false;
+  }
   const payload = ctx.cosmeticIndex?.forHost(ctx.host);
   if (payload !== undefined && hasInjectableContent(payload)) {
     return true;
@@ -342,6 +357,18 @@ function bufferAndInject(
   const chunks: Buffer[] = [];
   let buffered = 0;
   let flushed = false;
+  // The injection-budget slot `decideResponse` took on this plan is released
+  // at EVERY terminal path — injected, verbatim-flushed, errored — or the
+  // shared counter leaks toward the cap and every later page goes `busy`.
+  let slotReleased = false;
+  const releaseSlot = () => {
+    if (!slotReleased) {
+      slotReleased = true;
+      if (pipeline.injectionBudget !== undefined) {
+        pipeline.injectionBudget.inflight--;
+      }
+    }
+  };
 
   const flushRaw = () => {
     clearTimeout(bufferDeadline);
@@ -349,6 +376,7 @@ function bufferAndInject(
       return;
     }
     flushed = true;
+    releaseSlot();
     body.off('data', onData);
     // The head never crossed — `$csp` additions still apply (they are a
     // header transform, honest on untouched bytes), and content-length stays
@@ -428,6 +456,9 @@ function bufferAndInject(
         try {
           target = res.begin(status, head);
         } catch {
+          // Still a terminal path — the slot must go back before the
+          // fail-closed teardown or the counter leaks toward the cap.
+          releaseSlot();
           failClosed(res, kill);
           return;
         }
@@ -465,14 +496,17 @@ function bufferAndInject(
       scriptlets: (text as NonNullable<typeof text>).scriptletCount,
       skippedScriptlets: (text as NonNullable<typeof text>).skippedScriptlets,
     });
+    releaseSlot();
   });
   body.once('error', () => {
     clearTimeout(bufferDeadline);
+    releaseSlot();
     res.destroy();
     kill();
   });
   body.once('aborted', () => {
     clearTimeout(bufferDeadline);
+    releaseSlot();
     res.destroy();
   });
 }
@@ -505,6 +539,7 @@ function serveResponse(
           method: pipeline.method,
           requestContentType: pipeline.requestContentType,
           cosmeticIndex: pipeline.cosmeticIndex,
+          injectionBudget: pipeline.injectionBudget,
           evaluateTyped: pipeline.evaluateTyped,
         });
   const emit = pipeline?.onEvent;
@@ -522,7 +557,12 @@ function serveResponse(
   }
 
   if (plan.injectSkipped !== undefined) {
-    emit?.({ kind: 'inject-skip', host: pipeline?.host ?? '', reason: plan.injectSkipped });
+    emit?.({
+      kind: 'inject-skip',
+      host: pipeline?.host ?? '',
+      reason: plan.injectSkipped,
+      skippedScriptlets: plan.skippedScriptlets,
+    });
   }
 
   if (plan.action === 'buffer-inject' && plan.payload !== undefined && pipeline !== undefined) {

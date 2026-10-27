@@ -44,7 +44,8 @@
  *    the action. `removeparam=name` collects `name`; bare, `*` or `/regex/` forms collapse to
  *    `"all"`; the `~name` exclusion form reports `"all"` with `keepParams: ["name"]`.
  *    `removeheader=name` collects header names (`request:`/`response:` prefixes stripped) and
- *    `csp=` keeps the policy text.
+ *    `csp=` keeps every matching rule's policy text — each lands as its own co-equal policy
+ *    on the response.
  *  - An exception carrying a transform modifier is a *cancellation*, upstream `@@`-semantics:
  *    it still wins `exception` on precedence, and it suppresses the collected transform of
  *    that type and value — `@@||x.com^$removeparam=token` stops `token` being stripped, while
@@ -91,8 +92,8 @@ export interface RequestVerdict {
     keepParams: string[];
     /** Header names to strip before forwarding. */
     removeHeaders: string[];
-    /** A `$csp=` policy the response should carry; absent when no matching rule set one. */
-    csp?: string;
+    /** Every matching rule's `$csp=` policy text — each becomes its own co-equal policy. */
+    csp?: string[];
   };
 }
 
@@ -196,7 +197,8 @@ interface CompiledRequestRule {
   removeAllHeaders: boolean;
   /** Whether the rule carries `csp` at all — a bare `@@…$csp` suppresses any collected csp. */
   hasCspModifier: boolean;
-  csp?: string;
+  /** Every `csp=` value on the rule (a comma-split tail can carry more than one). */
+  csp: string[];
 }
 
 /** A path/pattern rule and its URL test — the scan-list half of the index. */
@@ -206,9 +208,13 @@ interface ScannedRule {
 }
 
 /**
- * Split a raw rule into pattern body and lower-cased `$`-modifiers. `@@` is stripped from the
+ * Split a raw rule into pattern body and verbatim `$`-modifiers. `@@` is stripped from the
  * body (the caller tracks `isException`), so the body is what a URL matcher would see. An
  * empty body is kept — `*$removeparam=` and `$removeparam=` are match-all rules upstream.
+ * Modifier NAMES are case-insensitive (the caller folds them); modifier VALUES are left
+ * byte-exact because `$csp` policy text and `$removeparam`/`$removeheader` names are
+ * case-sensitive — a whole-tail `.toLowerCase()` here would corrupt
+ * `csp=script-src 'sha256-AbCdEf='`.
  */
 function splitRule(raw: string): { body: string; modifiers: string[] } {
   let work = raw.trim();
@@ -222,7 +228,6 @@ function splitRule(raw: string): { body: string; modifiers: string[] } {
       ? []
       : work
           .slice(separator + 1)
-          .toLowerCase()
           .split(",")
           .map((part) => part.trim())
           .filter(Boolean);
@@ -338,10 +343,17 @@ function compileRule(
   const trimmed = raw.trim();
   if (!trimmed) return null;
   const isException = isExceptionFlag || trimmed.startsWith("@@");
-  const { body, modifiers } = splitRule(trimmed);
+  const { body, modifiers: rawModifiers } = splitRule(trimmed);
   // A body-less rule still indexes when it carries modifiers (`$removeparam=` is match-all);
   // one without either is a stray `$` and nothing to compile.
-  if (!body && modifiers.length === 0) return null;
+  if (!body && rawModifiers.length === 0) return null;
+  // Names are case-insensitive, values are not: fold only the name half of each modifier so
+  // `CSP=` parses while `csp=script-src 'sha256-AbCd'` keeps its case-sensitive policy text.
+  const modifiers = rawModifiers.map((part) => {
+    const eq = part.indexOf("=");
+    const name = (eq < 0 ? part : part.slice(0, eq)).trim().toLowerCase();
+    return eq < 0 ? name : name + part.slice(eq);
+  });
 
   const rule: CompiledRequestRule = {
     raw: trimmed,
@@ -356,7 +368,7 @@ function compileRule(
     removeHeaders: [],
     removeAllHeaders: false,
     hasCspModifier: false,
-    csp: undefined,
+    csp: [],
   };
   let isBadfilter = false;
   let hasModify = false;
@@ -425,7 +437,7 @@ function compileRule(
         else rule.removeAllHeaders = true;
       } else if (name === "csp") {
         rule.hasCspModifier = true;
-        if (value && rule.csp === undefined) rule.csp = value;
+        if (value) rule.csp.push(value);
       }
       // replace/urltransform/header/referrerpolicy/permissions/stealth are modify actions
       // this verdict cannot express — they still mark the rule non-blocking.
@@ -599,8 +611,8 @@ export function createRequestEvaluator(rawRules: string[]): RequestEvaluator {
     const removeHeaderSet = new Set<string>();
     const suppressHeaderNames = new Set<string>();
     let suppressHeaderAll = false;
-    let csp: string | undefined;
     let cspSuppressed = false;
+    const cspValues = new Set<string>();
     const suppressCspValues = new Set<string>();
 
     for (const rule of active) {
@@ -610,15 +622,15 @@ export function createRequestEvaluator(rawRules: string[]): RequestEvaluator {
         if (rule.removeAllHeaders) suppressHeaderAll = true;
         for (const header of rule.removeHeaders) suppressHeaderNames.add(header);
         if (rule.hasCspModifier) {
-          if (rule.csp === undefined) cspSuppressed = true;
-          else suppressCspValues.add(rule.csp);
+          if (rule.csp.length === 0) cspSuppressed = true;
+          else for (const value of rule.csp) suppressCspValues.add(value);
         }
       } else {
         if (rule.removeAllParams) removeAll = true;
         for (const param of rule.removeParamNames) removeParamSet.add(param);
         for (const param of rule.keepParamNames) keepParamSet.add(param);
         for (const header of rule.removeHeaders) removeHeaderSet.add(header);
-        if (rule.csp !== undefined && csp === undefined) csp = rule.csp;
+        for (const value of rule.csp) cspValues.add(value);
       }
     }
 
@@ -631,9 +643,8 @@ export function createRequestEvaluator(rawRules: string[]): RequestEvaluator {
       active.find((rule) => !rule.isException && rule.contributesBlock) ??
       null;
 
-    if (csp !== undefined && (cspSuppressed || suppressCspValues.has(csp))) {
-      csp = undefined;
-    }
+    // A bare `@@…$csp` clears the whole transform; a valued one clears only its own policy.
+    const csp = cspSuppressed ? [] : [...cspValues].filter((v) => !suppressCspValues.has(v));
 
     let removeParams: string[] | "all";
     if (suppressRemoveAll) removeParams = [];
@@ -649,7 +660,7 @@ export function createRequestEvaluator(rawRules: string[]): RequestEvaluator {
         removeHeaders: suppressHeaderAll
           ? []
           : [...removeHeaderSet].filter((header) => !suppressHeaderNames.has(header)),
-        ...(csp !== undefined ? { csp } : {}),
+        ...(csp.length ? { csp } : {}),
       },
     };
   }

@@ -96,7 +96,15 @@ export type ResponseEvent =
   | {
       kind: 'inject-skip';
       host: string;
-      reason: 'overflow' | 'encoded' | 'error' | 'empty';
+      /**
+       * `busy` — the proxy-wide injection budget was exhausted;
+       * `no-known-content` — the host's only payload entries were
+       * unknown-name scriptlets (nothing to emit, but the skip still
+       * carries the count so the card sees them).
+       */
+      reason: 'overflow' | 'encoded' | 'error' | 'empty' | 'busy' | 'no-known-content';
+      /** Unknown-name scriptlets the payload carried (`no-known-content`). */
+      skippedScriptlets?: number;
     };
 
 export type ResponseAction = 'passthrough' | 'block' | 'buffer-inject';
@@ -118,7 +126,26 @@ export interface ResponsePlan {
    * Injection was eligible but skipped before buffering — counted by the
    * relay as an `inject-skip` event.
    */
-  injectSkipped?: 'encoded';
+  injectSkipped?: 'encoded' | 'busy' | 'no-known-content';
+  /** Unknown-name scriptlets riding a `no-known-content` skip. */
+  skippedScriptlets?: number;
+}
+
+/**
+ * Proxy-wide bound on concurrent injection buffers. The relay holds up to
+ * {@link MAX_HTML_BUFFER} bytes per `buffer-inject` plan while it accumulates
+ * a body, so an unbounded count of simultaneous HTML responses is an
+ * unbounded memory surface — a hostile or simply busy upstream could park
+ * arbitrarily many half-buffered pages at once. `decideResponse` takes a
+ * slot when it returns `buffer-inject` (`inflight++`) and the relay's
+ * bufferer releases it on EVERY terminal path (injected, flushed, errored);
+ * a full budget answers `passthrough` + `inject-skip` `busy` instead.
+ */
+export interface InjectionBudget {
+  /** Slots currently held by live injection buffers. */
+  inflight: number;
+  /** The cap — `inflight >= max` makes the next eligible response skip `busy`. */
+  readonly max: number;
 }
 
 /** Everything the response pipeline needs from the request side. */
@@ -134,6 +161,8 @@ export interface ResponsePipelineInput {
   requestContentType?: string;
   /** The cosmetic index — absent disables injection (and the identity strip). */
   cosmeticIndex?: CosmeticIndex;
+  /** The proxy's shared injection slot counter — absent means unbounded. */
+  injectionBudget?: InjectionBudget;
   evaluateTyped?: EvaluateTyped;
   onEvent?: (event: ResponseEvent) => void;
 }
@@ -256,12 +285,12 @@ export function decideResponse(input: {
   method: string;
   requestContentType?: string;
   cosmeticIndex?: CosmeticIndex;
+  injectionBudget?: InjectionBudget;
   evaluateTyped?: EvaluateTyped;
 }): ResponsePlan {
   // `$csp` additions ride along independent of action — they are a
   // header-level transform and apply to whatever the response head becomes.
-  const cspAdditions =
-    input.verdict.transforms.csp !== undefined ? [input.verdict.transforms.csp] : [];
+  const cspAdditions = input.verdict.transforms.csp ?? [];
 
   // A verdict that was already blocked never reaches the relay in practice
   // (the request handler answered 403 before dialing) — but the pure
@@ -317,25 +346,56 @@ export function decideResponse(input: {
       input.requestContentType === 'subdocument')
   ) {
     const payload = input.cosmeticIndex?.forHost(input.host);
-    if (payload !== undefined && hasInjectableContent(payload)) {
-      if (isEncoded(input.headers['content-encoding'])) {
-        // The request side forces `accept-encoding: identity` for injectable
-        // hosts, but a non-compliant upstream can still compress — buffering
-        // gzip bytes and splicing markup in would corrupt the body, so an
-        // encoded response passes through (counted as a skipped injection).
+    if (payload !== undefined) {
+      if (hasInjectableContent(payload)) {
+        if (isEncoded(input.headers['content-encoding'])) {
+          // The request side forces `accept-encoding: identity` for injectable
+          // hosts, but a non-compliant upstream can still compress — buffering
+          // gzip bytes and splicing markup in would corrupt the body, so an
+          // encoded response passes through (counted as a skipped injection).
+          return {
+            action: 'passthrough',
+            cspAdditions,
+            reason: 'encoded-body',
+            injectSkipped: 'encoded',
+          };
+        }
+        const budget = input.injectionBudget;
+        if (budget !== undefined && budget.inflight >= budget.max) {
+          // Every live slot is a half-buffered page — a full budget streams
+          // this response verbatim rather than queueing unbounded memory.
+          return {
+            action: 'passthrough',
+            cspAdditions,
+            reason: 'injection-budget',
+            injectSkipped: 'busy',
+          };
+        }
+        // The slot is held from this decision until the bufferer resolves —
+        // decideResponse cannot roll it back on a later event, so the
+        // relay's bufferAndInject owns the matching decrement on every exit.
+        if (budget !== undefined) {
+          budget.inflight++;
+        }
+        return {
+          action: 'buffer-inject',
+          cspAdditions,
+          reason: 'cosmetic-payload',
+          payload,
+        };
+      }
+      if (payload.skippedScriptlets > 0) {
+        // Every payload entry was an unknown-name scriptlet — nothing to
+        // emit, but the skipped count must still reach the stats/card or
+        // unknown-scriptlet coverage reads as zero rather than partial.
         return {
           action: 'passthrough',
           cspAdditions,
-          reason: 'encoded-body',
-          injectSkipped: 'encoded',
+          reason: 'no-known-content',
+          injectSkipped: 'no-known-content',
+          skippedScriptlets: payload.skippedScriptlets,
         };
       }
-      return {
-        action: 'buffer-inject',
-        cspAdditions,
-        reason: 'cosmetic-payload',
-        payload,
-      };
     }
   }
 
@@ -522,8 +582,11 @@ export function rewriteCspForInjection(
  * into a live source list is spec-void (CSP ignores `'none'` alongside
  * other sources — the restriction silently dies), and live sources unioned
  * into a `'none'` list revive it (the stricter policy is widened). A
- * `$csp` value may itself be a comma-separated policy list — each member
- * lands as a separate co-equal policy. Returns the serialized header
+ * Each `additions` member is exactly ONE policy text: a `,` inside a `$csp`
+ * modifier can never survive `splitRule`'s tail split (the comma starts the
+ * next modifier), so no per-addition comma handling is needed here — and a
+ * stray comma that somehow arrived would still serialize identically
+ * through the final `join(', ')` either way. Returns the serialized header
  * value (`''` only when both sides are empty).
  */
 export function applyCspAdditions(
@@ -532,11 +595,9 @@ export function applyCspAdditions(
 ): string {
   const policies = collectPolicies(existing);
   for (const addition of additions) {
-    for (const part of addition.split(',')) {
-      const text = part.trim();
-      if (text !== '') {
-        policies.push(text);
-      }
+    const text = addition.trim();
+    if (text !== '') {
+      policies.push(text);
     }
   }
   return policies.join(', ');

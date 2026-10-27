@@ -120,7 +120,7 @@ describe('applyRequestTransforms — pass-through', () => {
     const out = applyRequestTransforms(
       'https://x.test/?a=1',
       headers,
-      transforms({ csp: "script-src 'none'" }),
+      transforms({ csp: ["script-src 'none'"] }),
     );
     expect(out.url).toBe('https://x.test/?a=1');
     expect(out.headers).toBe(headers);

@@ -483,6 +483,41 @@ describe("createCosmeticIndex — contract edges", () => {
     expect(index.stats.notCosmetic).toBeGreaterThanOrEqual(4);
   });
 
+  test("two domainless hosts share one frozen payload object", () => {
+    // The miss path is the hot path — domainless hosts must not each pay a
+    // fresh ~40k-entry merge when the same global bucket answers them all.
+    const index = createCosmeticIndex(["##.ad", "##+js(set, x, 1)", "other.com##.other"]);
+    const a = index.forHost("alpha.example");
+    const b = index.forHost("beta.example");
+    expect(a).toBeDefined();
+    expect(a).toBe(b);
+    expect(Object.isFrozen(a)).toBe(true);
+    expect(a?.hide).toEqual([".ad"]);
+    expect(a?.scriptlets).toHaveLength(1);
+  });
+
+  test("a host with domain hits gets its own merged payload — globals still apply", () => {
+    const index = createCosmeticIndex(["##.global", "example.com##.local"]);
+    const shared = index.forHost("other.example");
+    const merged = index.forHost("example.com");
+    expect(merged).not.toBe(shared);
+    expect(merged?.hide).toEqual([".local", ".global"]);
+    expect(shared?.hide).toEqual([".global"]);
+    // Subdomain hits take the per-host path too.
+    const sub = index.forHost("a.example.com");
+    expect(sub).not.toBe(shared);
+    expect(sub?.hide).toEqual([".local", ".global"]);
+  });
+
+  test("a vetoing ~ exclusion drops the host to the per-host path — the shared payload stays clean", () => {
+    const index = createCosmeticIndex(["~vetoed.example##.ad", "##.global"]);
+    const vetoed = index.forHost("vetoed.example");
+    const shared = index.forHost("clean.example");
+    expect(vetoed).not.toBe(shared);
+    expect(vetoed?.hide).toEqual([".global"]);
+    expect(shared?.hide).toEqual([".ad", ".global"]);
+  });
+
   test("size() reports the indexed populations", () => {
     const index = createCosmeticIndex([
       "example.com,other.com##.ad",

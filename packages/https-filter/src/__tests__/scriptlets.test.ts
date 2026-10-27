@@ -287,6 +287,17 @@ describe('runtime behavior under a fake page', () => {
     expect(foreign.misses).toBe(1); // honest accounting of the blocked install
   });
 
+  test('a non-extensible window never throws out of the IIFE — calls degrade to the fallback', () => {
+    // `Object.preventExtensions(window)` is the hostile-page shape that makes
+    // the `dp(w,'__bm_sc',…)` install throw; the guarded runtime must swallow
+    // it, and each invocation's own `||function(){}` fallback keeps the rest
+    // of the script block alive.
+    const page = fakePage();
+    Object.preventExtensions(page.window);
+    expect(() => runIn(page, [{ name: 'set-constant', args: ['ok3', '7'] }])).not.toThrow();
+    expect(page.window.__bm_sc).toBeUndefined();
+  });
+
   test('set-constant lazily traps a leaf under a page-created intermediate', () => {
     const page = fakePage();
     runIn(page, [{ name: 'set-constant', args: ['ads.blocked', 'false'] }]);

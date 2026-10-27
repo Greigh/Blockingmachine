@@ -67,8 +67,10 @@
  * pre-poisoned `__bm_sc` can't disarm the payload: a foreign configurable
  * value is replaced by ours, while a foreign NON-configurable one can't be
  * beaten — that case logs on the foreign value's `misses` counter and
- * bails honestly. Function `.toString` spoofing is explicitly out of scope
- * (flagged in the P2 plan).
+ * bails honestly. The install itself is guarded too: a non-extensible
+ * window refuses `defineProperty`, so the wrap degrades to the call lines'
+ * `||function(){}` fallback rather than throwing out of the IIFE. Function
+ * `.toString` spoofing is explicitly out of scope (flagged in the P2 plan).
  *
  * Escaping is the XSS surface: every interpolated arg goes through
  * `emitArg` (JSON.stringify + `</script` → `<\/script`, `<!--` → `\x3C!--`,
@@ -138,7 +140,11 @@ let runtimeCache: string | undefined;
  * The library IIFE — defines `window.__bm_sc(name, args)` non-enumerably and
  * returns. Idempotent: a second injection is a no-op. Every scriptlet body
  * swallows its own exceptions at the dispatcher, so a partial DOM or a page
- * fighting back can never turn our block into a page-visible error.
+ * fighting back can never turn our block into a page-visible error. The
+ * `dp(w, '__bm_sc', …)` install itself is guarded for the same reason: a
+ * non-extensible/frozen window refuses defineProperty, and the wrap degrades
+ * to the call lines' `||function(){}` fallback instead of throwing out of
+ * the IIFE.
  */
 export function scriptletRuntimeSource(): string {
   if (runtimeCache === undefined) {
@@ -453,7 +459,7 @@ s.setItem(k,v=='emptyObj'?'{}':v=='emptyArr'?'[]':v=='emptyStr'?'':v)}catch(e){}
 function sc(n,args){var h=has.call(H,n)?H[n]:undefined;if(h===undefined){sc.misses=(sc.misses|0)+1;return}try{h(args||[])}catch(e){}}
 dp(sc,'misses',{value:0,writable:!0});
 dp(sc,'__bm',{value:1});
-dp(w,'__bm_sc',{value:sc,enumerable:!1,configurable:!1,writable:!1});
+try{dp(w,'__bm_sc',{value:sc,enumerable:!1,configurable:!1,writable:!1})}catch(e){}
 })();`
   }
   return runtimeCache;

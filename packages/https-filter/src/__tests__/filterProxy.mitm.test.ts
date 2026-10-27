@@ -1569,6 +1569,7 @@ describe('response pipeline (P2 Task 3)', () => {
     "||csp.example^$csp=script-src 'none'",
     'cspcos.example##.csp-ad',
     "||cspcos.example^$csp=frame-src 'none'",
+    'unknowncos.example##+js(totally-fake-name)',
   ];
   let responsePolicy: PolicyStore;
   let responseProxy: RunningProxy;
@@ -2323,6 +2324,172 @@ describe('response pipeline (P2 Task 3)', () => {
     } finally {
       await closeServer(server);
       await auditProxy.close();
+    }
+  });
+
+  test('injection budget: a held buffer makes the next page skip busy; the slot returns when it resolves', async () => {
+    // The budget object is observable here — drive relayRequest directly so
+    // the concurrency and the counter restore are both deterministic.
+    const evaluator = createRequestEvaluator(rules);
+    const cosmetic = createCosmeticIndex(rules);
+    const budget = { inflight: 0, max: 1 };
+    const events: ResponseEvent[] = [];
+
+    // Origin A writes its head + a partial body, then parks — the relay's
+    // buffer holds the only injection slot mid-accumulation.
+    const leafA = originCa.forgeLeaf('cosmetic.example');
+    let park: http.ServerResponse | null = null;
+    const originA = https.createServer(
+      { key: leafA.keyPem, cert: leafA.certPem },
+      (_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.write('<html><head>');
+        park = res;
+      },
+    );
+    const portA = await listen(originA);
+    const pageB = '<html><head></head><body><div class="ad-slot">b</div></body></html>';
+    const { server: originB, port: portB } = await htmlOrigin('cosmetic.example', pageB);
+    try {
+      const drive = (port: number, res: RelayResponse, host = 'cosmetic.example') =>
+        relayRequest(
+          {
+            method: 'GET',
+            url: '/',
+            host,
+            headers: {},
+            body: Readable.from([]),
+            protocol: 'h1',
+          },
+          res,
+          { host: '127.0.0.1', port, servername: 'cosmetic.example' },
+          {
+            upstreamCaCerts: [originCa.caCertPem],
+            response: {
+              url: `https://${host}/`,
+              host,
+              method: 'GET',
+              verdict: evaluator.evaluate(`https://${host}/`),
+              cosmeticIndex: cosmetic,
+              injectionBudget: budget,
+              onEvent: (event) => events.push(event),
+            },
+          },
+        );
+
+      const probeA = fakeResponse();
+      drive(portA, probeA.res);
+      // The head arriving runs decideResponse — the slot is taken synchronously.
+      await waitFor(() => budget.inflight === 1);
+
+      const probeB = fakeResponse();
+      drive(portB, probeB.res);
+      await waitFor(
+        () => events.some((e) => e.kind === 'inject-skip' && e.reason === 'busy'),
+      );
+      // B streamed verbatim — a full budget never queues memory.
+      await waitFor(() => probeB.bodyBytes().length >= pageB.length);
+      expect(probeB.bodyBytes().toString('utf8')).toBe(pageB);
+      expect(probeB.bodyBytes().toString('utf8')).not.toContain('bm-c');
+
+      // Resolving A's parked body completes its injection and frees the slot
+      // (`inflight === 1` above already proved the handler ran and parked).
+      park!.end('</head><body>A</body></html>');
+      await waitFor(() => budget.inflight === 0);
+      expect(events.some((e) => e.kind === 'html-inject')).toBe(true);
+
+      // …and a later page takes the freed slot — the counter was restored,
+      // not permanently spent.
+      const probeC = fakeResponse();
+      drive(portB, probeC.res);
+      await waitFor(() => probeC.bodyBytes().length > pageB.length);
+      expect(probeC.bodyBytes().toString('utf8')).toContain('bm-c');
+    } finally {
+      await closeServer(originA);
+      await closeServer(originB);
+    }
+  });
+
+  test('a declared non-document context keeps its accept-encoding — no wasted identity strip', async () => {
+    const { server, port, lastRequest } = await htmlOrigin(
+      'cosmetic.example',
+      '<html><head></head><body>x</body></html>',
+    );
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const image = await withTimeout(
+        httpRequestOver(client, {
+          path: '/i.png',
+          host: 'cosmetic.example',
+          headers: {
+            'sec-fetch-dest': 'image',
+            accept: 'image/png',
+            'accept-encoding': 'gzip, deflate',
+          },
+        }),
+        10_000,
+        'typed-encoding image GET',
+      );
+      expect(image.status).toBe(200);
+      // An image-declared fetch can never render the markup — the gzip
+      // offer rides through instead of paying the identity strip.
+      expect(lastRequest()?.headers['accept-encoding']).toBe('gzip, deflate');
+
+      // The same host under a document declaration still forces identity.
+      const doc = await withTimeout(
+        httpRequestOver(client, {
+          path: '/',
+          host: 'cosmetic.example',
+          headers: {
+            'sec-fetch-dest': 'document',
+            accept: 'text/html',
+            'accept-encoding': 'gzip, deflate',
+          },
+        }),
+        10_000,
+        'typed-encoding document GET',
+      );
+      expect(doc.status).toBe(200);
+      expect(lastRequest()?.headers['accept-encoding']).toBe('identity');
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('a host with only unknown scriptlets skips injection but still counts them', async () => {
+    // `unknowncos.example` carries only `##+js(totally-fake-name)` — nothing
+    // the runtime knows. The page must pass byte-identical while the card's
+    // skipped-scriptlets figure still sees the coverage gap.
+    const page = '<html><head></head><body><div>x</div></body></html>';
+    const { server, port } = await htmlOrigin('unknowncos.example', page);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'unknowncos.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'unknowncos.example' }),
+        10_000,
+        'unknown-scriptlet GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toBe(page);
+      const after = responseProxy.stats();
+      expect(after.htmlInjected).toBe(before.htmlInjected);
+      expect(after.injectionsSkipped).toBe(before.injectionsSkipped + 1);
+      expect(after.skippedScriptlets).toBe(before.skippedScriptlets + 1);
+      client.destroy();
+    } finally {
+      await closeServer(server);
     }
   });
 });
