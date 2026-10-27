@@ -45,6 +45,23 @@ const TRUST_LABEL: Record<string, string> = {
 };
 
 /**
+ * Loopback spellings for the data-bind check — mirrors the engine's own
+ * `isLoopbackBindHost` (the card can't import engine code): `localhost`,
+ * any 127.x, `::1` and its expanded/mapped forms. A bind that reads as
+ * anything else means the data port accepts flows from the network.
+ */
+function isLoopbackBind(host: string): boolean {
+  let h = host.trim().toLowerCase().replace(/\.+$/, '');
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+  if (h === 'localhost' || h.startsWith('127.')) return true;
+  if (h === '::1' || h === '0:0:0:0:0:0:0:1') return true;
+  // ::ffff:<v4> mapped forms — the tail decides by the same 127.x rule.
+  if (h.startsWith('::ffff:')) return h.slice('::ffff:'.length).startsWith('127.');
+  if (h.startsWith('0:0:0:0:ffff:')) return h.slice('0:0:0:0:ffff:'.length).startsWith('127.');
+  return /^0{1,4}(:0{1,4}){6}:0{0,3}1$/.test(h);
+}
+
+/**
  * The capture-install hint's per-platform wording: which machine is being
  * described, how the installer is invoked (`sudo` for the posix scripts;
  * an elevated Administrator PowerShell for the ps1 — Windows has no sudo
@@ -208,6 +225,11 @@ export const HttpsFilterCard: React.FC = () => {
   const starting = status?.status === 'starting';
   const stopped = !status || status.status === 'stopped';
   const engineAlive = running || paused || degraded;
+  // LAN hub mode (P4): the answering engine's data listener is bound off
+  // loopback, so it accepts flows from the whole network — the posture
+  // Android capture uses. The control API stays loopback by construction;
+  // the data port carries no authentication, so the hint says so.
+  const lanHub = engineAlive && typeof status?.bindHost === 'string' && !isLoopbackBind(status.bindHost);
   // The capture service owning the engine is NOT a stopped-and-startable
   // state — an unanswered probe is a transient KeepAlive gap, and a
   // user-context spawn on those ports would self-capture.
@@ -488,6 +510,22 @@ export const HttpsFilterCard: React.FC = () => {
           title="Content depth since engine start — cosmetic rules indexed, pages that received injected markup, responses blocked on their content-type, and scriptlet invocations emitted into pages (emitted, not verified executions)."
         >
           Content filtering — {contentLine}
+        </p>
+      )}
+
+      {/* LAN hub posture notice — a deliberate operator choice (BM_BIND_HOST),
+          surfaced because the data port then trusts the whole network. The
+          control API never joins it: /v1/proxy/* stays loopback-pinned. */}
+      {lanHub && (
+        <p
+          className="deploy-feed-box-desc"
+          style={{ margin: '6px 0 0', color: 'var(--tone-warning)' }}
+          title="The engine's data listener is bound to a non-loopback address — LAN hub mode (BM_BIND_HOST). Any host that can route to this address can send traffic through the proxy: the data port carries no authentication, so use it only on trusted networks. The /v1/proxy/* control API stays bound to loopback regardless."
+        >
+          LAN hub mode — the data listener accepts flows from the network on {status?.bindHost}:
+          {status?.port}. Only use on trusted networks — there is no authentication on the data
+          port. This is the mode Android capture uses to route a phone&apos;s traffic through
+          this machine; the control API stays on loopback.
         </p>
       )}
 

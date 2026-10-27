@@ -26,7 +26,7 @@ export { PolicyStore } from './policy/policyStore.js';
 export type { PolicyAction, PolicyEntry } from './policy/policyStore.js';
 export { startProxy } from './proxy/filterProxy.js';
 export type { ProxyStats, RunningProxy, StartProxyOptions } from './proxy/filterProxy.js';
-export { startControlServer } from './control.js';
+export { startControlServer, isLoopbackBindHost } from './control.js';
 export type { ControlApiDeps, RunningControl } from './control.js';
 
 /** Default listeners — loopback only, never 0.0.0.0 (Global Constraints). */
@@ -36,16 +36,22 @@ const DEFAULT_CONTROL_PORT = 9293;
 
 export interface FilterProxyConfig {
   /**
-   * Loopback bind host for BOTH listeners today — there is deliberately one
-   * knob. HAZARD for a future LAN-hub mode (design spec §9): a non-loopback
-   * DATA bind must never drag CONTROL along with it. The origin allowlist is
-   * a browser-boundary guard, not authentication — no-Origin clients (curl,
-   * a LAN neighbor) are trusted by design, so a LAN-exposed `/v1/proxy/*`
-   * would let any LAN client toggle protection off, read the pin ledger, or
-   * rotate the CA. When the data listener learns a `0.0.0.0` bind, the
-   * control listener stays loopback-pinned (or gains its own config).
+   * Bind host for the DATA listener only — the P4 LAN-hub posture is a
+   * non-loopback value here (BM_BIND_HOST). It deliberately cannot reach the
+   * control listener: the origin allowlist is a browser-boundary guard, not
+   * authentication — no-Origin clients (curl, a LAN neighbor) are trusted
+   * by design, so a LAN-exposed `/v1/proxy/*` would let any LAN client
+   * toggle protection off, read the pin ledger, or rotate the CA. The
+   * control bind is a separate knob, and a non-loopback one is refused.
    */
   bindHost?: string;
+  /**
+   * Bind host for the CONTROL listener — default 127.0.0.1, and it must be
+   * a loopback address: `startControlServer` refuses anything else. The
+   * knob exists for loopback-family variation (`::1`, a different 127.x
+   * alias) — never for putting `/v1/proxy/*` on the network.
+   */
+  controlBindHost?: string;
   /** CONNECT/PROXY-v2/plain-HTTP data listener — default 9294; 0 for ephemeral. */
   dataPort?: number;
   /** /v1/proxy/* control listener — default 9293; 0 for ephemeral. */
@@ -108,6 +114,7 @@ export interface RunningFilterProxy {
 
 export async function startFilterProxy(config: FilterProxyConfig): Promise<RunningFilterProxy> {
   const bindHost = config.bindHost ?? DEFAULT_BIND_HOST;
+  const controlBindHost = config.controlBindHost ?? DEFAULT_BIND_HOST;
   const dataPort = config.dataPort ?? DEFAULT_DATA_PORT;
   const controlPort = config.controlPort ?? DEFAULT_CONTROL_PORT;
 
@@ -193,8 +200,12 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
   };
   try {
     control = await startControlServer({
-      bindHost,
+      // The control bind is its own knob, loopback-enforced inside the
+      // server — a LAN `bindHost` (the hub posture) cannot drag
+      // `/v1/proxy/*` onto the network with it.
+      bindHost: controlBindHost,
       controlPort,
+      dataBindHost: bindHost,
       proxy,
       authority,
       policy,

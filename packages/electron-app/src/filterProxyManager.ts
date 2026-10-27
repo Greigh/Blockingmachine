@@ -27,6 +27,14 @@ export interface FilterProxyStatus {
   /** CONNECT/PROXY-v2/plain-HTTP data listener port. */
   port: number;
   controlPort: number;
+  /**
+   * The data listener's bound host — a non-loopback value means LAN hub
+   * mode (P4): the port accepts flows from the network, unauthenticated.
+   * Absent on engines that predate the field, and when stopped.
+   */
+  bindHost?: string;
+  /** The control listener's bound host — loopback by engine construction. */
+  controlBindHost?: string;
   rulesLoaded: number;
   protectionEnabled: boolean;
   /** Ledger fell back to in-memory — pins apply for the session, nothing persists. */
@@ -244,6 +252,9 @@ export class FilterProxyManager {
           status: paused ? 'paused' : policyDegraded ? 'degraded' : 'running',
           port: data.dataPort || this.dataPort,
           controlPort: data.controlPort || this.controlPort,
+          bindHost: typeof data.bindHost === 'string' ? data.bindHost : undefined,
+          controlBindHost:
+            typeof data.controlBindHost === 'string' ? data.controlBindHost : undefined,
           rulesLoaded: data.rulesLoaded || 0,
           protectionEnabled: data.protectionEnabled ?? !paused,
           policyDegraded,

@@ -18,7 +18,7 @@ import { once } from 'node:events';
 import { createHash, X509Certificate } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import tls from 'node:tls';
 import { CertAuthority, startFilterProxy, type RunningFilterProxy } from '../index.js';
@@ -866,6 +866,105 @@ describe('policy store edge cases', () => {
         await app3.close();
       }
     } finally {
+      await rm(d, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The P4 LAN-hub posture (plan Task 3): `bindHost` is the DATA listener's
+ * knob alone — `/v1/proxy/*` stays loopback-pinned regardless, because its
+ * unauthenticated mutation surface (pause/rotate/unpin/shutdown) must never
+ * face the network. A non-loopback `controlBindHost` is refused, not bound.
+ */
+describe('control bind posture (LAN hub)', () => {
+  /**
+   * A routable local address for the LAN-bind legs — the first non-internal
+   * IPv4 this host owns. `0.0.0.0` is the fallback (wildcard covers every
+   * interface including the LAN one; the connect then goes through loopback).
+   */
+  function lanAddress(): { bind: string; connect: string } {
+    for (const addrs of Object.values(networkInterfaces())) {
+      for (const a of addrs ?? []) {
+        if (a.family === 'IPv4' && !a.internal) {
+          return { bind: a.address, connect: a.address };
+        }
+      }
+    }
+    return { bind: '0.0.0.0', connect: '127.0.0.1' };
+  }
+
+  test('a non-loopback controlBindHost is refused — control never binds the LAN', async () => {
+    const d = await mkdtemp(join(tmpdir(), 'bm-https-filter-controlbind-'));
+    try {
+      for (const bad of ['0.0.0.0', '::', '192.0.2.10', 'example.com']) {
+        await expect(
+          startFilterProxy({
+            storeDir: join(d, 'store'),
+            dataPort: 0,
+            controlPort: 0,
+            controlBindHost: bad,
+            keyWrapBackend: null,
+          }),
+        ).rejects.toThrow(/loopback/i);
+      }
+      // Loopback-family spellings are the legitimate uses — each binds.
+      for (const good of ['127.0.0.1', 'localhost']) {
+        const ok = await startFilterProxy({
+          storeDir: join(d, 'store'),
+          dataPort: 0,
+          controlPort: 0,
+          controlBindHost: good,
+          keyWrapBackend: null,
+        });
+        await ok.close();
+      }
+    } finally {
+      await rm(d, { recursive: true, force: true });
+    }
+  });
+
+  test('a LAN-bound data listener answers on the LAN addr — and the control API stays loopback-only', async () => {
+    const d = await mkdtemp(join(tmpdir(), 'bm-https-filter-lanbind-'));
+    const { bind, connect } = lanAddress();
+    let app4: RunningFilterProxy | null = null;
+    try {
+      app4 = await startFilterProxy({
+        storeDir: join(d, 'store'),
+        bindHost: bind,
+        dataPort: 0,
+        controlPort: 0,
+        keyWrapBackend: null,
+      });
+      // Status names both postures honestly — data on the LAN bind, control
+      // on loopback.
+      const status = (await (
+        await fetch(`http://127.0.0.1:${app4.controlPort}/v1/proxy/status`)
+      ).json()) as Record<string, any>;
+      expect(status.bindHost).toBe(bind);
+      expect(status.controlBindHost).toBe('127.0.0.1');
+
+      // The data listener answers through the LAN address.
+      const dataSock = net.connect({ host: connect, port: app4.proxy.port });
+      await withTimeout(once(dataSock, 'connect'), 5_000, 'LAN data connect');
+      dataSock.destroy();
+
+      if (bind !== '0.0.0.0') {
+        // The control API does NOT answer on the LAN address — a mutation
+        // attempt from the network hits a dead port, not the API.
+        const lanControl = net.connect({ host: bind, port: app4.controlPort });
+        await expect(
+          withTimeout(once(lanControl, 'error'), 5_000, 'LAN control refusal'),
+        ).resolves.toBeDefined();
+        lanControl.destroy();
+      }
+      // …while answering loopback as always (the status fetch above already
+      // proved it; one more here so the leg reads self-contained).
+      const loopControl = net.connect({ host: '127.0.0.1', port: app4.controlPort });
+      await withTimeout(once(loopControl, 'connect'), 5_000, 'loopback control connect');
+      loopControl.destroy();
+    } finally {
+      await app4?.close();
       await rm(d, { recursive: true, force: true });
     }
   });

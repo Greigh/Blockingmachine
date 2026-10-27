@@ -16,7 +16,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configFromEnv } from '../main.js';
@@ -195,7 +195,43 @@ describe('configFromEnv', () => {
       expect(parsed.config.dataPort).toBe(19294);
       expect(parsed.config.controlPort).toBe(19293);
       expect(parsed.config.bindHost).toBe('127.0.0.2');
+      expect(parsed.config.controlBindHost).toBe('127.0.0.1');
       expect(parsed.config.rulesPath).toBe('/tmp/rules.txt');
+    }
+  });
+
+  test('BM_BIND_HOST is the DATA bind only — the control bind defaults loopback and refuses LAN values', () => {
+    // A LAN data bind leaves the control bind at its loopback default — the
+    // one posture that must never happen cannot be expressed via BM_BIND_HOST.
+    const lan = configFromEnv({
+      BM_STORE_DIR: '/tmp/x',
+      BM_BIND_HOST: '192.168.1.20',
+    });
+    expect(lan.ok).toBe(true);
+    if (lan.ok) {
+      expect(lan.config.bindHost).toBe('192.168.1.20');
+      expect(lan.config.controlBindHost).toBe('127.0.0.1');
+    }
+
+    // Non-loopback BM_CONTROL_BIND_HOST values are refused at config time —
+    // exit-2 honest, never a half-bound engine.
+    for (const bad of ['0.0.0.0', '::', '192.168.1.20', 'example.com']) {
+      const parsed = configFromEnv({
+        BM_STORE_DIR: '/tmp/x',
+        BM_CONTROL_BIND_HOST: bad,
+      });
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) expect(parsed.error).toContain('BM_CONTROL_BIND_HOST');
+    }
+
+    // Loopback-family spellings pass through verbatim.
+    for (const good of ['127.0.0.1', '127.0.0.2', 'localhost', '::1']) {
+      const parsed = configFromEnv({
+        BM_STORE_DIR: '/tmp/x',
+        BM_CONTROL_BIND_HOST: good,
+      });
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.config.controlBindHost).toBe(good);
     }
   });
 });
@@ -266,6 +302,75 @@ describe('dist/main.js spawned', () => {
     const code = await exitCode(child);
     expect(code).toBe(0);
     expect(stderr()).toContain('/v1/proxy/shutdown');
+  });
+
+  test('BM_BIND_HOST=<lan> LAN-binds the data listener while control stays loopback', async () => {
+    // The hub posture end-to-end: env → binds. A routable local IPv4 when
+    // this host owns one (CI loopback-only hosts fall back to the wildcard
+    // bind — the LAN-reachability legs then check 127.0.0.1, which the
+    // wildcard also serves).
+    let lanAddr: string | null = null;
+    for (const addrs of Object.values(networkInterfaces())) {
+      for (const a of addrs ?? []) {
+        if (a.family === 'IPv4' && !a.internal) lanAddr ??= a.address;
+      }
+    }
+    const bind = lanAddr ?? '0.0.0.0';
+    const reach = lanAddr ?? '127.0.0.1';
+
+    const storeDir = await tempDir('bm-proxy-lan-');
+    const dataPort = await freePort();
+    const controlPort = await freePort();
+    const { child, stderr } = spawnEngine({
+      BM_STORE_DIR: storeDir,
+      BM_DATA_PORT: String(dataPort),
+      BM_CONTROL_PORT: String(controlPort),
+      BM_BIND_HOST: bind,
+    });
+
+    const status = await waitForStatus(child, controlPort);
+    expect(status.bindHost).toBe(bind);
+    expect(status.controlBindHost).toBe('127.0.0.1');
+    expect(stderr()).toContain(`listening: control 127.0.0.1:${controlPort} data ${bind}:${dataPort}`);
+
+    // The data listener answers through the LAN address.
+    await new Promise<void>((resolve, reject) => {
+      const s = net.connect({ host: reach, port: dataPort });
+      s.once('connect', () => {
+        s.destroy();
+        resolve();
+      });
+      s.once('error', reject);
+    });
+
+    if (lanAddr) {
+      // Control on the LAN addr is a dead port — the mutation surface is
+      // loopback-pinned even while the data port takes network flows.
+      const refused = await new Promise<boolean>((resolve) => {
+        const s = net.connect({ host: lanAddr, port: controlPort });
+        s.once('connect', () => {
+          s.destroy();
+          resolve(false);
+        });
+        s.once('error', () => resolve(true));
+      });
+      expect(refused).toBe(true);
+    }
+
+    child.kill('SIGTERM');
+    await exitCode(child);
+  });
+
+  test('a non-loopback BM_CONTROL_BIND_HOST exits 2 with a named refusal', async () => {
+    const storeDir = await tempDir('bm-proxy-badctlbind-');
+    const { child, stderr } = spawnEngine({
+      BM_STORE_DIR: storeDir,
+      BM_CONTROL_BIND_HOST: '0.0.0.0',
+    });
+    const code = await exitCode(child);
+    expect(code).toBe(2);
+    expect(stderr()).toContain('BM_CONTROL_BIND_HOST');
+    expect(stderr()).toContain('loopback');
   });
 
   test('BM_KEYWRAP=off leaves no OS-keystore trace — CA reports keyWrapped:false', async () => {

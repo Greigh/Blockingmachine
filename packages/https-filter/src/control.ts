@@ -28,6 +28,7 @@
 
 import { X509Certificate } from 'node:crypto';
 import http from 'node:http';
+import { isIP } from 'node:net';
 import type { CertAuthority } from './ca/certAuthority.js';
 import {
   normalizeHost,
@@ -37,14 +38,62 @@ import {
 } from './policy/policyStore.js';
 import type { RunningProxy } from './proxy/filterProxy.js';
 
+/**
+ * Loopback-literal check on the control listener's bind host — the one
+ * posture `startControlServer` enforces by refusing to bind otherwise. A
+ * LAN-bound DATA listener (BM_BIND_HOST, the P4 hub posture) must never drag
+ * `/v1/proxy/*` onto the network with it: the origin guard only filters
+ * browser callers — no-Origin clients are trusted by design, so a
+ * LAN-exposed control port would let the whole network pause protection,
+ * rotate the CA, or unpin hosts. Accepted spellings mirror the data
+ * listener's self-target loopback set — `localhost`, any `127.x`, `::1` and
+ * its expanded/`::ffff:`-mapped forms, `127.x` under `::ffff:` too.
+ * Wildcards (`0.0.0.0`, `::`) are refused on purpose — they mean "every
+ * interface", which is exactly the exposure being prevented.
+ */
+export function isLoopbackBindHost(host: string): boolean {
+  let h = host.trim().toLowerCase().replace(/\.+$/, '');
+  if (h.startsWith('[') && h.endsWith(']')) {
+    h = h.slice(1, -1);
+  }
+  if (h === 'localhost') return true;
+  const version = isIP(h);
+  if (version === 4) {
+    return h.startsWith('127.');
+  }
+  if (version === 6) {
+    if (h.startsWith('::ffff:')) {
+      const mapped = h.slice('::ffff:'.length);
+      return isIP(mapped) === 4 && mapped.startsWith('127.');
+    }
+    if (h.startsWith('0:0:0:0:ffff:')) {
+      const mapped = h.slice('0:0:0:0:ffff:'.length);
+      return isIP(mapped) === 4 && mapped.startsWith('127.');
+    }
+    return (
+      h === '::1' ||
+      h === '0:0:0:0:0:0:0:1' ||
+      /^0{1,4}(:0{1,4}){6}:0{0,3}1$/.test(h)
+    );
+  }
+  return false;
+}
+
 export interface ControlApiDeps {
   /**
-   * Always loopback — this must never follow a non-loopback data bind
-   * (see `FilterProxyConfig.bindHost` in index.ts): the origin guard only
-   * filters browser callers, and no-Origin clients are trusted by design.
+   * Always loopback — enforced: `startControlServer` refuses a non-loopback
+   * value before binding (see `isLoopbackBindHost`). The origin guard only
+   * filters browser callers, and no-Origin clients are trusted by design —
+   * there is no posture where this surface belongs on the network.
    */
   bindHost: string;
   controlPort: number;
+  /**
+   * The data listener's bound host, surfaced verbatim as `bindHost` on
+   * `/v1/proxy/status` — the card's "LAN hub mode" hint keys off it (a
+   * non-loopback value means the data port accepts flows from the network).
+   */
+  dataBindHost: string;
   proxy: RunningProxy;
   authority: CertAuthority;
   policy: PolicyStore;
@@ -121,6 +170,19 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 export function startControlServer(deps: ControlApiDeps): Promise<RunningControl> {
+  // Hardwired invariant, not a config posture: the control API answers
+  // loopback only — see isLoopbackBindHost. A non-loopback value here means
+  // a caller bug (or an env that slipped validation), so the refusal is a
+  // thrown startup error, not a bind attempt that half-succeeds.
+  if (!isLoopbackBindHost(deps.bindHost)) {
+    return Promise.reject(
+      new Error(
+        `control listener bind host must be a loopback address (got '${deps.bindHost}') — ` +
+          `/v1/proxy/* must never face the network: a LAN-bound engine (BM_BIND_HOST) keeps ` +
+          `the control API on loopback while the data listener takes the LAN bind`,
+      ),
+    );
+  }
   const { proxy, authority, policy } = deps;
   const startedAt = Date.now();
   // Resolved at listen time — `controlPort: 0` reports the ephemeral pick.
@@ -301,6 +363,13 @@ export function startControlServer(deps: ControlApiDeps): Promise<RunningControl
             status: paused ? 'paused' : 'running',
             dataPort: proxy.port,
             controlPort: boundPort,
+            // The two binds are reported separately because they are
+            // different postures: `bindHost` is the data listener's (a
+            // non-loopback value = LAN hub mode — the port accepts flows
+            // from the network with no authentication); `controlBindHost`
+            // is this listener's, loopback by construction.
+            bindHost: deps.dataBindHost,
+            controlBindHost: deps.bindHost,
             protectionEnabled: !paused,
             paused,
             policyDegraded: deps.policyDegraded,

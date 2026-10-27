@@ -510,6 +510,14 @@ export interface HttpsFilterStatus {
   /** CONNECT/PROXY-v2/plain-HTTP data listener port. */
   port: number;
   controlPort: number;
+  /**
+   * The data listener's bound host — a non-loopback value means LAN hub
+   * mode (P4 Android capture): the port accepts flows from the network,
+   * unauthenticated. Absent on engines that predate the field.
+   */
+  bindHost?: string;
+  /** The control listener's bound host — loopback by engine construction. */
+  controlBindHost?: string;
   rulesLoaded: number;
   protectionEnabled: boolean;
   policyDegraded: boolean;

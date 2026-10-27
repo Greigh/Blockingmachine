@@ -20,7 +20,18 @@
  *   BM_CONTROL_PORT  /v1/proxy/* listener (default 9293) — carries
  *                    POST /v1/proxy/shutdown, which retires the engine
  *                    through the same close+exit path the signals take
- *   BM_BIND_HOST     bind host for both listeners (default 127.0.0.1)
+ *   BM_BIND_HOST     bind host for the DATA listener only (default
+ *                    127.0.0.1) — a LAN address here is the P4 hub posture:
+ *                    the data port then accepts flows from the network
+ *                    (unauthenticated — trusted-LAN deployments only). It
+ *                    can never drag the control API along: /v1/proxy/* is
+ *                    loopback by construction, not by convention.
+ *   BM_CONTROL_BIND_HOST  control listener bind (default 127.0.0.1) — must
+ *                    be a loopback address; anything else is refused at
+ *                    config time, because a LAN-exposed control port would
+ *                    let the network pause protection, rotate the CA, or
+ *                    unpin hosts. Exists for loopback-family variation
+ *                    (::1, another 127.x alias), never for LAN exposure.
  *   BM_KEYWRAP       CA key-wrap backend pin — 'off'/'none'/'0' forces
  *                    `keyWrapBackend: null` (0600 `ca.key.pem`, `keyWrapped:
  *                    false`, zero OS-keystore contact); unset or any other
@@ -34,7 +45,12 @@
  * exits 1; only a config refusal (missing BM_STORE_DIR) exits 2.
  */
 
-import { startFilterProxy, type FilterProxyConfig, type RunningFilterProxy } from './index.js';
+import {
+  isLoopbackBindHost,
+  startFilterProxy,
+  type FilterProxyConfig,
+  type RunningFilterProxy,
+} from './index.js';
 
 const TAG = '[https-filter]';
 
@@ -45,7 +61,10 @@ function stderrLine(message: string): void {
 export interface SpawnedProxyConfig {
   storeDir: string;
   rulesPath?: string;
+  /** DATA listener bind — `BM_BIND_HOST`; a LAN address is the hub posture. */
   bindHost: string;
+  /** CONTROL listener bind — `BM_CONTROL_BIND_HOST`; loopback only, enforced. */
+  controlBindHost: string;
   dataPort: number;
   controlPort: number;
   /**
@@ -84,6 +103,19 @@ export function configFromEnv(env: NodeJS.ProcessEnv): EnvParse {
   }
   const rulesPath = env.BM_RULES_PATH?.trim();
   const bindHost = env.BM_BIND_HOST?.trim();
+  const controlBindHost = env.BM_CONTROL_BIND_HOST?.trim();
+  // The control bind is refused at CONFIG time, not left for the listen to
+  // fail: a non-loopback value is the one posture this surface must never
+  // take (mutations unauthenticated on the network), so the refusal names
+  // the env var rather than surfacing as a generic bind error.
+  if (controlBindHost && !isLoopbackBindHost(controlBindHost)) {
+    return {
+      ok: false,
+      error:
+        `BM_CONTROL_BIND_HOST must be a loopback address (got '${controlBindHost}') — ` +
+        `the /v1/proxy/* API is loopback by construction; BM_BIND_HOST covers the data listener only`,
+    };
+  }
   const keyWrap = env.BM_KEYWRAP?.trim().toLowerCase();
   return {
     ok: true,
@@ -91,6 +123,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv): EnvParse {
       storeDir,
       ...(rulesPath ? { rulesPath } : {}),
       bindHost: bindHost || DEFAULT_BIND_HOST,
+      controlBindHost: controlBindHost || DEFAULT_BIND_HOST,
       dataPort: envPort(env.BM_DATA_PORT, DEFAULT_DATA_PORT),
       controlPort: envPort(env.BM_CONTROL_PORT, DEFAULT_CONTROL_PORT),
       ...(keyWrap === 'off' || keyWrap === 'none' || keyWrap === '0'
@@ -139,9 +172,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     process.exit(1);
   }
 
-  // The single "came up" line the parent watches for — ports only.
+  // The single "came up" line the parent watches for — ports only. The two
+  // binds are different postures (control loopback, data possibly LAN), so
+  // each reports its own address.
   stderrLine(
-    `listening: control ${cfg.bindHost}:${running.controlPort} data ${cfg.bindHost}:${running.proxy.port}`,
+    `listening: control ${parsed.config.controlBindHost}:${running.controlPort} data ${parsed.config.bindHost}:${running.proxy.port}`,
   );
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));

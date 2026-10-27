@@ -175,6 +175,51 @@ describe('HttpsFilterCard — status surface', () => {
     expect(screen.queryByText(/pages injected/)).toBeNull();
   });
 
+  it('surfaces the LAN hub hint only when the data bind is off loopback', async () => {
+    // LAN-bound engine — the P4 hub posture; the hint must name the bind
+    // and the unauthenticated-data-port trade.
+    installBridge({
+      getHttpsFilterStatus: jest.fn(() =>
+        Promise.resolve({ ...running, bindHost: '192.168.1.20', controlBindHost: '127.0.0.1' }),
+      ),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/LAN hub mode/)).not.toBeNull();
+    expect(screen.queryByText(/192\.168\.1\.20:9294/)).not.toBeNull();
+    expect(screen.queryByText(/no authentication on the data port/)).not.toBeNull();
+    expect(screen.queryByText(/Android capture/)).not.toBeNull();
+
+    // Loopback binds never hint — including the ::1 and 127.x spellings.
+    for (const loopback of ['127.0.0.1', '::1', 'localhost', '127.0.0.2']) {
+      cleanup();
+      installBridge({
+        getHttpsFilterStatus: jest.fn(() =>
+          Promise.resolve({ ...running, bindHost: loopback }),
+        ),
+      });
+      render(<HttpsFilterCard />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.queryByText(/LAN hub mode/)).toBeNull();
+    }
+
+    // An engine predating the field (bindHost absent) stays silent too.
+    cleanup();
+    installBridge();
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/LAN hub mode/)).toBeNull();
+  });
+
   it('shows the capture hint per platform when the capture service is not installed', async () => {
     // darwin — the hint's static text names the script via the fallback line.
     installBridge();
