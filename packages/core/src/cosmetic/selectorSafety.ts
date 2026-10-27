@@ -82,6 +82,13 @@ export function checkSelectorStructure(
  * value terminates the element all the same. `{`/`}`/`;`/`@`/`/*` inside a
  * quoted attribute string are exactly as inert as the same characters inside
  * a quoted scriptlet arg.
+ *
+ * The bracket scan is quote-aware on the inside too: a `]` inside a quoted
+ * attribute value (`[a="]"]`) is data, not the bracket close — without that,
+ * the quoted `]` ends the scan, the closing `"` opens a checker-quote, and a
+ * following `{` sails through. A quote left open at end-of-selector (top
+ * level or inside brackets) means the scan never saw the tail of the input,
+ * so it fails rather than certify text it never examined.
  */
 export function checkListSelectorStructure(
   selector: unknown,
@@ -95,6 +102,7 @@ export function checkListSelectorStructure(
 
   let quote = "";
   let bracketDepth = 0;
+  let bracketQuote = "";
   for (let i = 0; i < trimmed.length; i++) {
     const ch = trimmed[i];
     if (ch === "<") {
@@ -108,6 +116,19 @@ export function checkListSelectorStructure(
       continue;
     }
     if (bracketDepth > 0) {
+      // Inside an attribute matcher a `"`/`'` opens a quoted value in which
+      // `]` is data, not the bracket close — `[a="]"]` must not let the
+      // quoted `]` end the scan and leave a stray `"` behind to open a
+      // checker-quote that swallows a following `{`.
+      if (bracketQuote) {
+        if (ch === "\\") i++;
+        else if (ch === bracketQuote) bracketQuote = "";
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        bracketQuote = ch;
+        continue;
+      }
       if (ch === "]") bracketDepth--;
       continue;
     }
@@ -128,6 +149,11 @@ export function checkListSelectorStructure(
     ) {
       return { ok: false, reason: "contains structural characters" };
     }
+  }
+  // An unclosed quote means the tail of the selector was never scanned —
+  // fail closed rather than certify text the checker never saw.
+  if (quote || bracketQuote) {
+    return { ok: false, reason: "contains structural characters" };
   }
   return { ok: true };
 }

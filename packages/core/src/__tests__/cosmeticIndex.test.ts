@@ -112,6 +112,59 @@ describe("createCosmeticIndex — element hiding", () => {
     expect(index.stats.invalidSelectors).toBe(6);
   });
 
+  test("a ] inside a quoted attribute value cannot end the bracket scan", () => {
+    // `[a="]"]{…}` — the quoted `]` must not close the attribute matcher:
+    // otherwise the trailing `"` opens a checker-quote that swallows the
+    // `{`, and arbitrary CSS rides into the page.
+    const index = createCosmeticIndex([
+      'example.com##[a="]"]{position:fixed;inset:0}',
+      "example.com##[a=']{']{position:fixed;inset:0}",
+      'example.com##[a="]{still-quoted}"]',
+      'example.com##[a="unterminated',
+      "example.com##.safe",
+    ]);
+    // Both escape attempts and the unclosed quote are rejected; the
+    // legitimately-quoted `]{…}` inside a string stays inert and valid.
+    expect(index.forHost("example.com")?.hide).toEqual([
+      '[a="]{still-quoted}"]',
+      ".safe",
+    ]);
+    expect(index.stats.invalidSelectors).toBe(3);
+  });
+
+  test("*.foo.com covers subdomains only — never the apex", () => {
+    const index = createCosmeticIndex([
+      "*.sony.com##.sub-ad",
+      "sony.com##.apex-ad",
+      "~*.ads.example.com##.everywhere-but-subs",
+    ]);
+    expect(index.forHost("sony.com")?.hide).toEqual([
+      ".apex-ad",
+      ".everywhere-but-subs",
+    ]);
+    expect(index.forHost("www.sony.com")?.hide).toEqual(
+      expect.arrayContaining([".sub-ad", ".apex-ad"]),
+    );
+    // `~*.` vetoes only the subdomains — the apex keeps the rule.
+    expect(index.forHost("ads.example.com")?.hide).toContain(
+      ".everywhere-but-subs",
+    );
+    expect(index.forHost("x.ads.example.com")?.hide).toBeUndefined();
+  });
+
+  test("~* excludes everything — the rule applies nowhere", () => {
+    const index = createCosmeticIndex([
+      "foo.com,~*##.never",
+      "~*##.also-never",
+      "foo.com##.yes",
+      "##.global",
+    ]);
+    expect(index.forHost("foo.com")?.hide).toEqual([".yes", ".global"]);
+    expect(index.forHost("bar.example")?.hide).toEqual([".global"]);
+    const only = createCosmeticIndex(["~*##.sel"]);
+    expect(only.forHost("anything.example")).toBeUndefined();
+  });
+
   test("host input is normalized: case, whitespace and a trailing dot", () => {
     const index = createCosmeticIndex(["example.com##.ad"]);
     expect(index.forHost("  Example.COM.  ")?.hide).toContain(".ad");
@@ -262,16 +315,82 @@ describe("createCosmeticIndex — scriptlets", () => {
     expect(index.forHost("multi.example")?.scriptlets).toHaveLength(1);
   });
 
-  test("a name-only scriptlet exception cancels every invocation of the name", () => {
+  test("a name-only scriptlet exception cancels only the zero-arg call", () => {
+    // uBO is literal-match on the whole call content: `#@#+js(nobab)` cancels
+    // `##+js(nobab)` but leaves `##+js(nobab, _)` live — the escape hatch list
+    // authors use to re-enable a scriptlet one arg-set at a time.
     const index = createCosmeticIndex([
-      "uii.io#@#+js(noeval)",
+      "uii.io#@#+js(nobab)",
+      "uii.io##+js(nobab)",
+      "uii.io##+js(nobab, _)",
       "uii.io##+js(noeval)",
-      "uii.io##+js(no-eval-if)",
       "uii.io##+js(set, x, 1)",
     ]);
     const payload = index.forHost("uii.io");
     expect(payload?.scriptlets).toEqual([
+      { name: "prevent-bab", args: ["_"] },
+      { name: "prevent-eval-if", args: [] },
       { name: "set-constant", args: ["x", "1"] },
+    ]);
+  });
+
+  test("#@#+js() with no name cancels every scriptlet for its host only", () => {
+    const index = createCosmeticIndex([
+      "example.com##+js(aopr, _pop)",
+      "example.com##+js(set, x, 1)",
+      "example.com#@#+js()",
+      "other.com##+js(aopr, _pop)",
+    ]);
+    expect(index.forHost("example.com")?.scriptlets ?? []).toHaveLength(0);
+    expect(index.forHost("other.com")?.scriptlets).toHaveLength(1);
+    expect(index.size().scriptletExceptions).toBe(1);
+  });
+
+  test("a bare #@#+js() is the global scriptlet kill-all", () => {
+    const index = createCosmeticIndex([
+      "##+js(aopr, _pop)",
+      "example.com##+js(set, x, 1)",
+      "#@#+js()",
+    ]);
+    expect(index.forHost("example.com")?.scriptlets ?? []).toHaveLength(0);
+    expect(index.forHost("anything.example")?.scriptlets ?? []).toHaveLength(0);
+    // The non-exception `##+js()` is meaningless — malformed, not kill-all.
+    const meaningless = createCosmeticIndex([
+      "example.com##+js()",
+      "example.com##+js(set, x, 1)",
+    ]);
+    expect(meaningless.stats.malformed).toBe(1);
+    expect(meaningless.forHost("example.com")?.scriptlets).toHaveLength(1);
+  });
+
+  test("a mid-token apostrophe is literal — quotes open only at arg start", () => {
+    const index = createCosmeticIndex([
+      "example.com##+js(set, prop, it's, value)",
+    ]);
+    expect(index.forHost("example.com")?.scriptlets).toEqual([
+      { name: "set-constant", args: ["prop", "it's", "value"] },
+    ]);
+  });
+
+  test("commas inside parens do not split args", () => {
+    const index = createCosmeticIndex([
+      "example.com##+js(set, x, f(a,b), y)",
+    ]);
+    expect(index.forHost("example.com")?.scriptlets).toEqual([
+      { name: "set-constant", args: ["x", "f(a,b)", "y"] },
+    ]);
+  });
+
+  test("backtick-quoted args group as raw literals (uBO ≥1.61)", () => {
+    const index = createCosmeticIndex([
+      "example.com##+js(set, x, `a,b`, y)",
+      "other.com##+js(set, x, `keep \\n raw`)",
+    ]);
+    expect(index.forHost("example.com")?.scriptlets).toEqual([
+      { name: "set-constant", args: ["x", "a,b", "y"] },
+    ]);
+    expect(index.forHost("other.com")?.scriptlets).toEqual([
+      { name: "set-constant", args: ["x", "keep \\n raw"] },
     ]);
   });
 
@@ -332,6 +451,7 @@ describe("createCosmeticIndex — contract edges", () => {
       selectors: 0,
       exceptions: 0,
       scriptlets: 0,
+      scriptletExceptions: 0,
       styles: 0,
     });
     expect(index.forHost("example.com")).toBeUndefined();
@@ -370,11 +490,13 @@ describe("createCosmeticIndex — contract edges", () => {
       "example.com#@#.ad",
       "example.com#$#.x { display: none; }",
       "example.com##+js(set, a, b)",
+      "example.com#@#+js(set, a, b)",
     ]);
     expect(index.size()).toEqual({
       selectors: 2,
       exceptions: 1,
       scriptlets: 1,
+      scriptletExceptions: 1,
       styles: 1,
     });
   });
@@ -393,6 +515,28 @@ describe("createCosmeticIndex — contract edges", () => {
     expect(canonicalScriptletName("rc")).toBe("remove-class");
     expect(canonicalScriptletName("abort-on-property-read")).toBe(
       "abort-on-property-read",
+    );
+    // AdGuard legacy camelCase spellings fold onto the canonical names.
+    expect(canonicalScriptletName("abortOnPropertyRead")).toBe(
+      "abort-on-property-read",
+    );
+    expect(canonicalScriptletName("preventWindowOpen")).toBe(
+      "prevent-window-open",
+    );
+    expect(canonicalScriptletName("setLocalStorageItem")).toBe(
+      "set-local-storage-item",
+    );
+    expect(canonicalScriptletName("noWindowOpenIf")).toBe(
+      "prevent-window-open",
+    );
+    expect(canonicalScriptletName("preventSetTimeout")).toBe(
+      "prevent-setTimeout",
+    );
+    // A `ubo`-prefixed spelling folds only onto a known name.
+    expect(canonicalScriptletName("ubo-set-constant")).toBe("set-constant");
+    expect(canonicalScriptletName("uboSetConstant")).toBe("set-constant");
+    expect(canonicalScriptletName("ubo-something-unknown")).toBe(
+      "ubo-something-unknown",
     );
     expect(canonicalScriptletName("something-unknown")).toBe(
       "something-unknown",

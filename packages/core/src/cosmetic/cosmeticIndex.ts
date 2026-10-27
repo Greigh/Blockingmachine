@@ -37,10 +37,13 @@
  *
  * Exception semantics are uBO's: a `#@#` exception removes its literal selector
  * for that host wherever the selector came from (global or domain rule); one
- * whose selector was never injected is a no-op. Scriptlet exceptions cancel the
- * same canonical name, either name-only (`+js(name)`) or name + exact args.
- * Scriptlet names are normalized through the uBO↔AdGuard alias table
- * ({@link canonicalScriptletName}); names the table doesn't know are emitted raw
+ * whose selector was never injected is a no-op. Scriptlet exceptions are
+ * literal-match on the whole call — name plus the exact arg list — so a
+ * name-only `#@#+js(name)` cancels only the zero-arg call, and an empty-name
+ * `#@#+js()` cancels every scriptlet on the host (bare, globally). Names
+ * canonicalize through the uBO↔AdGuard alias table
+ * ({@link canonicalScriptletName}) before comparison — a deliberate superset
+ * of uBO's text match. Names the table doesn't know are emitted raw
  * and counted in `skippedScriptlets` — running them is the library's decision.
  *
  * Lookup is one suffix walk over the host's labels (a dotted suffix map for plain
@@ -101,11 +104,12 @@ export interface CosmeticIndex {
    * not mutate it.
    */
   forHost(host: string): CosmeticPayload | undefined;
-  /** Indexed populations: hide selectors, hide exceptions, scriptlet calls, style rules. */
+  /** Indexed populations: hide selectors, hide/style exceptions, scriptlet calls + exceptions, style rules. */
   size(): {
     selectors: number;
     exceptions: number;
     scriptlets: number;
+    scriptletExceptions: number;
     styles: number;
   };
   /** Build-time counters for everything parsed-and-skipped. */
@@ -181,8 +185,40 @@ const SCRIPTLET_NAME_ALIASES: Readonly<Record<string, string>> = {
   setconstant: "set-constant",
   ra: "remove-attr",
   rc: "remove-class",
+  // AdGuard's legacy camelCase spellings — each lower-cased camel key resolves
+  // to a name in the canonical set (verified, not guessed).
+  abortonpropertyread: "abort-on-property-read",
+  abortonpropertywrite: "abort-on-property-write",
+  abortcurrentinlinescript: "abort-current-inline-script",
+  abortonstacktrace: "abort-on-stack-trace",
+  preventsettimeout: "prevent-setTimeout",
+  preventsetinterval: "prevent-setInterval",
+  adjustsettimeout: "adjust-setTimeout",
+  adjustsetinterval: "adjust-setInterval",
+  preventfetch: "prevent-fetch",
+  preventxhr: "prevent-xhr",
+  preventaddeventlistener: "prevent-addEventListener",
+  preventwindowopen: "prevent-window-open",
+  jsonprune: "json-prune",
+  removeattr: "remove-attr",
+  removeclass: "remove-class",
+  setlocalstorageitem: "set-local-storage-item",
+  setsessionstorageitem: "set-session-storage-item",
+  removelocalstorageitem: "remove-local-storage-item",
+  hrefsanitizer: "href-sanitizer",
+  spoofcss: "spoof-css",
+  preventevalif: "prevent-eval-if",
+  noprotectedaudience: "no-protected-audience",
+  // camelCase forms of the existing `no-*-if` spellings.
+  nowindowopenif: "prevent-window-open",
+  noevalif: "prevent-eval-if",
+  nofetchif: "prevent-fetch",
+  noxhrif: "prevent-xhr",
+  nosettimeoutif: "prevent-setTimeout",
+  nosetintervalif: "prevent-setInterval",
   // → real upstream names outside the implemented set (counted as skipped)
   rpnt: "remove-node-text",
+  removenodetext: "remove-node-text",
   rmnt: "remove-node-text",
   "replace-node-text": "remove-node-text",
   aell: "addEventListener-logger",
@@ -190,6 +226,8 @@ const SCRIPTLET_NAME_ALIASES: Readonly<Record<string, string>> = {
   "no-requestanimationframe-if": "prevent-requestAnimationFrame",
   "refresh-defuser": "prevent-refresh",
   "no-refresh-if": "prevent-refresh",
+  norefreshif: "prevent-refresh",
+  norequestanimationframeif: "prevent-requestAnimationFrame",
   "cookie-remover": "remove-cookie",
   nobab: "prevent-bab",
   "no-bab": "prevent-bab",
@@ -199,19 +237,41 @@ const SCRIPTLET_NAME_ALIASES: Readonly<Record<string, string>> = {
   "trusted-set": "trusted-set-constant",
 };
 
+/** Canonical names keyed by their lower-case form, so case variants fold too. */
+const CANONICAL_LOWER: ReadonlyMap<string, string> = new Map(
+  [...CANONICAL_SCRIPTLET_NAMES].map((name) => [name.toLowerCase(), name]),
+);
+
 /**
  * Resolves a list-authored scriptlet name to the canonical spelling the injected
- * library consumes — uBO terse (`aopr`), Nano (`nano-sib`) and legacy camelCase
- * (`setConstant`) all fold into one name set. Unknown names are returned raw.
+ * library consumes — uBO terse (`aopr`), Nano (`nano-sib`), AdGuard legacy
+ * camelCase (`abortOnPropertyRead`, `noWindowOpenIf`) and `ubo`-prefixed
+ * spellings (`ubo-set-constant`) all fold into one name set. The `ubo` prefix
+ * strips only onto a known name — a coincidental `ubo`-leading unknown stays
+ * raw. Unknown names are returned raw.
  */
 export function canonicalScriptletName(rawName: string): string {
   const key = rawName.endsWith(".js") ? rawName.slice(0, -3) : rawName;
-  return SCRIPTLET_NAME_ALIASES[key.toLowerCase()] ?? key;
+  const lower = key.toLowerCase();
+  const direct = SCRIPTLET_NAME_ALIASES[lower] ?? CANONICAL_LOWER.get(lower);
+  if (direct) return direct;
+  const stripped = lower.replace(/^ubo[-_.]?/, "");
+  if (stripped !== lower) {
+    const resolved =
+      SCRIPTLET_NAME_ALIASES[stripped] ?? CANONICAL_LOWER.get(stripped);
+    if (resolved) return resolved;
+  }
+  return key;
 }
 
-/** One domain-prefix token: a host suffix, or an entity whose SLD must equal `name`. */
+/** One domain-prefix token: a host suffix, a `*.`-prefixed subdomains-only
+ * suffix (AdGuard semantics — the apex is not covered), an entity whose SLD
+ * must equal `name`, or `~*`'s match-everything exclusion. */
 type DomainToken =
-  { kind: "host"; suffix: string } | { kind: "entity"; name: string };
+  | { kind: "host"; suffix: string }
+  | { kind: "sub"; suffix: string }
+  | { kind: "entity"; name: string }
+  | { kind: "all" };
 
 type EntryKind =
   | "hide"
@@ -292,8 +352,10 @@ function findMarker(line: string): MarkerHit | null {
 
 /**
  * Parses the domain prefix into include/exclude tokens. `~` marks an exclusion,
- * a trailing `.*` marks an entity wildcard, a leading `*.` is normalized away,
- * and a bare `*` token makes the rule global. Tokens that can never be a host —
+ * a trailing `.*` marks an entity wildcard, a leading `*.` scopes to subdomains
+ * only (AdGuard semantics — `*.foo.com` does not cover bare `foo.com`), a bare
+ * `*` token makes the rule global, and `~*` is AdGuard's exclude-everything —
+ * the rule applies nowhere, not everywhere. Tokens that can never be a host —
  * whitespace, `/`, `>`, quotes, brackets — are dropped; when the list held
  * include tokens but none survive, the caller skips the rule rather than letting
  * it silently become global.
@@ -314,10 +376,15 @@ function parseDomainList(prefix: string): {
     if (!token) continue;
     const excluded = token.startsWith("~");
     if (excluded) token = token.slice(1).trim();
-    if (token.startsWith("*.")) token = token.slice(2);
+    const subdomainsOnly = token.startsWith("*.");
+    if (subdomainsOnly) token = token.slice(2);
     if (!token) continue;
     if (token === "*") {
-      global = true;
+      // A bare `*` include is the global form; `~*` excludes every host, so
+      // the rule applies nowhere — inverting it to `global` would inject the
+      // rule on the exact complement of what the list author meant.
+      if (excluded) excludes.push({ kind: "all" });
+      else global = true;
       continue;
     }
     if (token.endsWith(".*")) {
@@ -335,7 +402,11 @@ function parseDomainList(prefix: string): {
       hadInvalidInclude = true;
       continue;
     }
-    (excluded ? excludes : includes).push({ kind: "host", suffix: token });
+    (excluded ? excludes : includes).push(
+      subdomainsOnly
+        ? { kind: "sub", suffix: token }
+        : { kind: "host", suffix: token },
+    );
   }
   return { includes, excludes, global, hadInvalidInclude };
 }
@@ -419,11 +490,15 @@ function unescapeQuotedArg(text: string): string {
 }
 
 /**
- * Splits a scriptlet argument string on top-level commas. Quotes (`'`/`"`)
- * group, a `\` escapes the next character, and `{}`/`[]` blocks nest — uBO lists
- * pass bare object literals (`+js(set, x, { cmd: { y: 1 } })`) whose inner commas
- * must not split. Outside quotes `\,` unescapes to a literal comma; other
- * backslashes stay (regex args like `/\"homad\"/ ` carry them).
+ * Splits a scriptlet argument string on top-level commas. Quotes (`'`/`"`/`` ` ``)
+ * group, a `\` escapes the next character, and `{}`/`[]`/`()` blocks nest — uBO
+ * lists pass bare object literals (`+js(set, x, { cmd: { y: 1 } })`) and
+ * parenthesised calls whose inner commas must not split. A quote only opens a
+ * quoted span at the *start* of an arg — a mid-token `'` is an apostrophe
+ * (`it's`), not a string delimiter, and must not swallow the rest of the list.
+ * Outside quotes `\,` unescapes to a literal comma; other backslashes stay
+ * (regex args like `/\"homad\"/ ` carry them). `` `…` `` args (uBO ≥1.61) are
+ * raw literals — no backslash processing on unquoting.
  */
 function splitScriptletArgs(text: string): string[] {
   const args: string[] = [];
@@ -437,10 +512,11 @@ function splitScriptletArgs(text: string): string[] {
     const last = trimmed[trimmed.length - 1];
     if (
       trimmed.length >= 2 &&
-      (first === "'" || first === '"') &&
+      (first === "'" || first === '"' || first === "`") &&
       last === first
     ) {
-      args.push(unescapeQuotedArg(trimmed.slice(1, -1)));
+      const inner = trimmed.slice(1, -1);
+      args.push(first === "`" ? inner : unescapeQuotedArg(inner));
     } else {
       args.push(trimmed);
     }
@@ -470,17 +546,18 @@ function splitScriptletArgs(text: string): string[] {
       }
       continue;
     }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
+    if (ch === "'" || ch === '"' || ch === "`") {
+      // Only an arg-leading quote delimits — `it's` mid-token is literal.
+      if (!current.trim()) quote = ch;
       current += ch;
       continue;
     }
-    if (ch === "{" || ch === "[") {
+    if (ch === "{" || ch === "[" || ch === "(") {
       depth++;
       current += ch;
       continue;
     }
-    if (ch === "}" || ch === "]") {
+    if (ch === "}" || ch === "]" || ch === ")") {
       if (depth > 0) depth--;
       current += ch;
       continue;
@@ -496,9 +573,13 @@ function splitScriptletArgs(text: string): string[] {
 }
 
 /**
- * Reads the `)` that closes a `+js(`/`//scriptlet(` call — quote-aware, and
- * `{}`/`[]`/`()`-depth aware so object-literal args and parenthesised regexes
- * can't end the call early. Returns -1 when the call never closes.
+ * Reads the `)` that closes a `+js(`/`//scriptlet(` call — quote-aware
+ * (`'`/`"`/`` ` ``), and `{}`/`[]`/`()`-depth aware so object-literal args and
+ * parenthesised expressions can't end the call early. Returns -1 when the
+ * call never closes. Known limitation: `/` is not treated as a delimiter, so
+ * a *bare* regex arg containing an unbalanced `)` (`+js(set, x, /a)b/)`)
+ * closes the call early — wild lists quote or backtick such args, matching
+ * uBO's own tolerance here rather than growing a regex-literal scanner.
  */
 function findCallClose(text: string, openIndex: number): number {
   let quote = "";
@@ -510,7 +591,7 @@ function findCallClose(text: string, openIndex: number): number {
       else if (ch === quote) quote = "";
       continue;
     }
-    if (ch === "'" || ch === '"') {
+    if (ch === "'" || ch === '"' || ch === "`") {
       quote = ch;
       continue;
     }
@@ -585,13 +666,22 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
 
   // Global rules (no include token — includes only-`~` lists and `*`), keyed
   // domain rules, and entity rules each keep the rule's own exclusions on the
-  // entry so a `~` vetoes its own rule only.
+  // entry so a `~` vetoes its own rule only. `*.foo.com` include tokens key
+  // into `subdomainEntries` — the suffix walk consults them only for proper
+  // subdomains, so the apex itself is not covered (AdGuard `*.` semantics).
   const globalEntries: CosmeticEntry[] = [];
   const domainEntries = new Map<string, CosmeticEntry[]>();
+  const subdomainEntries = new Map<string, CosmeticEntry[]>();
   const entityEntries = new Map<string, CosmeticEntry[]>();
   let hasEntityRules = false;
 
-  const counts = { selectors: 0, exceptions: 0, scriptlets: 0, styles: 0 };
+  const counts = {
+    selectors: 0,
+    exceptions: 0,
+    scriptlets: 0,
+    scriptletExceptions: 0,
+    styles: 0,
+  };
 
   const store = (
     domains: ReturnType<typeof parseDomainList>,
@@ -607,11 +697,16 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
         const bucket = entityEntries.get(token.name);
         if (bucket) bucket.push(entry);
         else entityEntries.set(token.name, [entry]);
-      } else {
+      } else if (token.kind === "sub") {
+        const bucket = subdomainEntries.get(token.suffix);
+        if (bucket) bucket.push(entry);
+        else subdomainEntries.set(token.suffix, [entry]);
+      } else if (token.kind === "host") {
         const bucket = domainEntries.get(token.suffix);
         if (bucket) bucket.push(entry);
         else domainEntries.set(token.suffix, [entry]);
       }
+      // "all" tokens are only ever exclusions (`~*`) — includes get `global`.
     }
   };
 
@@ -761,6 +856,24 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
         }
         const parsed = parseScriptletCall(body);
         if (!parsed) {
+          // `#@#+js()` — the empty-name exception — is uBO's scriptlet
+          // kill-all: it cancels every invocation the host would receive
+          // (the bare `#@#+js()` form, globally). Sentinel name `""` is what
+          // `lookupHost` reads as cancel-all. The non-exception `##+js()`
+          // is meaningless and stays malformed.
+          if (
+            kind === "scriptletException" &&
+            /^(?:\+js|\/\/scriptlet)\(\s*\)$/.test(body.trim())
+          ) {
+            store(domains, {
+              kind,
+              selector: "",
+              call: { name: "", args: [] },
+              excludes: domains.excludes,
+            });
+            counts.scriptletExceptions++;
+            continue;
+          }
           stats.malformed++;
           continue;
         }
@@ -774,7 +887,8 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
           call: parsed.call,
           excludes: domains.excludes,
         });
-        counts.scriptlets++;
+        if (kind === "scriptlet") counts.scriptlets++;
+        else counts.scriptletExceptions++;
         continue;
       }
       default:
@@ -794,10 +908,17 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
 
     const bag: CosmeticEntry[] = [];
     // Suffix walk: `a.b.example.com` sees `example.com` and `b.example.com`
-    // entries but never `notexample.com`'s.
+    // entries but never `notexample.com`'s. `*.`-scoped entries apply only
+    // when the matched suffix is a strict ancestor (start > 0) — the apex
+    // itself is excluded.
     for (let start = 0; ;) {
-      const bucket = domainEntries.get(start === 0 ? h : h.slice(start));
+      const key = start === 0 ? h : h.slice(start);
+      const bucket = domainEntries.get(key);
       if (bucket) bag.push(...bucket);
+      if (start > 0) {
+        const subBucket = subdomainEntries.get(key);
+        if (subBucket) bag.push(...subBucket);
+      }
       const dot = h.indexOf(".", start);
       if (dot < 0) break;
       start = dot + 1;
@@ -822,10 +943,20 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
     if (globalEntries.length) bag.push(...globalEntries);
     if (bag.length === 0) return undefined;
 
-    const tokenMatches = (token: DomainToken): boolean =>
-      token.kind === "host"
-        ? hostTokenMatches(token.suffix, h)
-        : sldOf() === token.name;
+    const tokenMatches = (token: DomainToken): boolean => {
+      switch (token.kind) {
+        case "host":
+          return hostTokenMatches(token.suffix, h);
+        case "sub":
+          // `~*.foo.com` vetoes subdomains only — the apex keeps the rule.
+          return h.endsWith(`.${token.suffix}`);
+        case "all":
+          // `~*` — matches every host, so the rule applies nowhere.
+          return true;
+        case "entity":
+          return sldOf() === token.name;
+      }
+    };
 
     const hideCandidates = new Set<string>();
     const hideExceptions = new Set<string>();
@@ -879,10 +1010,17 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
       (call) =>
         !scriptletExceptions.some(
           (ex) =>
-            ex.name === call.name &&
-            (ex.args.length === 0 ||
-              (ex.args.length === call.args.length &&
-                ex.args.every((arg, i) => arg === call.args[i]))),
+            // `#@#+js()` — the empty-name sentinel — cancels every scriptlet.
+            ex.name === "" ||
+            // Otherwise uBO is literal-match on the whole call content: name
+            // plus the exact arg list, so a name-only exception cancels ONLY
+            // the zero-arg call — `##+js(nobab, _)` survives `#@#+js(nobab)`.
+            // Canonical-name comparison is a deliberate superset of uBO's
+            // literal text match (it lets an `aopr` exception cancel an
+            // `abort-on-property-read` invocation).
+            (ex.name === call.name &&
+              ex.args.length === call.args.length &&
+              ex.args.every((arg, i) => arg === call.args[i])),
         ),
     );
     if (hide.length === 0 && styles.length === 0 && scriptlets.length === 0) {
@@ -917,10 +1055,16 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
     forHost(host: string): CosmeticPayload | undefined {
       const h = normalizeHost(host);
       if (!h) return undefined;
-      const cached = payloadCache.get(h);
-      if (cached !== undefined || payloadCache.has(h)) return cached;
+      if (payloadCache.has(h)) {
+        const cached = payloadCache.get(h);
+        // LRU touch on hits too — a bare get() returns the value (including
+        // a cached `undefined`) without refreshing recency, so the busiest
+        // hosts were the first eviction victims.
+        payloadCache.delete(h);
+        payloadCache.set(h, cached);
+        return cached;
+      }
       const payload = lookupHost(h);
-      payloadCache.delete(h);
       if (payloadCache.size >= PAYLOAD_CACHE_MAX) {
         const oldest = payloadCache.keys().next().value;
         if (oldest !== undefined) payloadCache.delete(oldest);
