@@ -21,9 +21,29 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import tls from 'node:tls';
-import { startFilterProxy, type RunningFilterProxy } from '../index.js';
+import { CertAuthority, startFilterProxy, type RunningFilterProxy } from '../index.js';
 
 jest.setTimeout(30_000);
+
+const V2_SIGNATURE = Buffer.from('\r\n\r\n\x00\r\nQUIT\n', 'latin1');
+
+function buildTcp4Header(
+  srcIp: number[],
+  dstIp: number[],
+  srcPort: number,
+  dstPort: number,
+): Buffer {
+  const frame = Buffer.alloc(28);
+  V2_SIGNATURE.copy(frame, 0);
+  frame[12] = 0x21; // version 2, command PROXY
+  frame[13] = 0x11; // AF_INET, STREAM
+  frame.writeUInt16BE(12, 14);
+  Buffer.from(srcIp).copy(frame, 16);
+  Buffer.from(dstIp).copy(frame, 20);
+  frame.writeUInt16BE(srcPort, 24);
+  frame.writeUInt16BE(dstPort, 26);
+  return frame;
+}
 
 function listen(server: net.Server): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -349,6 +369,133 @@ describe('control API routes', () => {
   });
 });
 
+describe('pause semantics — verdict points', () => {
+  test('a paused CONNECT to a blocked host answers 200 — verdicts are off', async () => {
+    // Baseline: unpaused, the rule blocks outright.
+    const { sock: preSock, status: preStatus } = await connectHandshake(
+      app.proxy.port,
+      'one.example:443',
+    );
+    expect(preStatus).toBe('HTTP/1.1 403 Forbidden');
+    await withTimeout(once(preSock, 'close'), 5_000, 'pre-check close');
+
+    await toggle(false);
+    try {
+      const before = app.proxy.stats();
+      const { sock, status } = await connectHandshake(app.proxy.port, 'one.example:443');
+      expect(status).toBe('HTTP/1.1 200 Connection Established'); // verdict never ran
+      const after = app.proxy.stats();
+      expect(after.flowsBlocked).toBe(before.flowsBlocked);
+      // The blind tunnel dials one.example:443 — NXDOMAIN closes the splice.
+      await withTimeout(once(sock, 'close'), 10_000, 'upstream dial-fail close');
+      sock.destroy();
+    } finally {
+      await toggle(true);
+    }
+  });
+
+  test('a toggle landing mid-peek tunnels the CONNECT flow — no forge, no close', async () => {
+    const echo = tcpEchoServer();
+    const echoPort = await listen(echo);
+    try {
+      const { sock, status } = await connectHandshake(app.proxy.port, `localhost:${echoPort}`);
+      expect(status).toBe('HTTP/1.1 200 Connection Established');
+      // The ClientHello peek is now live — flip protection off inside it. A
+      // paused verdict point must splice, never reach terminateFlow.
+      await toggle(false);
+      try {
+        const before = app.proxy.stats();
+        sock.write('mid-peek junk, not a ClientHello');
+        const echoed = await withTimeout(collectBytes(sock, 32), 8_000, 'mid-peek echo');
+        expect(echoed.toString('latin1')).toBe('mid-peek junk, not a ClientHello');
+        const after = app.proxy.stats();
+        expect(after.flowsTunneled).toBe(before.flowsTunneled + 1);
+        expect(after.flowsTerminated).toBe(before.flowsTerminated);
+        sock.destroy();
+      } finally {
+        await toggle(true);
+      }
+    } finally {
+      await closeServer(echo);
+    }
+  });
+
+  test('a mid-peek paused PROXY-v2 flow tunnels to the ANNOUNCED destination', async () => {
+    // The upstream is a real TLS server whose cert a scratch CA signed — a
+    // tunneled ClientHello completes against its leaf. A mis-dialed sni:443
+    // (the old post-peek fallback even when the v2 destination was known) or
+    // a terminated flow can never produce this handshake.
+    const originDir = await mkdtemp(join(tmpdir(), 'bm-control-origin-ca-'));
+    let upstream: tls.Server | null = null;
+    try {
+      const originCa = await CertAuthority.open({ storeDir: originDir });
+      const leaf = originCa.forgeLeaf('v2paused.example');
+      upstream = tls.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (s) => {
+        s.on('data', (c: Buffer) => s.write(c));
+      });
+      const upstreamPort = await listen(upstream);
+
+      const sock = net.connect({ host: '127.0.0.1', port: app.proxy.port });
+      await once(sock, 'connect');
+      sock.write(buildTcp4Header([10, 9, 9, 9], [127, 0, 0, 1], 51111, upstreamPort));
+      // Let the frame land so the ClientHello peek is live — the pre-peek
+      // paused check must already have run with protection on, forcing this
+      // flow through the post-peek re-check branch.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await toggle(false);
+      try {
+        const client = tls.connect({
+          socket: sock,
+          servername: 'v2paused.example',
+          ca: originCa.caCertPem,
+          rejectUnauthorized: true,
+        });
+        client.on('error', () => {});
+        await withTimeout(once(client, 'secureConnect'), 10_000, 'paused v2 handshake');
+        expect(client.getPeerCertificate().subject.CN).toBe('v2paused.example');
+        client.destroy();
+      } finally {
+        await toggle(true);
+        sock.destroy();
+      }
+    } finally {
+      if (upstream !== null) {
+        await closeServer(upstream);
+      }
+      await rm(originDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('startup failure cleanup', () => {
+  test('a control-port bind failure rejects startFilterProxy AND releases the data port', async () => {
+    const d = await mkdtemp(join(tmpdir(), 'bm-https-filter-bindfail-'));
+    const blocker = net.createServer();
+    try {
+      // Occupy the control port; claim a free port for the data listener so
+      // its release is probeable afterwards.
+      const controlPort = await listen(blocker);
+      const probe = net.createServer();
+      const dataPort = await listen(probe);
+      await closeServer(probe);
+
+      await expect(
+        startFilterProxy({ storeDir: join(d, 'store'), dataPort, controlPort }),
+      ).rejects.toThrow();
+
+      // The bound data listener must have been closed on the way out — a
+      // connect is refused, not answered.
+      const s = net.connect({ host: '127.0.0.1', port: dataPort });
+      s.on('error', () => {});
+      await withTimeout(once(s, 'error'), 5_000, 'released-port refusal');
+      s.destroy();
+    } finally {
+      await closeServer(blocker);
+      await rm(d, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('policy store edge cases', () => {
   test('corrupt JSONL lines surface in stats and pins without failing startup', async () => {
     const d = await mkdtemp(join(tmpdir(), 'bm-https-filter-corrupt-'));
@@ -417,6 +564,20 @@ describe('policy store edge cases', () => {
         app3.policy.addBypass('bypass.example');
         expect(app3.policy.isBypassed('bypass.example')).toBe(true);
         expect(app3.policy.corruptLineCount).toBe(0);
+
+        // app3 was booted without rulesPath — reload reports the honest 500.
+        const reload = await fetch(
+          `http://127.0.0.1:${app3.controlPort}/v1/proxy/reload`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          },
+        );
+        expect(reload.status).toBe(500);
+        const reloadBody = (await reload.json()) as Record<string, any>;
+        expect(reloadBody.success).toBe(false);
+        expect(reloadBody.error).toContain('rulesPath');
 
         // Data path is live: a CONNECT to a literal IP still tunnels.
         const echo = tcpEchoServer();

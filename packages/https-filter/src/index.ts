@@ -15,6 +15,7 @@ import { CertAuthority } from './ca/certAuthority.js';
 import { startControlServer } from './control.js';
 import { PolicyStore } from './policy/policyStore.js';
 import { startProxy, type RunningProxy } from './proxy/filterProxy.js';
+import type { RunningControl } from './control.js';
 
 export { CertAuthority, isValidSni, normalizeSni } from './ca/certAuthority.js';
 export type { LeafMaterial } from './ca/certAuthority.js';
@@ -31,7 +32,16 @@ const DEFAULT_DATA_PORT = 9294;
 const DEFAULT_CONTROL_PORT = 9293;
 
 export interface FilterProxyConfig {
-  /** Loopback bind host for both listeners. */
+  /**
+   * Loopback bind host for BOTH listeners today — there is deliberately one
+   * knob. HAZARD for a future LAN-hub mode (design spec §9): a non-loopback
+   * DATA bind must never drag CONTROL along with it. The origin allowlist is
+   * a browser-boundary guard, not authentication — no-Origin clients (curl,
+   * a LAN neighbor) are trusted by design, so a LAN-exposed `/v1/proxy/*`
+   * would let any LAN client toggle protection off, read the pin ledger, or
+   * rotate the CA. When the data listener learns a `0.0.0.0` bind, the
+   * control listener stays loopback-pinned (or gains its own config).
+   */
   bindHost?: string;
   /** CONNECT/PROXY-v2/plain-HTTP data listener — default 9294; 0 for ephemeral. */
   dataPort?: number;
@@ -125,15 +135,25 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
     return proxy.stats().rulesSize;
   };
 
-  const control = await startControlServer({
-    bindHost,
-    controlPort,
-    proxy,
-    authority,
-    policy,
-    reloadRules,
-    policyDegraded,
-  });
+  let control: RunningControl;
+  try {
+    control = await startControlServer({
+      bindHost,
+      controlPort,
+      proxy,
+      authority,
+      policy,
+      reloadRules,
+      policyDegraded,
+    });
+  } catch (err) {
+    // The data listener is already bound — release it (and the ledger hook)
+    // before propagating, or a control-port failure leaks a live proxy no
+    // caller has a handle to close.
+    await proxy.close();
+    policy.close();
+    throw err;
+  }
 
   return {
     proxy,

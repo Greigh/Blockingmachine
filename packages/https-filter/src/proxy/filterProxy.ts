@@ -422,7 +422,20 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
     const peeked = await collectClientHello(sock, PEEK_TIMEOUT_MS, rest);
     if (!peeked.isTls) {
+      // A mid-peek pause still owns this flow: splice whatever arrived to the
+      // CONNECT target — a paused proxy is dumb transit, never a verdict.
+      if (paused) {
+        blindTunnel(sock, host, port, peeked.head);
+        return;
+      }
       sock.destroy();
+      return;
+    }
+    // Mid-peek pause — the same re-check handleTransparent performs: a toggle
+    // landing inside the collectClientHello window must splice blind, not
+    // reach terminateFlow. No forge while protection is off.
+    if (paused) {
+      blindTunnel(sock, host, port, peeked.head);
       return;
     }
     // The announced SNI gets its own verdict when it disagrees with the
@@ -489,9 +502,14 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     }
     const sni = peeked.sni;
 
-    // Paused with no announced destination (helper-spliced TLS): the wire's
-    // only destination hint is a valid SNI — tunnel it on :443, still blind.
+    // Mid-peek pause: prefer the PROXY-v2 announced destination when one
+    // exists — a redirected flow must reach its real endpoint, not a guess at
+    // sni:443. The SNI fallback covers only the headerless splice.
     if (paused) {
+      if (target !== null) {
+        blindTunnel(sock, target.dstHost, target.dstPort, peeked.head);
+        return;
+      }
       const normalized = sni !== null ? normalizeSni(sni) : null;
       if (normalized !== null && isValidSni(normalized)) {
         blindTunnel(sock, normalized, 443, peeked.head);

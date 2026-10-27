@@ -33,6 +33,11 @@ import type { PolicyStore } from './policy/policyStore.js';
 import type { RunningProxy } from './proxy/filterProxy.js';
 
 export interface ControlApiDeps {
+  /**
+   * Always loopback — this must never follow a non-loopback data bind
+   * (see `FilterProxyConfig.bindHost` in index.ts): the origin guard only
+   * filters browser callers, and no-Origin clients are trusted by design.
+   */
   bindHost: string;
   controlPort: number;
   proxy: RunningProxy;
