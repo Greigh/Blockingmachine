@@ -172,6 +172,13 @@ export function collectClientHello(
       socket.off('end', finish);
       socket.off('close', finish);
       const head = Buffer.concat(chunks);
+      // Hand the socket back paused: the caller's next stage (a blind-tunnel
+      // pipe, or Task 5's TLSSocket wrap — which pushes inside read()) may
+      // attach a tick later, and a flowing-mode socket would drop the bytes.
+      // finish() also runs on 'close'/'error', where the socket is gone.
+      if (!socket.destroyed) {
+        socket.pause();
+      }
       resolve({ head, ...parseClientHello(head) });
     };
 

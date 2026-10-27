@@ -256,7 +256,7 @@ describe('startProxy listeners', () => {
       bindHost: '127.0.0.1',
       dataPort: 0,
       authority,
-      evaluator: createRequestEvaluator(['||blocked.example^']),
+      evaluator: createRequestEvaluator(['||blocked.example^', '||blocked.com^']),
       policy,
     });
   });
@@ -389,6 +389,35 @@ describe('startProxy listeners', () => {
     client.on('error', () => {}); // ECONNRESET expected — the proxy just drops
     await withTimeout(once(sock, 'close'), 10_000, 'blocked transparent close');
     expect(proxy.stats().flowsBlocked).toBe(before.flowsBlocked + 1);
+
+    client.destroy();
+    await closeServer(upstream);
+  });
+
+  test('PROXY-v2 with a trailing-dot blocked SNI (blocked.com.) → dropped, never tunneled', async () => {
+    let upstreamSawConnection = false;
+    const upstream = net.createServer((socket) => {
+      upstreamSawConnection = true;
+      socket.on('data', (chunk) => socket.write(chunk));
+    });
+    const upstreamPort = await listen(upstream);
+
+    const before = proxy.stats();
+    const sock = net.connect({ host: '127.0.0.1', port: proxy.port });
+    await once(sock, 'connect');
+    sock.write(buildTcp4Header([10, 9, 9, 9], [127, 0, 0, 1], 51111, upstreamPort));
+    const client = tls.connect({
+      socket: sock,
+      servername: 'blocked.com.', // FQDN form — invalid SNI, but the verdict must still run
+      rejectUnauthorized: false,
+    });
+    client.on('error', () => {}); // ECONNRESET expected — the proxy drops the flow
+    await withTimeout(once(sock, 'close'), 10_000, 'trailing-dot blocked close');
+    expect(proxy.stats().flowsBlocked).toBe(before.flowsBlocked + 1);
+    // Give a would-be tunnel a beat to exist — it must not: the verdict ran on
+    // the normalized name and dropped the flow before any upstream dial.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(upstreamSawConnection).toBe(false);
 
     client.destroy();
     await closeServer(upstream);

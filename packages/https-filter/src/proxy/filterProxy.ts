@@ -44,7 +44,7 @@ import {
   createRequestEvaluator,
   type RequestEvaluator,
 } from '@blockingmachine/core';
-import { isValidSni, type CertAuthority } from '../ca/certAuthority.js';
+import type { CertAuthority } from '../ca/certAuthority.js';
 import type { PolicyStore } from '../policy/policyStore.js';
 import {
   matchProxyV2Signature,
@@ -81,6 +81,8 @@ export interface StartProxyOptions {
 const DISPATCH_TIMEOUT_MS = 10_000;
 /** Bound on the ClientHello peek, spec'd at 10s. */
 const PEEK_TIMEOUT_MS = 10_000;
+/** Upstream dial deadline for blind tunnels — a blackholed target must not park fds. */
+const UPSTREAM_CONNECT_TIMEOUT_MS = 15_000;
 /** CONNECT header block cap — anything past this is not a real proxy client. */
 const CONNECT_HEADER_LIMIT = 64 * 1024;
 
@@ -89,6 +91,17 @@ const HEADER_END = '\r\n\r\n';
 
 function sanitizeHeaderValue(value: string): string {
   return value.replace(/[\r\n]/g, '');
+}
+
+/**
+ * The name a verdict or a policy check runs on: SNI off the wire may carry a
+ * trailing dot (FQDN form) — a *normalizable-but-invalid* name that must
+ * still be judged, never skipped (a `blocked.com.` ClientHello would
+ * otherwise blind-tunnel past `||blocked.com^`). The evaluator's own host
+ * parse does the same strip; policy lookups do not.
+ */
+function normalizeSni(sni: string): string {
+  return sni.toLowerCase().replace(/\.+$/, '');
 }
 
 /**
@@ -144,8 +157,12 @@ function parseConnectAuthority(authority: string): { host: string; port: number 
     host = authority.slice(0, colon);
     portText = authority.slice(colon + 1);
   }
+  // Decimal digits only — Number() alone would accept `0x1bb`, `+443`, `4e2`.
+  if (!/^\d{1,5}$/.test(portText)) {
+    return null;
+  }
   const port = Number(portText);
-  if (host.length === 0 || !Number.isInteger(port) || port < 1 || port > 65535) {
+  if (host.length === 0 || port < 1 || port > 65535) {
     return null;
   }
   return { host, port };
@@ -186,7 +203,15 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     client.pause();
     const upstream = net.connect({ host: dstHost, port: dstPort });
     track(upstream);
+    // Connect deadline, distinct from socket idle timeouts: the tunnel itself
+    // may idle legitimately, but a dial that never answers is a parked fd.
+    const connectDeadline = setTimeout(() => {
+      client.destroy();
+      upstream.destroy();
+    }, UPSTREAM_CONNECT_TIMEOUT_MS);
+    connectDeadline.unref();
     const kill = () => {
+      clearTimeout(connectDeadline);
       client.destroy();
       upstream.destroy();
     };
@@ -195,6 +220,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     client.once('close', () => upstream.destroy());
     upstream.once('close', () => client.destroy());
     upstream.once('connect', () => {
+      clearTimeout(connectDeadline);
       // Replay the bytes the peek consumed before splicing — pipe applies
       // backpressure for us, so a slow upstream never loses `head`.
       if (head.length > 0) {
@@ -257,17 +283,24 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // The announced SNI gets its own verdict when it disagrees with the
     // CONNECT host — a client must not smuggle a blocked name inside an
     // allowed authority.
-    if (
-      peeked.sni !== null &&
-      peeked.sni.toLowerCase() !== host.toLowerCase() &&
-      evaluator.evaluate(`https://${peeked.sni}/`).action === 'blocked'
-    ) {
-      stats.flowsBlocked++;
-      sock.destroy();
-      return;
+    if (peeked.sni !== null && peeked.sni.toLowerCase() !== host.toLowerCase()) {
+      const sni = normalizeSni(peeked.sni);
+      if (evaluator.evaluate(`https://${sni}/`).action === 'blocked') {
+        stats.flowsBlocked++;
+        sock.destroy();
+        return;
+      }
+      // A pinned/bypassed SNI is the party that pins, not the authority —
+      // tunnel to the CONNECT target the client actually dialed.
+      if (policy.isPinned(sni) || policy.isBypassed(sni)) {
+        blindTunnel(sock, host, port, peeked.head);
+        return;
+      }
     }
     // P0: blind tunnel — Task 5 terminates here (forged-leaf TLSSocket for
     // `peeked.sni`/`host`, ALPN h2|http/1.1, then the request pipeline).
+    // Gate the forge on isValidSni first — `forgeLeaf` throws on invalid SNI,
+    // and a missing/garbage name must stay on this blind path.
     blindTunnel(sock, host, port, peeked.head);
   }
 
@@ -288,30 +321,34 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       return;
     }
     const { dstHost, dstPort } = target;
-    const sni = peeked.sni;
-
-    // Passthrough predicates — non-TLS bytes forward honestly (helpers also
-    // redirect port 80), and pinned/bypassed SNIs tunnel before any verdict.
-    if (
-      !peeked.isTls ||
-      sni === null ||
-      !isValidSni(sni) ||
-      policy.isPinned(sni) ||
-      policy.isBypassed(sni)
-    ) {
+    // Non-TLS bytes forward honestly — helpers also redirect port 80.
+    if (!peeked.isTls) {
       blindTunnel(sock, dstHost, dstPort, peeked.head);
       return;
     }
+    const sni = peeked.sni;
 
-    const verdict = evaluator.evaluate(`https://${sni}/`);
-    if (verdict.action === 'blocked') {
-      stats.flowsBlocked++;
-      // No response exists on raw TLS — the close itself is the verdict.
-      sock.destroy();
-      return;
+    // The verdict runs on the *normalized* name whenever one was announced —
+    // validity is not a gate: `blocked.com.` must drop, and pinned/bypassed
+    // checks apply to the name rules and users actually write. Only an
+    // absent SNI skips judgment entirely.
+    if (sni !== null) {
+      const normalized = normalizeSni(sni);
+      if (policy.isPinned(normalized) || policy.isBypassed(normalized)) {
+        blindTunnel(sock, dstHost, dstPort, peeked.head);
+        return;
+      }
+      if (evaluator.evaluate(`https://${normalized}/`).action === 'blocked') {
+        stats.flowsBlocked++;
+        // No response exists on raw TLS — the close itself is the verdict.
+        sock.destroy();
+        return;
+      }
     }
-    // P0: blind tunnel — Task 5 terminates here (forge leaf for `sni`,
-    // upstream tls.connect against dstHost:dstPort with full verification).
+
+    // P0: blind tunnel — Task 5 terminates here, but ONLY when
+    // isValidSni(sni) — `forgeLeaf` throws on invalid/absent names, and a
+    // normalizable-but-invalid or missing SNI keeps this blind tunnel.
     blindTunnel(sock, dstHost, dstPort, peeked.head);
   }
 
