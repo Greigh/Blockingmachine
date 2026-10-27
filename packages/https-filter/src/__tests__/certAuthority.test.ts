@@ -6,10 +6,16 @@
  * dns=<sni>, signed by the CA, LRU-capped. These tests pin the on-disk layout,
  * the forge semantics, the invalid-SNI boundary that the proxy relies on to
  * decide passthrough, and rotation.
+ *
+ * Every `open` here passes `keyWrapBackend: null` — the no-backend plaintext
+ * posture — so the suite pins the legacy `ca.key.pem` layout and never
+ * touches a real OS credential store. The wrapped `ca.key.enc` path is
+ * covered against a mock backend in `keyWrap.test.ts`, and the real
+ * `security`-CLI leg lives behind `BM_LIVE_KEYCHAIN=1` there.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from '@jest/globals';
-import { statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,7 +34,7 @@ afterAll(async () => {
 
 describe('CertAuthority.open', () => {
   test('writes ca.pem + ca.key.pem under the store dir with the key at mode 0600', async () => {
-    const authority = await CertAuthority.open({ storeDir });
+    const authority = await CertAuthority.open({ storeDir, keyWrapBackend: null });
 
     const certStat = statSync(join(storeDir, 'ca.pem'));
     const keyStat = statSync(join(storeDir, 'ca.key.pem'));
@@ -39,16 +45,29 @@ describe('CertAuthority.open', () => {
     expect(authority.caCertPem).toContain('BEGIN CERTIFICATE');
   });
 
+  test('a no-backend store reports the plaintext posture honestly', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bm-ca-plaintext-'));
+    try {
+      const authority = await CertAuthority.open({ storeDir: dir, keyWrapBackend: null });
+      expect(authority.keyWrapped).toBe(false);
+      expect(authority.keyWrapBackend).toBeUndefined();
+      expect(existsSync(join(dir, 'ca.key.pem'))).toBe(true);
+      expect(existsSync(join(dir, 'ca.key.enc'))).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test('reopening the same store dir returns the same CA', async () => {
-    const first = await CertAuthority.open({ storeDir });
-    const second = await CertAuthority.open({ storeDir });
+    const first = await CertAuthority.open({ storeDir, keyWrapBackend: null });
+    const second = await CertAuthority.open({ storeDir, keyWrapBackend: null });
     expect(second.caCertPem).toBe(first.caCertPem);
   });
 });
 
 describe('forgeLeaf', () => {
   test('mints a leaf whose SAN is the SNI, issued and verifiable by the CA', async () => {
-    const authority = await CertAuthority.open({ storeDir });
+    const authority = await CertAuthority.open({ storeDir, keyWrapBackend: null });
     const leaf = authority.forgeLeaf('cdn.example.com');
 
     const leafCert = forge.pki.certificateFromPem(leaf.certPem);
@@ -68,7 +87,7 @@ describe('forgeLeaf', () => {
   });
 
   test('second forge of the same SNI returns the cached material', async () => {
-    const authority = await CertAuthority.open({ storeDir });
+    const authority = await CertAuthority.open({ storeDir, keyWrapBackend: null });
     const first = authority.forgeLeaf('cache.example.com');
     const second = authority.forgeLeaf('cache.example.com');
     expect(second.certPem).toBe(first.certPem);
@@ -78,7 +97,7 @@ describe('forgeLeaf', () => {
 
 describe('isValidSni / forgeLeaf rejection', () => {
   test('empty and non-hostname SNIs throw instead of minting a malformed leaf', async () => {
-    const authority = await CertAuthority.open({ storeDir });
+    const authority = await CertAuthority.open({ storeDir, keyWrapBackend: null });
     expect(() => authority.forgeLeaf('')).toThrow();
     expect(() => authority.forgeLeaf('not a host!')).toThrow();
     expect(() => authority.forgeLeaf('trailing-dot.example.')).toThrow();
@@ -106,7 +125,7 @@ describe('isValidSni / forgeLeaf rejection', () => {
 
 describe('rotate', () => {
   test('produces a different CA cert and clears forged leaves', async () => {
-    const authority = await CertAuthority.open({ storeDir });
+    const authority = await CertAuthority.open({ storeDir, keyWrapBackend: null });
     const before = authority.caCertPem;
     const leafBefore = authority.forgeLeaf('rotate.example.com');
 
@@ -127,13 +146,13 @@ describe('store refusal + recovery', () => {
     const dirA = await mkdtemp(join(tmpdir(), 'bm-ca-mismatch-a-'));
     const dirB = await mkdtemp(join(tmpdir(), 'bm-ca-mismatch-b-'));
     try {
-      await CertAuthority.open({ storeDir: dirA });
-      await CertAuthority.open({ storeDir: dirB });
+      await CertAuthority.open({ storeDir: dirA, keyWrapBackend: null });
+      await CertAuthority.open({ storeDir: dirB, keyWrapBackend: null });
       // Simulate a torn rotate: B's key beside A's cert — both parse fine but
       // are not a pair, and every leaf minted from them would fail verify.
       const bKey = await readFile(join(dirB, 'ca.key.pem'), 'utf8');
       await writeFile(join(dirA, 'ca.key.pem'), bKey, 'utf8');
-      await expect(CertAuthority.open({ storeDir: dirA })).rejects.toThrow();
+      await expect(CertAuthority.open({ storeDir: dirA, keyWrapBackend: null })).rejects.toThrow();
     } finally {
       await rm(dirA, { recursive: true, force: true });
       await rm(dirB, { recursive: true, force: true });
@@ -143,9 +162,9 @@ describe('store refusal + recovery', () => {
   test('a corrupt ca.pem refuses to open rather than regenerating', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'bm-ca-corrupt-'));
     try {
-      await CertAuthority.open({ storeDir: dir });
+      await CertAuthority.open({ storeDir: dir, keyWrapBackend: null });
       await writeFile(join(dir, 'ca.pem'), 'this is not a certificate\n', 'utf8');
-      await expect(CertAuthority.open({ storeDir: dir })).rejects.toThrow();
+      await expect(CertAuthority.open({ storeDir: dir, keyWrapBackend: null })).rejects.toThrow();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -154,11 +173,11 @@ describe('store refusal + recovery', () => {
   test('an orphan key surviving its cert is preserved, not truncated', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'bm-ca-orphan-'));
     try {
-      const first = await CertAuthority.open({ storeDir: dir });
+      const first = await CertAuthority.open({ storeDir: dir, keyWrapBackend: null });
       const orphanKey = await readFile(join(dir, 'ca.key.pem'), 'utf8');
       await rm(join(dir, 'ca.pem'));
 
-      const second = await CertAuthority.open({ storeDir: dir });
+      const second = await CertAuthority.open({ storeDir: dir, keyWrapBackend: null });
 
       expect(second.caCertPem).not.toBe(first.caCertPem);
       expect(await readFile(join(dir, 'ca.key.pem.orphan'), 'utf8')).toBe(orphanKey);
@@ -174,10 +193,10 @@ describe('store refusal + recovery', () => {
   test('rotate persists — a reopened authority verifies new leaves', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'bm-ca-rotate-'));
     try {
-      const authority = await CertAuthority.open({ storeDir: dir });
+      const authority = await CertAuthority.open({ storeDir: dir, keyWrapBackend: null });
       await authority.rotate();
 
-      const reopened = await CertAuthority.open({ storeDir: dir });
+      const reopened = await CertAuthority.open({ storeDir: dir, keyWrapBackend: null });
       expect(reopened.caCertPem).toBe(authority.caCertPem);
       const caCert = forge.pki.certificateFromPem(reopened.caCertPem);
       const leaf = forge.pki.certificateFromPem(

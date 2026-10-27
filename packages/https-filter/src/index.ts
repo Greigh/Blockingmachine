@@ -18,7 +18,9 @@ import { startProxy, type RunningProxy } from './proxy/filterProxy.js';
 import type { RunningControl } from './control.js';
 
 export { CertAuthority, isValidSni, normalizeSni } from './ca/certAuthority.js';
-export type { LeafMaterial } from './ca/certAuthority.js';
+export type { CertAuthorityOpenOptions, LeafMaterial } from './ca/certAuthority.js';
+export { CaKeyUnwrapError, resolveBackend } from './ca/keyWrap.js';
+export type { KeyWrapBackend } from './ca/keyWrap.js';
 export { PolicyStore } from './policy/policyStore.js';
 export type { PolicyAction, PolicyEntry } from './policy/policyStore.js';
 export { startProxy } from './proxy/filterProxy.js';
@@ -48,8 +50,10 @@ export interface FilterProxyConfig {
   /** /v1/proxy/* control listener — default 9293; 0 for ephemeral. */
   controlPort?: number;
   /**
-   * Root of on-device state: `<storeDir>/ca/` holds `ca.pem` + `ca.key.pem`
-   * (0700/0600), `<storeDir>/policy.jsonl` is the pin/bypass ledger.
+   * Root of on-device state: `<storeDir>/ca/` holds `ca.pem` + the CA key —
+   * `ca.key.enc` (AES-256-GCM under the OS key-wrap backend, spec §5.1) or
+   * 0600 `ca.key.pem` when no backend exists — under a 0700 dir.
+   * `<storeDir>/policy.jsonl` is the pin/bypass ledger.
    */
   storeDir: string;
   /**
