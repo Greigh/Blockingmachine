@@ -84,6 +84,7 @@ describe('startFilterProxy entrypoint', () => {
         rulesPath,
         dataPort: 0,
         controlPort: 0,
+        keyWrapBackend: null,
       });
 
       // CA + policy stores materialized under the store dir.

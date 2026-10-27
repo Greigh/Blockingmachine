@@ -125,6 +125,10 @@ export function startControlServer(deps: ControlApiDeps): Promise<RunningControl
       // `x509 -fingerprint -sha256` rendering.
       sha256Fingerprint: x509.fingerprint256,
       notAfter: x509.validTo,
+      // At-rest posture of the CA private key — false means legacy 0600
+      // plaintext (no OS backend available).
+      keyWrapped: authority.keyWrapped,
+      keyWrapBackend: authority.keyWrapBackend,
     };
   };
 

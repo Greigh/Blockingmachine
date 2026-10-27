@@ -143,6 +143,7 @@ beforeAll(async () => {
     rulesPath,
     dataPort: 0,
     controlPort: 0,
+    keyWrapBackend: null,
   });
   base = `http://127.0.0.1:${app.controlPort}`;
 });
@@ -614,7 +615,7 @@ describe('pause semantics — verdict points', () => {
     const originDir = await mkdtemp(join(tmpdir(), 'bm-control-origin-ca-'));
     let upstream: tls.Server | null = null;
     try {
-      const originCa = await CertAuthority.open({ storeDir: originDir });
+      const originCa = await CertAuthority.open({ storeDir: originDir, keyWrapBackend: null });
       const leaf = originCa.forgeLeaf('v2paused.example');
       upstream = tls.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (s) => {
         s.on('data', (c: Buffer) => s.write(c));
@@ -666,7 +667,7 @@ describe('startup failure cleanup', () => {
       await closeServer(probe);
 
       await expect(
-        startFilterProxy({ storeDir: join(d, 'store'), dataPort, controlPort }),
+        startFilterProxy({ storeDir: join(d, 'store'), dataPort, controlPort, keyWrapBackend: null }),
       ).rejects.toThrow();
 
       // The bound data listener must have been closed on the way out — a
@@ -702,6 +703,7 @@ describe('policy store edge cases', () => {
         rulesPath: join(d, 'rules.txt'), // absent → empty ruleset
         dataPort: 0,
         controlPort: 0,
+        keyWrapBackend: null,
       });
       try {
         const pins = (await (
@@ -735,7 +737,7 @@ describe('policy store edge cases', () => {
       // policy.jsonl as a DIRECTORY: open's readFile throws EISDIR — the
       // degraded fallback keeps pin learning/toggles working in memory.
       await mkdir(join(storeDir, 'policy.jsonl'), { recursive: true });
-      const app3 = await startFilterProxy({ storeDir, dataPort: 0, controlPort: 0 });
+      const app3 = await startFilterProxy({ storeDir, dataPort: 0, controlPort: 0, keyWrapBackend: null });
       try {
         expect(app3.policyDegraded).toBe(true);
         const status = (await (

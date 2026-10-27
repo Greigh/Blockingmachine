@@ -101,8 +101,8 @@ let proxy: RunningProxy;
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'bm-https-filter-pipeline-'));
-  authority = await CertAuthority.open({ storeDir: join(dir, 'proxy-ca') });
-  originCa = await CertAuthority.open({ storeDir: join(dir, 'origin-ca') });
+  authority = await CertAuthority.open({ storeDir: join(dir, 'proxy-ca'), keyWrapBackend: null });
+  originCa = await CertAuthority.open({ storeDir: join(dir, 'origin-ca'), keyWrapBackend: null });
   policy = await PolicyStore.open(join(dir, 'policy.jsonl'));
   proxy = await startProxy({
     bindHost: '127.0.0.1',

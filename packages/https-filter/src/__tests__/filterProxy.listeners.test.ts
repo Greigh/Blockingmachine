@@ -161,7 +161,7 @@ let policy: PolicyStore;
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'bm-https-filter-proxy-'));
-  authority = await CertAuthority.open({ storeDir: join(dir, 'ca') });
+  authority = await CertAuthority.open({ storeDir: join(dir, 'ca'), keyWrapBackend: null });
   policy = await PolicyStore.open(join(dir, 'policy.jsonl'));
 });
 

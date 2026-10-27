@@ -77,6 +77,10 @@ export interface ProxyCaPayload {
   sha256Fingerprint: string;
   /** `X509Certificate.validTo` — the CA's notAfter date. */
   notAfter: string;
+  /** Whether the CA private key is stored OS-wrapped (false = 0600 plaintext). */
+  keyWrapped: boolean;
+  /** Backend behind the wrap (e.g. `macos-keychain(security-cli)`); absent on plaintext stores. */
+  keyWrapBackend?: string;
   [key: string]: unknown;
 }
 

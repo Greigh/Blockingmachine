@@ -12,6 +12,7 @@ import type http from 'node:http';
 import { join } from 'node:path';
 import { createRequestEvaluator } from '@blockingmachine/core';
 import { CertAuthority } from './ca/certAuthority.js';
+import type { KeyWrapBackend } from './ca/keyWrap.js';
 import { startControlServer } from './control.js';
 import { PolicyStore } from './policy/policyStore.js';
 import { startProxy, type RunningProxy } from './proxy/filterProxy.js';
@@ -62,6 +63,12 @@ export interface FilterProxyConfig {
    * starts with an empty ruleset and reload reports the failure.
    */
   rulesPath?: string;
+  /**
+   * CA key-wrap backend override — `undefined` auto-resolves the OS keystore
+   * (production), an injected backend forces it (tests should pass `null` so
+   * suite CAs never touch the real keychain).
+   */
+  keyWrapBackend?: KeyWrapBackend | null;
 }
 
 export interface RunningFilterProxy {
@@ -92,7 +99,10 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
 
   // CA first: a corrupt keystore refuses to start (spec §7) — never mint over
   // it or silently fall back to passthrough.
-  const authority = await CertAuthority.open({ storeDir: join(config.storeDir, 'ca') });
+  const authority = await CertAuthority.open({
+    storeDir: join(config.storeDir, 'ca'),
+    keyWrapBackend: config.keyWrapBackend,
+  });
 
   // Policy second, log-free on failure (Task 3 review): an ephemeral store
   // keeps pins/bypasses toggleable in memory — just unpersisted — and the
