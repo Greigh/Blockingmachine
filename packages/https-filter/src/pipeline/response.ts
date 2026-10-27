@@ -7,8 +7,8 @@
  * callback), decide what the relay does with the response:
  *
  *  - `passthrough` — stream verbatim (the `$csp` transform, when the verdict
- *    collected one, still merges into the CSP headers — it is a header-level
- *    rewrite, not a body one).
+ *    collected one, still appends to the enforcing CSP header — it is a
+ *    header-level rewrite, not a body one).
  *  - `block` — a 403 synthetic, reusing the request-side blocked idiom. Fired
  *    by the content-type re-verdict: the request was evaluated UNTYPED (a
  *    client that sends no `sec-fetch-dest` declares nothing), so a response
@@ -46,9 +46,11 @@ import { KNOWN_SCRIPTLETS, renderScriptletBlock } from './scriptlets.js';
 export const MAX_HTML_BUFFER = 512 * 1024;
 
 /**
- * The headers a CSP rewrite can target. The report-only header gets the same
- * treatment as the enforcing one — a widened report-only policy still lets a
- * page observe the same policy surface the injection needs.
+ * The headers the injection CSP widening targets — the enforcing header AND
+ * the report-only one get the same treatment: a widened report-only policy
+ * still lets a page observe the same policy surface the injection needs.
+ * (`$csp` additions do NOT use this list — they are enforcement-intended
+ * and apply to the enforcing header only: {@link mergeCspAdditionsIntoHeaders}.)
  */
 export const CSP_HEADER_NAMES = [
   'content-security-policy',
@@ -226,6 +228,17 @@ export function hasInjectableContent(payload: CosmeticPayload): boolean {
 }
 
 /**
+ * May this response carry a body at all? 1xx/204/304 answer "no body
+ * follows" by definition, and a `HEAD` answer carries none regardless of
+ * status. Buffering such a response for injection would fabricate DATA on
+ * a status that forbids it (an h2 DATA frame on a 304 is a protocol
+ * violation) and re-stamp a content-length the status doesn't own.
+ */
+function statusAllowsBody(status: number): boolean {
+  return status >= 200 && status !== 204 && status !== 304;
+}
+
+/**
  * Decide what the relay does with an upstream response head. Pure — the
  * caller owns sockets. Ordering: a `block` always beats injection (a
  * response the typed verdict blocks must never receive cosmetics), which is
@@ -235,6 +248,8 @@ export function hasInjectableContent(payload: CosmeticPayload): boolean {
  */
 export function decideResponse(input: {
   headers: IncomingHttpHeaders;
+  /** The upstream response status — injection gates on bodied statuses. */
+  status: number;
   verdict: RequestVerdict;
   url: string;
   host: string;
@@ -286,7 +301,21 @@ export function decideResponse(input: {
     }
   }
 
-  if (mediaType === 'text/html') {
+  if (
+    mediaType === 'text/html' &&
+    // Bodiless statuses/methods never buffer — there is no body to splice
+    // into (see {@link statusAllowsBody}; `method` is case-insensitive —
+    // the wire spells it `HEAD` but a client header is client bytes).
+    statusAllowsBody(input.status) &&
+    input.method.toUpperCase() !== 'HEAD' &&
+    // A sec-fetch-dest-typed request that isn't a document/subdocument
+    // context getting text/html back is a dead context — nothing renders
+    // the markup, so injection is wasted CPU on bytes nobody consumes.
+    // `undefined` (untyped request) stays eligible.
+    (input.requestContentType === undefined ||
+      input.requestContentType === 'document' ||
+      input.requestContentType === 'subdocument')
+  ) {
     const payload = input.cosmeticIndex?.forHost(input.host);
     if (payload !== undefined && hasInjectableContent(payload)) {
       if (isEncoded(input.headers['content-encoding'])) {
@@ -373,6 +402,7 @@ function serializePolicy(directives: ParsedDirective[]): string {
 }
 
 const UNSAFE_INLINE = "'unsafe-inline'";
+const STRICT_DYNAMIC = "'strict-dynamic'";
 
 /**
  * Widen one element-context chain (`elem` → `base` → `default-src`) so the
@@ -381,11 +411,24 @@ const UNSAFE_INLINE = "'unsafe-inline'";
  *  - every PRESENT directive on the chain that could govern the context gets
  *    `'unsafe-inline'` appended — `script-src-elem` (CSP3 element level) and
  *    `script-src` (CSP2's only script gate) are both covered, since a browser
- *    honoring the one ignores the other for elements;
+ *    honoring the one ignores the other for elements. When the directive
+ *    carries `'strict-dynamic'` the append is inert under CSP3 (that
+ *    keyword makes the engine ignore `'unsafe-inline'` along with every
+ *    host source) — it still goes in, because CSP2 engines don't know
+ *    `'strict-dynamic'` and DO honor `'unsafe-inline'`: skipping it would
+ *    deny exactly the engines the widen can still reach;
  *  - with neither present but `default-src` restricting, the base directive
  *    is synthesized as a clone of `default-src` plus `'unsafe-inline'`;
  *  - with nothing on the chain at all, the context is already free — nothing
  *    is added.
+ *
+ * `strictDynamicApplies` marks the script chain (`'strict-dynamic'` is a
+ * script concept — a `style-src` carrying it is inert under CSP3, so the
+ * style chain's clone still works and is emitted): when `default-src`
+ * carries `'strict-dynamic'`, cloning it forward into a fresh `script-src`
+ * is skipped — the synthesized directive would ship the keyword that makes
+ * CSP3 ignore the `'unsafe-inline'` it was cloned to carry: a widen that
+ * only pretends to work, and no new directive is better than one that lies.
  *
  * Only `'unsafe-inline'` is ever appended, and only to script/style element
  * contexts — `sandbox`, `frame-ancestors`, `require-trusted-types-for`,
@@ -400,6 +443,7 @@ function widenChain(
   directives: ParsedDirective[],
   elemName: string,
   baseName: string,
+  strictDynamicApplies: boolean,
 ): boolean {
   let changed = false;
   const elem = directives.find((dir) => dir.name === elemName);
@@ -412,6 +456,14 @@ function widenChain(
     }
   }
   if (fallback !== undefined && base === undefined) {
+    if (strictDynamicApplies && fallback.tokens.includes(STRICT_DYNAMIC)) {
+      // The clone would inherit 'strict-dynamic' — CSP3 ignores the
+      // 'unsafe-inline' the clone exists to carry, so the synthesized
+      // directive is noise that only pretends to widen. (CSP2 misses the
+      // admit this way — a strict-dynamic page opted into the CSP3
+      // contract, and the existing fallback still gates it there.)
+      return changed;
+    }
     // The base level is synthesized whenever a restrictive default-src
     // remains the effective source: (a) nothing governs the context at all,
     // or (b) only `-elem` exists — CSP2-level engines skip `-elem` entirely
@@ -449,8 +501,8 @@ export function rewriteCspForInjection(
     const directives = parsePolicy(policy);
     // `||` would short-circuit the second chain when the first widened —
     // script and style are independent contexts; both must always run.
-    const widenedScript = widenChain(directives, 'script-src-elem', 'script-src');
-    const widenedStyle = widenChain(directives, 'style-src-elem', 'style-src');
+    const widenedScript = widenChain(directives, 'script-src-elem', 'script-src', true);
+    const widenedStyle = widenChain(directives, 'style-src-elem', 'style-src', false);
     const widened = widenedScript || widenedStyle;
     if (widened) {
       changed = true;
@@ -461,39 +513,18 @@ export function rewriteCspForInjection(
 }
 
 /**
- * Merge one policy's directives into another token-wise: for each directive
- * the addition names, append its tokens onto the same-named existing
- * directive (deduped) or append the directive itself. Note the `'none'`
- * edge: merged into a populated source list it is spec-ignored (CSP defines
- * `'none'` as void alongside other sources) — the prescribed token-merge
- * keeps that caveat rather than silently splitting policies.
- */
-function mergePolicyDirectives(policy: string, addition: string): string {
-  const directives = parsePolicy(policy);
-  for (const add of parsePolicy(addition)) {
-    const target = directives.find((dir) => dir.name === add.name);
-    if (target === undefined) {
-      directives.push(add);
-      continue;
-    }
-    for (const token of add.tokens) {
-      if (!target.tokens.includes(token)) {
-        target.tokens.push(token);
-      }
-    }
-  }
-  return serializePolicy(directives);
-}
-
-/**
- * The `$csp` modifier path: serialize each collected addition onto the CSP.
- * Unlike the injection widening — which only ever widens — `$csp`
- * legitimately CREATES policy: an absent header gains the addition as its
- * first policy. An addition that is a directive list merges token-wise into
- * EVERY existing policy (all of them are enforced, so the restriction
- * applies uniformly); an addition that is itself a comma-separated policy
- * list merges each of its policies the same way. Returns the serialized
- * header value (`''` only when both sides are empty).
+ * The `$csp` modifier path: serialize each collected addition onto the CSP
+ * as its OWN co-equal policy, appended to the serialized list. Policies in
+ * a CSP header AND — every member of the `,`-joined list is enforced
+ * independently — so an appended policy restricts exactly as written and an
+ * existing policy can neither absorb nor be weakened by it. Token-merging
+ * into an existing directive is wrong in BOTH directions: `'none'` unioned
+ * into a live source list is spec-void (CSP ignores `'none'` alongside
+ * other sources — the restriction silently dies), and live sources unioned
+ * into a `'none'` list revive it (the stricter policy is widened). A
+ * `$csp` value may itself be a comma-separated policy list — each member
+ * lands as a separate co-equal policy. Returns the serialized header
+ * value (`''` only when both sides are empty).
  */
 export function applyCspAdditions(
   existing: string | string[] | undefined,
@@ -503,16 +534,8 @@ export function applyCspAdditions(
   for (const addition of additions) {
     for (const part of addition.split(',')) {
       const text = part.trim();
-      if (text === '') {
-        continue;
-      }
-      if (policies.length === 0) {
-        // No existing policy — the addition is the policy, verbatim.
+      if (text !== '') {
         policies.push(text);
-      } else {
-        for (let i = 0; i < policies.length; i++) {
-          policies[i] = mergePolicyDirectives(policies[i], text);
-        }
       }
     }
   }
@@ -585,31 +608,34 @@ export function widenInjectionCspHeaders(headers: OutgoingHttpHeaders): number {
 }
 
 /**
- * Apply the verdict's `$csp` additions to the response's CSP headers. The
- * enforcing header is created when absent; the report-only header only ever
- * merges (synthesizing a report-only policy would report violations without
- * enforcing anything — the `$csp` intent is enforcement).
+ * Apply the verdict's `$csp` additions to the response's enforcing CSP
+ * header — created when absent, each addition appended as a co-equal
+ * policy (see {@link applyCspAdditions} for why a token-merge is corrupt
+ * in both directions). The report-only header is deliberately untouched:
+ * `$csp` is enforcement-intended text (uBO's own posture is to touch the
+ * enforcing header only) — a report-only policy holding it would log
+ * violations the page never actually enforced.
+ *
+ * Returns the changed-count for the caller's `csp-rewrite` ledger — the
+ * number of header values written (`0` or `1`: only the enforcing header
+ * is ever touched).
  */
 export function mergeCspAdditionsIntoHeaders(
   headers: OutgoingHttpHeaders,
   additions: string[],
-): void {
+): number {
   if (additions.length === 0) {
-    return;
+    return 0;
   }
-  setHeaderValue(
-    headers,
-    'content-security-policy',
-    applyCspAdditions(getHeaderValue(headers, 'content-security-policy'), additions),
+  const merged = applyCspAdditions(
+    getHeaderValue(headers, 'content-security-policy'),
+    additions,
   );
-  const reportOnly = getHeaderValue(headers, 'content-security-policy-report-only');
-  if (reportOnly !== undefined) {
-    setHeaderValue(
-      headers,
-      'content-security-policy-report-only',
-      applyCspAdditions(reportOnly, additions),
-    );
+  if (merged === '') {
+    return 0;
   }
+  setHeaderValue(headers, 'content-security-policy', merged);
+  return 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -749,7 +775,10 @@ export function injectHtml(
   const parts: Buffer[] = [];
   let cursor = 0;
   for (const ins of inserts) {
-    parts.push(body.subarray(cursor, ins.at), Buffer.from(ins.text, 'latin1'));
+    // The inserted text is UTF-8 — selectors/scriptlet args may carry
+    // non-ASCII text that a latin1 encode would mojibake; `ins.at` offsets
+    // remain latin1-decoded byte positions into `body`, unaffected.
+    parts.push(body.subarray(cursor, ins.at), Buffer.from(ins.text, 'utf8'));
     cursor = ins.at;
   }
   parts.push(body.subarray(cursor));

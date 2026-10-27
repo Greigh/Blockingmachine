@@ -21,6 +21,7 @@ import {
   decideResponse,
   hasInjectableContent,
   injectHtml,
+  mergeCspAdditionsIntoHeaders,
   rewriteCspForInjection,
   type TypedEvalContext,
 } from '../pipeline/response.js';
@@ -52,6 +53,7 @@ const BASE = {
   url: 'https://example.com/',
   host: 'example.com',
   method: 'GET',
+  status: 200,
 };
 
 describe('decideResponse — passthrough', () => {
@@ -259,6 +261,118 @@ describe('decideResponse — buffer-inject gating', () => {
   });
 });
 
+describe('decideResponse — injection gating on status, method, declared context', () => {
+  const index = indexFor('example.com', payload({ hide: ['.ad'] }));
+
+  test('bodiless statuses never buffer-inject — 1xx/204/304 carry no body to splice', () => {
+    for (const status of [101, 204, 304]) {
+      const plan = decideResponse({
+        headers: { 'content-type': 'text/html' },
+        verdict: verdict(),
+        ...BASE,
+        status,
+        cosmeticIndex: index,
+      });
+      // A synthesized body on a 304 is a protocol violation on h2 — and a
+      // restamped content-length on a no-body status is a lie either way.
+      expect(plan.action).toBe('passthrough');
+    }
+  });
+
+  test('a HEAD request never buffer-injects — its answer carries no body', () => {
+    const plan = decideResponse({
+      headers: { 'content-type': 'text/html' },
+      verdict: verdict(),
+      ...BASE,
+      method: 'HEAD',
+      cosmeticIndex: index,
+    });
+    expect(plan.action).toBe('passthrough');
+  });
+
+  test('a sec-fetch-dest-typed non-document context skips injection', () => {
+    // image/script/other declared contexts fed text/html have no markup
+    // consumer — injection is wasted CPU on bytes nothing renders.
+    for (const requestContentType of ['image', 'script', 'stylesheet', 'other']) {
+      const plan = decideResponse({
+        headers: { 'content-type': 'text/html' },
+        verdict: verdict(),
+        ...BASE,
+        requestContentType,
+        cosmeticIndex: index,
+      });
+      expect(plan.action).toBe('passthrough');
+    }
+  });
+
+  test('document/subdocument (and untyped) contexts stay injectable', () => {
+    for (const requestContentType of ['document', 'subdocument', undefined]) {
+      const plan = decideResponse({
+        headers: { 'content-type': 'text/html' },
+        verdict: verdict(),
+        ...BASE,
+        requestContentType,
+        cosmeticIndex: index,
+      });
+      expect(plan.action).toBe('buffer-inject');
+    }
+  });
+});
+
+describe('decideResponse — content-encoding gate', () => {
+  const index = indexFor('example.com', payload({ hide: ['.ad'] }));
+  const html = { 'content-type': 'text/html' };
+
+  test('any non-identity token counts as encoded — including inside lists', () => {
+    const encodings: Array<string | string[]> = [
+      'gzip',
+      'GZip',
+      'gzip, identity',
+      'identity, br',
+      ['gzip', 'identity'],
+      ['identity', 'gzip'],
+    ];
+    for (const encoding of encodings) {
+      const plan = decideResponse({
+        // The Node type spells it `string`, but h2 compat and raw header
+        // arrays really do produce string[] values — the cast is honest.
+        headers: { ...html, 'content-encoding': encoding as string },
+        verdict: verdict(),
+        ...BASE,
+        cosmeticIndex: index,
+      });
+      expect(plan.action).toBe('passthrough');
+      expect(plan.injectSkipped).toBe('encoded');
+    }
+  });
+
+  test('absent, empty, and identity-only encodings stay injectable', () => {
+    const encodings: Array<string | string[] | undefined> = [
+      undefined,
+      '',
+      'identity',
+      ' identity , ',
+      ['identity', 'identity'],
+      ['identity', ''],
+    ];
+    for (const encoding of encodings) {
+      const headers: Record<string, string> = { ...html };
+      if (encoding !== undefined) {
+        // `content-encoding` really can arrive as string[] (h2 compat /
+        // rawHeaders) — the Node type just doesn't say so.
+        headers['content-encoding'] = encoding as string;
+      }
+      const plan = decideResponse({
+        headers,
+        verdict: verdict(),
+        ...BASE,
+        cosmeticIndex: index,
+      });
+      expect(plan.action).toBe('buffer-inject');
+    }
+  });
+});
+
 describe('rewriteCspForInjection', () => {
   test("script-src 'self' gains 'unsafe-inline'", () => {
     const out = rewriteCspForInjection("script-src 'self'");
@@ -303,12 +417,26 @@ describe('rewriteCspForInjection', () => {
       "script-src 'strict-dynamic'",
     ]);
     expect(out.changed).toBe(true);
-    // Two policies preserved as a comma list; the second's own script-src
-    // widens and style-src synthesizes under its default-src… which the
-    // second policy lacks — so only its script-src changes.
+    // Two policies preserved as a comma list; the first's script-src +
+    // style-src synthesize under its default-src; the second's own
+    // script-src widens ('unsafe-inline' on a 'strict-dynamic' directive is
+    // inert under CSP3 but is the only admit CSP2 engines can be offered —
+    // they don't know the keyword).
     expect(out.value).toBe(
       "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline', " +
         "script-src 'strict-dynamic' 'unsafe-inline'",
+    );
+  });
+
+  test("a 'strict-dynamic' default-src does not synthesize script-src — style-src still does", () => {
+    // Cloning 'strict-dynamic' into a fresh script-src produces a directive
+    // whose own keyword makes CSP3 ignore the 'unsafe-inline' it was built
+    // to carry — a widen that only pretends to work, skipped. The style
+    // chain's clone is unaffected: 'strict-dynamic' is a script concept,
+    // inert on style-src, so its 'unsafe-inline' still admits <style>.
+    const out = rewriteCspForInjection("default-src 'self' 'strict-dynamic'");
+    expect(out.value).toBe(
+      "default-src 'self' 'strict-dynamic'; style-src 'self' 'strict-dynamic' 'unsafe-inline'",
     );
   });
 
@@ -323,27 +451,78 @@ describe('rewriteCspForInjection', () => {
 });
 
 describe('applyCspAdditions', () => {
-  test('creates the header when none exists', () => {
+  test('creates the header when none exists — the addition verbatim', () => {
     expect(applyCspAdditions(undefined, ["script-src 'none'"])).toBe("script-src 'none'");
   });
 
-  test('merges additions token-wise by directive, deduplicated', () => {
-    const out = applyCspAdditions("script-src 'self'; img-src *", [
-      "script-src 'self' https://cdn.example; connect-src 'none'",
-    ]);
-    expect(out).toBe("script-src 'self' https://cdn.example; img-src *; connect-src 'none'");
+  test('additions land as their OWN co-equal policy — never token-merged', () => {
+    // `script-src 'self'` + `$csp=script-src 'none'`: the `,`-joined list
+    // ANDs the policies, so 'none' still refuses all scripts. A token-merge
+    // would produce `script-src 'self' 'none'` — where CSP defines 'none'
+    // as VOID alongside other sources, silently neutralizing the rule.
+    const out = applyCspAdditions("script-src 'self'", ["script-src 'none'"]);
+    expect(out).toBe("script-src 'self', script-src 'none'");
   });
 
-  test('comma-separated addition policies each merge', () => {
+  test("the reverse direction holds — a 'none' policy is never weakened", () => {
+    // `script-src 'none'` + `$csp=script-src https:`: token-merging would
+    // produce `script-src 'none' https:` — 'none' spec-voided, the live
+    // source admitted, the stricter policy WIDENED. As co-equal policies
+    // the 'none' half still blocks every script.
+    const out = applyCspAdditions("script-src 'none'", ['script-src https:']);
+    expect(out).toBe("script-src 'none', script-src https:");
+  });
+
+  test('comma-separated addition policies each land as their own policy', () => {
     const out = applyCspAdditions("default-src 'self'", [
       "script-src 'none', img-src 'none'",
     ]);
-    expect(out).toBe("default-src 'self'; script-src 'none'; img-src 'none'");
+    expect(out).toBe("default-src 'self', script-src 'none', img-src 'none'");
+  });
+
+  test('multiple existing policies are preserved, additions appended', () => {
+    const out = applyCspAdditions(["default-src 'self'", "img-src 'none'"], [
+      "script-src 'none'",
+    ]);
+    expect(out).toBe("default-src 'self', img-src 'none', script-src 'none'");
   });
 
   test('empty additions are a no-op', () => {
     expect(applyCspAdditions("script-src 'self'", [])).toBe("script-src 'self'");
     expect(applyCspAdditions(undefined, [])).toBe('');
+  });
+});
+
+describe('mergeCspAdditionsIntoHeaders', () => {
+  test('enforcing header created when absent; report-only untouched', () => {
+    const headers: Record<string, string> = {
+      'content-security-policy-report-only': "default-src 'self'",
+    };
+    const changed = mergeCspAdditionsIntoHeaders(headers, ["script-src 'none'"]);
+    expect(changed).toBe(1);
+    expect(headers['content-security-policy']).toBe("script-src 'none'");
+    // `$csp` is enforcement-intended — a report-only policy holding it would
+    // log violations the page never enforced (uBO's posture likewise).
+    expect(headers['content-security-policy-report-only']).toBe("default-src 'self'");
+  });
+
+  test('existing enforcing header gains a co-equal policy; report-only untouched', () => {
+    const headers: Record<string, string> = {
+      'content-security-policy': "script-src 'self'",
+      'content-security-policy-report-only': "script-src 'self'",
+    };
+    const changed = mergeCspAdditionsIntoHeaders(headers, ["script-src 'none'"]);
+    expect(changed).toBe(1);
+    expect(headers['content-security-policy']).toBe(
+      "script-src 'self', script-src 'none'",
+    );
+    expect(headers['content-security-policy-report-only']).toBe("script-src 'self'");
+  });
+
+  test('empty additions change nothing', () => {
+    const headers: Record<string, string> = {};
+    expect(mergeCspAdditionsIntoHeaders(headers, [])).toBe(0);
+    expect(headers['content-security-policy']).toBeUndefined();
   });
 });
 
@@ -430,6 +609,19 @@ describe('injectHtml — escaping and no-op', () => {
     const { body, injected } = injectHtml(raw, {});
     expect(body.equals(raw)).toBe(true);
     expect(injected).toEqual({ style: false, script: false });
+  });
+
+  test('non-ASCII payload text is emitted UTF-8, not latin1-mojibake', () => {
+    // Selectors and scriptlet args can carry non-ASCII text — a latin1
+    // `Buffer.from` would encode 'é' as a single 0xE9 byte the browser
+    // then decodes per the page charset (UTF-8 → U+FFFD mojibake).
+    const raw = Buffer.from('<html><head></head><body></body></html>');
+    const { body, injected } = injectHtml(raw, {
+      styleText: '.café{display:none}',
+    });
+    expect(injected.style).toBe(true);
+    expect(body.includes(Buffer.from('.café', 'utf8'))).toBe(true);
+    expect(body.includes(Buffer.from([0xe9]))).toBe(false); // no latin1 byte
   });
 });
 

@@ -69,6 +69,16 @@ const ACTIONS: ReadonlySet<string> = new Set<PolicyAction>([
 const MAX_EVENT_REASON_LENGTH = 200;
 
 /**
+ * Bound on the session dedupe set — (host, reason) pairs are client-shaped
+ * (a spray of unique hostnames under our own verdicts would grow the map
+ * without bound). Past the cap the dedupe stops learning new pairs — the
+ * event still RECORDS (audit stays honest); only the once-per-session
+ * deduplication lapses. The ledger line count stays bounded by traffic,
+ * which is what the dedupe was protecting against in the first place.
+ */
+const EVENT_DEDUPE_CAP = 10_000;
+
+/**
  * The text-form bound on a DNS name — the same 253 `isValidSni` enforces on
  * the forge gate. A longer string is not a hostname; the ledger refuses it.
  */
@@ -227,7 +237,11 @@ export class PolicyStore {
     if (this.eventDedupe.has(key)) {
       return;
     }
-    this.eventDedupe.add(key);
+    // Past the cap the set stops learning pairs (it never shrinks) — the
+    // event is still appended; only deduplication lapses.
+    if (this.eventDedupe.size < EVENT_DEDUPE_CAP) {
+      this.eventDedupe.add(key);
+    }
     this.append(normalized, 'proxy_event', bounded);
   }
 

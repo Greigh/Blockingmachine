@@ -182,3 +182,67 @@ describe('list()', () => {
     expect('prevHash' in entries[0]).toBe(false);
   });
 });
+
+describe('proxy_event audit lines', () => {
+  test('recordEvent persists a line that replay keeps OUT of the pin/bypass sets', async () => {
+    const first = await PolicyStore.open(storePath);
+    first.learnPin('pinned.example', 'handshake-abort');
+    first.recordEvent('page.example', 'html-inject');
+    first.recordEvent('page.example', 'csp-rewrite');
+    first.close();
+
+    const second = await PolicyStore.open(storePath);
+    // Audit lines apply to no set — the evented host is neither pinned nor
+    // bypassed, while the real pin still replays.
+    expect(second.isPinned('page.example')).toBe(false);
+    expect(second.isBypassed('page.example')).toBe(false);
+    expect(second.isPinned('pinned.example')).toBe(true);
+    const events = second.list().filter((e) => e.action === 'proxy_event');
+    expect(events.map((e) => e.host)).toEqual(['page.example', 'page.example']);
+    expect(events.map((e) => e.reason)).toEqual(['html-inject', 'csp-rewrite']);
+    // …and the policy view excludes them entirely.
+    expect(second.listPolicy().every((e) => e.action !== 'proxy_event')).toBe(true);
+    expect(second.corruptLineCount).toBe(0);
+  });
+
+  test('the same (host, reason) records once per session — audit is not metrics', () => {
+    const store = PolicyStore.ephemeral();
+    store.recordEvent('dup.example', 'csp-rewrite');
+    store.recordEvent('dup.example', 'csp-rewrite');
+    store.recordEvent('dup.example', 'html-inject'); // different reason → new line
+    store.recordEvent('other.example', 'csp-rewrite'); // different host → new line
+    const events = store.list().filter((e) => e.action === 'proxy_event');
+    expect(events).toHaveLength(3);
+  });
+
+  test('a reason longer than the bound is truncated like any ledger note', () => {
+    const store = PolicyStore.ephemeral();
+    store.recordEvent('reasons.example', 'r'.repeat(400));
+    const event = store.list().find((e) => e.action === 'proxy_event');
+    expect(event?.reason).toBe('r'.repeat(200));
+  });
+
+  test('a client-shaped non-hostname is refused — callers wrap it, the store stays strict', () => {
+    const store = PolicyStore.ephemeral();
+    expect(() => store.recordEvent(`${'x'.repeat(300)}.example`, 'csp-rewrite')).toThrow();
+    expect(() => store.recordEvent('', 'csp-rewrite')).toThrow();
+  });
+
+  test('past the 10k dedupe cap events still record — only deduplication lapses', () => {
+    const store = PolicyStore.ephemeral();
+    // (host, reason) pairs are client-shaped — a spray must not grow the
+    // dedupe set without bound. The cap stops it from learning; the audit
+    // lines keep landing.
+    for (let i = 0; i < 10_000; i++) {
+      store.recordEvent(`h${i}.example`, 'csp-rewrite');
+    }
+    expect(store.list().filter((e) => e.action === 'proxy_event')).toHaveLength(10_000);
+    // A learned pair still dedupes…
+    store.recordEvent('h0.example', 'csp-rewrite');
+    // …but a pair past the cap records outright — and again, because the
+    // capped set never memorized it.
+    store.recordEvent('post-cap.example', 'csp-rewrite');
+    store.recordEvent('post-cap.example', 'csp-rewrite');
+    expect(store.list().filter((e) => e.action === 'proxy_event')).toHaveLength(10_002);
+  });
+});

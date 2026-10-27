@@ -23,9 +23,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import tls from 'node:tls';
-import { createCosmeticIndex, createRequestEvaluator } from '@blockingmachine/core';
+import {
+  createCosmeticIndex,
+  createRequestEvaluator,
+  type CosmeticIndex,
+  type CosmeticPayload,
+} from '@blockingmachine/core';
 import { CertAuthority } from '../ca/certAuthority.js';
-import { MAX_HTML_BUFFER } from '../pipeline/response.js';
+import { MAX_HTML_BUFFER, type ResponseEvent } from '../pipeline/response.js';
 import { PolicyStore } from '../policy/policyStore.js';
 import { startProxy, type RunningProxy } from '../proxy/filterProxy.js';
 import { relayRequest } from '../proxy/httpRelay.js';
@@ -122,6 +127,21 @@ function httpRequestOver(
     sock.write(
       `${opts.method ?? 'GET'} ${opts.path} HTTP/1.1\r\nHost: ${opts.host}\r\n${extra}\r\n`,
     );
+  });
+}
+
+/**
+ * Write a raw request and collect everything until the socket closes —
+ * for responses that carry no content-length (304s, HEAD answers, chunked
+ * flushes) where `httpRequestOver`'s length-bound reader cannot end. The
+ * request should ask for `Connection: close` so the downstream lets it.
+ */
+function rawHttpOver(sock: tls.TLSSocket, request: string): Promise<Buffer> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    sock.on('data', (chunk: Buffer) => chunks.push(chunk));
+    sock.once('close', () => resolve(Buffer.concat(chunks)));
+    sock.write(request);
   });
 }
 
@@ -244,18 +264,23 @@ function captureClientHello(servername: string): Promise<Buffer> {
 /**
  * A `RelayResponse` that records instead of writing — drives `relayRequest`
  * directly so construct-time throws (control-char paths, malformed
- * authorities) are unit-tested without a full terminated flow.
+ * authorities) are unit-tested without a full terminated flow. `bodyBytes`
+ * returns everything written through `begin`'s stream — the buffered-flush
+ * assertions need the bytes, not just the status line.
  */
 function fakeResponse(): {
   res: RelayResponse;
   statuses: number[];
+  bodyBytes: () => Buffer;
   isDestroyed: () => boolean;
 } {
   const statuses: number[] = [];
+  const chunks: Buffer[] = [];
   let destroyed = false;
   let headersSent = false;
   return {
     statuses,
+    bodyBytes: () => Buffer.concat(chunks),
     isDestroyed: () => destroyed,
     res: {
       protocol: 'h1',
@@ -270,7 +295,8 @@ function fakeResponse(): {
         statuses.push(status);
         headersSent = true;
         return new Writable({
-          write(_chunk, _enc, cb) {
+          write(chunk, _enc, cb) {
+            chunks.push(chunk as Buffer);
             cb();
           },
         });
@@ -1541,6 +1567,8 @@ describe('response pipeline (P2 Task 3)', () => {
     'cosmetich2.example##+js(set-constant, h2_flag, 1)',
     '||ctblock.example^$image',
     "||csp.example^$csp=script-src 'none'",
+    'cspcos.example##.csp-ad',
+    "||cspcos.example^$csp=frame-src 'none'",
   ];
   let responsePolicy: PolicyStore;
   let responseProxy: RunningProxy;
@@ -1862,6 +1890,439 @@ describe('response pipeline (P2 Task 3)', () => {
       client.destroy();
     } finally {
       await closeServer(server);
+    }
+  });
+
+  test("a $csp merge on a passthrough is ledgered — csp-rewrite event + counter", async () => {
+    const leaf = originCa.forgeLeaf('csp.example');
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      const body = 'plain';
+      res.writeHead(200, { 'content-type': 'text/plain', 'content-length': String(body.length) });
+      res.end(body);
+    });
+    const port = await listen(server);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'csp.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'csp.example', headers: { accept: '*/*' } }),
+        10_000,
+        '$csp-ledger GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.head.toLowerCase()).toContain("content-security-policy: script-src 'none'");
+      // The merge is a real rewrite — counted and journaled, not silent.
+      expect(responseProxy.stats().cspRewrites).toBe(before.cspRewrites + 1);
+      await waitFor(() =>
+        responsePolicy
+          .list()
+          .some(
+            (e) =>
+              e.action === 'proxy_event' &&
+              e.host === 'csp.example' &&
+              (e.reason ?? '').startsWith('csp-rewrite'),
+          ),
+      );
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test("$csp onto an existing CSP appends a co-equal policy — 'none' still binds", async () => {
+    // `script-src 'self'` + `$csp=script-src 'none'`: the wire must carry
+    // BOTH policies (`,`-joined policies AND — 'none' still refuses all
+    // scripts). A token-merge would emit `script-src 'self' 'none'` where
+    // CSP voids 'none' beside live sources — the rule silently dead.
+    const leaf = originCa.forgeLeaf('csp.example');
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      const body = 'plain';
+      res.writeHead(200, {
+        'content-type': 'text/plain',
+        'content-security-policy': "script-src 'self'",
+        'content-length': String(body.length),
+      });
+      res.end(body);
+    });
+    const port = await listen(server);
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'csp.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'csp.example', headers: { accept: '*/*' } }),
+        10_000,
+        'co-equal $csp GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.head.toLowerCase()).toContain(
+        "content-security-policy: script-src 'self', script-src 'none'",
+      );
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('injection + $csp on one host: widened policy AND appended rule policy on one header', async () => {
+    const page =
+      '<html><head></head><body><div class="csp-ad">x</div></body></html>';
+    const { server, port } = await htmlOrigin('cspcos.example', page, {
+      'content-security-policy': "script-src 'self'",
+    });
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cspcos.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'cspcos.example' }),
+        10_000,
+        'csp+inject GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('<style id="bm-c">.csp-ad{display:none!important}</style>');
+      // Widen first, append after: the rule lands as its own policy.
+      expect(res.head.toLowerCase()).toContain(
+        "content-security-policy: script-src 'self' 'unsafe-inline', frame-src 'none'",
+      );
+      // One widen (the header) + one appended $csp policy → two rewrites.
+      expect(responseProxy.stats().cspRewrites).toBe(before.cspRewrites + 2);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('a non-compliant upstream answering gzip on an injectable host passes through (inject-skip: encoded)', async () => {
+    // The request side forces `accept-encoding: identity`, but the upstream
+    // can still compress — splicing markup into gzip bytes would corrupt
+    // the body, so the response must pass through byte-identical.
+    const leaf = originCa.forgeLeaf('cosmetic.example');
+    const body = 'GZIP-OPAQUE-PAYLOAD';
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'text/html',
+        'content-encoding': 'gzip',
+        'content-length': String(body.length),
+      });
+      res.end(body);
+    });
+    const port = await listen(server);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: 'cosmetic.example' }),
+        10_000,
+        'encoded-body GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toBe(body);
+      expect(res.head.toLowerCase()).toContain('content-encoding: gzip');
+      expect(res.body).not.toContain('bm-c');
+      expect(responseProxy.stats().injectionsSkipped).toBe(before.injectionsSkipped + 1);
+      expect(responseProxy.stats().htmlInjected).toBe(before.htmlInjected);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('a 304 on an injectable host passes through — no synthesized body, no restamped length', async () => {
+    // Buffer-inject on a bodiless status fabricates a body the protocol
+    // forbids (an h2 DATA frame on 304 is a violation) and restamps a
+    // content-length the status doesn't own.
+    const leaf = originCa.forgeLeaf('cosmetic.example');
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      res.writeHead(304, { 'content-type': 'text/html' });
+      res.end();
+    });
+    const port = await listen(server);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const wire = await withTimeout(
+        rawHttpOver(
+          client,
+          'GET / HTTP/1.1\r\nHost: cosmetic.example\r\nAccept: */*\r\nConnection: close\r\n\r\n',
+        ),
+        10_000,
+        '304 response',
+      );
+      const text = wire.toString('latin1');
+      expect(text).toContain('304');
+      const idx = text.indexOf('\r\n\r\n');
+      expect(idx).toBeGreaterThan(-1);
+      const head = text.slice(0, idx).toLowerCase();
+      const tail = text.slice(idx + 4);
+      expect(tail).toBe(''); // nothing synthesized behind the head
+      expect(head).not.toContain('content-length'); // and none restamped
+      expect(tail).not.toContain('bm-c');
+      expect(responseProxy.stats().htmlInjected).toBe(before.htmlInjected);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('a HEAD request on an injectable host keeps the upstream head verbatim', async () => {
+    const page =
+      '<html><head></head><body><div class="ad-slot">x</div></body></html>';
+    const leaf = originCa.forgeLeaf('cosmetic.example');
+    const server = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      // Node h1 suppresses the body for HEAD — the head still carries the
+      // would-be content-length.
+      res.writeHead(200, {
+        'content-type': 'text/html',
+        'content-length': String(page.length),
+      });
+      res.end(page);
+    });
+    const port = await listen(server);
+    try {
+      const before = responseProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        responseProxy.port,
+      );
+      const wire = await withTimeout(
+        rawHttpOver(
+          client,
+          'HEAD / HTTP/1.1\r\nHost: cosmetic.example\r\nAccept: text/html\r\nConnection: close\r\n\r\n',
+        ),
+        10_000,
+        'HEAD response',
+      );
+      const text = wire.toString('latin1');
+      const idx = text.indexOf('\r\n\r\n');
+      const head = idx < 0 ? text : text.slice(0, idx).toLowerCase();
+      const tail = idx < 0 ? '' : text.slice(idx + 4);
+      // The upstream's would-be length rides through unstamped-over — the
+      // buggy path rewrote it to the injected markup's length.
+      expect(head).toContain(`content-length: ${page.length}`);
+      expect(head).toContain('200');
+      expect(tail).not.toContain('bm-c');
+      expect(responseProxy.stats().htmlInjected).toBe(before.htmlInjected);
+      client.destroy();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  test('an injector throw flushes the buffered body verbatim — counted, never hung', async () => {
+    // Regression: the 'end' handler set `flushed` before its try, so the
+    // catch's flushRaw() no-op'd — the client hung with the head unsent
+    // and the buffered bytes held.
+    const leaf = originCa.forgeLeaf('throwinj.example');
+    const page = '<html><head></head><body>verbatim-bytes</body></html>';
+    const origin = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'text/html',
+        'content-length': String(page.length),
+      });
+      res.end(page);
+    });
+    const port = await listen(origin);
+    try {
+      const probe = fakeResponse();
+      const events: ResponseEvent[] = [];
+      const evaluator = createRequestEvaluator([]);
+      // A payload that passes hasInjectableContent (`hide` as a bare string
+      // still has .length) but throws at render (`'x'.join` is not a
+      // function) — the injector-error path under test.
+      const malformedIndex = {
+        forHost: () =>
+          ({
+            hide: 'x',
+            styles: [],
+            scriptlets: [],
+            skippedScriptlets: 0,
+          }) as unknown as CosmeticPayload,
+        size: () => ({
+          selectors: 0,
+          exceptions: 0,
+          scriptlets: 0,
+          scriptletExceptions: 0,
+          styles: 0,
+        }),
+        stats: {} as CosmeticIndex['stats'],
+      } as CosmeticIndex;
+      relayRequest(
+        {
+          method: 'GET',
+          url: '/',
+          host: 'throwinj.example',
+          headers: {},
+          body: Readable.from([]),
+          protocol: 'h1',
+        },
+        probe.res,
+        { host: '127.0.0.1', port, servername: 'throwinj.example' },
+        {
+          upstreamCaCerts: [originCa.caCertPem],
+          response: {
+            url: 'https://throwinj.example/',
+            host: 'throwinj.example',
+            method: 'GET',
+            verdict: evaluator.evaluate('https://throwinj.example/'),
+            cosmeticIndex: malformedIndex,
+            onEvent: (event) => events.push(event),
+          },
+        },
+      );
+      await waitFor(
+        () => probe.statuses.length > 0 && probe.bodyBytes().length >= page.length,
+      );
+      expect(probe.statuses[0]).toBe(200);
+      expect(probe.bodyBytes().toString('utf8')).toBe(page);
+      expect(events.some((e) => e.kind === 'inject-skip' && e.reason === 'error')).toBe(true);
+      await probeEngineAlive('injthrow');
+    } finally {
+      await closeServer(origin);
+    }
+  });
+
+  test('a chunked html body dripping under the cap flushes on the buffer deadline', async () => {
+    // The accumulation phase is bounded by BUFFER_FLUSH_FACTOR × the
+    // upstream response deadline: without it a body that never 'end's (and
+    // never overflows) would show the client nothing.
+    const dripProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator(rules),
+      cosmeticIndex: createCosmeticIndex(rules),
+      policy,
+      upstreamCaCerts: [originCa.caCertPem],
+      upstreamConnectTimeoutMs: 2_000,
+      upstreamResponseTimeoutMs: 300, // → 600ms buffer deadline
+    });
+    const leaf = originCa.forgeLeaf('cosmetic.example');
+    const origin = https.createServer({ key: leaf.keyPem, cert: leaf.certPem }, (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' }); // no CL — chunked upstream
+      res.write('<html><head></head><body>drip-');
+      setTimeout(() => res.write('middle-'), 1_200);
+      setTimeout(() => res.end('tail</body></html>'), 2_400);
+    });
+    const port = await listen(origin);
+    try {
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'cosmetic.example',
+        ['http/1.1'],
+        dripProxy.port,
+      );
+      const started = Date.now();
+      const collected = new Promise<{ ttfb: number; text: string }>((resolve) => {
+        let ttfb = -1;
+        let text = '';
+        client.on('data', (chunk: Buffer) => {
+          if (ttfb < 0) {
+            ttfb = Date.now() - started;
+          }
+          text += chunk.toString('latin1');
+          if (text.includes('</html>')) {
+            resolve({ ttfb, text });
+          }
+        });
+        client.once('close', () => resolve({ ttfb, text }));
+      });
+      client.write(
+        'GET / HTTP/1.1\r\nHost: cosmetic.example\r\nAccept: */*\r\nConnection: close\r\n\r\n',
+      );
+      const out = await withTimeout(collected, 15_000, 'deadline-flush response');
+      // The body completes verbatim — flushed raw past the deadline, never
+      // a partial injection — but the first byte lands at the 600ms
+      // deadline, not at the upstream's ~2.4s 'end'. The pieces arrive in
+      // order inside the chunked framing (hex sizes interleave).
+      expect(out.text).toContain('drip-');
+      expect(out.text).toContain('middle-');
+      expect(out.text).toContain('tail</body></html>');
+      expect(out.text.indexOf('drip-')).toBeLessThan(out.text.indexOf('middle-'));
+      expect(out.text.indexOf('middle-')).toBeLessThan(out.text.indexOf('tail</body></html>'));
+      expect(out.text).not.toContain('bm-c');
+      expect(out.ttfb).toBeGreaterThanOrEqual(0);
+      expect(out.ttfb).toBeLessThan(1_800);
+      client.destroy();
+    } finally {
+      await closeServer(origin);
+      await dripProxy.close();
+    }
+  });
+
+  test('a >253-char request host reaching the ledger sink fails soft — no engine kill', async () => {
+    // `pipeline.host` is client bytes (the request URL's authority): a Host
+    // header past the 253-char hostname cap reaches `recordEvent`, whose
+    // `requireHost` throws — unguarded, that throw escapes the response
+    // handler as an uncaughtException and takes the whole engine. The audit
+    // line must simply never land; the flow (and every other) carries on.
+    const longHost = `${'a'.repeat(250)}.example`; // 262 chars — over POLICY_HOST_MAX_LENGTH
+    const auditPolicy = PolicyStore.ephemeral();
+    const auditProxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator(["*$csp=img-src 'none'"]),
+      policy: auditPolicy,
+      upstreamCaCerts: [originCa.caCertPem],
+      upstreamConnectTimeoutMs: 2_000,
+    });
+    const { server, port } = await httpsOrigin('audit.example');
+    try {
+      const before = auditProxy.stats();
+      const { client } = await connectThenTls(
+        `localhost:${port}`,
+        'audit.example',
+        ['http/1.1'],
+        auditProxy.port,
+      );
+      const res = await withTimeout(
+        httpRequestOver(client, { path: '/', host: longHost }),
+        10_000,
+        'long-host GET',
+      );
+      // The merge applied (the stat counted it) and the response delivered —
+      // the ledger throw was swallowed inside the event sink.
+      expect(res.status).toBe(200);
+      expect(res.head.toLowerCase()).toContain("content-security-policy: img-src 'none'");
+      expect(auditProxy.stats().cspRewrites).toBe(before.cspRewrites + 1);
+      expect(auditPolicy.list().every((e) => e.host.length <= 253)).toBe(true);
+      // The same keep-alive flow still serves — the handler survived.
+      const second = await withTimeout(
+        httpRequestOver(client, { path: '/two', host: 'audit.example' }),
+        10_000,
+        'post-incident request',
+      );
+      expect(second.status).toBe(200);
+      client.destroy();
+      await probeEngineAlive('longhost');
+    } finally {
+      await closeServer(server);
+      await auditProxy.close();
     }
   });
 });

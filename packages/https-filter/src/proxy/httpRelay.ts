@@ -310,13 +310,23 @@ function respondBlocked(res: RelayResponse, coveringRule: string | null): void {
 }
 
 /**
+ * Bound on the buffered-injection accumulation phase, as a multiple of the
+ * upstream first-byte deadline: a chunked `text/html` body dripping forever
+ * under {@link MAX_HTML_BUFFER} would otherwise show the client nothing
+ * until 'end'. On expiry the buffered prefix flushes through verbatim — the
+ * same path overflow takes, never a partial injection.
+ */
+const BUFFER_FLUSH_FACTOR = 2;
+
+/**
  * The buffered half of `serveResponse`: accumulate body bytes up to
- * {@link MAX_HTML_BUFFER}, then splice the cosmetic payload and send the
- * rewritten head. Overflow flushes the buffered bytes THROUGH verbatim —
- * never a partial injection — and counts `inject-skip`; an injector throw
- * does the same, because injection is an enhancement and never a reason to
- * 502. `res.begin` failures still degrade to 502 + teardown (the fail-closed
- * contract every other path in this file honors).
+ * {@link MAX_HTML_BUFFER} (and at most `bufferDeadlineMs` wall-clock), then
+ * splice the cosmetic payload and send the rewritten head. Overflow,
+ * deadline expiry, and injector failure all flush the buffered bytes
+ * THROUGH verbatim — never a partial injection — and count `inject-skip`;
+ * injection is an enhancement and never a reason to 502. `res.begin`
+ * failures still degrade to 502 + teardown (the fail-closed contract every
+ * other path in this file honors).
  */
 function bufferAndInject(
   res: RelayResponse,
@@ -326,6 +336,7 @@ function bufferAndInject(
   kill: () => void,
   plan: ResponsePlan,
   pipeline: ResponsePipelineInput,
+  bufferDeadlineMs: number,
 ): void {
   const emit = pipeline.onEvent;
   const chunks: Buffer[] = [];
@@ -333,6 +344,7 @@ function bufferAndInject(
   let flushed = false;
 
   const flushRaw = () => {
+    clearTimeout(bufferDeadline);
     if (flushed) {
       return;
     }
@@ -342,9 +354,7 @@ function bufferAndInject(
     // header transform, honest on untouched bytes), and content-length stays
     // upstream's because the body passes through byte-identical.
     const head = responseHeaders(headers);
-    if (plan.cspAdditions.length > 0) {
-      mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
-    }
+    const cspChanged = mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
     let target;
     try {
       target = res.begin(status, head);
@@ -357,6 +367,9 @@ function bufferAndInject(
       target.write(chunk);
     }
     body.pipe(target);
+    if (cspChanged > 0) {
+      emit?.({ kind: 'csp-rewrite', host: pipeline.host, count: cspChanged });
+    }
   };
 
   const onData = (chunk: Buffer) => {
@@ -368,68 +381,100 @@ function bufferAndInject(
     }
   };
 
+  // Armed at buffer start — a response that never completes (and never
+  // overflows) owes the client the bytes it already has, not silence.
+  const bufferDeadline = setTimeout(flushRaw, bufferDeadlineMs);
+  bufferDeadline.unref();
+
   body.on('data', onData);
   body.once('end', () => {
+    clearTimeout(bufferDeadline);
     if (flushed) {
       return;
     }
     flushed = true; // 'end' wins — no 'data' can follow it.
-    const whole = Buffer.concat(chunks, buffered);
+    // Emits stay OUTSIDE the mutation try: the catch counts `inject-skip`,
+    // so a listener throw (the ledger is a client-named sink) after a
+    // delivered injection would misaccount a spurious skip — and the
+    // post-catch placement keeps emit() throws from ever reaching the
+    // byte path.
+    let outcome: 'injected' | 'empty' | 'failed' = 'failed';
+    let cspChanged = 0;
+    let text: ReturnType<typeof buildInjectionText> | undefined;
+    let injected: { style: boolean; script: boolean } | undefined;
     try {
-      const text = buildInjectionText(plan.payload as NonNullable<ResponsePlan['payload']>);
-      const { body: out, injected } = injectHtml(whole, {
+      // Inside the try: a concat failure (alloc) is an injector error like
+      // any other — outside it, it would escape the handler uncaught.
+      const whole = Buffer.concat(chunks, buffered);
+      text = buildInjectionText(plan.payload as NonNullable<ResponsePlan['payload']>);
+      const result = injectHtml(whole, {
         styleText: text.styleText,
         scriptText: text.scriptText,
       });
-      if (!injected.style && !injected.script) {
-        // The payload resolved to nothing emittable (defensive — the plan
-        // gate already checks) — deliver the bytes raw, count the skip.
-        emit?.({ kind: 'inject-skip', host: pipeline.host, reason: 'empty' });
-        flushed = false;
-        flushRaw();
-        return;
+      if (!result.injected.style && !result.injected.script) {
+        outcome = 'empty';
+      } else {
+        // The head has not crossed — mutate the fresh `responseHeaders()`
+        // dict before `res.begin` copies it onto the wire: widen existing
+        // CSP to admit the injected markup (only ever a widening, ledgered
+        // per change), merge any `$csp` additions, and re-publish the
+        // honest content-length.
+        const head = responseHeaders(headers);
+        const widened = widenInjectionCspHeaders(head);
+        const merged = mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
+        deleteHeaderValue(head, 'content-length');
+        setHeaderValue(head, 'content-length', String(result.body.length));
+        let target;
+        try {
+          target = res.begin(status, head);
+        } catch {
+          failClosed(res, kill);
+          return;
+        }
+        target.end(result.body);
+        cspChanged = widened + merged;
+        injected = result.injected;
+        outcome = 'injected';
       }
-      // The head has not crossed — mutate the fresh `responseHeaders()` dict
-      // before `res.begin` copies it onto the wire: widen existing CSP to
-      // admit the injected markup (only ever a widening, ledgered per change),
-      // merge any `$csp` additions, and re-publish the honest content-length.
-      const head = responseHeaders(headers);
-      const rewrites = widenInjectionCspHeaders(head);
-      if (plan.cspAdditions.length > 0) {
-        mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
-      }
-      deleteHeaderValue(head, 'content-length');
-      setHeaderValue(head, 'content-length', String(out.length));
-      let target;
-      try {
-        target = res.begin(status, head);
-      } catch {
-        failClosed(res, kill);
-        return;
-      }
-      target.end(out);
-      if (rewrites > 0) {
-        emit?.({ kind: 'csp-rewrite', host: pipeline.host, count: rewrites });
-      }
-      emit?.({
-        kind: 'html-inject',
-        host: pipeline.host,
-        style: injected.style,
-        scriptlets: text.scriptletCount,
-        skippedScriptlets: text.skippedScriptlets,
-      });
     } catch {
-      // Injection is an enhancement — its failure flushes the untouched body,
-      // never a 502 for a page the upstream served fine.
-      emit?.({ kind: 'inject-skip', host: pipeline.host, reason: 'error' });
-      flushRaw();
+      outcome = 'failed';
     }
+    if (outcome !== 'injected') {
+      // The payload resolved to nothing emittable (defensive — the plan
+      // gate already checks) or the injector threw: injection is an
+      // enhancement — its failure flushes the untouched body, never a 502
+      // for a page the upstream served fine. The 'end' latch must be
+      // released first — `flushed` was set above — or flushRaw() no-ops
+      // and the client hangs with the head unsent.
+      emit?.({
+        kind: 'inject-skip',
+        host: pipeline.host,
+        reason: outcome === 'empty' ? 'empty' : 'error',
+      });
+      flushed = false;
+      flushRaw();
+      return;
+    }
+    if (cspChanged > 0) {
+      emit?.({ kind: 'csp-rewrite', host: pipeline.host, count: cspChanged });
+    }
+    emit?.({
+      kind: 'html-inject',
+      host: pipeline.host,
+      style: (injected as NonNullable<typeof injected>).style,
+      scriptlets: (text as NonNullable<typeof text>).scriptletCount,
+      skippedScriptlets: (text as NonNullable<typeof text>).skippedScriptlets,
+    });
   });
   body.once('error', () => {
+    clearTimeout(bufferDeadline);
     res.destroy();
     kill();
   });
-  body.once('aborted', () => res.destroy());
+  body.once('aborted', () => {
+    clearTimeout(bufferDeadline);
+    res.destroy();
+  });
 }
 
 /**
@@ -445,13 +490,15 @@ function serveResponse(
   headers: IncomingHttpHeaders,
   body: Readable,
   kill: () => void,
-  pipeline?: ResponsePipelineInput,
+  pipeline: ResponsePipelineInput | undefined,
+  responseTimeoutMs: number,
 ): void {
   const plan =
     pipeline === undefined
       ? ({ action: 'passthrough', cspAdditions: [], reason: 'no-pipeline' } as ResponsePlan)
       : decideResponse({
           headers,
+          status,
           verdict: pipeline.verdict,
           url: pipeline.url,
           host: pipeline.host,
@@ -479,14 +526,21 @@ function serveResponse(
   }
 
   if (plan.action === 'buffer-inject' && plan.payload !== undefined && pipeline !== undefined) {
-    bufferAndInject(res, status, headers, body, kill, plan, pipeline);
+    bufferAndInject(
+      res,
+      status,
+      headers,
+      body,
+      kill,
+      plan,
+      pipeline,
+      responseTimeoutMs * BUFFER_FLUSH_FACTOR,
+    );
     return;
   }
 
   const head = responseHeaders(headers);
-  if (plan.cspAdditions.length > 0) {
-    mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
-  }
+  const cspChanged = mergeCspAdditionsIntoHeaders(head, plan.cspAdditions);
   let target;
   try {
     // A status the downstream protocol can't express (101 on h2) or an
@@ -503,6 +557,9 @@ function serveResponse(
   });
   body.once('aborted', () => res.destroy());
   body.pipe(target);
+  if (cspChanged > 0) {
+    emit?.({ kind: 'csp-rewrite', host: pipeline?.host ?? '', count: cspChanged });
+  }
 }
 
 /** h1 upstream: `http.request` rides the pre-connected socket (no `agent` key —
@@ -558,6 +615,7 @@ function relayOverH1(
       upRes,
       () => sock.destroy(),
       pipeline,
+      responseTimeoutMs,
     );
   });
   // Forwarded headers strip Upgrade/Connection, so a 101 should surface as
@@ -633,6 +691,7 @@ function relayOverH2(
       stream,
       kill,
       pipeline,
+      responseTimeoutMs,
     );
   });
   stream.once('error', () => {

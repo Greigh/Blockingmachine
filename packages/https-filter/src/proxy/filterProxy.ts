@@ -330,8 +330,17 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   const ledgerEvent = (host: string, reason: string): void => {
     // An empty host is a relay-side guard path, not a ledger fact — and
     // `recordEvent` (rightly) refuses it.
-    if (host !== '') {
+    if (host === '') {
+      return;
+    }
+    try {
       policy.recordEvent(host, reason);
+    } catch {
+      // Audit must NEVER throw into the data path: `host` is client bytes
+      // (the request URL's authority) and `requireHost` refuses past the
+      // 253-char hostname cap — an unguarded throw propagates out of the
+      // response handler as an uncaughtException and takes the engine.
+      // A skipped audit line, never a dead flow.
     }
   };
   const onResponseEvent = (event: ResponseEvent): void => {
