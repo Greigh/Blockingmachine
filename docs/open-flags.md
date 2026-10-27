@@ -143,22 +143,6 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **Fix shape:** if the window ever bites in practice, the helper could arm a dedicated pf token/anchor-pair that a crash takes down with it (fork-and-hold a sentinel fd), or the anchor could be made conditional on a live-socket probe — both are anchor-design work, not config.
 - **Verify:** `kill -9` the helper under live traffic — connections RST until KeepAlive relaunches it; the rehearsal script's kickstart leg exercises the adjacent path.
 
-### 104. Extended-CSS rules (`#?#`, `#@?#`, `#$?#`, `#@$?#`) are parsed-and-skipped — procedural selectors need an engine port
-
-- **Where:** `packages/core/src/cosmetic/cosmeticIndex.ts` — `findMarker` classifies the four extended markers and `stats.extendedCss`/`stats.extendedStyles` count them; nothing downstream ever sees the rules.
-- **What:** uBO/AdGuard's procedural selectors (`:has()`, `:contains()`, `:matches-attr()`, `:upward()`, …) ride the `#?#` family — the index drops them at build time, so an element whose only cover is procedural gets no hiding on terminated pages.
-- **Why left:** the P2 plan's explicit non-goal — real support is a selector engine inside the injected runtime (parse the procedural pseudo-args, evaluate against the DOM, stay off hot paths), which is its own phase, not an index change.
-- **Fix shape:** a minimal extended-css evaluator emitted beside `__bm_sc` — resolve procedural pseudos over `querySelectorAll` results at document-start plus the runtime's existing `MutationObserver` seam (`obs()`), and keep the index counting what the engine still cannot apply.
-- **Verify:** a terminated page under a `#?#div:has(> .ad)` rule actually hides the element; `extendedCss` shrinks to whatever forms the port still skips.
-
-### 107. `#@#+js():matches-path(…)` path-scoped scriptlet kill-alls parse as malformed — the exception never applies
-
-- **Where:** `packages/core/src/cosmetic/cosmeticIndex.ts` — `parseScriptletCall` returns null on the empty name before `trailing` is even read, so `+js():matches-path(/x/)` lands in `stats.malformed` instead of a path-scoped cancel.
-- **What:** AdGuard ships `host#@#+js():matches-path(/…)` to cancel a host's scriptlets only under a path pattern; dropped outright, the host keeps every scriptlet the list meant to except — over-injection relative to intent. (A non-exception `+js(name):matches-path(…)` invocation skips via `scopeModifiers` — the honest under-direction; the exception skip is the over-direction.)
-- **Why left:** the index keys on hostnames and the pipeline never hands it a path — supporting path scope means threading the request path through `forHost`/`decideResponse`, a signature change across the pipeline rather than a parse tweak.
-- **Fix shape:** carry the URL path into the cosmetic lookup, apply `:matches-path` rules only on a match, and extend the empty-name kill-all sentinel to its path-scoped form.
-- **Verify:** `example.com#@#+js():matches-path(/ads/)` cancels scriptlets on `example.com/ads/x` but not on `example.com/` — an e2e leg beside the existing mitm injection tests.
-
 ### 108. Injectable document-context flows force `accept-encoding: identity` upstream — no in-proxy decompress/recompress path exists
 
 - **Where:** `wantsIdentityEncoding` in `packages/https-filter/src/proxy/httpRelay.ts` (the request-side strip), plus the `injectSkipped: 'encoded'` passthrough in `decideResponse` — the escape hatch for an upstream that compresses anyway.
@@ -190,14 +174,6 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **Why left:** upstream parity — uBO's HTML filtering does the same literal-anchor search; a context-aware scan needs a tokenizer over the head section, a bigger instrument than the observed miss rate justifies.
 - **Fix shape:** if it ever bites: skip `<!-- -->` spans and quoted script-text runs when resolving anchors — bounded extra work on the already-buffered ≤512 KiB body.
 - **Verify:** a fixture page with `console.log("</head")` in an inline script must splice the `<style>` at the real `</head>`, not inside the string — compared byte-for-byte against the uninstrumented origin's output around the anchor.
-
-### 112. A combined `*.sony.*` domain token parses as a plain entity — the subdomains-only scope is dropped
-
-- **Where:** `parseDomainList` in `packages/core/src/cosmetic/cosmeticIndex.ts` — `*.` is stripped first (`subdomainsOnly`), then the `.*` tail classifies the token `{kind:'entity', name:'sony'}` and the subdomains-only qualifier never reaches it.
-- **What:** AdGuard's `*.sony.*` means "proper subdomains of any sony entity" (`www.sony.com`, never apex `sony.com`); indexed as a plain entity the rule also fires on the apex — a small over-application.
-- **Why left:** the combined shape is rare in real lists and errs toward more filtering, not less — the index treats it as the entity rule it nearly is rather than rejecting it.
-- **Fix shape:** carry a sub-entity token kind through the suffix walk — match when the host's registrable domain is `name.tld` AND a subdomain label precedes it (`decomposeDomain` already exposes the pieces).
-- **Verify:** `*.sony.*##.ad` fires on `a.sony.com` but not `sony.com`; the existing `sony.*` entity tests keep passing.
 
 ### 113. A throwing `onEvent` listener escapes the response pipeline's 'end' handler — emit is deliberately outside the mutation try
 
@@ -302,6 +278,24 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **Why left:** pre-existing — the shared-socket forwarder predates the P4 capture work (it is the DNS-only path, not the tun-relay side); the P4 consolidated review flagged it rather than reworking the forwarder inside a review-tail pass.
 - **Fix shape:** either a per-query `DatagramSocket` `connect()`ed at `upstream:53` (each coroutine owns its reply channel — the posture `UdpSession` already takes for relayed pairs) or a single receive loop that demuxes replies to waiting queries by DNS transaction id.
 - **Verify:** two in-flight forwarded queries whose upstream replies arrive out of order each get their own answer — a fake-upstream test that deliberately swaps the reply order.
+
+### 104. Extended-CSS rules (`#?#`, `#@?#`, `#$?#`, `#@$?#`) were parsed-and-skipped — closed by translating the CSS-expressible subset to native selectors
+
+- **What:** `translateExtendedSelector` in `selectorSafety.ts` walks a `#?#`/`#$?#` selector body quote- and bracket-aware and rewrites the subset a `<style>` element can express — `:-abp-has(sel)` → `:has(sel)` (ABP), `:matches(sel)` → `:is(sel)` (pre-standard) — while native `:has()` rides through unrewritten. The first procedural pseudo it cannot express reports `unsupported` (`:-abp-contains`, `:has-text`, `:contains`, `matches-css`/`matches-css-before`/`matches-css-after`/`:-abp-matches-css`, `:matches-attr`, `:matches-path`, `:matches-domain`, `:upward`, `:nth-ancestor`, `:xpath`, `:if`, `:watch-attr`, `:remove`, `:style`, `:properties`, `:min-text-length`, `:others`, the `abp-*` family, and unknown functional pseudos) and lands in the new `stats.extendedUnsupported` — counted honestly rather than silently applied or silently dropped. Translated selectors pass the same `checkListSelectorStructure` gate `##` rules take — a `[a="]"]`-style quoted bracket inside `:has(…)` cannot smuggle a bare `{`/`;`/`@` past it — and `#$?#`/`#@$?#` keep their declaration block verbatim while the selector part translates; `#@?#`/`#@$?#` store as ordinary `#@#`/`#@$#` exceptions so the marker families cancel each other by translated literal.
+- **Where:** `packages/core/src/cosmetic/selectorSafety.ts` (`translateExtendedSelector`, `NATIVE_FUNCTIONAL_PSEUDOS`, `EXTENDED_PSEUDO_NAMES`), `packages/core/src/cosmetic/cosmeticIndex.ts` (`extendedCssException`/`extendedStyleException` kinds in `findMarker`, the `extendedCss`/`extendedStyle` switch cases, `stats.extendedUnsupported`).
+- **Verify:** `cosmeticIndex.test.ts` — `#?#` emits `:-abp-has(> div)` translated to `:has(> div)` while `#@?#` stores as an exception; nine procedural-pseudo shapes all count `extendedUnsupported` while a native `:has()` emits; `[a="]"]`, `[a=']{']` and unterminated-quote breakouts are refused at the structural gate while `:-abp-has` inside a quoted attribute value passes as data; `#@?#` cancels a `#?#` hide by its translated selector; `#$?#`/`#@$?#` emit and except with declarations verbatim.
+
+### 107. `#@#+js():matches-path(…)` path-scoped scriptlet kill-alls parsed as malformed — closed by compiling the scope and carrying the request path into `forHost`
+
+- **What:** `parseScriptletCall` returns the raw trailing text instead of a boolean and an empty name parses through as the `""` kill-all sentinel; `parsePathScope` then compiles a well-formed `:matches-path(arg)` tail by the `[$path=]` convention — `/re/` is a regex, anything else is a prefix-anchored glob (`*` wildcards, a trailing `|` end-anchor, a bare literal a path prefix). An empty-name or name-scoped `#@#+js(…):matches-path(…)` exception stores the compiled pattern on the entry; `forHost(host, path?)` normalizes the supplied path (bare path verbatim, full URL down to `pathname + search`) and drops a scoped exception only when the supplied path provably doesn't match — a lookup carrying no path keeps it, the under-injection direction for an exception. Path-scoped *invocations* still skip via `scopeModifiers` (the honest under-direction for rules), other trailing scopes stay `scopeModifiers`/`malformed` as before, and the payload cache keys on `host\0path` only when scoped exceptions exist. The proxy hands the request path in at both consumers — `decideResponse`'s injection lookup and the relay's decodable-encoding gate — so one request resolves one answer.
+- **Where:** `packages/core/src/cosmetic/cosmeticIndex.ts` (`parsePathScope`, `normalizeLookupPath`, `pathPattern` on `CosmeticEntry`, the empty-name kill-all branch, `forHost(host, path?)`, `hasPathScoped`/`hasGlobalPathScoped`, `outOfPathScope`), `packages/https-filter/src/pipeline/response.ts` (`forHost(input.host, input.url)`), `packages/https-filter/src/proxy/httpRelay.ts` (`forHost(ctx.host, ctx.url)`).
+- **Verify:** `cosmeticIndex.test.ts` — `#@#+js():matches-path(/ads/)` cancels every scriptlet on `/ads/*` but not on `/` or `/other` and applies unconditionally with no path; a name-scoped exception cancels only the literal call on matching paths; the real AdGuard `/re/` arg, glob wildcards and the `|` end-anchor behave; a global path-scoped kill-all gates the shared global payload per path and `~` exclusions compose; path-scoped invocations and unreadable tails stay skipped. Core suite green; `tsc --noEmit` clean on core and https-filter.
+
+### 112. A combined `*.sony.*` domain token parsed as a plain entity — closed by a sub-entity token kind
+
+- **What:** `parseDomainList` keeps the leading `*.` qualifier when the remainder also ends in `.*` and emits a new `subEntity` token (`{ kind: "subEntity", name }`) beside `entity`; `subEntity` includes key into their own bucket consulted during the SLD walk only when `decomposeDomain` shows a label left of the registrable domain — `x.sony.com` and `y.sony.co.jp` match, the apex `sony.com` does not — and a `~*.sony.*` exclusion mirrors the same boundary, vetoing subdomains only while the apex keeps its rule.
+- **Where:** `packages/core/src/cosmetic/cosmeticIndex.ts` (`DomainToken.subEntity`, `parseDomainList`, `subEntityEntries`/`hasSubEntityRules`, the `tokenMatches` `subEntity` case).
+- **Verify:** `cosmeticIndex.test.ts` — `*.sony.*` fires on `x.sony.com`, `y.sony.co.jp` and `a.b.sony.com` but never on `sony.com`, `sony.co.jp`, `x.sonyplc.com` or `a.sony.com.evil.example`; `~*.sony.*` vetoes subdomains while the apex keeps its rule; the plain `sony.*` entity tests keep passing.
 
 ### 101. An app-quit orphaned engine persists until the next `stop()` — closed by a `BM_PARENT_PID` parent-death watchdog on the spawned engine
 

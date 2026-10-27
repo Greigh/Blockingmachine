@@ -2,9 +2,11 @@
 export {
   checkSelectorStructure,
   checkListSelectorStructure,
+  translateExtendedSelector,
   DANGEROUS_SELECTOR_CHARS,
   MAX_LIST_SELECTOR_LENGTH,
   MAX_SELECTOR_LENGTH,
+  type ExtendedSelectorTranslation,
   type SelectorSafetyResult,
 } from "./selectorSafety.js";
 export {

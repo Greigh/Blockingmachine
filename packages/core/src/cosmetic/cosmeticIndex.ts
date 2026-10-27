@@ -21,14 +21,22 @@
  *    it is parsed-and-skipped (`stats.rawJsRules`).
  *  - `[domains]#$#sel { css }` / `[domains]#@$#sel { css }` — style rules +
  *    exceptions, keyed by their selector part.
- *  - `[domains]#?#sel` / `#@?#`, `#$?#` / `#@$?#` — extended-CSS and extended-style
- *    rules: parsed and skipped (`stats.extendedCss` / `stats.extendedStyles`);
- *    procedural selectors are their own phase, not this one.
+ *  - `[domains]#?#sel` / `#@?#`, `#$?#` / `#@$?#` — extended-CSS and
+ *    extended-style rules. The CSS-expressible subset is translated and
+ *    emitted like its plain-marker twin (`:-abp-has(sel)` → `:has(sel)`,
+ *    `:matches(sel)` → `:is(sel)` — flag 104); rules carrying procedural
+ *    pseudos no `<style>` element can express (`:-abp-contains`,
+ *    `:has-text`, `:matches-css*`, `:upward`, `:matches-path`, `if`,
+ *    `remove`, `style`, the `abp-*` family, …) stay skipped, now counted
+ *    in `stats.extendedUnsupported` rather than silently.
  *
  * Domain prefixes are comma-separated token lists; each token is an include
- * (`example.com`), an exclusion (`~ads.example.com`), or an entity wildcard
+ * (`example.com`), an exclusion (`~ads.example.com`), an entity wildcard
  * (`sony.*` — the label that must be the registered domain's SLD, so `sony.*`
- * hits `sony.co.jp` but not `sonyplc.com` or `sony.com.evil.example`). A token
+ * hits `sony.co.jp` but not `sonyplc.com` or `sony.com.evil.example`), or a
+ * subdomain-scoped entity (`*.sony.*` — proper subdomains of any `sony`
+ * entity only: `x.sony.com` and `y.sony.co.jp` match, the apex `sony.com`
+ * does not — flag 112). A token
  * list of only `~` exclusions is a global rule that vetoes those hosts — that
  * shape is common in the wild (`~addtoany.com##a[href=…]`). `~` vetoes only the
  * rule it sits on. `[$path=…]` / `[$domain=…]` AdGuard modifier prefixes scope by
@@ -40,7 +48,16 @@
  * whose selector was never injected is a no-op. Scriptlet exceptions are
  * literal-match on the whole call — name plus the exact arg list — so a
  * name-only `#@#+js(name)` cancels only the zero-arg call, and an empty-name
- * `#@#+js()` cancels every scriptlet on the host (bare, globally). Names
+ * `#@#+js()` cancels every scriptlet on the host (bare, globally). A
+ * `:matches-path(…)` tail scopes an exception to matching request paths —
+ * `host#@#+js():matches-path(/ads/)` kills all scriptlets on `host/ads/*`
+ * only (flag 107): the arg compiles like the `[$path=]` convention —
+ * `/re/` is a regex, anything else is a path-anchored glob (`*` wildcards,
+ * a trailing `|` end-anchor). When the caller supplies no path the
+ * exception applies unconditionally — under-injecting scriptlets is the
+ * honest direction for an exception the list meant to fire. A path-scoped
+ * *invocation* (`##+js(name):matches-path(…)`) still skips via
+ * `scopeModifiers`, the equally honest under-direction for rules. Names
  * canonicalize through the uBO↔AdGuard alias table
  * ({@link canonicalScriptletName}) before comparison — a deliberate superset
  * of uBO's text match. Names the table doesn't know are emitted raw
@@ -56,6 +73,7 @@ import { decomposeDomain } from "../ai/entropy.js";
 import {
   checkListSelectorStructure,
   MAX_LIST_SELECTOR_LENGTH,
+  translateExtendedSelector,
 } from "./selectorSafety.js";
 
 export interface ScriptletCall {
@@ -80,10 +98,17 @@ export interface CosmeticIndexStats {
   totalLines: number;
   /** Lines with no cosmetic marker (network rules, comments, list headers). */
   notCosmetic: number;
-  /** `#?#`/`#@?#` extended-CSS rules — parsed and skipped this phase. */
+  /** `#?#`/`#@?#` extended-CSS marker rules seen — translatable subset emitted. */
   extendedCss: number;
-  /** `#$?#`/`#@$?#` extended-style rules — parsed and skipped this phase. */
+  /** `#$?#`/`#@$?#` extended-style marker rules seen — translatable subset emitted. */
   extendedStyles: number;
+  /**
+   * Extended-marker rules skipped for carrying procedural pseudos no
+   * `<style>` element can express (`:contains`, `:has-text`,
+   * `:matches-css*`, `:upward`, `:matches-path`, `abp-*`, unknown
+   * functional pseudos). The honest-accounting bucket of flag 104.
+   */
+  extendedUnsupported: number;
   /** `[$modifier=…]`-prefixed rules and `+js` lines with a procedural tail. */
   scopeModifiers: number;
   /** `#%#`/`#@%#` bodies that are raw JS rather than a `//scriptlet(…)` call. */
@@ -102,8 +127,14 @@ export interface CosmeticIndex {
    * `undefined` when nothing survives (the hot-path skip). The returned payload
    * is an index-owned, frozen object shared across repeat calls; callers must
    * not mutate it.
+   *
+   * `path` is the request path the page was fetched under — `/ads/x?y=1`,
+   * or a full URL whose path+search is taken. It refines `:matches-path(…)`
+   * scriptlet exceptions to the paths the list scoped them to; a path-scoped
+   * exception applies unconditionally when no path is supplied (the
+   * under-injection direction — flag 107).
    */
-  forHost(host: string): CosmeticPayload | undefined;
+  forHost(host: string, path?: string): CosmeticPayload | undefined;
   /** Indexed populations: hide selectors, hide/style exceptions, scriptlet calls + exceptions, style rules. */
   size(): {
     selectors: number;
@@ -266,11 +297,14 @@ export function canonicalScriptletName(rawName: string): string {
 
 /** One domain-prefix token: a host suffix, a `*.`-prefixed subdomains-only
  * suffix (AdGuard semantics — the apex is not covered), an entity whose SLD
- * must equal `name`, or `~*`'s match-everything exclusion. */
+ * must equal `name`, a `*.`-prefixed entity (subdomains of the entity only —
+ * `*.sony.*` covers `x.sony.com` but never the apex `sony.com`), or `~*`'s
+ * match-everything exclusion. */
 type DomainToken =
   | { kind: "host"; suffix: string }
   | { kind: "sub"; suffix: string }
   | { kind: "entity"; name: string }
+  | { kind: "subEntity"; name: string }
   | { kind: "all" };
 
 type EntryKind =
@@ -289,6 +323,12 @@ interface CosmeticEntry {
   css?: string;
   /** Parsed scriptlet invocation (name already canonicalized at build). */
   call?: ScriptletCall;
+  /**
+   * `:matches-path(…)` scope — only ever set on `scriptletException`
+   * entries. The exception applies when the lookup carries no path or the
+   * path matches; a supplied non-matching path keeps it out of the answer.
+   */
+  pathPattern?: RegExp;
   /** `~` exclusions carried by the rule this entry came from — veto it only. */
   excludes: DomainToken[];
 }
@@ -306,7 +346,9 @@ interface MarkerHit {
     | "scriptlet"
     | "scriptletException"
     | "extendedCss"
-    | "extendedStyle";
+    | "extendedCssException"
+    | "extendedStyle"
+    | "extendedStyleException";
 }
 
 /**
@@ -321,9 +363,9 @@ function findMarker(line: string): MarkerHit | null {
     const at = line.charCodeAt(i + 1);
     if (at === 64 /* @ */) {
       if (line.startsWith("#@$?#", i))
-        return { index: i, bodyIndex: i + 5, kind: "extendedStyle" };
+        return { index: i, bodyIndex: i + 5, kind: "extendedStyleException" };
       if (line.startsWith("#@?#", i))
-        return { index: i, bodyIndex: i + 4, kind: "extendedCss" };
+        return { index: i, bodyIndex: i + 4, kind: "extendedCssException" };
       if (line.startsWith("#@$#", i))
         return { index: i, bodyIndex: i + 4, kind: "styleException" };
       if (line.startsWith("#@%#", i))
@@ -355,7 +397,9 @@ function findMarker(line: string): MarkerHit | null {
  * a trailing `.*` marks an entity wildcard, a leading `*.` scopes to subdomains
  * only (AdGuard semantics — `*.foo.com` does not cover bare `foo.com`), a bare
  * `*` token makes the rule global, and `~*` is AdGuard's exclude-everything —
- * the rule applies nowhere, not everywhere. Tokens that can never be a host —
+ * the rule applies nowhere, not everywhere. The combined `*.sony.*` shape is
+ * both qualifiers at once — subdomains of any `sony` entity, never the apex
+ * itself (flag 112). Tokens that can never be a host —
  * whitespace, `/`, `>`, quotes, brackets — are dropped; when the list held
  * include tokens but none survive, the caller skips the rule rather than letting
  * it silently become global.
@@ -390,7 +434,11 @@ function parseDomainList(prefix: string): {
     if (token.endsWith(".*")) {
       const name = token.slice(0, -2);
       if (name && !name.includes(".") && !/[^\p{L}\p{N}_-]/u.test(name)) {
-        (excluded ? excludes : includes).push({ kind: "entity", name });
+        (excluded ? excludes : includes).push(
+          subdomainsOnly
+            ? { kind: "subEntity", name }
+            : { kind: "entity", name },
+        );
       } else if (!excluded) {
         hadInvalidInclude = true;
       }
@@ -613,13 +661,15 @@ function findCallClose(text: string, openIndex: number): number {
 
 /**
  * Parses `+js(name, arg, …)` or `//scriptlet('name', 'arg', …)` into a call.
- * Returns the parsed call plus whether non-whitespace text trails the closing
- * paren — a `:matches-path(...)`/`[...]` tail makes the rule path-scoped, which
- * the index cannot match, so the caller skips it rather than over-apply it.
+ * Returns the parsed call plus the raw text trailing the closing paren — a
+ * `:matches-path(...)`/`[...]` tail makes the rule scoped, which the caller
+ * classifies (flag 107). An empty name parses through as `name: ""` — the
+ * `#@#+js()` kill-all sentinel — and the caller decides whether the shape is
+ * meaningful (an exception) or malformed (an invocation).
  */
 function parseScriptletCall(
   body: string,
-): { call: ScriptletCall; trailing: boolean } | null {
+): { call: ScriptletCall; trailingText: string } | null {
   const trimmed = body.trim();
   const open = trimmed.startsWith("+js(")
     ? 3
@@ -636,11 +686,98 @@ function parseScriptletCall(
     if (close <= open) return null;
   }
   const inner = trimmed.slice(open + 1, close);
-  const trailing = trimmed.slice(close + 1).trim().length > 0;
+  const trailingText = trimmed.slice(close + 1).trim();
   const args = splitScriptletArgs(inner);
   const rawName = args.shift()?.trim() ?? "";
-  if (!rawName) return null;
-  return { call: { name: canonicalScriptletName(rawName), args }, trailing };
+  return {
+    call: {
+      name: rawName === "" ? "" : canonicalScriptletName(rawName),
+      args,
+    },
+    trailingText,
+  };
+}
+
+/** Escapes a literal character for regex use. */
+function escapeRegExpChar(ch: string): string {
+  return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Compiles a `:matches-path(arg)` trailing modifier to its matcher, or
+ * classifies the tail. Returns:
+ *
+ *  - `null` — no trailing text at all (the call is unscoped),
+ *  - `undefined` — trailing text that is not a well-formed
+ *    `:matches-path(…)` (some other scope the index cannot honor — the
+ *    caller counts it as a scope modifier),
+ *  - a `RegExp` — the path test.
+ *
+ * The arg compiles by the `[$path=]` convention the rest of the pipeline
+ * documents: wrapped in `/…/` it is a regex; anything else is a prefix-
+ * anchored glob — `*` wildcards, a trailing `|` end-anchors the match, and
+ * a bare literal is a path prefix (`/ads` covers `/ads`, `/ads/x`).
+ * An arg that cannot compile degrades to "unscoped" — the exception then
+ * applies unconditionally, the honest under-injection direction for a
+ * scope whose intent cannot be recovered.
+ */
+function parsePathScope(trailing: string): RegExp | null | undefined {
+  const t = trailing.trim();
+  if (!t) return null;
+  const marker = ":matches-path(";
+  if (!t.startsWith(marker)) return undefined;
+  const open = marker.length - 1;
+  const close = findCallClose(t, open);
+  if (close < 0 || t.slice(close + 1).trim() !== "") return undefined;
+  const arg = t.slice(open + 1, close).trim();
+  if (!arg) return null;
+  if (arg.length >= 2 && arg.startsWith("/") && arg.endsWith("/")) {
+    try {
+      return new RegExp(arg.slice(1, -1), "i");
+    } catch {
+      return null;
+    }
+  }
+  let pattern = arg;
+  let endAnchored = false;
+  if (pattern.endsWith("|")) {
+    endAnchored = true;
+    pattern = pattern.slice(0, -1);
+  }
+  // A leading `|` is redundant against the prefix anchor.
+  if (pattern.startsWith("|")) pattern = pattern.slice(1);
+  let source = "^";
+  for (const ch of pattern) {
+    source += ch === "*" ? ".*" : escapeRegExpChar(ch);
+  }
+  if (endAnchored) source += "$";
+  try {
+    return new RegExp(source, "i");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Normalizes the optional `path` argument of `forHost` — a request path is
+ * taken verbatim (a bare `x` gains its leading `/`), a full URL contributes
+ * its `pathname + search`. Anything unusable degrades to `undefined`, the
+ * no-path posture.
+ */
+function normalizeLookupPath(path: string | undefined): string | undefined {
+  if (path === undefined) return undefined;
+  let p = path.trim();
+  if (!p) return undefined;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(p)) {
+    try {
+      const parsed = new URL(p);
+      p = parsed.pathname + parsed.search;
+    } catch {
+      return undefined;
+    }
+  }
+  if (!p.startsWith("/")) p = `/${p}`;
+  return p;
 }
 
 /** `#$#` body → the selector part that keys it, or null when there is no `{`. */
@@ -657,6 +794,7 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
     notCosmetic: 0,
     extendedCss: 0,
     extendedStyles: 0,
+    extendedUnsupported: 0,
     scopeModifiers: 0,
     rawJsRules: 0,
     invalidSelectors: 0,
@@ -669,15 +807,27 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
   // entry so a `~` vetoes its own rule only. `*.foo.com` include tokens key
   // into `subdomainEntries` — the suffix walk consults them only for proper
   // subdomains, so the apex itself is not covered (AdGuard `*.` semantics).
+  // `*.name.*` tokens key into `subEntityEntries` — consulted only when the
+  // host's decomposition shows a label left of the registrable domain.
   // `globalEntries` holds every stored global for the merge path;
-  // `globalConditional` is the subset carrying `~` exclusions — the only part
-  // of the global bucket a domainless-host lookup still has to check per host.
+  // `globalConditional` is the subset carrying `~` exclusions or a
+  // `:matches-path` scope — the only part of the global bucket a per-host
+  // lookup still has to veto-check per host.
   const globalEntries: CosmeticEntry[] = [];
   const globalConditional: CosmeticEntry[] = [];
   const domainEntries = new Map<string, CosmeticEntry[]>();
   const subdomainEntries = new Map<string, CosmeticEntry[]>();
   const entityEntries = new Map<string, CosmeticEntry[]>();
+  const subEntityEntries = new Map<string, CosmeticEntry[]>();
   let hasEntityRules = false;
+  let hasSubEntityRules = false;
+  // `:matches-path`-scoped exceptions make the resolved payload
+  // path-dependent: `hasPathScoped` switches the payload cache to a
+  // host+path key, and `hasGlobalPathScoped` (the subset in
+  // `globalConditional`) gates the shared-global fast path, whose
+  // `globalSharedPayload` is the no-path resolution.
+  let hasPathScoped = false;
+  let hasGlobalPathScoped = false;
 
   const counts = {
     selectors: 0,
@@ -696,7 +846,13 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
     if (entry.excludes.some((token) => token.kind === "all")) return;
     if (domains.global || domains.includes.length === 0) {
       globalEntries.push(entry);
-      if (entry.excludes.length > 0) globalConditional.push(entry);
+      // A `:matches-path` scope needs a per-lookup check just like a `~`
+      // exclusion — both live on the conditional side so the shared global
+      // payload stays the no-path, no-veto resolution.
+      if (entry.excludes.length > 0 || entry.pathPattern !== undefined) {
+        globalConditional.push(entry);
+        if (entry.pathPattern !== undefined) hasGlobalPathScoped = true;
+      }
       return;
     }
     for (const token of domains.includes) {
@@ -705,6 +861,11 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
         const bucket = entityEntries.get(token.name);
         if (bucket) bucket.push(entry);
         else entityEntries.set(token.name, [entry]);
+      } else if (token.kind === "subEntity") {
+        hasSubEntityRules = true;
+        const bucket = subEntityEntries.get(token.name);
+        if (bucket) bucket.push(entry);
+        else subEntityEntries.set(token.name, [entry]);
       } else if (token.kind === "sub") {
         const bucket = subdomainEntries.get(token.suffix);
         if (bucket) bucket.push(entry);
@@ -752,13 +913,13 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
     else if (kind === "hideException" && body.startsWith("+js("))
       kind = "scriptletException";
 
-    if (kind === "extendedCss") {
+    // Extended markers are counted as seen, then routed through translation
+    // in the switch below — the unsupported residue lands in
+    // `extendedUnsupported`, never silently applied or silently dropped.
+    if (kind === "extendedCss" || kind === "extendedCssException") {
       stats.extendedCss++;
-      continue;
-    }
-    if (kind === "extendedStyle") {
+    } else if (kind === "extendedStyle" || kind === "extendedStyleException") {
       stats.extendedStyles++;
-      continue;
     }
 
     const prefixText = line.slice(0, marker.index).trim();
@@ -848,6 +1009,102 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
         counts.exceptions++;
         continue;
       }
+      case "extendedCss":
+      case "extendedCssException": {
+        // The CSS-expressible subset of `#?#`/`#@?#` (flag 104) — emitted
+        // exactly like its `##`/`#@#` twin once the extended pseudos
+        // translate. Procedural pseudos a `<style>` cannot express are
+        // counted in `extendedUnsupported`; the translated result still
+        // passes the same structural gate, so a `:has()` arg cannot
+        // smuggle rule-breaking text past it.
+        const raw = body.trim();
+        if (!raw) {
+          stats.malformed++;
+          continue;
+        }
+        const translated = translateExtendedSelector(raw);
+        if (!translated.ok) {
+          stats.extendedUnsupported++;
+          continue;
+        }
+        if (kind === "extendedCss") {
+          if (
+            !checkListSelectorStructure(
+              translated.selector,
+              MAX_LIST_SELECTOR_LENGTH,
+            ).ok
+          ) {
+            stats.invalidSelectors++;
+            continue;
+          }
+          store(domains, {
+            kind: "hide",
+            selector: translated.selector,
+            excludes: domains.excludes,
+          });
+          counts.selectors++;
+        } else {
+          // Literal-match exceptions need no structural check — same
+          // contract as `hideException`.
+          store(domains, {
+            kind: "hideException",
+            selector: translated.selector,
+            excludes: domains.excludes,
+          });
+          counts.exceptions++;
+        }
+        continue;
+      }
+      case "extendedStyle":
+      case "extendedStyleException": {
+        // `#$?#`/`#@$?#` — the `#$#`/`#@$#` twins with an extended selector.
+        // The selector part translates like `#?#`; declarations ride
+        // verbatim, and the whole body keeps the `#$#` `</` contract.
+        const css = body.trim();
+        const brace = css.indexOf("{");
+        const selectorPart = (brace < 0 ? css : css.slice(0, brace)).trim();
+        if (!selectorPart) {
+          stats.malformed++;
+          continue;
+        }
+        const translated = translateExtendedSelector(selectorPart);
+        if (!translated.ok) {
+          stats.extendedUnsupported++;
+          continue;
+        }
+        if (kind === "extendedStyle") {
+          // `</` can never appear in real CSS but does break the element —
+          // checked on the whole body (declarations included), and the
+          // translated selector itself takes the structural gate so a
+          // rewritten pseudo can't open a bare declaration.
+          if (
+            brace < 0 ||
+            css.includes("</") ||
+            !checkListSelectorStructure(
+              translated.selector,
+              MAX_LIST_SELECTOR_LENGTH,
+            ).ok
+          ) {
+            stats.malformed++;
+            continue;
+          }
+          store(domains, {
+            kind: "style",
+            selector: translated.selector,
+            css: `${translated.selector} ${css.slice(brace)}`,
+            excludes: domains.excludes,
+          });
+          counts.styles++;
+        } else {
+          store(domains, {
+            kind: "styleException",
+            selector: translated.selector,
+            excludes: domains.excludes,
+          });
+          counts.exceptions++;
+        }
+        continue;
+      }
       case "scriptlet":
       case "scriptletException": {
         // AdGuard `#%#`/`#@%#` markers — only the `//scriptlet(…)` form maps onto
@@ -864,29 +1121,60 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
         }
         const parsed = parseScriptletCall(body);
         if (!parsed) {
-          // `#@#+js()` — the empty-name exception — is uBO's scriptlet
-          // kill-all: it cancels every invocation the host would receive
-          // (the bare `#@#+js()` form, globally). Sentinel name `""` is what
-          // `lookupHost` reads as cancel-all. The non-exception `##+js()`
-          // is meaningless and stays malformed.
-          if (
-            kind === "scriptletException" &&
-            /^(?:\+js|\/\/scriptlet)\(\s*\)$/.test(body.trim())
-          ) {
-            store(domains, {
-              kind,
-              selector: "",
-              call: { name: "", args: [] },
-              excludes: domains.excludes,
-            });
-            counts.scriptletExceptions++;
-            continue;
-          }
           stats.malformed++;
           continue;
         }
-        if (parsed.trailing) {
+        // `:matches-path(…)` is the one trailing scope the index can honor
+        // (flag 107); any other tail keeps the `scopeModifiers` posture.
+        const pathScope = parsePathScope(parsed.trailingText);
+        if (parsed.call.name === "") {
+          // `#@#+js()` — the empty-name exception — is uBO's scriptlet
+          // kill-all: it cancels every invocation the host would receive,
+          // bare or `:matches-path`-scoped. Sentinel name `""` is what the
+          // merge reads as cancel-all. The non-exception `##+js()` (any
+          // tail) is meaningless, as is a kill-all carrying stray args or
+          // an unreadable scope — all malformed.
+          if (
+            kind !== "scriptletException" ||
+            parsed.call.args.length > 0 ||
+            pathScope === undefined
+          ) {
+            stats.malformed++;
+            continue;
+          }
+          if (pathScope !== null) hasPathScoped = true;
+          store(domains, {
+            kind,
+            selector: "",
+            call: parsed.call,
+            pathPattern: pathScope ?? undefined,
+            excludes: domains.excludes,
+          });
+          counts.scriptletExceptions++;
+          continue;
+        }
+        if (pathScope === undefined) {
           stats.scopeModifiers++;
+          continue;
+        }
+        if (pathScope !== null) {
+          // A path-scoped invocation still skips — the under-direction for
+          // a rule. The same scope on an EXCEPTION is the over-direction
+          // flag 107 names, so it is stored and fires only on matching
+          // paths (or unconditionally when the lookup carries no path).
+          if (kind !== "scriptletException") {
+            stats.scopeModifiers++;
+            continue;
+          }
+          hasPathScoped = true;
+          store(domains, {
+            kind,
+            selector: "",
+            call: parsed.call,
+            pathPattern: pathScope,
+            excludes: domains.excludes,
+          });
+          counts.scriptletExceptions++;
           continue;
         }
         store(domains, {
@@ -913,9 +1201,10 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
   /**
    * Merge one host's candidate entries into the frozen payload it shares with
    * repeat lookups — the exact filter/exception application the per-host cache
-   * stores. `vetoed` reports whether an entry's own `~` exclusions keep it out
-   * of this answer; the shared global payload is built with `() => false`
-   * because every conditional entry that fires is part of it.
+   * stores. `vetoed` reports whether an entry's own `~` exclusions or a
+   * `:matches-path` scope keep it out of this answer; the shared global
+   * payload is built with `() => false` because every conditional entry that
+   * fires is part of it.
    */
   const resolveEntries = (
     bag: CosmeticEntry[],
@@ -1017,7 +1306,10 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
   const globalSharedPayload =
     globalEntries.length > 0 ? resolveEntries(globalEntries, () => false) : undefined;
 
-  const lookupHost = (host: string): CosmeticPayload | undefined => {
+  const lookupHost = (
+    host: string,
+    path: string | undefined,
+  ): CosmeticPayload | undefined => {
     const h = normalizeHost(host);
     if (!h) return undefined;
 
@@ -1039,20 +1331,30 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
       start = dot + 1;
     }
 
+    let decomposed: ReturnType<typeof decomposeDomain> | undefined;
+    const decompOf = (): ReturnType<typeof decomposeDomain> =>
+      (decomposed ??= decomposeDomain(h));
     let sld: string | undefined;
     const sldOf = (): string | undefined => {
       if (sld === undefined) {
-        const decomposed = decomposeDomain(h);
-        sld = decomposed.tld ? decomposed.sld : "";
+        const d = decompOf();
+        sld = d.tld ? d.sld : "";
       }
       return sld;
     };
 
-    if (hasEntityRules) {
+    if (hasEntityRules || hasSubEntityRules) {
       const name = sldOf();
       if (name) {
         const bucket = entityEntries.get(name);
         if (bucket) bag.push(...bucket);
+        // `*.name.*` — the subdomain-scoped entity — applies only when a
+        // label precedes the registrable domain (flag 112): `x.sony.com`
+        // sees the bucket, apex `sony.com` does not.
+        if (hasSubEntityRules && decompOf().subdomains.length > 0) {
+          const subBucket = subEntityEntries.get(name);
+          if (subBucket) bag.push(...subBucket);
+        }
       }
     }
 
@@ -1068,13 +1370,35 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
           return true;
         case "entity":
           return sldOf() === token.name;
+        case "subEntity": {
+          // `~*.name.*` — the exclusion mirrors the include: only proper
+          // subdomains of the entity are vetoed; the apex keeps the rule.
+          const d = decompOf();
+          return (
+            !!d.tld && d.sld === token.name && d.subdomains.length > 0
+          );
+        }
       }
     };
 
+    // A `:matches-path`-scoped entry leaves the answer when the lookup
+    // carries a path the scope doesn't match; no-path lookups keep it —
+    // the no-path posture is the under-injection direction for exceptions.
+    const outOfPathScope = (entry: CosmeticEntry): boolean =>
+      entry.pathPattern !== undefined &&
+      path !== undefined &&
+      !entry.pathPattern.test(path);
+
     // Fast path: nothing host-specific hit, so the answer is the pre-resolved
     // global payload — unless a conditional global's `~` vetoes this host, in
-    // which case the merge must run with that entry absent.
-    if (bag.length === 0 && globalEntries.length > 0) {
+    // which case the merge must run with that entry absent. The shared
+    // payload is the no-path resolution, so a path-carrying lookup that
+    // could veto a scoped global exception takes the merge instead.
+    if (
+      bag.length === 0 &&
+      globalEntries.length > 0 &&
+      !(hasGlobalPathScoped && path !== undefined)
+    ) {
       let vetoed = false;
       for (const entry of globalConditional) {
         if (entry.excludes.some(tokenMatches)) {
@@ -1087,7 +1411,12 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
 
     if (globalEntries.length) bag.push(...globalEntries);
     if (bag.length === 0) return undefined;
-    return resolveEntries(bag, (entry) => entry.excludes.some(tokenMatches));
+    // `~` exclusions and `:matches-path` scopes both veto per entry — the
+    // path-aware predicate is the flag-107 half of this lookup.
+    return resolveEntries(
+      bag,
+      (entry) => entry.excludes.some(tokenMatches) || outOfPathScope(entry),
+    );
   };
 
   const index: CosmeticIndex = {
@@ -1095,24 +1424,29 @@ export function createCosmeticIndex(lines: string[]): CosmeticIndex {
 
     size: () => ({ ...counts }),
 
-    forHost(host: string): CosmeticPayload | undefined {
+    forHost(host: string, path?: string): CosmeticPayload | undefined {
       const h = normalizeHost(host);
       if (!h) return undefined;
-      if (payloadCache.has(h)) {
-        const cached = payloadCache.get(h);
+      // The answer is path-dependent only when `:matches-path` exceptions
+      // exist at all — every other rule set shares the host-keyed cache
+      // regardless of the path a caller passes.
+      const p = hasPathScoped ? normalizeLookupPath(path) : undefined;
+      const key = p === undefined ? h : `${h}\0${p}`;
+      if (payloadCache.has(key)) {
+        const cached = payloadCache.get(key);
         // LRU touch on hits too — a bare get() returns the value (including
         // a cached `undefined`) without refreshing recency, so the busiest
         // hosts were the first eviction victims.
-        payloadCache.delete(h);
-        payloadCache.set(h, cached);
+        payloadCache.delete(key);
+        payloadCache.set(key, cached);
         return cached;
       }
-      const payload = lookupHost(h);
+      const payload = lookupHost(h, p);
       if (payloadCache.size >= PAYLOAD_CACHE_MAX) {
         const oldest = payloadCache.keys().next().value;
         if (oldest !== undefined) payloadCache.delete(oldest);
       }
-      payloadCache.set(h, payload);
+      payloadCache.set(key, payload);
       return payload;
     },
   };

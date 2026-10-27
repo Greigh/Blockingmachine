@@ -76,6 +76,34 @@ describe("createCosmeticIndex — element hiding", () => {
     expect(index.forHost("mail.yandex.ru")?.hide).toContain(".ya-ad");
   });
 
+  test("*.sony.* matches subdomains of the entity, never the apex (flag 112)", () => {
+    const index = createCosmeticIndex(["*.sony.*##.sub-ad"]);
+    // Proper subdomains of any `sony` entity — any TLD, any depth.
+    expect(index.forHost("x.sony.com")?.hide).toContain(".sub-ad");
+    expect(index.forHost("y.sony.co.jp")?.hide).toContain(".sub-ad");
+    expect(index.forHost("a.b.sony.com")?.hide).toContain(".sub-ad");
+    // The apexes stay out — that is the whole point of the combined token.
+    expect(index.forHost("sony.com")?.hide).toBeUndefined();
+    expect(index.forHost("sony.co.jp")?.hide).toBeUndefined();
+    // And the SLD boundary still holds — no suffix lookalikes.
+    expect(index.forHost("x.sonyplc.com")?.hide).toBeUndefined();
+    expect(index.forHost("a.sony.com.evil.example")?.hide).toBeUndefined();
+  });
+
+  test("~*.sony.* vetoes subdomains only — the apex keeps the rule", () => {
+    const index = createCosmeticIndex([
+      "sony.com,~*.sony.*##.ad",
+      "sub.sony.com##.sub",
+    ]);
+    // The include covers sony.com; the sub-entity exclusion can't veto it.
+    expect(index.forHost("sony.com")?.hide).toEqual([".ad"]);
+    // A real subdomain of a sony entity IS vetoed (its own rule still fires).
+    expect(index.forHost("sub.sony.com")?.hide).toEqual([".sub"]);
+    expect(index.forHost("other.sony.com")?.hide).toBeUndefined();
+    // A subdomain of a different entity is untouched.
+    expect(index.forHost("sub.sonyplc.com")?.hide).toBeUndefined();
+  });
+
   test("#@# removes a global-sourced selector on the matching host only", () => {
     const index = createCosmeticIndex([
       "##.reklama",
@@ -197,23 +225,95 @@ describe("createCosmeticIndex — style rules", () => {
     ]);
   });
 
-  test("#$?# extended-style rules are parsed and skipped with a stat", () => {
+  test("#$?# extended-style rules emit when the selector is translatable", () => {
     const index = createCosmeticIndex([
       '#$?#meta[name="apple-itunes-app"] { remove: true; }',
+      'example.com#$?#div:-abp-has(.banner) { display: none !important; }',
       "example.com##.ad",
     ]);
-    expect(index.stats.extendedStyles).toBe(1);
+    expect(index.stats.extendedStyles).toBe(2);
     expect(index.forHost("example.com")?.hide).toContain(".ad");
+    // `:-abp-has` folds to native `:has`; the declarations ride verbatim.
+    // The host rule leads; the global one lands after it.
+    expect(index.forHost("example.com")?.styles).toEqual([
+      "div:has(.banner) { display: none !important; }",
+      'meta[name="apple-itunes-app"] { remove: true; }',
+    ]);
+    // The global rule's plain selector needs no translation — emitted as-is.
+    expect(index.forHost("other.example")?.styles).toEqual([
+      'meta[name="apple-itunes-app"] { remove: true; }',
+    ]);
   });
 
-  test("#?# extended-css rules are parsed and skipped with a stat", () => {
+  test("#?# extended-css rules emit the CSS-expressible subset (flag 104)", () => {
     const index = createCosmeticIndex([
       "filecrypt.co#?#form > .protection.online ul > li:not(.buttons):-abp-has(> div)",
       "example.com#@?#.also-extended",
       "example.com##.ad",
     ]);
     expect(index.stats.extendedCss).toBe(2);
-    expect(index.forHost("filecrypt.co")?.hide).toBeUndefined();
+    // `:-abp-has(…)` translated to `:has(…)` — the selector hides for real now.
+    expect(index.forHost("filecrypt.co")?.hide).toEqual([
+      "form > .protection.online ul > li:not(.buttons):has(> div)",
+    ]);
+    // A `#@?#` exception with no pseudos stores like a `#@#` one.
+    expect(index.size().exceptions).toBe(1);
+    expect(index.forHost("example.com")?.hide).toEqual([".ad"]);
+  });
+
+  test("#?# pseudos that have no native reading are skipped and counted", () => {
+    const index = createCosmeticIndex([
+      "a.example#?#div:-abp-contains(advertisement)",
+      'b.example#?#div:has-text("sponsored")',
+      "c.example#?#div:contains(promo)",
+      "d.example#?#div:matches-css(color: red)",
+      "e.example#?#div:-abp-matches-css(display: block)",
+      "f.example#?#div:upward(.container)",
+      "g.example#?#div:xpath(//div)",
+      "h.example#?#div:matches-attr(href=/ad/)",
+      "i.example#?#div:something-unknown(1)",
+      "j.example#?#div:has(.ok)",
+      "k.example##.ad",
+    ]);
+    expect(index.stats.extendedCss).toBe(10);
+    expect(index.stats.extendedUnsupported).toBe(9);
+    // The one translatable rule emitted; every unsupported one stayed out.
+    expect(index.forHost("j.example")?.hide).toEqual(["div:has(.ok)"]);
+    expect(index.forHost("a.example")?.hide).toBeUndefined();
+    expect(index.forHost("i.example")?.hide).toBeUndefined();
+    expect(index.forHost("k.example")?.hide).toEqual([".ad"]);
+  });
+
+  test("a translated :has() cannot smuggle CSS through quote/bracket games", () => {
+    const index = createCosmeticIndex([
+      'example.com#?#div:has([a="]"]){position:fixed;inset:0}',
+      "example.com#?#div:-abp-has([a=']{']){position:fixed;inset:0}",
+      'example.com#?#div:has([a="]{still-quoted}"])',
+      'example.com#?#div:has([a="unterminated',
+      "example.com#?#div.safe",
+      'example.com#?#span[title=":-abp-has(x)"]',
+    ]);
+    // The two quote-escape breakouts and the unterminated quote are refused
+    // at the same structural gate `##` selectors pass through.
+    expect(index.forHost("example.com")?.hide).toEqual([
+      'div:has([a="]{still-quoted}"])',
+      "div.safe",
+      // `:-abp-has` inside a quoted attribute value is data — emitted as-is.
+      'span[title=":-abp-has(x)"]',
+    ]);
+    expect(index.stats.invalidSelectors).toBe(3);
+  });
+
+  test("#@?# cancels a #?# hide by its translated selector", () => {
+    const index = createCosmeticIndex([
+      "example.com#?#div:-abp-has(.ad)",
+      "example.com#@?#div:has(.ad)",
+      "other.com#?#div:-abp-has(.ad)",
+    ]);
+    // Both spellings translate to `div:has(.ad)` — the exception's literal
+    // match holds across marker families.
+    expect(index.forHost("example.com")?.hide).toBeUndefined();
+    expect(index.forHost("other.com")?.hide).toEqual(["div:has(.ad)"]);
   });
 });
 
@@ -363,6 +463,134 @@ describe("createCosmeticIndex — scriptlets", () => {
     expect(meaningless.forHost("example.com")?.scriptlets).toHaveLength(1);
   });
 
+  test("#@#+js():matches-path(…) kills scriptlets on matching paths only (flag 107)", () => {
+    const index = createCosmeticIndex([
+      "example.com##+js(aopr, _pop)",
+      "example.com##+js(set, x, 1)",
+      "example.com#@#+js():matches-path(/ads/)",
+    ]);
+    // A matching path — every scriptlet cancelled.
+    expect(index.forHost("example.com", "/ads/x")?.scriptlets ?? []).toHaveLength(0);
+    expect(index.forHost("example.com", "/ads/")?.scriptlets ?? []).toHaveLength(0);
+    // A non-matching path — the exception does not fire.
+    expect(index.forHost("example.com", "/")?.scriptlets).toHaveLength(2);
+    expect(index.forHost("example.com", "/other")?.scriptlets).toHaveLength(2);
+    // No path at all — the exception applies unconditionally (the
+    // under-injection direction: better to cancel a scriptlet than to keep
+    // one the list meant to kill).
+    expect(index.forHost("example.com")?.scriptlets ?? []).toHaveLength(0);
+    expect(index.size().scriptletExceptions).toBe(1);
+    expect(index.stats.malformed).toBe(0);
+    expect(index.stats.scopeModifiers).toBe(0);
+  });
+
+  test("a path-scoped named exception cancels only that call on matching paths", () => {
+    const index = createCosmeticIndex([
+      "example.com##+js(aopr, _pop)",
+      "example.com##+js(set, x, 1)",
+      "example.com#@#+js(aopr, _pop):matches-path(/x)",
+    ]);
+    // `/x` is a prefix — `/xyz` and `/x/y` match it, `/` and `/ax` do not.
+    expect(index.forHost("example.com", "/x")?.scriptlets).toEqual([
+      { name: "set-constant", args: ["x", "1"] },
+    ]);
+    expect(index.forHost("example.com", "/x/y")?.scriptlets).toEqual([
+      { name: "set-constant", args: ["x", "1"] },
+    ]);
+    expect(index.forHost("example.com", "/")?.scriptlets).toHaveLength(2);
+    expect(index.forHost("example.com", "/ax")?.scriptlets).toHaveLength(2);
+    // The glob never matches a mid-path segment.
+    expect(index.forHost("example.com", "/p/x")?.scriptlets).toHaveLength(2);
+  });
+
+  test("matches-path args: /regex/ form, glob wildcards and | end-anchor", () => {
+    const index = createCosmeticIndex([
+      "example.com##+js(aopr, _pop)",
+      "example.com#@#+js():matches-path(/\\/(?:weather\\/|pogoda\\/|hava\\/)/)",
+    ]);
+    // The real AdGuard regex arg — matches the segment anywhere in the path.
+    expect(index.forHost("example.com", "/weather/today")?.scriptlets ?? []).toHaveLength(0);
+    expect(index.forHost("example.com", "/pogoda/x")?.scriptlets ?? []).toHaveLength(0);
+    expect(index.forHost("example.com", "/climate/x")?.scriptlets).toHaveLength(1);
+
+    const glob = createCosmeticIndex([
+      "example.com##+js(aopr, _pop)",
+      "example.com#@#+js():matches-path(/ads/*/x)",
+    ]);
+    expect(glob.forHost("example.com", "/ads/a/x")?.scriptlets ?? []).toHaveLength(0);
+    expect(glob.forHost("example.com", "/ads/a/x/y")?.scriptlets ?? []).toHaveLength(0);
+    expect(glob.forHost("example.com", "/ads/x")?.scriptlets).toHaveLength(1);
+
+    const anchored = createCosmeticIndex([
+      "example.com##+js(aopr, _pop)",
+      "example.com#@#+js():matches-path(/ads|)",
+    ]);
+    // `|` end-anchors: only the exact prefix `/ads` (and nothing longer).
+    expect(anchored.forHost("example.com", "/ads")?.scriptlets ?? []).toHaveLength(0);
+    expect(anchored.forHost("example.com", "/ads/x")?.scriptlets).toHaveLength(1);
+
+    // A full URL is accepted — path+search is what gets matched.
+    const viaUrl = createCosmeticIndex([
+      "example.com##+js(aopr, _pop)",
+      "example.com#@#+js():matches-path(/ads)",
+    ]);
+    expect(
+      viaUrl.forHost("example.com", "https://example.com/ads/x?q=1")
+        ?.scriptlets ?? [],
+    ).toHaveLength(0);
+    expect(
+      viaUrl.forHost("example.com", "https://example.com/other")?.scriptlets,
+    ).toHaveLength(1);
+  });
+
+  test("path-scoped kill-alls compose with ~ exclusions and domain scoping", () => {
+    const index = createCosmeticIndex([
+      "##+js(aopr, _pop)",
+      "example.com,~sub.example.com#@#+js():matches-path(/ads/)",
+    ]);
+    // On a matching path the host's kill-all fires...
+    expect(index.forHost("example.com", "/ads/x")?.scriptlets ?? []).toHaveLength(0);
+    // ...on other paths it does not — the global scriptlet survives.
+    expect(index.forHost("example.com", "/")?.scriptlets).toHaveLength(1);
+    // The `~` exclusion still vetoes its own rule only — the subdomain is
+    // exempt even on the matching path.
+    expect(index.forHost("sub.example.com", "/ads/x")?.scriptlets).toHaveLength(1);
+    // Unscoped hosts never carry the exception at all.
+    expect(index.forHost("other.example", "/ads/x")?.scriptlets).toHaveLength(1);
+  });
+
+  test("a global path-scoped kill-all gates the shared global payload per path", () => {
+    const index = createCosmeticIndex([
+      "##+js(aopr, _pop)",
+      "##.ad",
+      "#@#+js():matches-path(/kill/)",
+    ]);
+    // The shared global payload is the no-path resolution — the exception
+    // applies there.
+    expect(index.forHost("anywhere.example")?.scriptlets ?? []).toHaveLength(0);
+    // With a path carried, it applies only where the scope matches — the
+    // same host answers differently per path (the host+path cache key).
+    expect(index.forHost("anywhere.example", "/kill/x")?.scriptlets ?? []).toHaveLength(0);
+    expect(index.forHost("anywhere.example", "/")?.scriptlets).toHaveLength(1);
+    // Hides are unaffected either way.
+    expect(index.forHost("anywhere.example", "/")?.hide).toEqual([".ad"]);
+  });
+
+  test("path-scoped invocations and non-exception +js() stay honest-skip", () => {
+    const index = createCosmeticIndex([
+      "example.com##+js(aopr, _pop):matches-path(/x)",
+      "example.com##+js():matches-path(/x)",
+      "example.com##+js(set, x, 1)",
+      "example.com#@#+js():not-a-scope(/x)",
+    ]);
+    // The scoped invocation and the scoped non-exception kill-all skip —
+    // under-injection is the honest direction for rules; the exception
+    // carrying an unreadable scope is malformed like any other `+js()` tail.
+    expect(index.stats.scopeModifiers).toBe(1);
+    expect(index.stats.malformed).toBe(2);
+    expect(index.forHost("example.com", "/x")?.scriptlets).toHaveLength(1);
+  });
+
   test("a mid-token apostrophe is literal — quotes open only at arg start", () => {
     const index = createCosmeticIndex([
       "example.com##+js(set, prop, it's, value)",
@@ -416,9 +644,10 @@ describe("createCosmeticIndex — scriptlets", () => {
     const payload = index.forHost("example.com");
     expect(payload?.scriptlets[0].name).toBe("remove-cookie");
     expect(payload?.skippedScriptlets).toBe(1);
-    // The path-scoped exception cannot be honored — skipped with a stat, and
-    // the invocation it would cancel does not exist here anyway.
-    expect(index.stats.scopeModifiers).toBe(1);
+    // The path-scoped exception is stored now (flag 107), not counted as an
+    // unreadable scope — the invocation it would cancel still does not exist.
+    expect(index.stats.scopeModifiers).toBe(0);
+    expect(index.size().scriptletExceptions).toBe(1);
   });
 
   test("raw-JS #%# bodies are parsed-and-skipped, never emitted", () => {

@@ -231,7 +231,10 @@ function wantsIdentityEncoding(req: TerminatedRequest, ctx: ResponsePipelineInpu
   ) {
     return false;
   }
-  const payload = ctx.cosmeticIndex?.forHost(ctx.host);
+  // `ctx.url` hands the request path through so `:matches-path(…)`
+  // scriptlet exceptions scope correctly (flag 107) — the same payload the
+  // response side will resolve.
+  const payload = ctx.cosmeticIndex?.forHost(ctx.host, ctx.url);
   if (payload !== undefined && hasInjectableContent(payload)) {
     return true;
   }

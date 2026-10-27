@@ -345,7 +345,9 @@ export function decideResponse(input: {
       input.requestContentType === 'document' ||
       input.requestContentType === 'subdocument')
   ) {
-    const payload = input.cosmeticIndex?.forHost(input.host);
+    // The URL rides along so `:matches-path(…)` scriptlet exceptions apply
+    // only on the paths the list scoped them to (flag 107).
+    const payload = input.cosmeticIndex?.forHost(input.host, input.url);
     if (payload !== undefined) {
       if (hasInjectableContent(payload)) {
         if (isEncoded(input.headers['content-encoding'])) {

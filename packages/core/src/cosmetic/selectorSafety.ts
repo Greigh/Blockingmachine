@@ -157,3 +157,209 @@ export function checkListSelectorStructure(
   }
   return { ok: true };
 }
+
+/**
+ * The extended-CSS → native-CSS translation gate for `#?#`/`#@?#`/`#$?#`/`#@$?#`
+ * rules (flag 104). Modern engines evaluate `:has()` natively, so the
+ * translatable subset is exactly the pseudo rewrites below; everything else
+ * procedural (`:contains()`, `:has-text()`, `:matches-css*()`, `:upward()`,
+ * `:xpath()`, `:matches-attr()`, `:matches-path()`, `:if()`, `:style()`,
+ * `:remove()`, the `:-abp-*`/`abp-*` spellings, …) cannot be expressed in a
+ * `<style>` element and reports `unsupported` so the caller can count it
+ * honestly instead of emitting an inert selector.
+ *
+ * The walk is quote- and bracket-aware on the same terms as
+ * {@link checkListSelectorStructure}: a `:` inside a quoted string or an
+ * attribute matcher is data, never a pseudo (`[title=":has(x)"]` passes
+ * through unflagged and unrewritten). Pseudo names are read inside `:has()`
+ * arguments too — parens deliberately do not hide a nested extended pseudo,
+ * because `:has(> .x:contains(y))` is exactly as untranslatable as a top-level
+ * `:contains`.
+ *
+ * An *unknown* functional pseudo (`:something-new(`) is also unsupported: the
+ * extended markers only exist for procedural selectors, so a functional pseudo
+ * the allowlist does not know is an upstream experiment, not native CSS.
+ * Unknown *bare* names (`:hover`-style, no `(`) pass through — worst case they
+ * are inert in the emitted rule, which fails toward under-injection.
+ *
+ * `::` pseudo-elements are never classified: every extended engine writes its
+ * pseudos single-colon, and `::part()`/`::slotted()` are native.
+ */
+export interface ExtendedSelectorTranslation {
+  ok: boolean;
+  /** The rewritten selector — identical input when nothing needed a rewrite. */
+  selector: string;
+  /** The pseudo name that made the rule untranslatable, when `!ok`. */
+  unsupported?: string;
+}
+
+/** Functional pseudo-classes a modern engine evaluates natively. */
+const NATIVE_FUNCTIONAL_PSEUDOS: ReadonlySet<string> = new Set([
+  "has",
+  "not",
+  "is",
+  "where",
+  "nth-child",
+  "nth-last-child",
+  "nth-of-type",
+  "nth-last-of-type",
+  "nth-col",
+  "nth-last-col",
+  "lang",
+  "dir",
+  "host",
+  "host-context",
+  "slotted",
+  "part",
+  "state",
+  "current",
+  "past",
+  "future",
+]);
+
+/**
+ * Procedural pseudo names known across the uBO/AdGuard/ABP extended engines —
+ * flagged bare or functional, because a list author reaching for them means
+ * the procedural reading.
+ */
+const EXTENDED_PSEUDO_NAMES: ReadonlySet<string> = new Set([
+  // Text/property matching — no native reading exists.
+  "contains",
+  "has-text",
+  "min-text-length",
+  "matches-css",
+  "matches-css-before",
+  "matches-css-after",
+  "matches-attr",
+  "matches-property",
+  // Page-scope and tree-walking predicates.
+  "matches-path",
+  "matches-domain",
+  "matches-media",
+  "upward",
+  "nth-ancestor",
+  "xpath",
+  "if",
+  "if-not",
+  "watch-attr",
+  "watch-attrs",
+  "others",
+  // Action pseudos (AdGuard `sel:remove()`, `sel:style { }`, ABP `:-abp-properties`).
+  "remove",
+  "style",
+  "properties",
+]);
+
+/**
+ * Translates the extended-CSS subset of a selector body to native CSS, or
+ * reports the first untranslatable pseudo. Rewrites performed:
+ *
+ *  - `:-abp-has(sel)` (ABP) → `:has(sel)`
+ *  - `:matches(sel)` (pre-standard :is) → `:is(sel)`
+ *
+ * Everything else about the string is preserved verbatim — whitespace,
+ * combinators, attribute matchers and all.
+ */
+export function translateExtendedSelector(
+  selector: string,
+): ExtendedSelectorTranslation {
+  let out = "";
+  let quote = "";
+  let bracketDepth = 0;
+  let bracketQuote = "";
+  const n = selector.length;
+  for (let i = 0; i < n; ) {
+    const ch = selector[i];
+    if (quote) {
+      out += ch;
+      if (ch === "\\" && i + 1 < n) {
+        out += selector[i + 1];
+        i += 2;
+        continue;
+      }
+      if (ch === quote) quote = "";
+      i++;
+      continue;
+    }
+    if (bracketDepth > 0) {
+      out += ch;
+      if (bracketQuote) {
+        if (ch === "\\" && i + 1 < n) {
+          out += selector[i + 1];
+          i += 2;
+          continue;
+        }
+        if (ch === bracketQuote) bracketQuote = "";
+        i++;
+        continue;
+      }
+      if (ch === "'" || ch === '"') bracketQuote = ch;
+      else if (ch === "]") bracketDepth--;
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < n) {
+      // An escaped colon is data (`a\:has`), never a pseudo opener.
+      out += ch + selector[i + 1];
+      i += 2;
+      continue;
+    }
+    if (ch === "[") {
+      bracketDepth = 1;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === ":") {
+      if (selector[i + 1] === ":") {
+        // Pseudo-elements are native in this syntax — never classified.
+        out += "::";
+        i += 2;
+        continue;
+      }
+      let j = i + 1;
+      while (j < n && /[a-zA-Z0-9_-]/.test(selector[j])) j++;
+      const name = selector.slice(i + 1, j).toLowerCase();
+      if (name === "") {
+        out += ch;
+        i++;
+        continue;
+      }
+      const functional = selector[j] === "(";
+      if (name === "-abp-has") {
+        out += ":has";
+        i = j;
+        continue;
+      }
+      if (name === "matches" && functional) {
+        out += ":is";
+        i = j;
+        continue;
+      }
+      if (
+        name.startsWith("-abp-") ||
+        name.startsWith("abp-") ||
+        EXTENDED_PSEUDO_NAMES.has(name)
+      ) {
+        return { ok: false, selector: out + selector.slice(i), unsupported: name };
+      }
+      if (functional && !NATIVE_FUNCTIONAL_PSEUDOS.has(name)) {
+        return { ok: false, selector: out + selector.slice(i), unsupported: name };
+      }
+      // Known functional, or a bare pseudo — emit the `:` and let the name
+      // ride through the loop as ordinary characters.
+      out += ch;
+      i++;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return { ok: true, selector: out };
+}
