@@ -19,7 +19,9 @@ const config = {
     asar: {
       // {classifier,output}Worker.cjs are spawned with `new Worker()` — worker
       // bootstrap is more reliable reading a real file than through the asar patch.
-      unpack: "{**/node_modules/electron-store/**/*,**/.webpack/main/classifierWorker.cjs,**/.webpack/main/outputWorker.cjs,**/.webpack/main/systemDaemon.cjs}"
+      // {systemDaemon,filterProxy}.cjs are spawned as plain Node scripts — same
+      // reason: the spawn target must be a real file, not an asar virtual path.
+      unpack: "{**/node_modules/electron-store/**/*,**/.webpack/main/classifierWorker.cjs,**/.webpack/main/outputWorker.cjs,**/.webpack/main/systemDaemon.cjs,**/.webpack/main/filterProxy.cjs}"
     },
     extraResource: ['./assets', './filters'],
     afterPrune: [

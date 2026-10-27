@@ -32,6 +32,11 @@ module.exports = {
     // not src: ts-loader would pick up the daemon's own tsconfig (rootDir=src)
     // and reject every electron-app file in the program.
     systemDaemon: '../system-daemon/dist/index.js',
+    // Same story for the HTTPS filtering engine — filterProxyManager.start()
+    // spawns it under ELECTRON_RUN_AS_NODE, and the macOS capture service's
+    // launchd plist runs the same bundle as _blockingmachine. Dist entry for
+    // the identical tsconfig-rootDir reason.
+    filterProxy: '../https-filter/dist/main.js',
   },
   target: 'electron-main',
   output: {
