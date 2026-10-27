@@ -625,6 +625,25 @@ describe("linux NSS certutil trust ops", () => {
     ).resolves.toBe("unsupported");
   });
 
+  it("installCa throws on a nickname collision — a different cert holds the name", async () => {
+    // Same refusal firefoxInstallCa names: SEC_ERROR_CERT_NICKNAME_ALREADY_IN_USE
+    // must surface as a thrown failure, never a quiet overwrite.
+    const { runner } = recordingPlatformRunner((file, args) => {
+      if (args[0] === "-A") {
+        return fail(
+          "certutil: could not add certificate to token or database: SEC_ERROR_CERT_NICKNAME_ALREADY_IN_USE",
+        );
+      }
+      return nssList("CT,,");
+    });
+    await expect(
+      installCa(CA_PEM, { platformRunner: runner, homeDir: "/home/t", ...LINUX, ...noSystemStore }),
+    ).rejects.toThrow("nickname");
+    await expect(
+      installCa(CA_PEM, { platformRunner: runner, homeDir: "/home/t", ...LINUX, ...noSystemStore }),
+    ).rejects.toThrow("refusing to overwrite");
+  });
+
   it("removeCa deletes the nssdb row by nickname and re-verifies by fingerprint", async () => {
     let deleted = false;
     const { runner, calls } = recordingPlatformRunner((file, args) => {

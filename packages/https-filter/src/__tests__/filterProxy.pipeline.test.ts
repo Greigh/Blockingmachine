@@ -63,7 +63,7 @@ interface WireResponse {
 /** One h1 request on `sock`, reading status/head/body back. */
 function httpRequestOver(
   sock: tls.TLSSocket,
-  opts: { method?: string; path: string; host: string },
+  opts: { method?: string; path: string; host: string; headers?: Record<string, string> },
 ): Promise<WireResponse> {
   return new Promise((resolve) => {
     let buf = Buffer.alloc(0);
@@ -87,8 +87,11 @@ function httpRequestOver(
       });
     };
     sock.on('data', onData);
+    const extra = Object.entries(opts.headers ?? {})
+      .map(([name, value]) => `${name}: ${value}\r\n`)
+      .join('');
     sock.write(
-      `${opts.method ?? 'GET'} ${opts.path} HTTP/1.1\r\nHost: ${opts.host}\r\n\r\n`,
+      `${opts.method ?? 'GET'} ${opts.path} HTTP/1.1\r\nHost: ${opts.host}\r\n${extra}\r\n`,
     );
   });
 }
@@ -113,6 +116,10 @@ beforeAll(async () => {
       '||blocked.test^',
       '*$removeparam=token',
       '@@||x.test^$removeparam=token',
+      // Typed-scope cancellation: suppresses the generic token strip only
+      // inside a pass that really evaluated the request as an image —
+      // the declared-signal-can't-relax union pins it.
+      '@@||img-exc.test^$image,removeparam=token',
     ]),
     policy,
     upstreamCaCerts: [originCa.caCertPem],
@@ -233,6 +240,32 @@ describe('request pipeline — transforms and verdicts on a terminated flow', ()
       );
       expect(res.status).toBe(200);
       expect(res.body).toBe('origin GET /?k=2 host=y.test');
+      expect(seen).toContain('/?k=2');
+    } finally {
+      client.destroy();
+    }
+  });
+
+  test('a fabricated sec-fetch-dest cannot arm a typed exception against the untyped strip', async () => {
+    // `@@||img-exc.test^$image,removeparam=token` suppresses the generic
+    // *$removeparam=token coverage only inside a pass that evaluates the
+    // request AS an image — and `sec-fetch-dest` is client bytes, so the
+    // declared type may tighten, never relax. When neither pass blocks the
+    // merged verdict unions both transform sets, so the token param still
+    // strips upstream even though the typed exception scoped it away.
+    const client = await connectThenTls(`localhost:${originPort}`, 'origin.test');
+    try {
+      const res = await withTimeout(
+        httpRequestOver(client, {
+          path: '/?token=abc&k=2',
+          host: 'img-exc.test',
+          headers: { 'sec-fetch-dest': 'image' },
+        }),
+        10_000,
+        'fabricated-dest GET',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toBe('origin GET /?k=2 host=img-exc.test');
       expect(seen).toContain('/?k=2');
     } finally {
       client.destroy();

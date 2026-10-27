@@ -288,8 +288,15 @@ function decodableEncodingOffer(headers: IncomingHttpHeaders): string {
       const semi = token.indexOf(';');
       const name = (semi < 0 ? token : token.slice(0, semi)).trim().toLowerCase();
       // `q=0` (or `q=0.0`) refuses the coding — it must not count as offered.
+      // The `q` must open a parameter (start-of-params or `;`-boundary,
+      // case-insensitive like every parameter name): `fooq=0` is a
+      // differently-named parameter, not a refusal. Anything this strict
+      // pattern cannot parse — `q=abc`, `q=`, `q=00`, `q=0x` — keeps the
+      // coding offered: real clients ignore malformed qvalues and treat
+      // the coding as acceptable, so a malformed q must never read as a
+      // refusal we invented.
       const params = semi < 0 ? '' : token.slice(semi);
-      if (/q\s*=\s*0(?:\.0+)?(?:\s*;|\s*$)/.test(params)) {
+      if (/(?:^|;)\s*q\s*=\s*0(?:\.0+)?(?:\s*;|\s*$)/i.test(params)) {
         continue;
       }
       if (name === 'identity' || BODY_CODECS.has(name)) {

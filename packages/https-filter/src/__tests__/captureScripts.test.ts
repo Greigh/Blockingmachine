@@ -240,6 +240,10 @@ describe('macos capture scripts — hygiene', () => {
     // The squat listener binds :9294 and is verified through the SAME lsof
     // probe the installer runs — a vacuous bind cannot pass the leg.
     expect(text).toMatch(/lsof -nP -iTCP:"\$ENGINE_PORT" -sTCP:LISTEN/);
+    // The squatter self-reaps on parent death (getppid flips to 1 under
+    // launchd) rather than holding :9294 on a fixed sleep bound — a
+    // SIGKILLed rehearsal must not leak a squatted port.
+    expect(text).toMatch(/while os\.getppid\(\) != 1/);
     // Post-state assertions: no new service account, and every artifact
     // the installer would touch absent-or-byte-identical (fingerprint tsv).
     expect(text).toMatch(/dscl \. -read "\/Users\/_blockingmachine"/);

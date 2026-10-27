@@ -1562,7 +1562,8 @@ describe('thirdParty inference — sec-fetch-site (flag 96)', () => {
   // `||site-tp.example/p` is inert at CONNECT time — the SNI verdict runs
   // with no request context, so a `$third-party` gate can never fire there.
   // Terminated per-request evaluation sees the client-volunteered header:
-  // cross-site/same-site → third-party, same-origin/none → first-party,
+  // cross-site → third-party; same-site/same-origin/none → first-party
+  // (same-site shares the registrable domain — ABP's eTLD+1 reading),
   // absent/garbage → undefined (no guessing).
   const tpRules = [
     '||site-tp.example/p$third-party',
@@ -1586,7 +1587,7 @@ describe('thirdParty inference — sec-fetch-site (flag 96)', () => {
     });
   }
 
-  test('sec-fetch-site: cross-site and same-site fire a $third-party rule (h1 MITM)', async () => {
+  test('sec-fetch-site: cross-site fires a $third-party rule; same-site stays first-party (h1 MITM)', async () => {
     const p = await tpProxy();
     const { server, port } = await httpsOrigin('site-tp.example');
     try {
@@ -1596,23 +1597,24 @@ describe('thirdParty inference — sec-fetch-site (flag 96)', () => {
         ['http/1.1'],
         p.port,
       );
-      for (const site of ['cross-site', 'same-site']) {
-        const res = await withTimeout(
-          httpRequestOver(client, {
-            path: '/p',
-            host: 'site-tp.example',
-            headers: { 'sec-fetch-site': site },
-          }),
-          10_000,
-          `${site} request`,
-        );
-        expect(res.status).toBe(403);
-        expect(res.head.toLowerCase()).toContain(
-          'x-blockingmachine-rule: ||site-tp.example/p$third-party',
-        );
-      }
-      // first-party and undeclared contexts leave the rule unfired.
+      const res = await withTimeout(
+        httpRequestOver(client, {
+          path: '/p',
+          host: 'site-tp.example',
+          headers: { 'sec-fetch-site': 'cross-site' },
+        }),
+        10_000,
+        'cross-site request',
+      );
+      expect(res.status).toBe(403);
+      expect(res.head.toLowerCase()).toContain(
+        'x-blockingmachine-rule: ||site-tp.example/p$third-party',
+      );
+      // first-party and undeclared contexts leave the rule unfired —
+      // same-site included: `a.foo.com` → `b.foo.com` shares the
+      // registrable domain, so ABP's `$third-party` does not cover it.
       for (const headers of [
+        { 'sec-fetch-site': 'same-site' },
         { 'sec-fetch-site': 'same-origin' },
         { 'sec-fetch-site': 'none' },
         { 'sec-fetch-site': 'totally-bogus' },
@@ -1646,7 +1648,7 @@ describe('thirdParty inference — sec-fetch-site (flag 96)', () => {
             ':path': '/p',
             ':scheme': 'https',
             ':authority': 'site-tp.example',
-            'sec-fetch-site': 'same-site',
+            'sec-fetch-site': 'cross-site',
           });
           req.on('response', (headers) => resolve(Number(headers[':status'])));
           req.resume();
@@ -1686,16 +1688,20 @@ describe('thirdParty inference — sec-fetch-site (flag 96)', () => {
         ['http/1.1'],
         p.port,
       );
-      const blocked = await withTimeout(
-        httpRequestOver(client, {
-          path: '/q',
-          host: 'site-fp.example',
-          headers: { 'sec-fetch-site': 'same-origin' },
-        }),
-        10_000,
-        'first-party request',
-      );
-      expect(blocked.status).toBe(403);
+      // same-origin AND same-site are both first-party — same-site shares
+      // the registrable domain, which is the boundary `$~third-party` reads.
+      for (const site of ['same-origin', 'same-site']) {
+        const blocked = await withTimeout(
+          httpRequestOver(client, {
+            path: '/q',
+            host: 'site-fp.example',
+            headers: { 'sec-fetch-site': site },
+          }),
+          10_000,
+          `${site} first-party request`,
+        );
+        expect(blocked.status).toBe(403);
+      }
       const freed = await withTimeout(
         httpRequestOver(client, {
           path: '/q',

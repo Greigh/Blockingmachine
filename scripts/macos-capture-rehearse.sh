@@ -203,12 +203,17 @@ if [[ $ROOT_SQUAT -eq 1 ]]; then
   # if the kernel does not see a listener, the refusal asserts vacuously.
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$ENGINE_PORT" <<'PY' &
-import socket, sys, time
+import os, socket, sys, time
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("127.0.0.1", int(sys.argv[1])))
 s.listen(1)
-time.sleep(300)
+# Hold the port only as long as the leg needs it — every scripted exit
+# path kills $SQUAT_PID, and a rehearsal killed before its trap could run
+# orphans us: reparented to launchd, getppid() flips to 1 and the squatter
+# exits rather than holding the port on some fixed sleep bound.
+while os.getppid() != 1:
+    time.sleep(1)
 PY
     SQUAT_PID=$!
   elif command -v nc >/dev/null 2>&1; then

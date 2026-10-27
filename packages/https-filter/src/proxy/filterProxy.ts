@@ -57,7 +57,12 @@ import {
 import { isValidSni, normalizeSni, type CertAuthority } from '../ca/certAuthority.js';
 import { LeafForgeQueue } from '../ca/leafForgeQueue.js';
 import type { InjectionBudget, ResponseEvent } from '../pipeline/response.js';
-import { applyRequestTransforms, inferContentType, inferThirdParty } from '../pipeline/transforms.js';
+import {
+  applyRequestTransforms,
+  inferContentType,
+  inferThirdParty,
+  unionRequestTransforms,
+} from '../pipeline/transforms.js';
 import type { PolicyStore } from '../policy/policyStore.js';
 import {
   absoluteRequestUrl,
@@ -549,7 +554,9 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         const contentType = inferContentType(req.headers);
         // `sec-fetch-site` is the one initiator signal a proxy can see —
         // client-volunteered fetch metadata, tri-stated by inferThirdParty
-        // (cross-/same-site → true, same-origin/none → false, else undefined).
+        // (cross-site → true; same-site/same-origin/none → false — same-site
+        // shares the registrable domain, first-party under ABP's reading;
+        // else undefined).
         const thirdParty = inferThirdParty(req.headers);
         // The client-declared resource type and site relation may only
         // TIGHTEN a verdict, never relax it. `sec-fetch-dest`/`accept`/
@@ -561,10 +568,13 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         // declared contentType OR thirdParty earns a second, untyped
         // evaluation: a block on EITHER wins, and when both block the typed
         // verdict stands — its coveringRule is the more specific match.
-        // Only when neither blocks does the typed verdict govern (its
-        // transforms and exception semantics are the honest reading of the
-        // declared signals). Undeclared signals → one evaluation: untyped
-        // and typed are the same run, so the double pass is skipped.
+        // Only when neither blocks does the typed verdict govern the
+        // ACTION — and even then its transform set is UNIONED with the
+        // untyped pass's, because a `@@…$image,removeparam=x`-style
+        // exception suppresses coverage only inside typed scope: the same
+        // can't-relax invariant applied to rewrites, not just blocks.
+        // Undeclared signals → one evaluation: untyped and typed are the
+        // same run, so the double pass is skipped.
         const typed = flowEvaluator.evaluate(url, {
           method: req.method,
           contentType,
@@ -578,6 +588,14 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           const untyped = flowEvaluator.evaluate(url, { method: req.method });
           if (untyped.action === 'blocked') {
             verdict = untyped;
+          } else {
+            // The typed exception semantics govern the action, but a
+            // suppression that exists only in typed scope must not relax
+            // what the untyped pass collected — union keeps both.
+            verdict = {
+              ...typed,
+              transforms: unionRequestTransforms(untyped.transforms, typed.transforms),
+            };
           }
         }
         if (verdict.action === 'blocked') {

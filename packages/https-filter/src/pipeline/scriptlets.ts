@@ -460,7 +460,7 @@ var rep=spoof(function(t,h){var fs='';
 try{fs=typeof h=='function'?fns(h):(h&&typeof h.handleEvent=='function'?fns(h.handleEvent):S(h))}catch(e){}
 if(tm(S(t))&&fm(fs)){return}
 return orig.apply(this,arguments)},orig);
-rep.__bm=1;
+try{dp(rep,'__bm',{value:1})}catch(e){}
 try{o.addEventListener=rep}catch(e){}};
 var ET=w.EventTarget;
 if(ET&&ET.prototype){wrap(ET.prototype)}

@@ -777,7 +777,13 @@ async function linuxInstallCa(
       return "installed" as const;
     }
     // SEC_ERROR_CERT_NICKNAME_ALREADY_IN_USE means a different cert already
-    // holds our nickname — surfaced as a thrown failure, never a quiet overwrite.
+    // holds our nickname — surfaced as a thrown failure, never a quiet
+    // overwrite (the same refusal firefoxInstallCa names on its dbSpec).
+    if (NSS_NICKNAME_IN_USE.test(add.stderr) || NSS_NICKNAME_IN_USE.test(add.stdout)) {
+      throw new Error(
+        `certutil -A on ${spec}: the nickname "${commonName}" already holds a different certificate — refusing to overwrite`,
+      );
+    }
     if (isAuthorizationFailure(add)) return "needs-admin" as const;
     throw new Error(`certutil -A failed: ${sanitizeToolError(add)}`);
   });

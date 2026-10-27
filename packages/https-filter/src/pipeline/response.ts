@@ -110,7 +110,11 @@ export type ResponseEvent =
        * unknown-name scriptlets (nothing to emit, but the skip still
        * carries the count so the card sees them);
        * `not-html` — the content-type was absent/`text/plain` and the
-       * bounded sniff found no markup in the buffered prefix.
+       * bounded sniff found no markup in the buffered prefix;
+       * `attachment` — the response head marks the body a download
+       * (`Content-Disposition: attachment` or a `filename=`-named
+       * disposition), so a `.html` body meant for saving passes through
+       * byte-identical rather than spliced.
        */
       reason:
         | 'overflow'
@@ -119,7 +123,8 @@ export type ResponseEvent =
         | 'empty'
         | 'busy'
         | 'no-known-content'
-        | 'not-html';
+        | 'not-html'
+        | 'attachment';
       /** Unknown-name scriptlets the payload carried (`no-known-content`). */
       skippedScriptlets?: number;
     };
@@ -154,7 +159,7 @@ export interface ResponsePlan {
    * Injection was eligible but skipped before buffering — counted by the
    * relay as an `inject-skip` event.
    */
-  injectSkipped?: 'encoded' | 'busy' | 'no-known-content';
+  injectSkipped?: 'encoded' | 'busy' | 'no-known-content' | 'attachment';
   /** Unknown-name scriptlets riding a `no-known-content` skip. */
   skippedScriptlets?: number;
 }
@@ -344,14 +349,37 @@ export function hasInjectableContent(payload: CosmeticPayload): boolean {
 }
 
 /**
- * May this response carry a body at all? 1xx/204/304 answer "no body
- * follows" by definition, and a `HEAD` answer carries none regardless of
- * status. Buffering such a response for injection would fabricate DATA on
- * a status that forbids it (an h2 DATA frame on a 304 is a protocol
- * violation) and re-stamp a content-length the status doesn't own.
+ * May this response carry a body at all? 1xx/204/205/304 answer "no body
+ * follows" by definition (RFC 9110: a 205 is terminated by the end of the
+ * header section — it cannot contain content), and a `HEAD` answer
+ * carries none regardless of status. Buffering such a response for
+ * injection would fabricate DATA on a status that forbids it (an h2 DATA
+ * frame on a 304 is a protocol violation) and re-stamp a content-length
+ * the status doesn't own.
  */
 function statusAllowsBody(status: number): boolean {
-  return status >= 200 && status !== 204 && status !== 304;
+  return status >= 200 && status !== 204 && status !== 205 && status !== 304;
+}
+
+/**
+ * Does this response head deliver its body as a download, not a render
+ * context? `Content-Disposition: attachment` is the explicit signal — the
+ * body is meant to be SAVED, and a `.html` file the user keeps must never
+ * carry injected markup. A `filename=`/`filename*=` parameter is the same
+ * download intent under any disposition (`inline; filename="x.html"`
+ * still names a saved artifact — spliced bytes would persist into the
+ * file). Absent, bare `inline`, and unrelated dispositions are render
+ * contexts.
+ */
+function isDownloadDisposition(value: string | string[] | undefined): boolean {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string') {
+    return false;
+  }
+  if (baseMediaType(raw) === 'attachment') {
+    return true;
+  }
+  return /(?:^|;)\s*filename\*?\s*=/i.test(raw);
 }
 
 /**
@@ -442,6 +470,18 @@ export function decideResponse(input: {
     const payload = input.cosmeticIndex?.forHost(input.host, input.url);
     if (payload !== undefined) {
       if (hasInjectableContent(payload)) {
+        // A download is not a render context: an `attachment` body (or any
+        // filename-named disposition) is meant to be SAVED — a `.html`
+        // download on an injectable host must pass through byte-identical
+        // rather than carry spliced markup into a kept file.
+        if (isDownloadDisposition(input.headers['content-disposition'])) {
+          return {
+            action: 'passthrough',
+            cspAdditions,
+            reason: 'download-body',
+            injectSkipped: 'attachment',
+          };
+        }
         const encoding = parseContentEncoding(input.headers['content-encoding']);
         if (encoding === 'unsupported') {
           // A layered or unknown coding can't be spliced — buffering

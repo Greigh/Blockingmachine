@@ -315,8 +315,11 @@ describe('decideResponse — buffer-inject gating', () => {
 describe('decideResponse — injection gating on status, method, declared context', () => {
   const index = indexFor('example.com', payload({ hide: ['.ad'] }));
 
-  test('bodiless statuses never buffer-inject — 1xx/204/304 carry no body to splice', () => {
-    for (const status of [101, 204, 304]) {
+  test('bodiless statuses never buffer-inject — 1xx/204/205/304 carry no body to splice', () => {
+    // 205 joins the no-body set: RFC 9110 ends it at the header section,
+    // so buffering one for injection would fabricate content the status
+    // forbids exactly like 204/304.
+    for (const status of [101, 204, 205, 304]) {
       const plan = decideResponse({
         headers: { 'content-type': 'text/html' },
         verdict: verdict(),
@@ -367,6 +370,54 @@ describe('decideResponse — injection gating on status, method, declared contex
       });
       expect(plan.action).toBe('buffer-inject');
     }
+  });
+
+  test('a Content-Disposition attachment is never injected — .html downloads pass through', () => {
+    const plan = decideResponse({
+      headers: {
+        'content-type': 'text/html',
+        'content-disposition': 'attachment; filename="report.html"',
+      },
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: index,
+    });
+    // The body is meant to be SAVED — spliced markup would persist into a
+    // kept file, so it streams byte-identical and counts the skip.
+    expect(plan.action).toBe('passthrough');
+    expect(plan.injectSkipped).toBe('attachment');
+  });
+
+  test('a filename-named inline disposition is download intent — not injected', () => {
+    const plan = decideResponse({
+      headers: {
+        'content-type': 'text/html',
+        'content-disposition': 'inline; filename="page.html"',
+      },
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: index,
+    });
+    expect(plan.action).toBe('passthrough');
+    expect(plan.injectSkipped).toBe('attachment');
+  });
+
+  test('a bare attachment token skips; plain inline stays injectable', () => {
+    const attachment = decideResponse({
+      headers: { 'content-type': 'text/html', 'content-disposition': 'ATTACHMENT' },
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: index,
+    });
+    expect(attachment.action).toBe('passthrough');
+    expect(attachment.injectSkipped).toBe('attachment');
+    const inline = decideResponse({
+      headers: { 'content-type': 'text/html', 'content-disposition': 'inline' },
+      verdict: verdict(),
+      ...BASE,
+      cosmeticIndex: index,
+    });
+    expect(inline.action).toBe('buffer-inject');
   });
 });
 

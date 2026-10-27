@@ -110,15 +110,16 @@ export function inferContentType(headers: IncomingHttpHeaders): string | undefin
  * The evaluator's `thirdParty` context, inferred from the request's
  * `sec-fetch-site` header — the one initiator-relative signal a proxy CAN
  * see because the client volunteers it (spec-defined fetch metadata, sent
- * by every modern browser on requests it can describe). The tri-state is
- * honest: `cross-site` is third-party outright, and `same-site` counts too
- * — it covers same-site cross-HOST requests (`a.foo.com` → `b.foo.com`),
- * which is exactly ABP's `$third-party` reading (the request host differs
- * from the initiator's). `same-origin` and `none` (typed addresses,
- * bookmarks, omni box) are first-party. Absent or unrecognized stays
- * `undefined` — no guessing: a fabricated value can still only tighten a
- * verdict, because the caller pairs this with the same untyped second pass
- * `contentType` gets.
+ * by every modern browser on requests it can describe). The tri-state
+ * follows ABP/uBO's registrable-domain reading: only `cross-site` is
+ * third-party — it means a different eTLD+1. `same-site` covers same-site
+ * cross-HOST requests (`a.foo.com` → `b.foo.com`), and those are
+ * FIRST-party under `||h^$third-party` semantics — the modifier exists to
+ * spare exactly that shared-registrable-domain traffic. `same-origin` and
+ * `none` (typed addresses, bookmarks, omni box) are first-party too.
+ * Absent or unrecognized stays `undefined` — no guessing: a fabricated
+ * value can still only tighten a verdict, because the caller pairs this
+ * with the same untyped second pass `contentType` gets.
  */
 export function inferThirdParty(headers: IncomingHttpHeaders): boolean | undefined {
   const site = headers['sec-fetch-site'];
@@ -128,14 +129,63 @@ export function inferThirdParty(headers: IncomingHttpHeaders): boolean | undefin
   }
   switch (siteValue.trim().toLowerCase()) {
     case 'cross-site':
-    case 'same-site':
       return true;
+    case 'same-site':
     case 'same-origin':
     case 'none':
       return false;
     default:
       return undefined;
   }
+}
+
+/**
+ * Union of two passes' transform sets — the merge the proxy's typed+untyped
+ * double evaluation applies when NEITHER pass blocks. Every transform
+ * either pass collected still applies: a typed `@@…$image,removeparam=x`
+ * exception suppresses coverage only inside its own typed evaluation,
+ * never the untyped pass's — otherwise a fabricated `sec-fetch-dest`
+ * would relax strips the request provably earned (the same
+ * declared-signal-can't-relax invariant the action merge keeps).
+ *
+ * `removeParams` unions by name with `"all"` absorbing; `keepParams`
+ * keeps only what no side strips — where both sides are `"all"` a name
+ * must ride BOTH keep lists (each side's `"all"` strips whatever its own
+ * keep list omits), and a named removal on either side always wins over a
+ * keep. `removeHeaders` and `csp` union straightforwardly.
+ */
+export function unionRequestTransforms(
+  a: RequestVerdict['transforms'],
+  b: RequestVerdict['transforms'],
+): RequestVerdict['transforms'] {
+  let removeParams: string[] | 'all';
+  let keepParams: string[];
+  if (a.removeParams === 'all' || b.removeParams === 'all') {
+    removeParams = 'all';
+    // Named removals are strips too — a keep name either side lists for
+    // removal cannot survive the union.
+    const named = new Set<string>([
+      ...(a.removeParams === 'all' ? [] : a.removeParams),
+      ...(b.removeParams === 'all' ? [] : b.removeParams),
+    ]);
+    const candidates =
+      a.removeParams === 'all' && b.removeParams === 'all'
+        ? a.keepParams.filter((name) => b.keepParams.includes(name))
+        : a.removeParams === 'all'
+          ? a.keepParams
+          : b.keepParams;
+    keepParams = candidates.filter((name) => !named.has(name));
+  } else {
+    removeParams = [...new Set([...a.removeParams, ...b.removeParams])];
+    keepParams = [];
+  }
+  const removeHeaders = [...new Set([...a.removeHeaders, ...b.removeHeaders])];
+  const csp = [...new Set([...(a.csp ?? []), ...(b.csp ?? [])])];
+  const out: RequestVerdict['transforms'] = { removeParams, keepParams, removeHeaders };
+  if (csp.length > 0) {
+    out.csp = csp;
+  }
+  return out;
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   applyRequestTransforms,
   inferContentType,
   inferThirdParty,
+  unionRequestTransforms,
 } from '../pipeline/transforms.js';
 
 type Transforms = RequestVerdict['transforms'];
@@ -172,11 +173,19 @@ describe('inferContentType', () => {
 });
 
 describe('inferThirdParty (flag 96)', () => {
-  test('cross-site and same-site declare a third-party context', () => {
+  test('cross-site declares a third-party context', () => {
     expect(inferThirdParty({ 'sec-fetch-site': 'cross-site' })).toBe(true);
-    expect(inferThirdParty({ 'sec-fetch-site': 'same-site' })).toBe(true);
     // Case-folded like every fetch-metadata token.
     expect(inferThirdParty({ 'sec-fetch-site': 'Cross-Site' })).toBe(true);
+  });
+
+  test('same-site is first-party — same registrable domain under ABP/uBO', () => {
+    // `sec-fetch-site: same-site` means the initiator shares the request's
+    // eTLD+1 (`a.foo.com` → `b.foo.com`): ABP's `$third-party` compares
+    // registrable domains, not hostnames, so a `||h^$third-party` rule
+    // exists to spare exactly this traffic — it must NOT match it.
+    expect(inferThirdParty({ 'sec-fetch-site': 'same-site' })).toBe(false);
+    expect(inferThirdParty({ 'sec-fetch-site': 'Same-Site' })).toBe(false);
   });
 
   test('same-origin and none declare a first-party context', () => {
@@ -201,5 +210,55 @@ describe('inferThirdParty (flag 96)', () => {
         'sec-fetch-site': ['bogus', 'cross-site'] as unknown as string,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe('unionRequestTransforms — the typed+untyped merge', () => {
+  test('a typed-scope exception cannot cancel an untyped strip', () => {
+    // `@@||h^$image,removeparam=x` suppresses the strip only inside the
+    // typed pass — the untyped pass's coverage unions back in, so a
+    // fabricated `sec-fetch-dest: image` keeps the param stripped.
+    const untyped = transforms({ removeParams: ['x'] });
+    const typed = transforms(); // the typed exception suppressed the strip
+    expect(unionRequestTransforms(untyped, typed).removeParams).toEqual(['x']);
+  });
+
+  test('named removeParams union; removeHeaders and csp merge', () => {
+    const out = unionRequestTransforms(
+      transforms({
+        removeParams: ['a'],
+        removeHeaders: ['referer'],
+        csp: ["script-src 'none'"],
+      }),
+      transforms({ removeParams: ['b'], removeHeaders: ['x-trace'] }),
+    );
+    expect(out.removeParams).toEqual(['a', 'b']);
+    expect(out.removeHeaders).toEqual(['referer', 'x-trace']);
+    expect(out.csp).toEqual(["script-src 'none'"]);
+  });
+
+  test('"all" absorbs named lists; a keep survives only when no side strips it', () => {
+    // Both sides "all" — a name must ride BOTH keep lists to survive:
+    // each side's own "all" strips whatever its keep list omits.
+    const out = unionRequestTransforms(
+      transforms({ removeParams: 'all', keepParams: ['k', 'x'] }),
+      transforms({ removeParams: 'all', keepParams: ['k', 'y'] }),
+    );
+    expect(out.removeParams).toBe('all');
+    expect(out.keepParams).toEqual(['k']);
+    // One side "all" + a named removal on the other: the named strip wins
+    // over the keep — the union strips what either side removes.
+    const mixed = unionRequestTransforms(
+      transforms({ removeParams: 'all', keepParams: ['k'] }),
+      transforms({ removeParams: ['k'] }),
+    );
+    expect(mixed.removeParams).toBe('all');
+    expect(mixed.keepParams).toEqual([]);
+  });
+
+  test('an empty union produces no csp key at all', () => {
+    const out = unionRequestTransforms(transforms(), transforms());
+    expect(out).toEqual({ removeParams: [], keepParams: [], removeHeaders: [] });
+    expect('csp' in out).toBe(false);
   });
 });
