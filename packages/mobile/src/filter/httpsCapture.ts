@@ -135,8 +135,9 @@ export interface HubCa {
 
 /**
  * GET `http://<hub>:9293/v1/proxy/ca` — the engine's CA identity block
- * (`{certPem, sha256Fingerprint, notAfter, …}`). The hub must be bound to its
- * LAN address for this to answer.
+ * (`{certPem, sha256Fingerprint, notAfter, …}`). The control port stays on
+ * the hub's loopback by design, so this only answers where that loopback is
+ * reachable — a dev emulator's 10.0.2.2 today (flag 129).
  */
 export async function fetchHubCa(
   host: string,
@@ -147,7 +148,7 @@ export async function fetchHubCa(
     res = await fetchImpl(hubControlUrl(host, '/v1/proxy/ca'));
   } catch {
     throw new UserError(
-      'The hub didn\u2019t answer — check the address, and that its HTTPS engine is bound to the LAN (BM_BIND_HOST).',
+      'The hub didn\u2019t answer — its control port stays on the hub\u2019s loopback by design, so CA install works on a dev emulator today (10.0.2.2). On a physical device, install the CA manually — export it on the hub (cert export). Tracked as flag 129.',
     );
   }
   if (!res.ok) {

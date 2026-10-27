@@ -57,6 +57,9 @@ import kotlinx.coroutines.launch
  * lets the broad routes coexist with the hub dial — those sockets can never
  * re-enter the fd. Extras are sticky across ACTION_START: a re-START (e.g.
  * enabling capture on a running DNS filter) changes only what it carries.
+ * The tun's single writer serializes every emit path on one lock around a
+ * blocking `output.write` — a wedged fd stalls all senders at once (a global
+ * head-of-line stall, inherent to the single-fd design).
  */
 class VpnFilterService : VpnService() {
 
@@ -289,7 +292,10 @@ class VpnFilterService : VpnService() {
         val r = relayDispatcher
         val u = udpDispatcher
         if (c == null && r == null && u == null) break
-        runCatching { c?.onTick(); r?.onTick(); u?.onTick() }
+        // One runCatching each — a throwing tick must not skip its siblings.
+        runCatching { c?.onTick() }
+        runCatching { r?.onTick() }
+        runCatching { u?.onTick() }
         try {
           Thread.sleep(TICK_MS)
         } catch (e: InterruptedException) {

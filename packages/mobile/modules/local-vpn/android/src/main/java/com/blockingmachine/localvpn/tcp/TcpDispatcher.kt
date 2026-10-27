@@ -169,7 +169,10 @@ class TcpDispatcher(
         if (k != null) lru.remove(k)
         k
       } ?: sessions.keys.firstOrNull() ?: return
-      val victim = sessions.remove(victimKey) ?: continue
+      val victim = sessions[victimKey] ?: continue
+      // Value-conditional remove — a session reborn under this key after the
+      // LRU read is not ours to kill.
+      if (!sessions.remove(victimKey, victim)) continue
       victim.abortWithRst()
       stats.flowsClosed.incrementAndGet()
     }

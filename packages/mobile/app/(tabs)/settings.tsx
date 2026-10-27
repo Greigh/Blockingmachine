@@ -214,8 +214,10 @@ function LocalFilterCard({ ready }: { ready: boolean }) {
  * engine. TCP :80/:443 is spliced onto a `protect()`ed socket to
  * `<hub>:9294` (PROXY-v2), every other TCP port relays through unchanged,
  * other UDP relays through protected datagram sockets, and UDP/443 (QUIC) is
- * dropped so HTTP/3 falls back into the TCP path. The hub must be bound to
- * its LAN address (BM_BIND_HOST) for :9294/:9293 to answer.
+ * dropped so HTTP/3 falls back into the TCP path. The hub's data port must
+ * be bound to its LAN address (BM_BIND_HOST) for :9294 to answer; :9293 —
+ * the control port the CA fetch below uses — stays on the hub's loopback by
+ * design, so that fetch only reaches the hub from a dev emulator (flag 129).
  */
 function HttpsCaptureCard() {
   const { activeServer } = useServers();

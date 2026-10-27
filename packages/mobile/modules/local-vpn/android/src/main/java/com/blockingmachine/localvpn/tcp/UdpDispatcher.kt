@@ -149,7 +149,10 @@ class UdpDispatcher(
         if (k != null) lru.remove(k)
         k
       } ?: sessions.keys.firstOrNull() ?: return
-      val victim = sessions.remove(victimKey) ?: continue
+      val victim = sessions[victimKey] ?: continue
+      // Value-conditional remove — a session reborn under this key after the
+      // LRU read is not ours to kill.
+      if (!sessions.remove(victimKey, victim)) continue
       victim.close() // no RST exists for UDP — the socket just goes away
       flowsClosed.incrementAndGet()
     }
@@ -179,8 +182,13 @@ class UdpSession(
     private set
 
   private val socket: DatagramSocket = socketFactory().also { s ->
-    protect(s) // the dial must bypass the tun or every datagram loops
-    s.connect(InetAddress.getByAddress(key.dstAddr), key.dstPort)
+    try {
+      protect(s) // the dial must bypass the tun or every datagram loops
+      s.connect(InetAddress.getByAddress(key.dstAddr), key.dstPort)
+    } catch (e: Exception) {
+      runCatching { s.close() } // a failed dial must not leak the fd
+      throw e
+    }
   }
 
   private val reader = thread(name = "bm-udp-r", isDaemon = true) { readerLoop() }
