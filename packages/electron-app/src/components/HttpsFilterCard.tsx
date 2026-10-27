@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { HttpsFilterStatus, HttpsFilterPin } from '../types';
+import { DeployCommandBlock } from '../deploy/DeployCommandBlock';
 
 /**
  * HTTPS filter-proxy state on the main surface — ProtectionCard's sibling.
@@ -50,6 +51,10 @@ export const HttpsFilterCard: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [awaitingAdmin, setAwaitingAdmin] = useState(false);
+  // The rendered install-macos-capture.sh invocation for the capture hint —
+  // absolute paths, so it pastes on a machine with no repo checkout.
+  const [installHint, setInstallHint] = useState<{ command?: string; message?: string } | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const isMountedRef = useRef(true);
   const lastCaRefreshRef = useRef(0);
 
@@ -164,6 +169,22 @@ export const HttpsFilterCard: React.FC = () => {
   const starting = status?.status === 'starting';
   const stopped = !status || status.status === 'stopped';
   const engineAlive = running || paused || degraded;
+  // The capture service owning the engine is NOT a stopped-and-startable
+  // state — an unanswered probe is a transient KeepAlive gap, and a
+  // user-context spawn on those ports would self-capture.
+  const captureOwned = status?.captureServiceInstalled === true;
+
+  const handleCopy = useCallback((text: string, key: string) => {
+    try {
+      void window.electron?.copyToClipboard?.(text);
+    } catch {
+      // the clipboard is best-effort — the pre block stays selectable
+    }
+    setCopiedKey(key);
+    setTimeout(() => {
+      if (isMountedRef.current) setCopiedKey((cur) => (cur === key ? null : cur));
+    }, 1600);
+  }, []);
 
   const formatUptime = (s: number): string => {
     const d = Math.floor(s / 86400);
@@ -218,7 +239,9 @@ export const HttpsFilterCard: React.FC = () => {
         ? 'Proxy is up but filtering is paused — every flow is being tunnelled uninspected.'
         : degraded
           ? 'Filtering is live but the pin/bypass ledger is in-memory only — entries will not persist across restarts.'
-          : 'The HTTPS filter proxy is not running — start it to terminate and filter encrypted traffic.';
+          : captureOwned
+            ? 'The capture service owns the engine and it is not answering — launchd KeepAlive recovers a stopped instance; a wedge means re-run the installer or uninstall capture.'
+            : 'The HTTPS filter proxy is not running — start it to terminate and filter encrypted traffic.';
 
   // The pins endpoint returns the raw applied ledger (pin → bypass → remove
   // journal, oldest first). What the user owns is the effective state: each
@@ -240,6 +263,24 @@ export const HttpsFilterCard: React.FC = () => {
   const trustState = caTrust?.state;
   const showCaRow = engineAlive || (caTrust != null && caTrust.state !== 'unavailable');
   const showCaptureHint = status?.platform === 'darwin' && status?.captureServiceInstalled === false;
+
+  // The hint's command is the rendered-for-this-host invocation — resolved
+  // once capture is confirmed absent (the IPC can fail on a packaged build
+  // that does not ship scripts/, in which case the honest message shows).
+  useEffect(() => {
+    if (!showCaptureHint || !window.electron?.getHttpsFilterInstallScript) return;
+    let live = true;
+    window.electron
+      .getHttpsFilterInstallScript()
+      .then((res) => {
+        if (!live) return;
+        setInstallHint(res?.success && res.command ? { command: res.command } : { message: res?.message });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [showCaptureHint]);
 
   return (
     <div className="desktop-card protection-card">
@@ -282,14 +323,26 @@ export const HttpsFilterCard: React.FC = () => {
 
         <div className="deploy-actions-row" style={{ marginTop: 0 }}>
           {stopped ? (
-            <button
-              type="button"
-              className="deploy-btn primary"
-              disabled={busy || !window.electron?.startHttpsFilter}
-              onClick={() => void runAction(() => window.electron.startHttpsFilter!())}
-            >
-              {busy ? 'Starting…' : 'Run proxy'}
-            </button>
+            captureOwned ? (
+              // Never offer a user-context spawn under an installed capture
+              // service — the engine's unanswered probe is a KeepAlive gap,
+              // and a second engine on those ports would self-capture.
+              <span
+                className="deploy-feed-box-desc"
+                title="The launchd capture service owns the engine — it recovers on its own; a wedge means re-run the installer or uninstall capture."
+              >
+                managed by the capture service
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="deploy-btn primary"
+                disabled={busy || !window.electron?.startHttpsFilter}
+                onClick={() => void runAction(() => window.electron.startHttpsFilter!())}
+              >
+                {busy ? 'Starting…' : 'Run proxy'}
+              </button>
+            )
           ) : (
             <>
               <button
@@ -340,7 +393,7 @@ export const HttpsFilterCard: React.FC = () => {
               {status.stats.requestsBlocked.toLocaleString()} req · {status.stats.flowsBlocked.toLocaleString()} flows
             </span>
           </div>
-          <div className="protection-live-cell" title="Share of requests the rules blocked">
+          <div className="protection-live-cell" title="Share of flows refused">
             <span className="protection-live-name">Block rate</span>
             <span className="protection-live-detail">{status.stats.blockRatePercent}%</span>
           </div>
@@ -348,6 +401,22 @@ export const HttpsFilterCard: React.FC = () => {
             <span className="protection-live-name">Rules</span>
             <span className="protection-live-detail">{status.rulesLoaded.toLocaleString()}</span>
           </div>
+        </div>
+      )}
+
+      {/* The answering engine's CA differs from the recorded last-trusted
+          one — the user-engine/launchd-engine store split (flag 100) means
+          the user likely trusted the OTHER engine's mint, so leaf certs the
+          current engine forges will not verify until this CA is trusted. */}
+      {status?.caDrift === true && (
+        <div
+          className="dashboard-alert error-banner"
+          style={{ marginTop: '10px', marginBottom: 0 }}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+          </svg>
+          <span>The answering engine&apos;s CA changed — re-verify trust (install the CA below) before filtering terminates TLS again.</span>
         </div>
       )}
 
@@ -376,9 +445,14 @@ export const HttpsFilterCard: React.FC = () => {
               {fingerprintShort ? `SHA-256 ${fingerprintShort}` : 'Fingerprint unavailable'}
               {caTrust?.keyWrapped != null &&
                 ` · key ${caTrust.keyWrapped ? 'wrapped by the OS keychain' : 'unwrapped'}`}
-              {trustState === 'trusted'
-                ? ' — HTTPS responses can be filtered.'
-                : ' — install it to let the proxy terminate TLS.'}
+              {/* The trust reply's own message names the concrete posture
+                  (e.g. "in the keychain but not anchored as a trust root") —
+                  it beats the generic tail when the engine supplies one. */}
+              {caTrust?.message
+                ? ` — ${caTrust.message}`
+                : trustState === 'trusted'
+                  ? ' — HTTPS responses can be filtered.'
+                  : ' — install it to let the proxy terminate TLS.'}
             </p>
           </div>
           <div className="deploy-actions-row" style={{ marginTop: 0 }}>
@@ -520,12 +594,33 @@ export const HttpsFilterCard: React.FC = () => {
       )}
 
       {showCaptureHint && (
-        <p className="deploy-feed-box-desc" style={{ margin: '10px 0 0' }}>
-          Transparent capture is not installed — the proxy still answers manual CONNECT/HTTP
-          proxying on :{status?.port ?? 9294}. To route this Mac&apos;s traffic through it
-          automatically, run <code>sudo scripts/install-macos-capture.sh</code> from the repo
-          (administrator rights, once); the app does not invoke it for you.
-        </p>
+        <div style={{ margin: '10px 0 0' }}>
+          <p className="deploy-feed-box-desc" style={{ margin: 0 }}>
+            Transparent capture is not installed — the proxy still answers manual CONNECT/HTTP
+            proxying on :{status?.port ?? 9294}. To route this Mac&apos;s traffic through it
+            automatically, run the installer (administrator rights, once); the app does not
+            invoke it for you.
+          </p>
+          {installHint?.command ? (
+            // Absolute script/bundle/runner/rulesPath — pasteable on a
+            // machine with no repo checkout (getServiceInstallScript's
+            // precedent); the copy button is the same DeployCommandBlock
+            // pattern the feed panes use.
+            <div style={{ marginTop: 8 }}>
+              <DeployCommandBlock
+                command={installHint.command}
+                copyKey="httpsfilter-install"
+                copiedKey={copiedKey}
+                onCopy={handleCopy}
+              />
+            </div>
+          ) : (
+            <p className="deploy-feed-box-desc" style={{ margin: '6px 0 0' }}>
+              {installHint?.message ??
+                'Resolving the installer command… (packaged builds may not ship install-macos-capture.sh — use a source checkout if this does not resolve.)'}
+            </p>
+          )}
+        </div>
       )}
 
       {message && (

@@ -18,7 +18,10 @@
 #      released, falls back to pfctl -d; if pf was already enabled, leaves
 #      it on — the uninstaller never turns off a firewall it didn't turn on
 #   4. bootout's both LaunchDaemons (engine + helper)
-#   5. removes both plists, the anchor file, the state file, and the
+#   5. flushes the anchor a SECOND time — the helper can re-arm between the
+#      first flush and its own bootout, and a loaded ruleset outlives the
+#      processes that loaded it
+#   6. removes both plists, the anchor file, the state file, and the
 #      helper binary + pf-anchor.sh in
 #      /Library/Application Support/Blockingmachine
 #
@@ -101,7 +104,18 @@ for label in com.blockingmachine.natlook com.blockingmachine.proxy; do
   fi
 done
 
-# --- 4. remove installed files ---
+# --- 4. flush the anchor a second time ---
+# The helper's startup re-arm (and any watchdog re-arm it may still hold
+# from an in-flight startup) can fire between the first flush and its own
+# bootout — a KeepAlive'd helper that saw the anchor absent with a live
+# engine reloads it, and a ruleset pf has loaded outlives the process that
+# loaded it. The second flush closes that race; with both daemons dead,
+# nothing exists to re-arm a third time.
+if pfctl -a "$ANCHOR_NAME" -F all 2>/dev/null; then
+  log "re-flushed anchor $ANCHOR_NAME (post-bootout)"
+fi
+
+# --- 5. remove installed files ---
 for f in "$NATLOOK_PLIST" "$PROXY_PLIST" "$ANCHOR_FILE" "$STATE_FILE" "$APP_SUPPORT_DIR/natlook-helper" "$APP_SUPPORT_DIR/pf-anchor.sh"; do
   if [[ -e "$f" ]]; then
     rm -f "$f"
@@ -110,6 +124,6 @@ for f in "$NATLOOK_PLIST" "$PROXY_PLIST" "$ANCHOR_FILE" "$STATE_FILE" "$APP_SUPP
 done
 rmdir "$APP_SUPPORT_DIR" 2>/dev/null || true
 
-# --- 5. kept state, reported ---
+# --- 6. kept state, reported ---
 log "kept: _blockingmachine account, /Users/Shared/Blockingmachine/https-filter, /Library/Logs/Blockingmachine"
 log "capture removed — traffic now flows direct (pf fail-open by construction)"

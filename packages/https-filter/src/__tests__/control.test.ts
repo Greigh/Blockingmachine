@@ -201,6 +201,33 @@ describe('control API guards (daemon-parity)', () => {
     });
     expect(postOnGetRoute.status).toBe(405);
   });
+
+  test('the shutdown route sits behind the same mutation guards as toggle', async () => {
+    // A real POST would retire this suite's shared engine, so the route's
+    // own POST coverage lives in filterProxy.entrypoint.test.ts — what stays
+    // here is the guard parity proof: known path, wrong method → 405; POST
+    // without application/json → 415; foreign origin → 403.
+    const getOnIt = await fetch(`${base}/v1/proxy/shutdown`);
+    expect(getOnIt.status).toBe(405);
+    expect(getOnIt.headers.get('allow')).toContain('POST');
+
+    const wrongType = await fetch(`${base}/v1/proxy/shutdown`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: 'stop',
+    });
+    expect(wrongType.status).toBe(415);
+
+    const foreign = await fetch(`${base}/v1/proxy/shutdown`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' },
+      body: '{}',
+    });
+    expect(foreign.status).toBe(403);
+    // The engine is still very much alive — nothing above may have fired it.
+    const alive = await fetch(`${base}/v1/proxy/status`);
+    expect(alive.status).toBe(200);
+  });
 });
 
 describe('control API routes', () => {

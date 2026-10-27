@@ -15,40 +15,52 @@
 #                         plist either way; inert for plain node) or a
 #                         node binary.
 #     [rulesPath]         optional compiled request-rules file; lands in
-#                         the plist's BM_RULES_PATH.
+#                         the plist's BM_RULES_PATH. Omitted → the canonical
+#                         compile output next to savePath,
+#                         ~/Documents/Blockingmachine/browser.txt ($SUDO_USER's
+#                         home under sudo, not root's) — a missing file is a
+#                         warning, not a failure: capture starts with 0 rules
+#                         until a compile lands + reload.
 #
 #   Options (test/dev seams — no root needed):
 #     --render-only DIR   write the anchor + both plists into DIR and stop;
 #                         nothing is installed, started, or flushed.
+#     --preflight-only    run only the port preflight and exit — the
+#                         captureScripts suite drives it by squatting a port.
 #     --service-user NAME override the dedicated service account
 #                         (default _blockingmachine).
 #
 # What it does, in order:
 #   1. refuses unless EUID=0 (after arg parse, before any touch)
-#   2. refuses if the main ruleset skips lo (`set skip on lo0` makes the
+#   2. refuses when anything already listens on :9293/:9294/:9295 — an engine
+#      squatting the capture ports means the launchd services would fail to
+#      bind while pf redirects traffic at a dead listener
+#   3. refuses if the main ruleset skips lo (`set skip on lo0` makes the
 #      whole rdr-on-lo0 mechanism dead — loud failure beats silent capture)
-#   3. creates the _blockingmachine group + user via dscl (idempotent;
+#   4. creates the _blockingmachine group + user via dscl (idempotent;
 #      UniqueID/GID chosen from the free 400s, /usr/bin/false shell,
 #      /var/empty home — service-account convention, nothing writable)
-#   4. creates the store dir /Users/Shared/Blockingmachine/https-filter
+#   5. creates the store dir /Users/Shared/Blockingmachine/https-filter
 #      (0700, _blockingmachine-owned — CA + policy ledger root) and the
 #      log dir /Library/Logs/Blockingmachine
-#   5. installs the prebuilt natlook-helper AND pf-anchor.sh to
+#   6. installs the prebuilt natlook-helper AND pf-anchor.sh to
 #      /Library/Application Support/Blockingmachine/ (root:wheel 0755) —
 #      pf-anchor.sh is the shared anchor-arm sequence the helper calls at
 #      startup for post-reboot re-arm (see FAILURE POSTURES)
-#   6. writes /etc/pf.anchors/com.blockingmachine (rendered below)
-#   7. writes both LaunchDaemon plists (rendered below, plutil -lint'd)
-#   8. bootstraps com.blockingmachine.proxy (engine, as _blockingmachine)
+#   7. writes /etc/pf.anchors/com.blockingmachine (rendered below)
+#   8. writes both LaunchDaemon plists (rendered below, plutil -lint'd)
+#   9. bootstraps com.blockingmachine.proxy (engine, as _blockingmachine)
 #      then com.blockingmachine.natlook (helper, as root) — services BEFORE
 #      the anchor so a redirect never meets a dead listener
-#   9. arms the anchor via the installed pf-anchor.sh — the single
+#  10. arms the anchor via the installed pf-anchor.sh — the single
 #      implementation of the sequence: record pf's pre-enable status in
 #      /etc/blockingmachine-capture.state, `pfctl -a
 #      com.apple/com.blockingmachine -f <anchor>`, then `pfctl -E` iff pf
 #      is currently disabled, appending the returned token to the state
 #      file for uninstall's -X release
-#  10. verifies the anchor loaded and both services printed
+#  11. verifies the anchor loaded, the helper printed, and — the real
+#      proof — the engine answers /v1/proxy/status (launchd registration
+#      is not health; a crash-looping bundle registers fine)
 #
 # FAILURE POSTURES — asymmetric by design, documented here so nobody
 # "fixes" the wrong half:
@@ -105,6 +117,7 @@ ENGINE_PORT=9294
 CONTROL_PORT=9293
 SERVICE_USER="_blockingmachine"
 RENDER_ONLY=""
+PREFLIGHT_ONLY=0
 
 ANCHOR_NAME="com.apple/com.blockingmachine"
 ANCHOR_FILE="/etc/pf.anchors/com.blockingmachine"
@@ -125,15 +138,31 @@ usage() {
 usage:
   install-macos-capture.sh [options] <engineBundlePath> <engineRunner> [rulesPath]
     --render-only DIR    write rendered anchor + plists into DIR, touch nothing
+    --preflight-only     run only the port preflight and exit
     --service-user NAME  service account name (default _blockingmachine)
 EOF
   exit 2
+}
+
+# One engine, ever — a listener already on the control/data/helper ports is
+# an engine (user-context, stale launchd, foreign) that would own the ports
+# the launchd services then fail to take, leaving pf redirecting at a dead
+# listener. lsof names the squatter in the error so the operator can stop it.
+port_preflight() {
+  command -v lsof >/dev/null 2>&1 || { log "lsof unavailable — port preflight skipped"; return 0; }
+  local occupied
+  occupied="$(lsof -nP -iTCP:${CONTROL_PORT} -iTCP:${ENGINE_PORT} -iTCP:${HELPER_PORT} -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -n "$occupied" ]]; then
+    printf '%s\n' "$occupied" >&2
+    die "an engine already listens on :${CONTROL_PORT}/:${ENGINE_PORT} — stop it before installing capture"
+  fi
 }
 
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --render-only)   RENDER_ONLY="${2:?--render-only needs a dir}"; shift 2 ;;
+    --preflight-only) PREFLIGHT_ONLY=1; shift ;;
     --service-user)  SERVICE_USER="${2:?--service-user needs a name}"; shift 2 ;;
     -h|--help)       usage ;;
     --)              shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
@@ -141,10 +170,37 @@ while [[ $# -gt 0 ]]; do
     *)               POSITIONAL+=("$1"); shift ;;
   esac
 done
+
+# --preflight-only runs the port check alone — no root, no mutations, no
+# positional args required; the captureScripts suite squats a port and
+# expects the die.
+if [[ "$PREFLIGHT_ONLY" -eq 1 ]]; then
+  port_preflight
+  log "port preflight clean — nothing listens on :${CONTROL_PORT}/:${ENGINE_PORT}/:${HELPER_PORT}"
+  exit 0
+fi
+
 [[ ${#POSITIONAL[@]} -ge 2 && ${#POSITIONAL[@]} -le 3 ]] || usage
 BUNDLE_PATH="${POSITIONAL[0]}"
 ENGINE_RUNNER="${POSITIONAL[1]}"
 RULES_PATH="${POSITIONAL[2]:-}"
+
+# The omitted-rulesPath default is the canonical compiled output — the same
+# join(dirname(savePath), 'browser.txt') the manager/engine resolve, where
+# savePath's own default is ~/Documents/Blockingmachine/processed_rules.txt.
+# Under sudo the operator's home is SUDO_USER's, never root's.
+if [[ -z "$RULES_PATH" ]]; then
+  rules_home="$HOME"
+  if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+    resolved_home="$(dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+    [[ -n "$resolved_home" ]] && rules_home="$resolved_home"
+  fi
+  RULES_PATH="$rules_home/Documents/Blockingmachine/browser.txt"
+  log "rulesPath not given — defaulting to $RULES_PATH"
+fi
+if [[ ! -f "$RULES_PATH" ]]; then
+  log "warning: $RULES_PATH does not exist — capture will start with 0 rules until a compile lands + reload"
+fi
 
 # --service-user lands raw in the anchor's `user !=` filter rules and in
 # dscl paths — restrict it to a real login-name shape or the anchor dies
@@ -191,7 +247,10 @@ pass out quick route-to lo0 inet proto tcp from any to any port { 80, 443 } user
 pass out quick route-to lo0 inet6 proto tcp from any to any port { 80, 443 } user != ${SERVICE_USER} keep state
 # QUIC suppression (spec §10 helper-side decision): UDP/443 is invisible to
 # TCP capture — drop it so clients fall back to TCP/443 which rdr can see.
-block drop out quick proto udp from any to any port 443
+# Same `user !=` scoping as the route-to rules: the service account's egress
+# is exempt, and forwarded packets (user "unknown") never match a user
+# clause — an unscoped drop would also kill routed LAN clients' QUIC.
+block drop out quick proto udp from any to any port 443 user != ${SERVICE_USER}
 EOF
 }
 
@@ -293,6 +352,12 @@ fi
 
 [[ "$(uname -s)" == "Darwin" ]] || die "macOS only — this script is the pf capture leg"
 
+# The squat check — before the account, directories, helper, anchor, plists
+# or services are touched. An engine already on the capture ports would make
+# the launchd services fail to bind while pf redirects traffic at a dead
+# listener — the failure only showing in logs.
+port_preflight
+
 # A skipped lo0 makes every lo0 rule dead — detect rather than deploy a
 # silent no-op capture.
 if pfctl -s Interfaces -i lo -v 2>/dev/null | grep -qw skip; then
@@ -380,7 +445,19 @@ if ! pfctl -a "$ANCHOR_NAME" -s rules 2>/dev/null | grep -q 'rdr pass on lo0'; t
   die "anchor loaded but rdr rules not visible — pf state inconsistent; run scripts/uninstall-macos-capture.sh"
 fi
 launchctl print "system/com.blockingmachine.natlook" >/dev/null 2>&1 || die "natlook service not running after bootstrap"
-launchctl print "system/com.blockingmachine.proxy" >/dev/null 2>&1 || die "proxy service not running after bootstrap"
+# launchctl print proves REGISTRATION, not health — a crash-looping engine
+# prints fine. The real check is the engine's own control answer, polled
+# with the same bounded-patience loop the rehearsal script uses (the engine
+# mints its CA on first boot — RSA keygen can take several seconds).
+engine_up=0
+for _ in $(seq 1 30); do
+  if curl -sf --max-time 2 "http://127.0.0.1:${CONTROL_PORT}/v1/proxy/status" >/dev/null 2>&1; then
+    engine_up=1
+    break
+  fi
+  sleep 1
+done
+[[ "$engine_up" -eq 1 ]] || die "com.blockingmachine.proxy never answered /v1/proxy/status on :${CONTROL_PORT} — the service is bootstrapped but the engine is not healthy; check ${LOG_DIR}/https-filter.err"
 
 log "capture installed: tcp:{80,443} → 127.0.0.1:${HELPER_PORT} (helper) → 127.0.0.1:${ENGINE_PORT} (engine)"
 log "verify: curl --cacert <ca.pem from http://127.0.0.1:${CONTROL_PORT}/v1/proxy/ca> https://example.com/"

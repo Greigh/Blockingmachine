@@ -69,6 +69,13 @@ export interface FilterProxyConfig {
    * suite CAs never touch the real keychain).
    */
   keyWrapBackend?: KeyWrapBackend | null;
+  /**
+   * Called (deferred — after the reply flushes) when POST /v1/proxy/shutdown
+   * lands on the control API. Absent → the engine's own close() runs, which
+   * reaps the listeners but leaves the process up; the spawned entry
+   * (main.ts) substitutes its signal-path shutdown so the process exits too.
+   */
+  onShutdownRequest?: () => void;
 }
 
 export interface RunningFilterProxy {
@@ -155,6 +162,23 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
   };
 
   let control: RunningControl;
+  // One teardown, idempotent — the caller's close(), the shutdown control
+  // route, and (in main.ts) the signal handlers all funnel here.
+  let closed = false;
+  const closeAll = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    // Control first so no mutation lands mid-teardown, then the data
+    // listener (destroys every tracked socket), then the ledger.
+    const server = control.server;
+    const done = new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+    server.closeAllConnections(); // keep-alive probes must not park shutdown
+    await done;
+    await proxy.close();
+    policy.close();
+  };
   try {
     control = await startControlServer({
       bindHost,
@@ -164,6 +188,9 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
       policy,
       reloadRules,
       policyDegraded,
+      // The route schedules this past the reply flush; the caller's hook
+      // (main.ts adds the process exit) wins over the default close.
+      shutdown: config.onShutdownRequest ?? (() => void closeAll()),
     });
   } catch (err) {
     // The data listener is already bound — release it (and the ledger hook)
@@ -181,17 +208,6 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
     authority,
     policy,
     policyDegraded,
-    async close() {
-      // Control first so no mutation lands mid-teardown, then the data
-      // listener (destroys every tracked socket), then the ledger.
-      const server = control.server;
-      const closed = new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-      server.closeAllConnections(); // keep-alive probes must not park shutdown
-      await closed;
-      await proxy.close();
-      policy.close();
-    },
+    close: closeAll,
   };
 }

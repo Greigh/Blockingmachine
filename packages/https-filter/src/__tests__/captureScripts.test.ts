@@ -14,6 +14,7 @@
 import { afterAll, describe, expect, jest, test } from '@jest/globals';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import net from 'node:net';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +45,40 @@ const hasBash = (() => {
 })();
 const isDarwin = process.platform === 'darwin';
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+const hasLsof = (() => {
+  try {
+    execFileSync('bash', ['-c', 'command -v lsof'], { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+/** Try to hold a listening socket — first of `ports` that binds wins; null = all squatted already. */
+function holdPort(ports: number[]): Promise<net.Server | null> {
+  return new Promise((resolve) => {
+    const tryNext = (i: number) => {
+      if (i >= ports.length) return resolve(null);
+      const srv = net.createServer();
+      srv.once('error', () => tryNext(i + 1));
+      srv.listen(ports[i], '127.0.0.1', () => resolve(srv));
+    };
+    tryNext(0);
+  });
+}
+
+/** True only when every port can be bound-and-released right now. */
+async function allFree(ports: number[]): Promise<boolean> {
+  for (const p of ports) {
+    const ok = await new Promise<boolean>((resolve) => {
+      const srv = net.createServer();
+      srv.once('error', () => resolve(false));
+      srv.listen(p, '127.0.0.1', () => srv.close(() => resolve(true)));
+    });
+    if (!ok) return false;
+  }
+  return true;
+}
 
 describe('macos capture scripts — hygiene', () => {
   (hasBash ? test : test.skip)('all scripts pass bash -n', () => {
@@ -73,6 +108,63 @@ describe('macos capture scripts — hygiene', () => {
     const renderAt = text.indexOf('if [[ -n "$RENDER_ONLY" ]]');
     expect(gateAt).toBeGreaterThan(-1);
     expect(gateAt).toBeLessThan(renderAt);
+  });
+
+  test('installer refuses occupied capture ports BEFORE any mutation', () => {
+    const text = readFileSync(INSTALL, 'utf8');
+    // The preflight probes all three ports the install will own.
+    expect(text).toContain('lsof -nP -iTCP:${CONTROL_PORT} -iTCP:${ENGINE_PORT} -iTCP:${HELPER_PORT} -sTCP:LISTEN');
+    expect(text).toContain('an engine already listens on :${CONTROL_PORT}/:${ENGINE_PORT} — stop it before installing capture');
+    // The --preflight-only seam exists for suites to drive it without root.
+    expect(text).toContain('--preflight-only');
+    // On the real path the check runs after the EUID/Darwin gates and before
+    // the first mutation (the dscl user-create).
+    const euidAt = text.indexOf('[[ $EUID -eq 0 ]]');
+    const callAt = text.indexOf('\nport_preflight\n');
+    const dsclAt = text.indexOf('dscl . -create "/Users/');
+    expect(callAt).toBeGreaterThan(euidAt);
+    expect(callAt).toBeGreaterThan(-1);
+    expect(callAt).toBeLessThan(dsclAt);
+  });
+
+  test('an omitted rulesPath defaults to the canonical compiled output with a missing-file warning', () => {
+    const text = readFileSync(INSTALL, 'utf8');
+    // Canonical default — join(dirname(savePath), 'browser.txt') under
+    // ~/Documents/Blockingmachine, with $SUDO_USER's home honored under sudo.
+    expect(text).toContain('Documents/Blockingmachine/browser.txt');
+    expect(text).toContain('SUDO_USER');
+    expect(text).toMatch(/warning: \$RULES_PATH does not exist — capture will start with 0 rules until a compile lands \+ reload/);
+    // The defaulting block runs before any render emitter is invoked so a
+    // render-only plist carries the resolved path.
+    const defaultAt = text.indexOf('rulesPath not given');
+    const emitAt = text.indexOf('render_proxy_plist > "$PROXY_PLIST"');
+    const renderOnlyEmitAt = text.indexOf('render_proxy_plist > "$RENDER_ONLY/com.blockingmachine.proxy.plist"');
+    expect(defaultAt).toBeGreaterThan(-1);
+    expect(emitAt).toBeGreaterThan(-1);
+    expect(defaultAt).toBeLessThan(emitAt);
+    expect(defaultAt).toBeLessThan(renderOnlyEmitAt);
+  });
+
+  test('install verify probes the engine control API, not just launchd registration', () => {
+    const text = readFileSync(INSTALL, 'utf8');
+    // Registration is not health — the final gate is a bounded status probe.
+    expect(text).toContain('/v1/proxy/status');
+    expect(text).toMatch(/curl -sf --max-time 2 "http:\/\/127\.0\.0\.1:\$\{CONTROL_PORT\}\/v1\/proxy\/status"/);
+    const probeAt = text.indexOf('engine_up=0');
+    const bootAt = text.indexOf('boot_or_fresh "$PROXY_PLIST"');
+    expect(probeAt).toBeGreaterThan(bootAt);
+    // The proxy's launchctl-print check is gone — only the helper's remains.
+    expect(text).not.toContain('launchctl print "system/com.blockingmachine.proxy"');
+  });
+
+  test('uninstall flushes the anchor a second time after bootout (helper re-arm race)', () => {
+    const text = readFileSync(UNINSTALL, 'utf8');
+    const bootoutAt = text.indexOf('launchctl bootout "system/$label"');
+    const firstFlushAt = text.indexOf('pfctl -a "$ANCHOR_NAME" -F all');
+    const secondFlushAt = text.indexOf('pfctl -a "$ANCHOR_NAME" -F all', bootoutAt);
+    expect(firstFlushAt).toBeGreaterThan(-1);
+    expect(firstFlushAt).toBeLessThan(bootoutAt);
+    expect(secondFlushAt).toBeGreaterThan(bootoutAt);
   });
 
   test('rehearse script is sudo-gated and never self-escalates', () => {
@@ -171,8 +263,11 @@ describe('macos capture scripts — hygiene', () => {
     // appear in an rdr rule on macOS pf).
     expect(anchor).toMatch(/no rdr on lo0 inet proto tcp .*127\.0\.0\.0\/8/);
     expect(anchor).toMatch(/no rdr on lo0 inet6 proto tcp .*::1/);
-    // QUIC suppression — UDP/443 drop so clients fall back to TCP.
-    expect(anchor).toMatch(/block drop out quick proto udp from any to any port 443/);
+    // QUIC suppression — UDP/443 drop so clients fall back to TCP, scoped
+    // with the same user exemption as the route-to rules (an unscoped drop
+    // would also kill routed LAN clients' QUIC — forwarded packets match no
+    // user clause, so they never match this rule at all).
+    expect(anchor).toMatch(/block drop out quick proto udp from any to any port 443 user != _blockingmachine/);
   });
 
   test('natlook plist invokes helper 9295 → 127.0.0.1:9294 with KeepAlive', () => {
@@ -202,6 +297,16 @@ describe('macos capture scripts — hygiene', () => {
     // keystore auto-resolve would degrade to plaintext anyway.
     expect(plist).toMatch(/<key>BM_KEYWRAP<\/key>\s*<string>off<\/string>/);
     expect(plist).toContain('<key>KeepAlive</key>');
+  });
+
+  test('an omitted rulesPath renders the canonical Documents/Blockingmachine/browser.txt default', () => {
+    const out = mkdtempSync(join(tmpdir(), 'bm-render-'));
+    tmpDirs.push(out);
+    execFileSync('bash', [INSTALL, '--render-only', out, '/pkg/dist/main.js', '/runner/node'], {
+      stdio: 'pipe',
+    });
+    const plist = readFileSync(join(out, 'com.blockingmachine.proxy.plist'), 'utf8');
+    expect(plist).toMatch(/<key>BM_RULES_PATH<\/key>\s*<string>[^<]*Documents\/Blockingmachine\/browser\.txt<\/string>/);
   });
 
   test('--service-user rejects bad names and accepts valid ones', () => {
@@ -262,6 +367,36 @@ describe('macos capture scripts — hygiene', () => {
     // Store dir + service user are kept (CA/ledger survive reinstall).
     expect(text).toContain('kept: _blockingmachine account');
     expect(text).not.toMatch(/dscl . -delete/);
+  });
+});
+
+describe('macos capture scripts — port preflight seam (--preflight-only)', () => {
+  // lsof drives the check; without it the preflight self-reports skipped and
+  // exits 0, so the functional assertions below need it present.
+  const t = hasBash && hasLsof ? test : test.skip;
+
+  t('dies naming the squatter when a capture port is occupied', async () => {
+    // Bind whichever of the three is free on this host — if ALL are already
+    // occupied (a real engine/capture running) the check must die anyway.
+    const server = await holdPort([9295, 9294, 9293]);
+    try {
+      const r = spawnSync('bash', [INSTALL, '--preflight-only'], { encoding: 'utf8' });
+      expect(r.status).toBe(1);
+      expect(`${r.stderr}`).toMatch(/an engine already listens on :9293\/:9294 — stop it before installing capture/);
+    } finally {
+      server?.close();
+    }
+  });
+
+  t('exits 0 when all three capture ports are free', async () => {
+    if (!(await allFree([9293, 9294, 9295]))) {
+      // A live engine/capture owns the ports on this machine — the occupied-
+      // port case above already proves the refusal; nothing to prove here.
+      return;
+    }
+    const r = spawnSync('bash', [INSTALL, '--preflight-only'], { encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    expect(`${r.stdout}`).toMatch(/port preflight clean/);
   });
 });
 

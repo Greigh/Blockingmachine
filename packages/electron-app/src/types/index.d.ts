@@ -433,6 +433,13 @@ export interface StoreSchema {
    */
   lanAuthMode?: 'required' | 'open';
   /**
+   * The last engine CA fingerprint a ca-* trust op verified as 'trusted' —
+   * the baseline `getStatus` compares the answering engine's CA against to
+   * flag `caDrift`. Absent until the first trusted reply, so the check is
+   * inert on installs that never trusted an engine CA.
+   */
+  httpsFilterTrustedCaFingerprint?: string;
+  /**
    * What each deploy target's scheduled refresh has reported back, keyed by target id
    * (`unbound`, `bind`, …). The refresh command in the recipe POSTs its result to
    * `/v1/deploy-report`; this record is what survives the window where the hub was closed,
@@ -510,6 +517,14 @@ export interface HttpsFilterStatus {
   managedByApp: boolean;
   /** True when the macOS capture install owns the engine via launchd. */
   captureServiceInstalled: boolean;
+  /**
+   * True when the answering engine's CA fingerprint differs from the
+   * recorded last-trusted one — the user engine (userData storeDir) and the
+   * launchd capture engine (/Users/Shared storeDir) mint DIFFERENT CAs, so
+   * whichever the user trusted, the other looks drifted. The card renders a
+   * re-verify-trust warning.
+   */
+  caDrift?: boolean;
   /** Main-process platform — the capture-install hint is darwin-only. */
   platform?: string;
   corruptLineCount?: number;
@@ -795,6 +810,17 @@ export interface ElectronAPI {
   getHttpsFilterStatus?: () => Promise<HttpsFilterStatus>;
   startHttpsFilter?: () => Promise<{ success: boolean; message: string }>;
   stopHttpsFilter?: () => Promise<{ success: boolean; message: string }>;
+  /**
+   * The `install-macos-capture.sh` invocation rendered for this host —
+   * absolute script/bundle/runner/rulesPath — so the card's hint pastes on
+   * a machine with no repo checkout (the `getServiceInstallScript`
+   * precedent). `success:false` names why it cannot be rendered.
+   */
+  getHttpsFilterInstallScript?: () => Promise<{
+    success: boolean;
+    command?: string;
+    message?: string;
+  }>;
   /** Pause = the engine blind-tunnels every flow; resume restores verdicts. */
   toggleHttpsFilterPause?: (enabled?: boolean) => Promise<{ success: boolean; protectionEnabled: boolean }>;
   getHttpsFilterPins?: () => Promise<{

@@ -1172,6 +1172,22 @@ describe('httpsfilter:ca-* IPC handlers', () => {
     expect(res.state).toBe('absent');
     expect(caTrustOps.removeCa).toHaveBeenCalledWith(CA_JSON.certPem);
   });
+
+  test('a trusted reply records the answering fingerprint as the drift baseline', async () => {
+    caTrustOps.trustStatus.mockResolvedValue('trusted');
+    await invoke('httpsfilter:ca-trust-status');
+    expect(capturedStoreRef.current!.get('httpsFilterTrustedCaFingerprint')).toBe('AA:BB:CC');
+    capturedStoreRef.current!.delete('httpsFilterTrustedCaFingerprint');
+  });
+
+  test('a non-trusted reply never re-baselines the drift record', async () => {
+    // A swapped/rotated engine answering 'absent' must not overwrite the
+    // baseline — only a verified 'trusted' posture may.
+    capturedStoreRef.current!.delete('httpsFilterTrustedCaFingerprint');
+    caTrustOps.trustStatus.mockResolvedValue('absent');
+    await invoke('httpsfilter:ca-trust-status');
+    expect(capturedStoreRef.current!.get('httpsFilterTrustedCaFingerprint')).toBeUndefined();
+  });
 });
 
 // ============================================================================
@@ -1245,12 +1261,20 @@ describe('httpsfilter:* lifecycle + policy IPC handlers', () => {
   });
 
   test('stop refuses honestly when the app owns no engine process', async () => {
+    // The probe MUST be a stubbed refusal: an unstubbed fetch here would hit
+    // a REAL engine on :9293 (a dev machine's own proxy) and the orphan-
+    // retire path would POST it a shutdown — a test must never do that.
+    fetchSpy.mockRejectedValue(new Error('connect ECONNREFUSED'));
     const res = await invoke('httpsfilter:stop');
-    // No child was spawned in this boot — the answer is either the
-    // launchd/capture-service pointer or the external-owner message; both
-    // are honest refusals with a named remedy, never a silent success.
+    // No child was spawned in this boot and nothing answers — the answer is
+    // either the launchd/capture-service pointer or the not-running message;
+    // both are honest refusals with a named remedy, never a silent success.
     expect(res.success).toBe(false);
     expect(res.message.length).toBeGreaterThan(0);
+    // And the shutdown route was never reached for.
+    expect(
+      fetchSpy.mock.calls.some(([u]) => String(u).includes('/v1/proxy/shutdown')),
+    ).toBe(false);
   });
 
   test('toggle-pause POSTs {enabled:false} to the engine toggle', async () => {
@@ -1304,5 +1328,52 @@ describe('httpsfilter:* lifecycle + policy IPC handlers', () => {
     }
     // None of the invalid payloads reached the engine.
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test('status flags caDrift when the answering CA differs from the recorded trust', async () => {
+    // The store-backed drift baseline — the two-store split (user engine vs
+    // launchd engine mint different CAs) surfaces here as a swap of which
+    // fingerprint answers the same ports.
+    capturedStoreRef.current!.set('httpsFilterTrustedCaFingerprint', 'ZZ:ZZ:ZZ');
+    try {
+      fetchSpy.mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith('/v1/proxy/ca')) {
+          return jsonResponse(200, {
+            certPem: 'pem',
+            sha256Fingerprint: 'AA:BB:CC',
+            notAfter: 'Jan  1 00:00:00 2036 GMT',
+            keyWrapped: false,
+          });
+        }
+        return jsonResponse(200, STATUS_JSON);
+      });
+      const drifted = await invoke('httpsfilter:status');
+      expect(drifted.caDrift).toBe(true);
+
+      // The matching record stays quiet — the check compares, never infers.
+      capturedStoreRef.current!.set('httpsFilterTrustedCaFingerprint', 'AA:BB:CC');
+      const same = await invoke('httpsfilter:status');
+      expect(same.caDrift).toBe(false);
+    } finally {
+      capturedStoreRef.current!.delete('httpsFilterTrustedCaFingerprint');
+    }
+  });
+
+  test('get-install-script renders the capture installer invocation (or fails honestly)', async () => {
+    const res = await invoke('httpsfilter:get-install-script');
+    expect(typeof res.success).toBe('boolean');
+    if (res.success) {
+      // Absolute paths only — a repo-relative reference is exactly what this
+      // must not render (packaged hosts have no checkout).
+      expect(res.command).toContain('install-macos-capture.sh');
+      expect(res.command).toContain(process.execPath);
+      expect(res.command.startsWith('sudo')).toBe(true);
+      expect(res.command).not.toContain(' scripts/install-macos-capture.sh');
+    } else {
+      // The bundle can be absent when dist/ is unbuilt — the honest failure
+      // must still carry a message.
+      expect(res.message).toBeTruthy();
+    }
   });
 });

@@ -239,6 +239,35 @@ describe('dist/main.js spawned', () => {
     expect(stderr()).toContain('SIGTERM');
   });
 
+  test('POST /v1/proxy/shutdown retires the engine through the signal-path shutdown (exit 0)', async () => {
+    // The route answers the caller first, then runs main's close+exit on a
+    // deferred tick — the observable contract is: 200 reply, process gone.
+    const storeDir = await tempDir('bm-proxy-shutdown-');
+    const dataPort = await freePort();
+    const controlPort = await freePort();
+
+    const { child, stderr } = spawnEngine({
+      BM_STORE_DIR: storeDir,
+      BM_DATA_PORT: String(dataPort),
+      BM_CONTROL_PORT: String(controlPort),
+      BM_BIND_HOST: '127.0.0.1',
+    });
+    await waitForStatus(child, controlPort);
+
+    const res = await fetch(`http://127.0.0.1:${controlPort}/v1/proxy/shutdown`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+
+    const code = await exitCode(child);
+    expect(code).toBe(0);
+    expect(stderr()).toContain('/v1/proxy/shutdown');
+  });
+
   test('BM_KEYWRAP=off leaves no OS-keystore trace — CA reports keyWrapped:false', async () => {
     const storeDir = await tempDir('bm-proxy-unwrapped-');
     const dataPort = await freePort();

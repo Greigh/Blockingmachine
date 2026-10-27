@@ -272,6 +272,9 @@ contextBridge.exposeInMainWorld('electron', {
   getHttpsFilterStatus: () => ipcRenderer.invoke('httpsfilter:status'),
   startHttpsFilter: () => ipcRenderer.invoke('httpsfilter:start'),
   stopHttpsFilter: () => ipcRenderer.invoke('httpsfilter:stop'),
+  // The rendered install-macos-capture.sh invocation — absolute paths, so
+  // the card's hint pastes on a machine with no repo checkout.
+  getHttpsFilterInstallScript: () => ipcRenderer.invoke('httpsfilter:get-install-script'),
   toggleHttpsFilterPause: (enabled?: boolean) => ipcRenderer.invoke('httpsfilter:toggle-pause', enabled),
   getHttpsFilterPins: () => ipcRenderer.invoke('httpsfilter:pins'),
   removeHttpsFilterPin: (host: string) => ipcRenderer.invoke('httpsfilter:pin-remove', host),

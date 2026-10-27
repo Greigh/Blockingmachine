@@ -303,7 +303,12 @@ app.name = 'Blockingmachine';
 const daemonManager = new DaemonManager();
 // The HTTPS filter proxy's engine manager — Task 4 consumes only its
 // `/v1/proxy/ca` reader for the trust-store IPC; Task 5 wires start/stop.
-const filterProxyManager = new FilterProxyManager();
+// The fingerprint getter is lazy — `store` is constructed below this line,
+// and the manager only reads it inside getStatus() calls that run well
+// after module init.
+const filterProxyManager = new FilterProxyManager({
+  trustedCaFingerprint: () => store.get('httpsFilterTrustedCaFingerprint'),
+});
 
 const isMac = process.platform === 'darwin';
 
@@ -591,6 +596,12 @@ const store = new Store<StoreSchema>({
       enum: ['required', 'open'],
       // No default: absence is the legacy posture signal — it means this install
       // predates the mode decision, not that a choice was made.
+    },
+    httpsFilterTrustedCaFingerprint: {
+      // No default: the key is written the first time a ca-* trust op
+      // verifies the answering engine's CA as 'trusted', and stays absent
+      // before that — absence = no drift baseline = the check is inert.
+      type: 'string',
     },
     deployRefreshReports: {
       type: 'object',
@@ -5061,6 +5072,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
       try {
         const reply = await fn(ca.certPem);
+        if (reply.state === 'trusted') {
+          // A verified 'trusted' reply records the answering engine's CA as
+          // the drift baseline — only AFTER trust is proven, so a rotated or
+          // swapped engine's CA can never silently re-baseline itself; the
+          // user-engine/launchd-engine store split (flag 100) is exactly
+          // what caDrift then watches for.
+          store.set('httpsFilterTrustedCaFingerprint', ca.sha256Fingerprint);
+        }
         return {
           ...reply,
           sha256Fingerprint: ca.sha256Fingerprint,
@@ -5098,6 +5117,13 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       await fs.writeFile(tmpPem, certPem, { mode: 0o600 });
       try {
         const shellQuote = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+        // The `-k` path is resolved for THIS process's user before the
+        // elevation runs — `security` executes as root but the target stays
+        // the user's own login.keychain-db, which is the correct one (that
+        // is the trust store the user's TLS clients read). The caveat: if
+        // the app itself were ever run elevated (root euid), this path would
+        // resolve to root's keychain instead and the user's browsers would
+        // still not trust the CA — running the app as root is unsupported.
         const shellCmd = `security add-trusted-cert -d -r trustRoot -k ${shellQuote(macOsLoginKeychainPath())} ${shellQuote(tmpPem)}`;
         const result = await runShellAsAdmin(shellCmd);
         if (!result.success) {
@@ -5208,6 +5234,19 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     ipcMain.handle('httpsfilter:stop', async () => {
       return await filterProxyManager.stop();
+    });
+
+    // The capture-install invocation rendered for THIS host — absolute
+    // script/bundle/runner/rulesPath so the card's hint pastes on a machine
+    // with no repo checkout (daemon:get-service-script's precedent). The
+    // rulesPath names the same browser.txt the start handler computes.
+    ipcMain.handle('httpsfilter:get-install-script', async () => {
+      const savePath = store.get('savePath');
+      const rulesPath =
+        typeof savePath === 'string' && isAbsolute(savePath)
+          ? join(dirname(savePath), 'browser.txt')
+          : undefined;
+      return filterProxyManager.getCaptureInstallCommand(rulesPath);
     });
 
     // Pause means "tunnel everything without verdicts" — the engine's own

@@ -17,7 +17,10 @@ const moduleDir =
  * control port, 'starting' is a spawned child that has not answered yet,
  * 'running'/'paused' come from the engine's own payload, and 'degraded' is a
  * running engine whose policy ledger fell back to ephemeral (the engine
- * reports `policyDegraded`; the union member keeps it pill-visible).
+ * reports `policyDegraded`; the union member keeps it pill-visible). The
+ * mapping is one-directional: a paused AND degraded engine reports 'paused'
+ * — pause masks degraded on the pill, while `policyDegraded` still travels
+ * as its own field so the card can name it.
  */
 export interface FilterProxyStatus {
   status: 'stopped' | 'starting' | 'running' | 'degraded' | 'paused';
@@ -38,6 +41,16 @@ export interface FilterProxyStatus {
    * rather than racing a second engine onto the same ports.
    */
   captureServiceInstalled: boolean;
+  /**
+   * True when the answering engine's CA fingerprint differs from the
+   * recorded last-trusted one — the two-store split means the user engine
+   * (userData storeDir) and the launchd engine (/Users/Shared storeDir)
+   * mint DIFFERENT CAs, so a user who trusted one engine then gets the
+   * other sees minted leafs that no longer verify. The card renders a
+   * re-verify warning. Absent/false when no trusted fingerprint is on
+   * record or the answering CA matches it.
+   */
+  caDrift?: boolean;
   corruptLineCount?: number;
   stats?: {
     flowsTotal: number;
@@ -86,6 +99,8 @@ export class FilterProxyManager {
   private storeDir?: string;
   private rulesPath?: string;
   private entryPath?: string;
+  private captureServiceInstalledProbe?: () => boolean;
+  private trustedCaFingerprint?: () => string | undefined;
 
   constructor(options?: {
     controlPort?: number;
@@ -94,12 +109,27 @@ export class FilterProxyManager {
     rulesPath?: string;
     /** Test/custom-install seam — when set it is THE spawn target (no candidate scan). */
     entryPath?: string;
+    /**
+     * Test/custom-posture seam — overrides the launchd-plist probe
+     * (`isCaptureServiceInstalled`). Deliberately bypasses the darwin gate
+     * so non-darwin suites can drive the capture-installed branches.
+     */
+    captureServiceInstalled?: () => boolean;
+    /**
+     * Reads the LAST-TRUSTED engine CA fingerprint for drift detection —
+     * index.ts backs it with the `httpsFilterTrustedCaFingerprint` store
+     * key (written by the ca-* IPC on a verified 'trusted' reply). Absent
+     * disables the check: `caDrift` stays false.
+     */
+    trustedCaFingerprint?: () => string | undefined;
   }) {
     if (options?.controlPort) this.controlPort = options.controlPort;
     if (options?.dataPort) this.dataPort = options.dataPort;
     if (options?.storeDir) this.storeDir = options.storeDir;
     if (options?.rulesPath) this.rulesPath = options.rulesPath;
     if (options?.entryPath) this.entryPath = options.entryPath;
+    if (options?.captureServiceInstalled) this.captureServiceInstalledProbe = options.captureServiceInstalled;
+    if (options?.trustedCaFingerprint) this.trustedCaFingerprint = options.trustedCaFingerprint;
   }
 
   /**
@@ -122,7 +152,23 @@ export class FilterProxyManager {
         const data = await res.json();
         const paused = data.paused === true || data.status === 'paused';
         const policyDegraded = data.policyDegraded === true;
+        // CA-drift check against the recorded last-trusted fingerprint — the
+        // launchd engine's CA (/Users/Shared storeDir) and the app engine's
+        // (userData storeDir) are different mints, so a swap of which engine
+        // answers shows up as a different sha256 on the same ports. The one-
+        // engine lifecycle gates normally prevent the swap; this is the
+        // defense-in-depth surface for it. No recorded trust → no baseline →
+        // the check stays inert.
+        const trustedFp = this.trustedCaFingerprint?.();
+        let caDrift = false;
+        if (trustedFp) {
+          const ca = await this.getCaInfo();
+          caDrift = ca !== null && ca.sha256Fingerprint !== trustedFp;
+        }
         return {
+          // A paused engine that is also degraded maps to 'paused' — pause
+          // masks degraded on the pill; `policyDegraded` still travels as its
+          // own field so the card can name the ledger posture.
           status: paused ? 'paused' : policyDegraded ? 'degraded' : 'running',
           port: data.dataPort || this.dataPort,
           controlPort: data.controlPort || this.controlPort,
@@ -132,6 +178,7 @@ export class FilterProxyManager {
           uptimeSeconds: data.uptimeSeconds || 0,
           managedByApp: this.childProcess !== null,
           captureServiceInstalled,
+          caDrift,
           corruptLineCount: data.corruptLineCount,
           stats: data.stats,
         };
@@ -166,9 +213,12 @@ export class FilterProxyManager {
    * live in the SYSTEM domain, which a user-context `launchctl list` cannot
    * see, so a probing `launchctl` could never report the service anyway.
    * Checked per call so installing or removing capture mid-session reports
-   * honestly on the next probe.
+   * honestly on the next probe. The injected probe (the
+   * `captureServiceInstalled` constructor seam) is authoritative and bypasses
+   * the platform gate so non-darwin suites can drive the capture branches.
    */
   private isCaptureServiceInstalled(): boolean {
+    if (this.captureServiceInstalledProbe) return this.captureServiceInstalledProbe();
     if (process.platform !== 'darwin') return false;
     return existsSync(LAUNCHD_PLIST);
   }
@@ -202,6 +252,49 @@ export class FilterProxyManager {
       return existsSync(this.entryPath) ? this.entryPath : null;
     }
     return this.candidateEntryPaths().find((p) => existsSync(p)) ?? null;
+  }
+
+  /**
+   * Ordered candidates for the capture installer script itself. Dev layout
+   * resolves the repo's `scripts/`; packaged builds ship `filterProxy.cjs`
+   * under `app.asar.unpacked` but do NOT yet ship `scripts/` — the
+   * resourcesPath candidate names where it would land so a packaged build
+   * that does ship it resolves it the same way.
+   */
+  candidateScriptPaths(): string[] {
+    return [
+      ...(process.resourcesPath ? [path.join(process.resourcesPath, 'scripts', 'install-macos-capture.sh')] : []),
+      path.resolve(moduleDir, '../../../scripts/install-macos-capture.sh'), // src/ → repo/scripts
+      path.resolve(moduleDir, '../../../../scripts/install-macos-capture.sh'), // .webpack/main/ → repo/scripts
+      path.resolve(process.cwd(), 'scripts/install-macos-capture.sh'), // cwd = repo root
+      path.resolve(process.cwd(), '../../scripts/install-macos-capture.sh'), // cwd = packages/electron-app → repo/scripts
+    ];
+  }
+
+  /**
+   * The `install-macos-capture.sh` invocation rendered for THIS host —
+   * absolute script, engine bundle, runner and rulesPath — so the card's
+   * hint pastes verbatim on a machine with no repo checkout (the
+   * `daemon:get-service-script` precedent). `sudo` stays literal: the
+   * script needs root and the operator types it.
+   */
+  getCaptureInstallCommand(rulesPath?: string): { success: boolean; command?: string; message?: string } {
+    const scriptPath = this.candidateScriptPaths().find((p) => existsSync(p));
+    const entryPath = this.resolveEntryPath();
+    if (!entryPath || !scriptPath) {
+      return {
+        success: false,
+        message: !entryPath
+          ? 'Could not resolve the https-filter engine bundle — run npm run build first.'
+          : 'install-macos-capture.sh is not present — packaged builds do not ship the capture scripts yet.',
+      };
+    }
+    const resolvedRules = this.resolveRulesPath(rulesPath);
+    const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+    const command =
+      `sudo bash ${q(scriptPath)} ${q(entryPath)} ${q(process.execPath)}` +
+      (resolvedRules ? ` ${q(resolvedRules)}` : '');
+    return { success: true, command };
   }
 
   /**
@@ -282,6 +375,23 @@ export class FilterProxyManager {
           ? 'the macOS capture service'
           : 'an external process';
       return { success: true, message: `Filter proxy engine is already active on port ${current.port} (managed by ${owner}).` };
+    }
+
+    // ONE ENGINE, EVER — an installed capture service with an unanswered
+    // probe is a transient KeepAlive gap, not a free port. Squatting here
+    // spawns a USER-euid engine on the launchd engine's ports, and that
+    // engine's own upstream dials are NOT exempt from the capture anchor's
+    // rdr (the `user != _blockingmachine` clause only exempts the service
+    // account) — it self-captures and livelocks, taking the web down. The
+    // right verbs are launchd's: re-run the installer or uninstall capture.
+    if (current.captureServiceInstalled) {
+      this.starting = false;
+      return {
+        success: false,
+        message:
+          `Cannot start the filter proxy: the capture service owns :${this.controlPort}/:${this.dataPort} — ` +
+          'it recovers via launchd KeepAlive; if it is wedged, re-run install or uninstall capture first.',
+      };
     }
 
     const storeDir = this.resolveStoreDir(options?.storeDir);
@@ -386,9 +496,14 @@ export class FilterProxyManager {
   }
 
   /**
-   * Stops the engine process if managed by this app. A launchd-owned engine
-   * (capture install) is refused with the launchctl pointer — killing the
-   * `_blockingmachine` process under KeepAlive would just relaunch it.
+   * Stops the engine. Three postures: a child this manager spawned gets
+   * SIGTERM; a launchd-owned engine (capture installed) is REFUSED — the
+   * shutdown route would answer on it too, but KeepAlive would relaunch it
+   * and bootout is the honest verb; an ANSWERING engine this manager never
+   * spawned (a detached child that outlived an app exit — deliberately, so
+   * CONNECT sessions survive) is retired gracefully through POST
+   * /v1/proxy/shutdown, the loopback close this control API exposes for
+   * exactly that orphan.
    */
   async stop(): Promise<{ success: boolean; message: string }> {
     if (this.childProcess) {
@@ -405,12 +520,49 @@ export class FilterProxyManager {
     if (this.isCaptureServiceInstalled()) {
       return {
         success: false,
-        message: 'Filter proxy is managed by the macOS capture service — unload com.blockingmachine.proxy via launchctl (or the Task 3 uninstaller).',
+        message:
+          'Filter proxy is managed by the macOS capture service — launchd owns the engine, so the verb is ' +
+          'launchctl bootout system/com.blockingmachine.proxy (or the Task 3 uninstaller), not a control-API shutdown.',
       };
+    }
+
+    // Orphaned user-context engine: nothing this manager spawned, no capture
+    // service, but an engine still answers the control port. It cannot be
+    // killed (no handle, and kill(2) is not the posture anyway) — the
+    // shutdown route it exposes is the graceful retire.
+    const current = await this.getStatus();
+    if (current.status === 'stopped') {
+      return {
+        success: false,
+        message: 'Filter proxy is not running — nothing answered the control port.',
+      };
+    }
+
+    try {
+      await fetch(`http://${this.bindHost}:${this.controlPort}/v1/proxy/shutdown`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+    } catch {
+      // A mid-reply connection reset is indistinguishable from the engine
+      // dying on cue — the poll below is the proof either way.
+    }
+
+    // The engine answers first, then closes on a deferred tick — poll until
+    // the control port reads stopped (bounded at the same patience the
+    // launch probe uses per iteration).
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const status = await this.getStatus();
+      if (status.status === 'stopped') {
+        return { success: true, message: 'The running engine accepted the shutdown and retired.' };
+      }
+      await new Promise((r) => setTimeout(r, 300));
     }
     return {
       success: false,
-      message: 'Filter proxy is running externally or not running. Stop it from its owning process.',
+      message: 'Shutdown was sent but the engine still answers — stop it from its owning process.',
     };
   }
 

@@ -312,6 +312,64 @@ describe('HttpsFilterCard — pins', () => {
   });
 });
 
+describe('HttpsFilterCard — one-engine lifecycle surface', () => {
+  it('suppresses Run proxy under an installed capture service — the managed-by line instead', async () => {
+    const bridge = installBridge({
+      getHttpsFilterStatus: jest.fn(() =>
+        Promise.resolve({ ...stopped, captureServiceInstalled: true }),
+      ),
+      startHttpsFilter: jest.fn(() => Promise.resolve({ success: true, message: 'started' })),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // The launchd service owns the ports — offering a user-context spawn
+    // here would race its KeepAlive recovery into a self-capture.
+    expect(screen.queryByRole('button', { name: /run proxy/i })).toBeNull();
+    expect(screen.queryByText(/managed by the capture service/)).not.toBeNull();
+    expect(bridge.startHttpsFilter).not.toHaveBeenCalled();
+  });
+
+  it('renders the rendered-for-this-host install command when the IPC answers one', async () => {
+    installBridge({
+      getHttpsFilterStatus: jest.fn(() => Promise.resolve(stopped)),
+      getHttpsFilterInstallScript: jest.fn(() =>
+        Promise.resolve({
+          success: true,
+          command:
+            "sudo bash '/opt/Blockingmachine/scripts/install-macos-capture.sh' '/opt/Blockingmachine/filterProxy.cjs' '/opt/Blockingmachine/Blockingmachine' '/Users/t/Documents/Blockingmachine/browser.txt'",
+        }),
+      ),
+      copyToClipboard: jest.fn(),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // The rendered absolute invocation — not the repo-relative hint.
+    expect(
+      screen.queryByText(/\/opt\/Blockingmachine\/scripts\/install-macos-capture\.sh/),
+    ).not.toBeNull();
+    expect(screen.queryByText(/sudo scripts\/install-macos-capture\.sh/)).toBeNull();
+  });
+
+  it('warns when the answering engine CA drifts from the trusted record', async () => {
+    installBridge({
+      getHttpsFilterStatus: jest.fn(() => Promise.resolve({ ...running, caDrift: true })),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/CA changed — re-verify trust/)).not.toBeNull();
+  });
+});
+
 describe('HttpsFilterCard — polling lifecycle', () => {
   it('fires the 10s poll while mounted and stops after unmount', async () => {
     jest.useFakeTimers();

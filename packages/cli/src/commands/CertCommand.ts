@@ -1,5 +1,6 @@
 import { X509Certificate } from "crypto";
 import fs from "fs/promises";
+import os from "os";
 import path from "path";
 import chalk from "chalk";
 import {
@@ -168,10 +169,20 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
 
     if (outcome === "needs-admin") {
       // `cert export` writes the PEM the sudo line consumes — keep the pair
-      // copy-pasteable as one shell command.
+      // copy-pasteable as one shell command. The keychain path is the same
+      // resolution core's macOsLoginKeychainPath uses, expanded to an
+      // absolute path here rather than left as "$HOME": under sudo -H (or
+      // any preserved-env posture) $HOME expands to the WRONG user's home,
+      // so the printed line names the concrete file the write targets.
+      const keychainPath = path.join(
+        process.env.HOME ?? os.homedir(),
+        "Library",
+        "Keychains",
+        "login.keychain-db",
+      );
       const sudoCommand =
         "blockingmachine cert export ca.pem && " +
-        'sudo security add-trusted-cert -d -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" ca.pem';
+        `sudo security add-trusted-cert -d -r trustRoot -k '${keychainPath.replace(/'/g, `'\\''`)}' ca.pem`;
       const message =
         "Trust install needs administrator rights from this context. Run: " +
         sudoCommand;

@@ -17,7 +17,9 @@
  *   BM_RULES_PATH    optional — compiled request-rules file the evaluator loads
  *                    at boot and `/v1/proxy/reload` re-reads; unset starts empty
  *   BM_DATA_PORT     CONNECT/PROXY-v2/plain-HTTP listener (default 9294)
- *   BM_CONTROL_PORT  /v1/proxy/* listener (default 9293)
+ *   BM_CONTROL_PORT  /v1/proxy/* listener (default 9293) — carries
+ *                    POST /v1/proxy/shutdown, which retires the engine
+ *                    through the same close+exit path the signals take
  *   BM_BIND_HOST     bind host for both listeners (default 127.0.0.1)
  *   BM_KEYWRAP       CA key-wrap backend pin — 'off'/'none'/'0' forces
  *                    `keyWrapBackend: null` (0600 `ca.key.pem`, `keyWrapped:
@@ -32,7 +34,7 @@
  * exits 1; only a config refusal (missing BM_STORE_DIR) exits 2.
  */
 
-import { startFilterProxy, type FilterProxyConfig } from './index.js';
+import { startFilterProxy, type FilterProxyConfig, type RunningFilterProxy } from './index.js';
 
 const TAG = '[https-filter]';
 
@@ -104,9 +106,30 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     stderrLine(`fatal: ${parsed.error}`);
     process.exit(2);
   }
-  const cfg: FilterProxyConfig = parsed.config;
+  // `running`/`shutdown` are declared before startFilterProxy so the config
+  // can hand the control API's shutdown route the same close+exit path the
+  // signals take — the route can only fire once the control port listens,
+  // which is after `running` is assigned.
+  let running: RunningFilterProxy;
+  let closing = false;
+  const shutdown = (signal: string) => {
+    if (closing) return; // a second signal during close must not re-enter it
+    closing = true;
+    stderrLine(`${signal} received — shutting down`);
+    running
+      .close()
+      .then(() => process.exit(0))
+      .catch((err) => {
+        stderrLine(`fatal: close failed: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      });
+  };
 
-  let running;
+  const cfg: FilterProxyConfig = {
+    ...parsed.config,
+    onShutdownRequest: () => shutdown('/v1/proxy/shutdown'),
+  };
+
   try {
     running = await startFilterProxy(cfg);
   } catch (err) {
@@ -121,19 +144,6 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     `listening: control ${cfg.bindHost}:${running.controlPort} data ${cfg.bindHost}:${running.proxy.port}`,
   );
 
-  let closing = false;
-  const shutdown = (signal: string) => {
-    if (closing) return; // a second signal during close must not re-enter it
-    closing = true;
-    stderrLine(`${signal} received — shutting down`);
-    running
-      .close()
-      .then(() => process.exit(0))
-      .catch((err) => {
-        stderrLine(`fatal: close failed: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
-      });
-  };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
   // detached + unref'd children outlive the app's terminal — SIGHUP then means

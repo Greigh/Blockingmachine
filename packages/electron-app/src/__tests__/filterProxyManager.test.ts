@@ -343,3 +343,157 @@ describe('FilterProxyManager', () => {
     expect(down.message).toContain('control API');
   });
 });
+
+describe('FilterProxyManager — one-engine lifecycle gates', () => {
+  test('start() refuses to squat under an installed-but-unanswered capture service', async () => {
+    // The probe reads 'stopped' (a transient KeepAlive gap), not a free
+    // port — a user-euid spawn on the launchd ports would self-capture, so
+    // the refusal must fire before resolveStoreDir/resolveEntryPath/spawn.
+    const fetchMock = jest.spyOn(globalThis, 'fetch');
+    fetchMock.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+    const manager = tracked(
+      new FilterProxyManager({
+        controlPort: 65431,
+        dataPort: 65432,
+        captureServiceInstalled: () => true,
+      }),
+    );
+    const result = await manager.start({ storeDir: join(tmpBase, 'store-capped') });
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('capture service owns');
+    expect(result.message).toContain('KeepAlive');
+    // The spawn was never reached — no child, and the only fetch attempted
+    // was the status probe (no control mutation rode it).
+    expect((manager as unknown as { childProcess: unknown }).childProcess).toBeNull();
+    expect(fetchMock.mock.calls.every(([u]) => String(u).endsWith('/v1/proxy/status'))).toBe(true);
+  });
+
+  test('stop() retires an orphaned engine via POST /v1/proxy/shutdown — not a kill', async () => {
+    // An engine answers that this manager never spawned (a detached child
+    // that outlived an app exit). The retire rides the control API, and the
+    // bounded poll then sees the port go dead.
+    const fetchMock = jest.spyOn(globalThis, 'fetch');
+    let engineDead = false;
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/v1/proxy/shutdown')) {
+        engineDead = true;
+        return jsonResponse(200, { success: true, message: 'shutting down' });
+      }
+      if (url.endsWith('/v1/proxy/status')) {
+        return engineDead
+          ? Promise.reject(new Error('connect ECONNREFUSED'))
+          : jsonResponse(200, STATUS_PAYLOAD);
+      }
+      return jsonResponse(404, { error: 'unknown route' });
+    });
+
+    const manager = tracked(new FilterProxyManager({ controlPort: 65431 }));
+    const result = await manager.stop();
+
+    expect(result.success).toBe(true);
+    const shutdownCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/v1/proxy/shutdown'));
+    expect(shutdownCall).toBeDefined();
+    expect((shutdownCall![1] as RequestInit).method).toBe('POST');
+    // Nothing was killed — there is no child to kill; the route is the verb.
+    expect((manager as unknown as { childProcess: unknown }).childProcess).toBeNull();
+  });
+
+  test('stop() refuses the launchd-owned engine — bootout is the verb, never the route', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch');
+    fetchMock.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+    const manager = tracked(
+      new FilterProxyManager({
+        controlPort: 65431,
+        captureServiceInstalled: () => true,
+      }),
+    );
+    const result = await manager.stop();
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('launchd');
+    expect(result.message).toContain('bootout');
+    // The shutdown route must never fire against the capture engine.
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).endsWith('/v1/proxy/shutdown')),
+    ).toBe(false);
+  });
+
+  test('stop() answers not-running when nothing answers the control port', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch');
+    fetchMock.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+    const manager = tracked(new FilterProxyManager({ controlPort: 65431 }));
+    const result = await manager.stop();
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('not running');
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).endsWith('/v1/proxy/shutdown')),
+    ).toBe(false);
+  });
+
+  test('getCaptureInstallCommand renders absolute script/bundle/runner/rulesPath', () => {
+    const dir = mkdtempSync(join(tmpBase, 'install-cmd-'));
+    const entry = writeFakeEngine(dir);
+
+    const manager = new FilterProxyManager({ entryPath: entry });
+    const res = manager.getCaptureInstallCommand(join(dir, 'rules', 'browser.txt'));
+
+    expect(res.success).toBe(true);
+    const cmd = res.command!;
+    expect(cmd).toContain('install-macos-capture.sh');
+    expect(cmd).toContain(entry); // the resolved engine bundle — absolute
+    expect(cmd).toContain(process.execPath); // the runner — absolute
+    expect(cmd).toContain(join(dir, 'rules', 'browser.txt')); // the rulesPath — absolute
+    // A repo-relative invocation is exactly what this must not render.
+    expect(cmd).not.toContain(' scripts/install-macos-capture.sh');
+    expect(cmd.startsWith('sudo')).toBe(true);
+
+    // An unresolvable engine bundle fails honestly rather than printing a
+    // half-rendered line.
+    const noEntry = new FilterProxyManager({ entryPath: join(tmpBase, 'no-such-entry.cjs') });
+    const failed = noEntry.getCaptureInstallCommand();
+    expect(failed.success).toBe(false);
+    expect(failed.message).toBeTruthy();
+  });
+
+  test('caDrift flags a changed answering fingerprint against the trusted record', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch');
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/v1/proxy/ca')) {
+        return jsonResponse(200, {
+          certPem: 'pem',
+          sha256Fingerprint: 'BB:BB:BB',
+          notAfter: 'Jan  1 00:00:00 2036 GMT',
+          keyWrapped: false,
+        });
+      }
+      return jsonResponse(200, STATUS_PAYLOAD);
+    });
+
+    // Recorded trust for a DIFFERENT fingerprint → drift.
+    const drifted = tracked(
+      new FilterProxyManager({ controlPort: 65431, trustedCaFingerprint: () => 'AA:AA:AA' }),
+    );
+    expect((await drifted.getStatus()).caDrift).toBe(true);
+
+    // Same fingerprint → no drift.
+    const same = tracked(
+      new FilterProxyManager({ controlPort: 65431, trustedCaFingerprint: () => 'BB:BB:BB' }),
+    );
+    expect((await same.getStatus()).caDrift).toBe(false);
+
+    // No recorded trust → the check is inert and never even probes /ca.
+    const none = tracked(new FilterProxyManager({ controlPort: 65431 }));
+    const before = fetchMock.mock.calls.length;
+    expect((await none.getStatus()).caDrift).toBe(false);
+    expect(
+      fetchMock.mock.calls.slice(before).some(([u]) => String(u).endsWith('/v1/proxy/ca')),
+    ).toBe(false);
+  });
+});

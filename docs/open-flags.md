@@ -94,6 +94,38 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **Fix shape:** when an initiator source exists, plumb `thirdParty` + `domain=` initiator context through the evaluate options, then re-audit which modifiers the proxy can truthfully honor.
 - **Verify:** a `$third-party`-scoped rule fires on a request the proxy can prove is third-party — needs the initiator signal first.
 
+### 100. The launchd engine and the app engine keep separate CA + ledger stores — a deliberate two-posture split that only the one-engine rule makes safe
+
+- **Where:** `scripts/install-macos-capture.sh` (`STORE_DIR=/Users/Shared/Blockingmachine/https-filter`, written into the proxy plist's `BM_STORE_DIR`) vs `FilterProxyManager`'s `app.getPath('userData')/https-filter` default in `packages/electron-app/src/filterProxyManager.ts`.
+- **What:** each engine mints its own CA and keeps its own pin ledger — a CA trusted while the launchd engine answers does not cover leafs minted by the user-context engine, and a pin ledger written by one is invisible to the other. The split is unavoidable posture: the `_blockingmachine` store is `0700` service-owned by design and cannot be opened by a user-euid process, and the app's store cannot be written by the service account.
+- **Why left:** the alternative — one shared store across a root-installed service account and the user app — trades a cleaner identity for a much harder permissions problem, and the one-engine lifecycle gates (the `start()` squat refusal under an installed plist, the installer's `:9293/:9294/:9295` port preflight, the `stop()` launchd refusal) are supposed to make the split unreachable in normal operation. The recorded residual is drift-DETECTION rather than store-sharing: `httpsFilterTrustedCaFingerprint` in electron-store records the CA a trust op verified, `getStatus()` flags `caDrift` when the answering engine's fingerprint differs, and the card warns "re-verify trust".
+- **Fix shape:** if the gates ever prove insufficient, the honest escalation is a shared CA directory both postures can read (service-owned, group-readable) — not a merge of ledgers.
+- **Verify:** install capture and trust its CA, then uninstall capture and run the user engine — the card must flag `caDrift` until the new CA is trusted; a `ca-trust-status` 'trusted' reply re-baselines the record.
+
+### 101. An app-quit orphaned engine persists until the next `stop()` — and the shutdown route it now rides is unauthenticated like the rest of the control API
+
+- **Where:** `FilterProxyManager.spawn` (detached + unref'd child), the new orphaned-engine branch of `stop()`, `POST /v1/proxy/shutdown` in `packages/https-filter/src/control.ts`, `onShutdownRequest` in `packages/https-filter/src/main.ts`.
+- **What:** the spawned engine deliberately outlives the app — a detached child keeps serving CONNECT sessions across an app close (flag-71's orphan-is-fed posture applied to the proxy). The manager now retires one gracefully: when no child is tracked, no capture service is installed, and an engine still answers the control port, `stop()` POSTs the shutdown route rather than hunting a process it cannot reach. The route itself carries the same trust model as `/v1/proxy/toggle` — any same-user loopback caller can stop protection, so any such caller can stop the process; it also works on the launchd engine, where `launchctl bootout` (or KeepAlive) remains the governing verb.
+- **Why left:** unauthenticated-loopback is the control API's documented posture; a loopback-auth design belongs to a broader auth pass for every mutation route at once, not this one alone.
+- **Fix shape:** a shared-secret control token persisted in the store dir (0600) checked on mutations — apply it to toggle/reload/pins-bypass/pins-remove at the same time so the trust model stays uniform.
+- **Verify:** the app spawns an engine, the app exits, the engine still answers; `httpsfilter:stop` then retires it via the route — the control port goes connect-refused and the child exits 0 (main.test.ts + filterProxy.entrypoint.test.ts + filterProxyManager.test.ts pin all three legs).
+
+### 102. Helper death is fail-CLOSED on purpose — the residual RST window while launchd restarts it is documented, not fixed
+
+- **Where:** `scripts/install-macos-capture.sh` FAILURE POSTURES + the `com.blockingmachine.natlook` KeepAlive plist; the helper watchdog design in `packages/https-filter/helper/macos/natlook-helper.c`.
+- **What:** a hard-killed natlook helper leaves the rdr rules pointing at :9295 — pf keeps redirecting to a dead listener → RST on connect → dead web for the KeepAlive relaunch window (seconds). Engine death is the opposite posture on purpose: the helper's watchdog flushes the anchor and fails open.
+- **Why left:** accepted residual — there is no watchdog for the watcher; launchd KeepAlive is the recovery path, and a second supervisor or a probe-gated pf rule is more machinery than the window is worth.
+- **Fix shape:** if the window ever bites in practice, the helper could arm a dedicated pf token/anchor-pair that a crash takes down with it (fork-and-hold a sentinel fd), or the anchor could be made conditional on a live-socket probe — both are anchor-design work, not config.
+- **Verify:** `kill -9` the helper under live traffic — connections RST until KeepAlive relaunches it; the rehearsal script's kickstart leg exercises the adjacent path.
+
+### 103. The rehearsal could also prove the installer's squat refusal under root — deferred as a scriptable variant
+
+- **Where:** `scripts/macos-capture-rehearse.sh`, the `--preflight-only` seam in `scripts/install-macos-capture.sh`, `captureScripts.test.ts`.
+- **What:** the installer now refuses to proceed when :9293/:9294/:9295 is already bound (the one-engine rule applied to installs). The `captureScripts` suite drives it functionally without root: bind a capture port, run `install-macos-capture.sh --preflight-only`, assert the die. What is NOT covered is the same refusal mid-rehearsal — a real `sudo` install attempt while a stub engine squats :9294, asserting the die fires before the first dscl/install/launchctl mutation.
+- **Why left:** the seam covers the logic deterministically; a root rehearsal variant would re-prove it inside the real flow but adds a stub-engine fixture and a second rehearsal mode for marginal coverage.
+- **Fix shape:** a `--refuse-under-squat` rehearsal leg: bind :9294, run the installer, assert exit 1 + the "an engine already listens" line + that `dscl . -list /Users/_blockingmachine` shows no new account.
+- **Verify:** run the variant on a live mac — the install dies naming the squatter and `/etc/pf.anchors/com.blockingmachine` is untouched.
+
 ## Closed
 
 ### 97. The CA private key rested as 0600 plaintext — closed by `ca.key.enc`, an AES-256-GCM envelope under an OS-stored wrap secret (`8dae574`)

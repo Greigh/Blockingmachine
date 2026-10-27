@@ -60,6 +60,16 @@ export interface ControlApiDeps {
    * rather than logged once and forgotten.
    */
   policyDegraded: boolean;
+  /**
+   * Invoked (deferred — the reply flushes first) by POST /v1/proxy/shutdown.
+   * `startFilterProxy` wires the engine's own close() here; the spawned
+   * entry (main.ts) substitutes its signal-path shutdown so the process
+   * exits too. Same trust model as /v1/proxy/toggle: ANY loopback caller
+   * can stop the engine — including the launchd capture instance, for which
+   * `launchctl bootout` is the honest verb but this answers the same way
+   * (KeepAlive relaunches it). Deliberate, and documented in the route.
+   */
+  shutdown: () => void;
 }
 
 export interface RunningControl {
@@ -86,6 +96,7 @@ const ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   '/v1/proxy/pins/bypass': new Set(['POST']),
   '/v1/proxy/pins/remove': new Set(['POST']),
   '/v1/proxy/reload': new Set(['POST']),
+  '/v1/proxy/shutdown': new Set(['POST']),
   '/v1/proxy/toggle': new Set(['POST']),
 };
 
@@ -380,6 +391,30 @@ export function startControlServer(deps: ControlApiDeps): Promise<RunningControl
             rulesLoaded: loadedCount,
             rulesSize: loadedCount,
           });
+          return;
+        }
+
+        // Graceful remote shutdown — the route the app's FilterProxyManager
+        // uses to retire an orphaned user-context engine (one it never
+        // spawned and cannot kill). Same trust model as toggle: a loopback
+        // caller can stop protection, so a loopback caller can stop the
+        // process — the launchd capture engine answers it too, for which
+        // launchd's bootout (or KeepAlive) is the governing verb.
+        case '/v1/proxy/shutdown': {
+          req.resume(); // the body is ignored — drain it for keep-alive
+          json(res, 200, { success: true, message: 'shutting down' });
+          // Never run the teardown inside the response path: close() calls
+          // server.closeAllConnections(), which would destroy THIS socket
+          // before the reply reached the caller. A short deferral lets the
+          // kernel hand the bytes over first.
+          setTimeout(() => {
+            try {
+              deps.shutdown();
+            } catch {
+              // A teardown failure has nowhere honest to report to — the
+              // reply already left. The caller's own close remains valid.
+            }
+          }, 25);
           return;
         }
 

@@ -132,4 +132,63 @@ describe('startFilterProxy entrypoint', () => {
       once(net.connect({ host: '127.0.0.1', port: app!.proxy.port }), 'error'),
     ).resolves.toBeDefined();
   });
+
+  test('POST /v1/proxy/shutdown answers, then retires both listeners — the orphan-retire path', async () => {
+    // The app's FilterProxyManager stops an engine it never spawned through
+    // this route (F5): the reply must flush BEFORE the teardown starts, and
+    // the teardown must take the control port down with the data port — a
+    // retried connect is the observable proof the engine is gone. With no
+    // onShutdownRequest configured, startFilterProxy's own closeAll runs:
+    // listeners die, the jest process survives.
+    const dir = await mkdtemp(join(tmpdir(), 'bm-https-filter-shutdown-'));
+    let app: Awaited<ReturnType<typeof startFilterProxy>> | null = null;
+    try {
+      app = await startFilterProxy({
+        storeDir: join(dir, 'store'),
+        dataPort: 0,
+        controlPort: 0,
+        keyWrapBackend: null,
+      });
+      const controlPort = app.controlPort;
+      const dataPort = app.proxy.port;
+
+      const res = await fetch(`http://127.0.0.1:${controlPort}/v1/proxy/shutdown`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, any>;
+      expect(body.success).toBe(true);
+
+      // The deferred close lands on the next tick — poll a fresh connect
+      // until refused rather than sleeping a fixed beat.
+      const deadline = Date.now() + 10_000;
+      let refused = false;
+      while (Date.now() < deadline) {
+        const sock = net.connect({ host: '127.0.0.1', port: controlPort });
+        const failed = await new Promise<boolean>((resolve) => {
+          sock.once('error', () => resolve(true));
+          sock.once('connect', () => {
+            sock.destroy();
+            resolve(false);
+          });
+        });
+        if (failed) {
+          refused = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(refused).toBe(true);
+
+      // The data listener went with it — the retire is the whole engine.
+      const dataSock = net.connect({ host: '127.0.0.1', port: dataPort });
+      await expect(once(dataSock, 'error')).resolves.toBeDefined();
+    } finally {
+      // close() is idempotent — the route already ran it.
+      await app?.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
