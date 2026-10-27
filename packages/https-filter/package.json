@@ -11,7 +11,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "prebuild": "node helper/build-if-darwin.mjs",
+    "prebuild": "node helper/build-if-darwin.mjs && node helper/build-if-win32.mjs",
     "build": "tsc",
     "dev": "tsc -w",
     "start": "node dist/index.js",
@@ -29,6 +29,6 @@
     "@types/node": "^26.6.5",
     "@types/node-forge": "^1.3.14",
     "rimraf": "^6.1.3",
-    "typescript": "~5.8.3"
+    "typescript": "~5.9.3"
   }
 }

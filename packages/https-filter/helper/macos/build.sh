@@ -16,6 +16,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$HERE/natlook-helper.c"
+CORE="$HERE/../common/splice.c"
 OUT="$HERE/natlook-helper"
 
 if [[ "${1:-}" == "clean" ]]; then
@@ -33,5 +34,5 @@ if ! command -v clang >/dev/null 2>&1; then
   exit 1
 fi
 
-clang -std=c11 -O2 -Wall -Wextra -Werror -o "$OUT" "$SRC"
+clang -std=c11 -O2 -Wall -Wextra -Werror -o "$OUT" "$SRC" "$CORE"
 echo "built $OUT" >&2
