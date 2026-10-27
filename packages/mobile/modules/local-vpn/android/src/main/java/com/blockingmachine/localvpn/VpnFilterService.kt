@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.VpnService
@@ -18,7 +19,6 @@ import com.blockingmachine.localvpn.tcp.TcpStats
 import com.blockingmachine.localvpn.tcp.UdpDispatcher
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.Socket
@@ -72,6 +72,10 @@ class VpnFilterService : VpnService() {
     const val EXTRA_LABEL = "label"
     const val EXTRA_HUB_HOST = "hubHost"
 
+    /** SharedPreferences file + key holding the per-app bypass package set (flag 128). */
+    const val PREFS_NAME = "blockingmachine_localvpn"
+    const val PREF_DISALLOWED_APPS = "disallowed_apps"
+
     /** Virtual resolver advertised to apps; routed into the tunnel. */
     const val VIRTUAL_DNS = "10.0.0.53"
 
@@ -93,6 +97,9 @@ class VpnFilterService : VpnService() {
     val forwardedCount = AtomicLong(0)
     val quicDropped = AtomicLong(0)
     val captureRunning = AtomicBoolean(false)
+
+    /** DNS-demux counters — cumulative across tunnel rebuilds (flag 130). */
+    val dnsStats = DnsForwarder.Stats()
 
     /** Live capture-flow counters while capture is armed — the module's status read. */
     @Volatile
@@ -173,6 +180,20 @@ class VpnFilterService : VpnService() {
       builder.addRoute(VIRTUAL_DNS, 32)
     }
 
+    // Flag 128: per-app bypass — excluded packages never enter the tunnel at
+    // all (their DNS stays unfiltered, no hub splice, QUIC untouched). An
+    // entry uninstalled since the set was saved throws NameNotFoundException —
+    // skipped per-app with a warn, never fatal to the tunnel.
+    val bypass = disallowedApps()
+    for (pkg in bypass) {
+      try {
+        builder.addDisallowedApplication(pkg)
+      } catch (e: Exception) {
+        Log.w(TAG, "per-app bypass skipped for '$pkg': $e")
+      }
+    }
+    if (bypass.isNotEmpty()) Log.i(TAG, "per-app bypass: ${bypass.size} package(s) excluded")
+
     val pfd = builder.establish() ?: run {
       Log.e(TAG, "VpnService.Builder.establish() returned null — VPN permission?")
       shutdown()
@@ -186,6 +207,11 @@ class VpnFilterService : VpnService() {
     readerJob = scope.launch { readLoop(pfd, this) }
   }
 
+  /** The persisted per-app bypass set — read fresh on every establish. */
+  private fun disallowedApps(): Set<String> =
+    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getStringSet(PREF_DISALLOWED_APPS, emptySet()) ?: emptySet()
+
   private fun readLoop(pfd: ParcelFileDescriptor, cs: CoroutineScope) {
     val input = FileInputStream(pfd.fileDescriptor)
     val output = FileOutputStream(pfd.fileDescriptor)
@@ -196,8 +222,16 @@ class VpnFilterService : VpnService() {
       synchronized(emitLock) { runCatching { output.write(pkt) } }
     }
     val buf = ByteArray(32767)
-    val upstreamSock = DatagramSocket()
-    protect(upstreamSock) // forwarding traffic must not loop back into the tunnel
+    // Flag 130: one shared upstream socket whose single receive loop demuxes
+    // replies to waiting queries by rewritten txid — the per-query receive()
+    // this replaces cross-delivered concurrent replies.
+    val forwarder = DnsForwarder(
+      upstream = upstream,
+      emit = { q, dns -> emit(DnsPacket.buildResponse(q, blocked = false, relay = dns)) },
+      protect = { s: DatagramSocket -> protect(s) },
+      parentScope = cs,
+      stats = dnsStats,
+    )
 
     val hub = hubHost
     if (hub != null) {
@@ -227,57 +261,49 @@ class VpnFilterService : VpnService() {
       Log.i(TAG, "hub capture armed — TCP :80/:443 → $hub:$HUB_DATA_PORT, UDP relayed")
     }
 
-    while (cs.isActive) {
-      val n = try {
-        input.read(buf)
-      } catch (e: Exception) {
-        break // fd closed on shutdown
-      }
-      if (n <= 0) continue
-      val packet = buf.copyOf(n)
-      val query = DnsPacket.parseQuery(packet)
+    try {
+      while (cs.isActive) {
+        val n = try {
+          input.read(buf)
+        } catch (e: Exception) {
+          break // fd closed on shutdown
+        }
+        if (n <= 0) continue
+        val packet = buf.copyOf(n)
+        val query = DnsPacket.parseQuery(packet)
 
-      if (query == null) {
-        // Non-DNS traffic only exists while the capture posture routes it in.
-        if (relayDispatcher == null) continue
-        if (Packet.peekUdpDstPort(packet) == 443) {
-          // QUIC suppression — counted; the TCP fallback lands in the stack.
-          // Precedes the UDP relay so HTTP/3 still can't bypass filtering.
-          quicDropped.incrementAndGet()
+        if (query == null) {
+          // Non-DNS traffic only exists while the capture posture routes it in.
+          if (relayDispatcher == null) continue
+          if (Packet.peekUdpDstPort(packet) == 443) {
+            // QUIC suppression — counted; the TCP fallback lands in the stack.
+            // Precedes the UDP relay so HTTP/3 still can't bypass filtering.
+            quicDropped.incrementAndGet()
+            continue
+          }
+          if (captureDispatcher?.onPacket(packet) == true) continue
+          if (relayDispatcher?.onPacket(packet) == true) continue
+          if (udpDispatcher?.onPacket(packet) == true) continue
+          continue // ICMP et al. — no consumer, honest drop
+        }
+
+        if (blocklist?.isBlocked(query.domain) == true) {
+          blockedCount.incrementAndGet()
+          if (blockedCount.get() <= 20) Log.i(TAG, "blocked: ${query.domain}")
+          emit(DnsPacket.buildResponse(query, blocked = true))
           continue
         }
-        if (captureDispatcher?.onPacket(packet) == true) continue
-        if (relayDispatcher?.onPacket(packet) == true) continue
-        if (udpDispatcher?.onPacket(packet) == true) continue
-        continue // ICMP et al. — no consumer, honest drop
-      }
 
-      if (blocklist?.isBlocked(query.domain) == true) {
-        blockedCount.incrementAndGet()
-        if (blockedCount.get() <= 20) Log.i(TAG, "blocked: ${query.domain}")
-        emit(DnsPacket.buildResponse(query, blocked = true))
-        continue
-      }
+        if (forwardedCount.get() < 20) Log.d(TAG, "forwarded: ${query.domain}")
 
-      if (forwardedCount.get() < 20) Log.d(TAG, "forwarded: ${query.domain}")
-
-      forwardedCount.incrementAndGet()
-      // Forward the raw DNS body upstream; relay the answer back into the tunnel.
-      scope.launch {
-        try {
-          val dnsBody = DnsPacket.extractDns(packet) ?: return@launch
-          val req = DatagramPacket(dnsBody, dnsBody.size, upstream, 53)
-          upstreamSock.send(req)
-          val respBuf = ByteArray(4096)
-          val resp = DatagramPacket(respBuf, respBuf.size)
-          upstreamSock.soTimeout = 5000
-          upstreamSock.receive(resp)
-          val dns = respBuf.copyOf(resp.length)
-          emit(DnsPacket.buildResponse(query, blocked = false, relay = dns))
-        } catch (e: Exception) {
-          // Upstream timeout/failure → answer nothing; the client retransmits.
-        }
+        forwardedCount.incrementAndGet()
+        // Register with the demux and send — the receive loop relays the
+        // answer back into the tunnel. A timeout/loss answers nothing, as
+        // before: the client retransmits.
+        forwarder.forward(query)
       }
+    } finally {
+      forwarder.close() // releases the shared socket + pending waiters
     }
   }
 

@@ -10,6 +10,20 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import java.security.cert.CertificateFactory
 
 private const val VPN_CONSENT_REQUEST = 0xB10C
+private const val MAX_DISALLOWED_APPS = 512
+
+/** Manifest package-name shape — each dot-segment must start with a letter. */
+private val PACKAGE_NAME_RE = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)*$")
+
+/**
+ * Trim + validate one package name; null when the shape can't be a real
+ * package (it could never be installed, so persisting it would just rot in
+ * the store). Internal so the unit suite can pin the grammar.
+ */
+internal fun sanitizePackageName(raw: String): String? {
+  val s = raw.trim()
+  return s.takeIf { it.length <= 255 && PACKAGE_NAME_RE.matches(it) }
+}
 
 /**
  * JS bridge for the on-device filter services. The VPN path needs a one-time
@@ -123,6 +137,41 @@ class LocalVpnModule : Module() {
       true
     }
 
+    /**
+     * Per-app tunnel bypass (flag 128): replace the persisted package set the
+     * service applies via `Builder.addDisallowedApplication` on establish. A
+     * changed set on a running tunnel re-STARTs the service — the rebuild
+     * drops in-flight flows, the honest price of applying it now. Entries
+     * that can't be a package name are dropped; the stored set is returned so
+     * JS sees exactly what persisted.
+     */
+    AsyncFunction("setDisallowedApps") { pkgs: List<String> ->
+      val clean = pkgs.mapNotNullTo(LinkedHashSet()) { sanitizePackageName(it) }
+        .take(MAX_DISALLOWED_APPS).toSet()
+      val prefs = context.getSharedPreferences(
+        VpnFilterService.PREFS_NAME, Context.MODE_PRIVATE,
+      )
+      val prev = prefs.getStringSet(VpnFilterService.PREF_DISALLOWED_APPS, emptySet()) ?: emptySet()
+      prefs.edit().putStringSet(VpnFilterService.PREF_DISALLOWED_APPS, clean).apply()
+      if (prev != clean && VpnFilterService.running.get()) {
+        // Extras are sticky across ACTION_START — a bare re-START keeps the
+        // ruleset/hub posture and picks the new set up at establish.
+        context.startService(
+          Intent(context, VpnFilterService::class.java).apply {
+            action = VpnFilterService.ACTION_START
+          }
+        )
+      }
+      clean.toList()
+    }
+
+    /** The persisted per-app bypass set — what the tunnel will exclude. */
+    AsyncFunction("getDisallowedApps") {
+      context.getSharedPreferences(VpnFilterService.PREFS_NAME, Context.MODE_PRIVATE)
+        .getStringSet(VpnFilterService.PREF_DISALLOWED_APPS, emptySet<String>())
+        ?.sorted() ?: emptyList<String>()
+    }
+
     /** Capture off, tunnel up — flows fall through to the pass-through relay. */
     AsyncFunction("stopHttpsCapture") {
       context.startService(
@@ -171,6 +220,9 @@ class LocalVpnModule : Module() {
         "vpnRunning" to VpnFilterService.running.get(),
         "dnsBlocked" to VpnFilterService.blockedCount.get(),
         "dnsForwarded" to VpnFilterService.forwardedCount.get(),
+        "dnsDroppedUnknown" to VpnFilterService.dnsStats.droppedUnknown.get(),
+        "dnsTimeouts" to VpnFilterService.dnsStats.timedOut.get(),
+        "dnsEvictions" to VpnFilterService.dnsStats.evicted.get(),
         "proxyRunning" to PacProxyService.running.get(),
         "proxyPort" to PacProxyService.boundPort,
         "proxyAllowed" to PacProxyService.allowedCount.get(),

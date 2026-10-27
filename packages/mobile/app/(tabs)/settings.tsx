@@ -35,6 +35,7 @@ import {
   type HubCa,
 } from '../../src/filter/httpsCapture';
 import { nativeRulesPath } from '../../src/filter/ruleset';
+import { parsePackageList, SELF_PACKAGE } from '../../src/filter/perAppBypass';
 import { ActionButton, Card, Pill, SectionTitle } from '../../src/components/ui';
 import { describeError, UserError, type FriendlyError } from '../../src/errors';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
@@ -401,6 +402,127 @@ function HttpsCaptureCard() {
   );
 }
 
+/**
+ * Android-only card: per-app bypass. Excluded packages never enter the VPN
+ * tunnel at all — their DNS is unfiltered, nothing they send reaches the
+ * hub, and QUIC is untouched. The set persists natively (SharedPreferences)
+ * and applies via `addDisallowedApplication` on the next tunnel establish;
+ * writing while the tunnel runs re-establishes it (in-flight flows drop).
+ */
+function PerAppBypassCard() {
+  const [apps, setApps] = useState<string[] | null>(null);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<FriendlyError | null>(null);
+  const [rejected, setRejected] = useState<string[]>([]);
+
+  useEffect(() => {
+    void LocalVpn.getDisallowedApps().then((list) => {
+      setApps(list);
+      setDraft(list.join(', '));
+    });
+  }, []);
+
+  const save = async (next: string[]) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const stored = await LocalVpn.setDisallowedApps(next);
+      setApps(stored);
+      setDraft(stored.join(', '));
+      haptics.success();
+    } catch (e) {
+      haptics.error();
+      setErr(describeError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = () => {
+    const parsed = parsePackageList(draft);
+    setRejected(parsed.rejected);
+    void save(parsed.packages);
+  };
+
+  const toggleSelf = () => {
+    if (apps === null) return;
+    const next = apps.includes(SELF_PACKAGE)
+      ? apps.filter((a) => a !== SELF_PACKAGE)
+      : [...apps, SELF_PACKAGE];
+    setRejected([]);
+    void save(next);
+  };
+
+  const selfExcluded = !!apps?.includes(SELF_PACKAGE);
+
+  return (
+    <Card>
+      <View style={styles.rowBetween}>
+        <SectionTitle icon="apps-outline" label="Per-app bypass" style={{ marginBottom: 0 }} />
+        {apps && apps.length > 0 ? <Pill label={`${apps.length} excluded`} tone="info" /> : null}
+      </View>
+      <Text style={styles.meta}>
+        Excluded apps bypass the VPN tunnel entirely — nothing they do is filtered or sent to the hub. Package names, separated by commas.
+      </Text>
+      {err ? (
+        <>
+          <Text style={styles.syncError}>{err.title}</Text>
+          {err.detail ? <Text style={styles.syncErrorDetail}>{err.detail}</Text> : null}
+        </>
+      ) : null}
+      <TextInput
+        style={styles.input}
+        value={draft}
+        onChangeText={setDraft}
+        placeholder="com.example.app, org.other.app"
+        placeholderTextColor={colors.textMuted}
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+      {rejected.length > 0 ? (
+        <Text style={styles.syncErrorDetail}>Skipped: {rejected.join(', ')}</Text>
+      ) : null}
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonFlex}>
+          <ActionButton
+            label="Apply"
+            disabled={busy || apps === null}
+            loading={busy}
+            onPress={apply}
+          />
+        </View>
+        <View style={styles.buttonFlex}>
+          <ActionButton
+            label="Clear all"
+            tone="ghost"
+            disabled={busy || !apps || apps.length === 0}
+            onPress={() => {
+              setRejected([]);
+              void save([]);
+            }}
+          />
+        </View>
+      </View>
+      <Pressable
+        style={styles.docRow}
+        accessibilityRole="button"
+        accessibilityLabel="Exclude this app from the tunnel"
+        onPress={toggleSelf}
+      >
+        <Ionicons
+          name={selfExcluded ? 'checkbox-outline' : 'square-outline'}
+          size={18}
+          color={colors.accent}
+        />
+        <Text style={styles.docLabel}>Exclude this app ({SELF_PACKAGE})</Text>
+      </Pressable>
+      <Text style={styles.meta}>
+        Applies on the next tunnel start — a running tunnel re-establishes, briefly dropping active connections.
+      </Text>
+    </Card>
+  );
+}
 
 export default function SettingsScreen() {
   const { servers, activeServerId, activeToken, setActive, removeServer, setToken } =
@@ -553,6 +675,7 @@ export default function SettingsScreen() {
 
       {isLocalVpnSupported() ? <LocalFilterCard ready={filter.ready} /> : null}
       {isLocalVpnSupported() ? <HttpsCaptureCard /> : null}
+      {isLocalVpnSupported() ? <PerAppBypassCard /> : null}
 
       {activeServerId ? (
         <Card>

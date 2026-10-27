@@ -11,6 +11,9 @@ export interface LocalVpnStatus {
   vpnRunning: boolean;
   dnsBlocked: number;
   dnsForwarded: number;
+  dnsDroppedUnknown: number;
+  dnsTimeouts: number;
+  dnsEvictions: number;
   proxyRunning: boolean;
   proxyPort: number;
   proxyAllowed: number;
@@ -33,6 +36,8 @@ interface NativeLocalVpn {
   stopProxy(): Promise<boolean>;
   startHttpsCapture(hubHost: string): Promise<boolean>;
   stopHttpsCapture(): Promise<boolean>;
+  setDisallowedApps(pkgs: string[]): Promise<string[]>;
+  getDisallowedApps(): Promise<string[]>;
   httpsCaptureStatus(): Promise<HttpsCaptureStatus>;
   installCaCertificate(name: string, certPem: string): Promise<boolean>;
   status(): Promise<LocalVpnStatus>;
@@ -53,6 +58,9 @@ const EMPTY_STATUS: LocalVpnStatus = {
   vpnRunning: false,
   dnsBlocked: 0,
   dnsForwarded: 0,
+  dnsDroppedUnknown: 0,
+  dnsTimeouts: 0,
+  dnsEvictions: 0,
   proxyRunning: false,
   proxyPort: 0,
   proxyAllowed: 0,
@@ -103,6 +111,15 @@ export const LocalVpn = {
   startHttpsCapture: (hubHost: string) =>
     isLocalVpnSupported() ? get().startHttpsCapture(hubHost) : Promise.resolve(false),
   stopHttpsCapture: () => get().stopHttpsCapture(),
+  /**
+   * Replace the per-app bypass set (flag 128) — excluded packages never
+   * enter the tunnel. Resolves to the names actually stored (the native side
+   * drops invalid shapes); a running tunnel re-establishes to apply them.
+   */
+  setDisallowedApps: (pkgs: string[]) =>
+    isLocalVpnSupported() ? get().setDisallowedApps(pkgs) : Promise.resolve([]),
+  getDisallowedApps: (): Promise<string[]> =>
+    isLocalVpnSupported() ? get().getDisallowedApps().catch(() => []) : Promise.resolve([]),
   httpsCaptureStatus: (): Promise<HttpsCaptureStatus> =>
     isLocalVpnSupported() ? get().httpsCaptureStatus().catch(() => EMPTY_CAPTURE) : Promise.resolve(EMPTY_CAPTURE),
   /** Fire Android's certificate-install UI with a hub CA PEM — a real user consent. */
