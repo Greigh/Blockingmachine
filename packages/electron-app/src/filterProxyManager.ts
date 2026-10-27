@@ -133,6 +133,7 @@ export class FilterProxyManager {
   private starting = false;
   private controlPort = 9293;
   private dataPort = 9294; // CONNECT/PROXY-v2 listener; the launchd capture plist uses the same
+  private helperPort = 9295; // helper acceptor; the capture installers' default
   private bindHost = '127.0.0.1';
   private storeDir?: string;
   private rulesPath?: string;
@@ -148,6 +149,12 @@ export class FilterProxyManager {
   constructor(options?: {
     controlPort?: number;
     dataPort?: number;
+    /**
+     * The capture helper's acceptor port (Windows/linux legs) — the
+     * installer defaults to the same 9295 constant; a manager configured
+     * away from it must spell the value in the rendered install command.
+     */
+    helperPort?: number;
     storeDir?: string;
     rulesPath?: string;
     /** Test/custom-install seam — when set it is THE spawn target (no candidate scan). */
@@ -186,6 +193,7 @@ export class FilterProxyManager {
   }) {
     if (options?.controlPort) this.controlPort = options.controlPort;
     if (options?.dataPort) this.dataPort = options.dataPort;
+    if (options?.helperPort) this.helperPort = options.helperPort;
     if (options?.storeDir) this.storeDir = options.storeDir;
     if (options?.rulesPath) this.rulesPath = options.rulesPath;
     if (options?.entryPath) this.entryPath = options.entryPath;
@@ -430,9 +438,18 @@ export class FilterProxyManager {
       // NTFS forbids `"` in filenames, so double-quote wrapping needs no
       // escaping; powershell parses `-File "<path>" "<arg…>"` natively.
       const q = (v: string) => `"${v}"`;
+      // Non-default ports ride the installer's named -Port params — its
+      // defaults are the same constants, so only a diverging manager
+      // spells them (a default-valued manager renders the same command
+      // as before this option existed).
+      const portArgs =
+        (this.helperPort !== 9295 ? ` -HelperPort ${this.helperPort}` : '') +
+        (this.dataPort !== 9294 ? ` -EnginePort ${this.dataPort}` : '') +
+        (this.controlPort !== 9293 ? ` -ControlPort ${this.controlPort}` : '');
       const command =
         `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(scriptPath)} ${q(entryPath)} ${q(process.execPath)}` +
-        (resolvedRules ? ` ${q(resolvedRules)}` : '');
+        (resolvedRules ? ` ${q(resolvedRules)}` : '') +
+        portArgs;
       return { success: true, command };
     }
     const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;

@@ -565,6 +565,25 @@ describe('FilterProxyManager — one-engine lifecycle gates', () => {
     expect(wres.command!).toContain('install-windows-capture.ps1');
     expect(wres.command!).toContain(`"${entry}"`);
     expect(wres.command!).toContain(`"${rules}"`);
+    // Default ports render no -Port params — the installer's own defaults
+    // carry them (same constants), so the command stays byte-stable.
+    expect(wres.command!).not.toMatch(/-(HelperPort|EnginePort|ControlPort)/);
+
+    // A manager on non-default ports must spell them — a rendered command
+    // that silently reverts to the script defaults would install capture
+    // pointed at ports the app's engine never binds.
+    const winCustom = new FilterProxyManager({
+      entryPath: entry,
+      platform: 'win32',
+      controlPort: 65001,
+      dataPort: 65002,
+      helperPort: 65003,
+    });
+    const wcres = winCustom.getCaptureInstallCommand(rules);
+    expect(wcres.success).toBe(true);
+    expect(wcres.command!).toContain('-HelperPort 65003');
+    expect(wcres.command!).toContain('-EnginePort 65002');
+    expect(wcres.command!).toContain('-ControlPort 65001');
 
     // No adapter for the platform → an honest failure naming it.
     const other = new FilterProxyManager({ entryPath: entry, platform: 'freebsd' });

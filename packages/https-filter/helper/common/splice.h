@@ -150,7 +150,12 @@ int bm_set_nonblocking(bm_sock_t fd, int on); /* fcntl O_NONBLOCK / FIONBIO */
  * Windows reuses are a hijack surface and are not needed to rebind a
  * listen port). Returns BM_SOCK_INVALID on failure. The platform file
  * may keep its own identical binder (natlook does — pinned by its
- * source-invariant tests). */
+ * source-invariant tests).
+ *
+ * Accepted-socket contract: the listener's nonblocking flag is NOT
+ * portable to accepted fds — POSIX clears it, Winsock inherits it. All
+ * three acceptors therefore call bm_set_nonblocking(cfd, 0) right after
+ * accept(); bm_write_all/bm_splice assume a blocking fd downstream. */
 bm_sock_t bm_listen_on(const struct sockaddr *sa, int slen);
 
 /*

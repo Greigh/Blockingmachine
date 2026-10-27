@@ -345,8 +345,10 @@ static int bind_listener(const struct sockaddr *sa, socklen_t slen) {
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
   /* O_NONBLOCK on the LISTENER: a client that aborts between poll() and
    * accept() must not stall the acceptor inside a blocking accept — the
-   * drain loop below stops at EAGAIN instead. Accepted sockets keep
-   * blocking semantics (the flag is not inherited on BSD). */
+   * drain loop below stops at EAGAIN instead. The ACCEPTED socket is
+   * normalized back to blocking right after accept() — inheritance of
+   * the flag is platform-defined (POSIX clears it, Winsock doesn't), so
+   * the normalize call is the shared contract, not a BSD claim. */
   int fl = fcntl(fd, F_GETFL, 0);
   if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0 ||
       bind(fd, sa, slen) != 0 || listen(fd, 128) != 0) {
@@ -478,6 +480,14 @@ static int acceptor_loop(uint16_t helper_port, const char *engine_host,
               bm_logf("accept: errno=%d", errno);
             }
             break;
+          }
+          /* Accepted-socket contract: pin BLOCKING before the flow
+           * handoff — whether the listener's O_NONBLOCK carries over is
+           * platform-defined (Winsock inherits, POSIX doesn't), so the
+           * normalize is the contract, not a quirk. */
+          if (bm_set_nonblocking(cfd, 0) != 0) {
+            close(cfd);
+            continue;
           }
           if (g_live_children >= MAX_CHILDREN) {
             /* Over cap: still accept (drain the backlog honestly rather

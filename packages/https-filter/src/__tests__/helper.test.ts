@@ -49,6 +49,13 @@ describe('natlook-helper source invariants', () => {
     expect(src).toMatch(/errno == EAGAIN\s*\)\s*break|errno == EAGAIN\)/);
   });
 
+  test('accepted sockets normalize to blocking right after accept', () => {
+    // Shared acceptor contract (splice.h): the listener's O_NONBLOCK is
+    // platform-defined for accepted fds — the normalize call is the
+    // contract, not a BSD claim.
+    expect(src).toMatch(/accept\(pfd\[i\]\.fd, NULL, NULL\)[\s\S]{0,900}?bm_set_nonblocking\(cfd, 0\)/);
+  });
+
   test('concurrent children are capped and the shutdown-kill skips reaped slots', () => {
     expect(src).toContain('MAX_CHILDREN');
     expect(src).toMatch(/g_live_children/);

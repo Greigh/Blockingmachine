@@ -117,8 +117,12 @@ bm_sock_t bm_listen_on(const struct sockaddr *sa, int slen) {
 #endif
   /* O_NONBLOCK on the LISTENER: a client that aborts between poll() and
    * accept() must not stall the acceptor inside a blocking accept — the
-   * caller drains until EAGAIN/WSAEWOULDBLOCK. Accepted sockets keep
-   * blocking semantics (the flag is not inherited). */
+   * caller drains until EAGAIN/WSAEWOULDBLOCK. The ACCEPTED socket's
+   * mode is platform-dependent — POSIX does not inherit the flag but
+   * Winsock DOES (an accept()ed socket there comes up nonblocking), so
+   * every acceptor normalizes it back with bm_set_nonblocking(cfd, 0)
+   * right after accept — bm_write_all/bm_splice assume blocking fds.
+   * That normalize call is the contract, not a portability quirk. */
   if (bm_set_nonblocking(fd, 1) != 0 || bind(fd, sa, (bm_socklen_t)slen) != 0 ||
       listen(fd, 128) != 0) {
     bm_sock_close(fd);

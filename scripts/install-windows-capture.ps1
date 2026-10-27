@@ -9,27 +9,35 @@
 
     powershell -NoProfile -ExecutionPolicy Bypass -File `
       scripts\install-windows-capture.ps1 <bundlePath> <nodeExe> [rulesPath]
+      [-HelperPort <p>] [-EnginePort <p>] [-ControlPort <p>]
 
   Sequence (mirrors install-macos-capture.sh's posture, SCM edition):
     1. admin check — before anything is probed or touched
     2. port preflight — refuse when anything already listens on
-       127.0.0.1:9293/:9294/:9295 (an engine squatting the capture ports
-       means the services would fail to own them while WFP redirect is
-       armed — same P1-review lesson as the macOS installer)
+       127.0.0.1:<control>/<engine>/<helper> (an engine squatting the
+       capture ports means the services would fail to own them while
+       WFP redirect is armed — same P1-review lesson as the macOS
+       installer)
     3. redirect-helper.exe + logs/store dirs under ProgramData /
        Program Files
-    4. BlockingmachineProxy service: binPath "<node.exe>" "<bundle>",
-       Environment multistring (BM_STORE_DIR/BM_DATA_PORT/BM_CONTROL_PORT/
-       BM_KEYWRAP=off/BM_RULES_PATH/ELECTRON_RUN_AS_NODE) on
-       HKLM\SYSTEM\CurrentControlSet\Services\BlockingmachineProxy,
-       failure actions = restart (the KeepAlive analog)
-    5. BlockingmachineHelper service: binPath "<helper.exe>" 9295 9294
-       --exclude-app "<node.exe>" (the engine's own dials must never be
-       re-captured; the helper auto-exempts itself too)
+    4. BlockingmachineProxy service: binPath "<helper.exe>"
+       --engine-supervisor "<node.exe>" "<bundle>" --log "<engine.log>"
+       — a raw node.exe can never answer the SCM dispatcher (it would
+       die on error 1053 inside ~30 s), so the HELPER binary hosts the
+       service and supervises the engine as a kill-on-close Job-Object
+       child. Environment multistring (BM_STORE_DIR/BM_DATA_PORT/
+       BM_CONTROL_PORT/BM_KEYWRAP=off/BM_RULES_PATH/ELECTRON_RUN_AS_NODE)
+       lands on HKLM\SYSTEM\CurrentControlSet\Services\BlockingmachineProxy
+       and is inherited by the supervised child; failure actions =
+       restart (the KeepAlive analog)
+    5. BlockingmachineHelper service: binPath "<helper.exe>" <helperPort>
+       <enginePort> --exclude-app "<node.exe>" (the engine's own dials
+       must never be re-captured; the helper auto-exempts itself too)
     6. start order proxy → helper (a redirect must never meet a dead
        engine — helper's own WFP arm is the last thing that happens)
-    7. health-verify: poll http://127.0.0.1:9293/v1/proxy/status up to
-       30 s — registration proves nothing about a crash-looping engine
+    7. health-verify: poll http://127.0.0.1:<control>/v1/proxy/status up
+       to 30 s — registration proves nothing about a crash-looping
+       engine
 
   Fail-open contract (documented, not a flag): the WFP redirect filters
   are SESSION-DYNAMIC objects — they evaporate the instant the helper
@@ -49,14 +57,17 @@ param(
   [Parameter(Position = 0)] [string] $BundlePath,
   [Parameter(Position = 1)] [string] $NodeExe,
   [Parameter(Position = 2)] [string] $RulesPath,
+  [int] $HelperPort = 9295,
+  [int] $EnginePort = 9294,
+  [int] $ControlPort = 9293,
   [switch] $PreflightOnly
 )
 
 $ErrorActionPreference = 'Stop'
 
-$script:HelperPort  = 9295
-$script:EnginePort  = 9294
-$script:ControlPort = 9293
+# The named port params land in script scope — $script:* reads below see
+# the caller's overrides (getCaptureInstallCommand passes the manager's
+# configured ports when they differ from these defaults).
 
 $script:SvcProxy  = 'BlockingmachineProxy'
 $script:SvcHelper = 'BlockingmachineHelper'
@@ -151,6 +162,7 @@ New-Item -ItemType Directory -Force -Path $script:ProgramDir | Out-Null
 New-Item -ItemType Directory -Force -Path $script:StoreDir  | Out-Null
 New-Item -ItemType Directory -Force -Path $script:LogDir    | Out-Null
 Copy-Item -Force $script:HelperSrc $script:HelperDst
+if (-not (Test-Path $script:HelperDst)) { throw "helper copy failed: $($script:HelperDst) missing after Copy-Item" }
 Write-Log "installed $($script:HelperDst)"
 
 # --- services (idempotent: stop+delete any previous registration) ---
@@ -164,7 +176,13 @@ foreach ($svc in @($script:SvcProxy, $script:SvcHelper)) {
 
 # sc.exe wants its own quoting: binPath= "<exe>" <args> — the outer quotes
 # group the whole value, inner \" quoting survives spaces in paths.
-$proxyBin  = "\`"$NodeExe\`" \`"$BundlePath\`""
+# BOTH services resolve to the helper binary — a raw node.exe binPath
+# dies on SCM error 1053 (no StartServiceCtrlDispatcher). The proxy
+# service runs the helper's --engine-supervisor mode: it spawns
+# "<node.exe>" "<bundle>" as a Job-Object kill-on-close child, folds the
+# engine's stderr into the helper-owned log file, and restarts it under
+# bounded backoff.
+$proxyBin  = "\`"$($script:HelperDst)\`" --engine-supervisor \`"$NodeExe\`" \`"$BundlePath\`" --log \`"$($script:LogDir)\engine.log\`""
 $helperBin = "\`"$($script:HelperDst)\`" $($script:HelperPort) $($script:EnginePort) --exclude-app \`"$NodeExe\`""
 
 & sc.exe create $script:SvcProxy "binPath= $proxyBin" 'start= auto' | Out-Null
@@ -172,15 +190,23 @@ if ($LASTEXITCODE -ne 0) { throw "sc.exe create $($script:SvcProxy) failed ($LAS
 & sc.exe create $script:SvcHelper "binPath= $helperBin" 'start= auto' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "sc.exe create $($script:SvcHelper) failed ($LASTEXITCODE)" }
 
-# SCM recovery — the KeepAlive analog: restart on every failure, 5 s then
-# 10 s then 30 s, counter resets after a clean day.
-& sc.exe failure $script:SvcProxy  'reset= 86400' 'actions= restart/5000/restart/10000/restart/30000' | Out-Null
-& sc.exe failure $script:SvcHelper 'reset= 86400' 'actions= restart/5000/restart/10000/restart/30000' | Out-Null
+# SCM recovery — the launchd KeepAlive / systemd Restart=always analog:
+# restart on every failure, 2 s then 5 s then 10 s, counter resets after
+# a clean minute. The supervised-engine spawn-refusal cap exits nonzero
+# and lands here; the helper's watchdog exits 3 the same way.
+foreach ($svc in @($script:SvcProxy, $script:SvcHelper)) {
+  & sc.exe failure $svc 'reset= 60' 'actions= restart/2000/restart/5000/restart/10000' | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "sc.exe failure $svc failed ($LASTEXITCODE)" }
+}
 
 # Engine env — the macOS plist's EnvironmentVariables, registry edition.
-# BM_KEYWRAP=off: LocalSystem has no login DPAPI context for the key-wrap
-# auto-resolve path — pin it off so the posture is deterministic, not
-# discovered (same reasoning as _blockingmachine on macOS).
+# SCM applies the multistring to the SERVICE process — which is now the
+# helper's --engine-supervisor instance; the supervised node.exe child
+# inherits it wholesale (CreateProcess lpEnvironment NULL), so the BM_*
+# list lives in exactly one place. BM_KEYWRAP=off: LocalSystem has no
+# login DPAPI context for the key-wrap auto-resolve path — pin it off so
+# the posture is deterministic, not discovered (same reasoning as
+# _blockingmachine on macOS).
 $envLines = @(
   "BM_STORE_DIR=$($script:StoreDir)",
   "BM_DATA_PORT=$($script:EnginePort)",

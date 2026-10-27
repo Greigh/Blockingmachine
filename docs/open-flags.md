@@ -62,6 +62,30 @@ The next step needs a person — a physical device, hardware this host cannot ru
 - **Fix shape:** Load the unpacked extension, browse normally for a few days, then **Hub → Export ledger** per session and merge them: `npm run ledger:merge -- --in export-1.json --in export-2.json --out ledger-hits.txt --min-days 3`. Then `npm run measure:hotlist-generalisation --hits ledger-hits.txt`, which derives from the ledger and holds out the whole 11-page session — a stricter hold-out than the page split, because the ledger shares no session with it. For a per-deployment set the merge step can be skipped entirely — `build-hot-list.mjs --sessions <export-dir>` merges the exports inline and derives in one command (the flag exists precisely so a hub's own users can supply the trace). Do **not** regenerate `hotlist.txt` from it in the same step; compare the two sets first and adopt the ledger-derived one only if its held-out share is genuinely better and the rules it adds are ones a person agrees should be there.
 - **Verify:** The `--hits` run reports a non-zero held-out share against the session's 133 blocks and names the ledger's provenance — done on the scripted ledger (14.3%, flat across all four session prefixes); what remains is the same run on a multi-day owner ledger — and the page-split assertion in `hotlist.test.ts` is still green and unchanged at 40.9%.
 
+### 119. The Windows WFP connect-redirect path is compile-fixed but runtime-unvalidated on real Windows (`wfp-unvalidated`)
+
+- **Where:** `packages/https-filter/helper/windows/redirect-helper.c` (the `BM_WFP_PATH_STATUS` banner), `scripts/windows-capture-rehearse.ps1` (the leg that turns it proven).
+- **What:** The P3 consolidated review found and this commit fixed the compile/link defects — `FWPM_CONDITION_TCP_REMOTE_PORT` → `FWPM_CONDITION_IP_REMOTE_PORT` (the TCP name does not exist), `fwpsu.h` + the versioned `FwpsRedirectHandleCreate0`/`FwpsRedirectHandleDestroy0` pair returning DWORD/`ERROR_SUCCESS` (not the kernel-mode NTSTATUS convention — fwpuclnt.lib carries both surfaces), the port-condition value pinned to `htons()` network order with the host-order alternative explicitly recorded as the thing the first run must verify, exclusion filters failing closed with fixed per-slot GUID keys, and the `--engine-supervisor` SCM host replacing a raw-node binPath (error 1053). What none of that proves is runtime correctness — this host (darwin) cannot compile or exercise the WFP legs, so `BM_WFP_PATH_STATUS` stays `UNVALIDATED` and the flag records precisely what remains unproven.
+- **Why left:** The residuals are empirical, not structural: the records→context IOCTL chain's exact output shape (defensively asserted — `ctx_len == sizeof(SOCKADDR_STORAGE)` + family ∈ {INET,INET6}, fail-closed per flow before the address is trusted), the redirect-handle→listener binding carried on `rawContext`, and the port-condition byte order (a wrong htons guess reads as filters-installed-but-nothing-captured — silent-looking, not an error).
+- **Fix shape:** Run `scripts/windows-capture-rehearse.ps1` elevated on a real Windows 10+ box (or windows-latest CI) — it asserts the full path end-to-end: minted-leaf allow on :443, a real 403 on the :80 plain-HTTP block leg, a socket-destroy + `flowsBlocked` delta (via `/v1/proxy/status`) on the :443 leg, and a clean session-dynamic uninstall.
+- **Verify:** A successful rehearsal transcript lands in this entry and the source banner flips to validated; until then the flag IS the record that "compiles on paper" ≠ "works on the wire".
+
+### 123. System-proxy/PAC auto-configuration stays a product decision — explicit CONNECT already covers the opt-in path (`pac-system-proxy`)
+
+- **Where:** `docs/https-filtering-p3-plan.md` non-goals; `packages/electron-app/src/filterProxyManager.ts` (the manager owns engine lifecycle, not OS proxy settings).
+- **What:** Transparent capture (WFP/netfilter/pf) is one coverage layer; an orthogonal, capture-free layer exists — writing the OS system proxy or a PAC URL pointed at `127.0.0.1:9294` gives CONNECT-based filtering with zero kernel surface, no service account, and no driver. P3 deliberately did not build it: auto-mutating the OS proxy config is a product decision (consent UX, per-user vs machine scope, reversion semantics on uninstall), not an engineering default.
+- **Why left:** The trade is the owner's call — proxy-aware apps obey the system proxy so coverage is app-subset rather than system-wide, but the footprint is zero; whether that layer belongs in the product at all is not a code question.
+- **Fix shape:** If adopted — per-platform write paths (registry `ProxyServer`/`AutoConfigURL` on Windows, `networksetup` on macOS, gsettings/nm on Linux) behind their own consent flow, plus uninstall reversion and an honest "proxy-aware apps only" label wherever capture coverage is described.
+- **Verify:** A product decision first; the engineering proof would be a proxy-configured client receiving verdicts with capture uninstalled.
+
+### 124. The helper binaries ship unsigned — SmartScreen/AV posture is a release-pipeline question (`unsigned-helper-binaries`)
+
+- **Where:** `packages/https-filter/helper/windows/build.ps1` (unsigned `redirect-helper.exe` output), `scripts/install-windows-capture.ps1`, the codesign/notarize legs in `forge.config.cjs`/`publish.yml`/`release.mjs`.
+- **What:** The capture helpers are ad-hoc built binaries — on Windows an unsigned LocalSystem service binary is exactly what SmartScreen and endpoint AV flag; the darwin helper rides the app's notarization only if shipped inside the bundle; the linux binary is unobserved. The posture question — sign `redirect-helper.exe` with the app's cert? accept SmartScreen reputation warmup? AV vendor whitelisting? — belongs to the release pipeline, not this code.
+- **Why left:** Signing is a credentials-and-pipeline decision the owner makes at release time; nothing in the helper blocks it — the exe is a normal PE and `build.ps1`'s output signs like any artifact.
+- **Fix shape:** Decide the signing story for helper binaries (the darwin helper inside the notarized app bundle, a signed `redirect-helper.exe` for Windows, unsigned-by-convention on Linux), then wire it into `release.mjs`/`publish.yml` beside the existing codesign/notarize legs.
+- **Verify:** A released installer whose `redirect-helper.exe` carries a valid signature and whose first run does not trip SmartScreen.
+
 ## Open — waiting on upstream or time
 
 No action by anyone advances these today — they move when an upstream release ships or real usage accrues the missing data. (43 becomes a "need your opinion" item once a real gate report carries the adjusted number.)
@@ -237,6 +261,30 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **Why left:** the supervision contract is the load-bearing piece — capture owns the redirect anchor, so helper death must be fail-closed-until-restarted (systemd gives that); openrc/sysvinit restart semantics differ and writing them blind would claim a posture the code cannot prove.
 - **Fix shape:** an openrc service file + a sysvinit init script that replicate the redirect anchor and restart-on-death semantics, plus the matching probe branches — same `bm-anchor.sh` core, new supervisor wrappers.
 - **Verify:** an openrc or sysvinit box where the install script completes, `isCaptureServiceInstalled` reports true through the new probe, and killing the helper shows the supervisor restart keeping the anchor fail-closed.
+
+### 120. WinDivert stays the documented Windows fallback — named, never silently substituted (`windivert-fallback`)
+
+- **Where:** `docs/https-filtering-p3-plan.md` (the fallback note), the `BM_WFP_PATH_STATUS` banner in `helper/windows/redirect-helper.c`.
+- **What:** the design spec's original Windows mechanism was a WinDivert driver + userspace NAT in both directions; P3 superseded it with the driverless WFP connect-redirect + the system-provided callout. The recorded rule: if the records/context API proves environment-fragile on real Windows, the escape is the spec's WinDivert design — implemented deliberately as its own task, never swapped in mid-failure.
+- **Why left:** WinDivert means a third-party kernel driver to vendor and sign plus a userspace NAT doing both directions — strictly more machinery than the session-dynamic WFP path, which already gives the fail-open posture the architecture wants. The flag exists so the fallback stays a decision, not a drift.
+- **Fix shape:** only if flag 119's rehearsal shows the WFP path unusable — a new helper TU driving `WinDivertOpen`, a driver ship/sign plan (a release-pipeline question of its own, flag 124), and the same PROXY-v2/splice contract downstream.
+- **Verify:** the structural suite asserts the helper never links `windivert.h`/`WinDivertOpen`; the flag closes when the WFP path validates (fallback moot) or a planned WinDivert adapter ships deliberately.
+
+### 121. Linux capture is REDIRECT + SO_ORIGINAL_DST — TPROXY was evaluated and deliberately not chosen (`tproxy-not-chosen`)
+
+- **Where:** `helper/linux/redirect-helper.c` header, `helper/linux/bm-anchor.sh` rule renders, the plan's platform-decision line.
+- **What:** REDIRECT rewrites the flow's destination to loopback and conntrack remembers the original — recovered with a plain `getsockopt(SO_ORIGINAL_DST)`/`IP6T_SO_ORIGINAL_DST`, no socket flags, no policy routing. TPROXY would need ip-rule/ip-route plumbing plus `CAP_NET_ADMIN` on the socket itself — strictly more moving parts for zero gain: the helper needs the original destination, not full transparent-proxy address preservation through the upstream side.
+- **Why left:** recorded decision, not a gap — the nft/iptables REDIRECT path was live-rehearsed in a NET_ADMIN container (`scripts/linux-capture-rehearse.sh`) and the structural suite pins the absence of the TPROXY sockopts.
+- **Fix shape:** none planned; revisit only if semantics beyond origdst are ever required (e.g. preserving the client source on the upstream side — out of scope for a loopback capture).
+- **Verify:** `helper-linux.test.ts` asserts no `IP_TRANSPARENT`/`IP_RECVORIGDSTADDR`/`SOL_TRANSPARENT` in the helper; the docker rehearsal is the standing proof.
+
+### 122. QUIC suppression drops ALL of UDP/443 — the per-user scoping question stays open (`quic-udp443-granularity`)
+
+- **Where:** `helper/linux/bm-anchor.sh` renders (`udp dport 443 drop` / `-t filter … -j DROP` after the skuid RETURN), the macOS pf anchor's `block drop … user != _blockingmachine` line.
+- **What:** UDP/443 is invisible to a TCP capture, so it is dropped to force the HTTP/3→TCP fallback the redirect can see. The drop is scoped like the capture itself — OUTPUT-hook only (locally-originated flows; forwarded traffic never traverses it) and behind the service-user exemption so the engine's own QUIC dials survive — but every other local process loses QUIC too, not just browsers under capture.
+- **Why left:** accepted granularity — no netfilter primitive scopes a drop finer than skuid, and the HTTP/3 fallback is the designed behavior (clients retry TCP/443). The trade is recorded: a non-browser UDP/443 application on the same host is collateral.
+- **Fix shape:** if a real workload surfaces, scope finer — e.g. exempt additional named uids via a second RETURN, or drop only for dports that would otherwise be captured; nothing narrower exists today.
+- **Verify:** the rendered rules carry the exemption-first ordering; the docker rehearsal's allow leg proves the fallback works end-to-end.
 
 ### 115. HTML injection buffers were unbounded — closed by a proxy-wide `injectionBudget` concurrency cap (P2 flags pass)
 

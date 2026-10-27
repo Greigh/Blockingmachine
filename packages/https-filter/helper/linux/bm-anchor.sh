@@ -110,7 +110,10 @@ take_lock() {
   [[ -d "$dir" ]] || dir=/tmp
   LOCK_FILE="$dir/blockingmachine-capture.lock"
   exec 9>"$LOCK_FILE"
-  flock -x 9 || die "another bm-anchor.sh holds the capture lock ($LOCK_FILE)"
+  # -w 5 as TWO argv elements — a bounded wait, not a combined "-w 5"
+  # token (flock would not parse that) and not an unbounded wait either:
+  # a wedged lock holder must not stall the watchdog's fail-open flush.
+  flock -x -w 5 9 || die "another bm-anchor.sh holds the capture lock ($LOCK_FILE) or lock wait timed out"
 }
 
 # ------------------------------------------------------------------ #

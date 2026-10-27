@@ -98,6 +98,13 @@ describe('linux redirect-helper.c — pinned netfilter surface', () => {
     expect(src).not.toMatch(/IP_TRANSPARENT|IP_RECVORIGDSTADDR|SOL_TRANSPARENT/);
   });
 
+  test('accepted sockets normalize to blocking right after accept', () => {
+    // The listener is nonblocking (drain loop); the ACCEPTED fd's mode
+    // is platform-defined (Winsock inherits, POSIX doesn't) — the
+    // bm_set_nonblocking(cfd, 0) call is the contract, not a quirk.
+    expect(src).toMatch(/accept\(pfd\[i\]\.fd, NULL, NULL\)[\s\S]{0,900}?bm_set_nonblocking\(cfd, 0\)/);
+  });
+
   test('fork-per-connection over the shared cap — SIGCHLD blocked across fork', () => {
     expect(src).toMatch(/\bfork\(\)/);
     expect(src).toMatch(/sigprocmask\(SIG_BLOCK, &chld, &prev\)/);
@@ -186,8 +193,12 @@ describe('linux bm-anchor.sh — mechanism + state contract', () => {
     expect(sh).not.toMatch(/source "\$STATE_FILE"|\. "\$STATE_FILE"/);
   });
 
-  test('flock serializes the non-atomic iptables sequences', () => {
-    expect(sh).toMatch(/flock -x 9/);
+  test('flock serializes the non-atomic iptables sequences — bounded wait, split argv', () => {
+    // -w 5 must be TWO argv elements (`flock -x -w 5 9`) — a combined
+    // "-w 5" token is one unparseable arg, and no -w at all is an
+    // unbounded wait a wedged holder could stall the watchdog flush on.
+    expect(sh).toMatch(/flock -x -w 5 9/);
+    expect(sh).not.toMatch(/flock -x "-w 5" 9|flock -x '-w 5' 9/);
     expect(sh).toContain('blockingmachine-capture.lock');
   });
 });

@@ -409,6 +409,14 @@ static int acceptor_loop(uint16_t helper_port, uint16_t engine_port,
             }
             break;
           }
+          /* Accepted-socket contract: pin BLOCKING before the flow
+           * handoff — whether the listener's O_NONBLOCK carries over is
+           * platform-defined (Winsock inherits, POSIX doesn't), so the
+           * normalize is the contract, not a quirk. */
+          if (bm_set_nonblocking(cfd, 0) != 0) {
+            bm_sock_close(cfd);
+            continue;
+          }
           if (bm_children_full()) {
             /* Over cap: still accept (drain the backlog honestly rather
              * than leave clients in SYN limbo) but close immediately. */

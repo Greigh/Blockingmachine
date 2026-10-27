@@ -53,8 +53,62 @@ describe('windows redirect-helper.c — pinned WFP surface', () => {
     expect(src).toContain('FWPM_LAYER_ALE_CONNECT_REDIRECT_V4');
     expect(src).toContain('FWPM_LAYER_ALE_CONNECT_REDIRECT_V6');
     expect(src).toContain('FWPM_CALLOUT_TCP_REDIRECT_CONNECT_LAYER');
-    expect(src).toContain('FwpmRedirectHandleCreate');
-    expect(src).toContain('FwpmRedirectHandleDestroy');
+    // P3 review: the redirect HANDLE pair lives in fwpsu.h as the
+    // versioned Fwps*0 API returning DWORD/ERROR_SUCCESS — the
+    // FwpmRedirectHandle* spellings do not exist.
+    expect(src).toContain('#include <fwpsu.h>');
+    expect(src).toContain('FwpsRedirectHandleCreate0');
+    expect(src).toContain('FwpsRedirectHandleDestroy0');
+    // No stale FwpmRedirectHandle* spellings or NTSTATUS-typed results
+    // (the names are allowed in comments — they document the fix).
+    expect(src).not.toMatch(/FwpmRedirectHandleCreate|FwpmRedirectHandleDestroy/);
+    expect(src).not.toMatch(/NTSTATUS\s+\w+\s*=|\bstatus\s*=\s*0x/);
+  });
+
+  test('port condition: IP_REMOTE_PORT + pinned htons network order', () => {
+    // There is no FWPM_CONDITION_TCP_REMOTE_PORT — the IP layer's port
+    // field is what the redirect layers evaluate.
+    expect(src).toContain('FWPM_CONDITION_IP_REMOTE_PORT');
+    expect(src).not.toContain('FWPM_CONDITION_TCP_REMOTE_PORT');
+    // htons() pinned with the alternative (host-order) reading recorded
+    // in the UNVALIDATED banner — never flip it silently.
+    expect(src).toContain('htons(port)');
+  });
+
+  test('exclusions fail closed + derive fixed per-slot keys', () => {
+    // A redirect with no engine exemption is a self-capture loop — an
+    // exclusion failure must tear the whole configure down, and the
+    // fixed keys make restarts update in place (no duplicate PERMITs).
+    expect(src).toContain('bm_excl_filter_key');
+    expect(src).toContain('FwpmFilterDeleteByKey0');
+    expect(src).toMatch(/self-capture loop/);
+    expect(src).toContain('FwpmGetAppIdFromFileName0');
+  });
+
+  test('engine-supervisor mode — helper IS the BlockingmachineProxy SCM host', () => {
+    // Raw node.exe cannot serve the SCM (error 1053) — the proxy service
+    // binPath is this binary supervising `node.exe <bundle>` under a
+    // kill-on-close Job Object with bounded restart backoff.
+    expect(src).toContain('--engine-supervisor');
+    expect(src).toContain('BlockingmachineProxy');
+    expect(src).toContain('CreateJobObjectW');
+    expect(src).toContain('JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE');
+    expect(src).toContain('AssignProcessToJobObject');
+    expect(src).toContain('CreateProcessW');
+    expect(src).toContain('engine_supervise');
+    expect(src).toContain('svc_main_proxy');
+  });
+
+  test('accepted sockets are normalized to blocking after accept', () => {
+    // Winsock inherits the listener's O_NONBLOCK — the shared contract
+    // is "blocking from here"; splice.h pins it.
+    expect(src).toMatch(/bm_set_nonblocking\(cfd, 0\)/);
+  });
+
+  test('redirect context asserts the pinned buffer contract', () => {
+    expect(src).toContain('ctx_len != sizeof(*out)');
+    expect(src).toContain('SIO_QUERY_WFP_CONNECTION_REDIRECT_RECORDS');
+    expect(src).toContain('SIO_QUERY_WFP_CONNECTION_REDIRECT_CONTEXT');
   });
 
   test('session-dynamic filters = fail-open by construction', () => {
@@ -129,6 +183,14 @@ describe('windows build + npm wiring', () => {
     expect(ps).toContain('ws2_32.lib');
     expect(ps).toContain('cl.exe');
     expect(ps).toContain('clang-cl');
+    // No-compiler posture: vswhere → VsDevCmd env import (INCLUDE/LIB
+    // are the load-bearing part), else a soft-skip exit 0 — npm run
+    // build must not hard-fail on a machine without MSVC.
+    expect(ps).toContain('vswhere.exe');
+    expect(ps).toContain('VsDevCmd.bat');
+    expect(ps).toContain('Microsoft.VisualStudio.Component.VC.Tools.x86.x64');
+    expect(ps).toMatch(/soft-skip/);
+    expect(ps).not.toMatch(/no C compiler on PATH/);
   });
 
   test('build-if-win32.mjs gates on win32 like the darwin twin', () => {
@@ -165,8 +227,22 @@ describe('windows install/uninstall/rehearse scripts', () => {
     expect(ps).toContain('BM_KEYWRAP=off');
     // Helper args: port pair + engine exe exemption.
     expect(ps).toContain('--exclude-app');
-    // SCM recovery = KeepAlive analog.
+    // BOTH services binPath the helper binary — raw node.exe would die
+    // on SCM error 1053. The proxy service is the helper's
+    // --engine-supervisor mode wrapping `node.exe <bundle>`.
+    expect(ps).toContain('--engine-supervisor');
+    expect(ps).toMatch(/\$proxyBin\s*=\s*"\\`"\$\(\$script:HelperDst\)\\`" --engine-supervisor/);
+    expect(ps).not.toMatch(/\$proxyBin\s*=\s*"\\`"\$NodeExe\\`"/);
+    // Named port params — getCaptureInstallCommand passes the manager's
+    // configured ports through when they diverge from the defaults.
+    expect(ps).toMatch(/\[int\] \$HelperPort\s*=\s*9295/);
+    expect(ps).toMatch(/\[int\] \$EnginePort\s*=\s*9294/);
+    expect(ps).toMatch(/\[int\] \$ControlPort\s*=\s*9293/);
+    // SCM recovery = KeepAlive analog — pinned reset/actions shape.
     expect(ps).toContain('sc.exe failure');
+    expect(ps).toContain('reset= 60');
+    expect(ps).toContain('restart/2000/restart/5000/restart/10000');
+    expect(ps).not.toContain('reset= 86400');
   });
 
   test('uninstaller: stops/deletes both services, documents session-dynamic fail-open', () => {
@@ -178,15 +254,26 @@ describe('windows install/uninstall/rehearse scripts', () => {
     expect(ps).toMatch(/session-dynamic|evaporat/i);
   });
 
-  test('rehearsal: admin-gated, NEVER auto-run, install→curl→403→uninstall→verdicts', () => {
+  test('rehearsal: admin-gated, NEVER auto-run, two verdict shapes for the two legs', () => {
     const ps = readFileSync(REHEARSE, 'utf8');
     expect(ps).toMatch(/NEVER AUTO-RUN/);
     expect(ps).toContain('Administrator');
     expect(ps).toContain('install-windows-capture.ps1');
     expect(ps).toContain('uninstall-windows-capture.ps1');
     expect(ps).toContain('curl.exe');
-    expect(ps).toContain('403');
     expect(ps).toContain('--cacert');
+    // :80 → a real HTTP 403 response is still asserted …
+    expect(ps).toContain('transparent-block-http');
+    expect(ps).toContain('403');
+    expect(ps).toMatch(/:80:/);
+    // … but :443 is a socket DESTROY — raw TLS has no response channel.
+    // The verdict is curl refusing plus the engine's own flowsBlocked
+    // delta on /v1/proxy/status, never a bare-403 expectation.
+    expect(ps).toContain('transparent-block-https');
+    expect(ps).toContain('flowsBlocked');
+    expect(ps).toContain('/v1/proxy/status');
+    expect(ps).toContain('stats.flowsBlocked');
+    expect(ps).not.toMatch(/\$blockCode -eq '403'/);
   });
 });
 

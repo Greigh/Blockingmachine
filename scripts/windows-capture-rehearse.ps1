@@ -19,9 +19,12 @@
     4. transparent allow proof: curl.exe --cacert <ca> https://example.com
        succeeds ONLY via the minted leaf (proves the flow crossed
        redirect → helper → engine MITM, not the real wire)
-    5. transparent block proof: curl.exe to a rehearsal-blocked host
-       pinned via --resolve to a reachable IP is refused, expecting the
-       engine's 403 posture — the refusal is provably the verdict
+    5. transparent block proofs — the two verdict shapes, mirroring
+       linux-capture-rehearse.sh: http:// :80 gets a REAL 403 response
+       (plain-HTTP block answers); https:// :443 is a socket DESTROY —
+       raw TLS has no response channel, so curl fails/exits nonzero and
+       the proof is the engine's own flowsBlocked delta on
+       /v1/proxy/status (a dead pin can't pass vacuously)
     6. uninstall-windows-capture.ps1 → PASS
 
   Env knobs: REHEARSE_ALLOWED_URL (default https://example.com/),
@@ -99,16 +102,30 @@ try {
   Add-Verdict 'ca-fetch' $true $caFile
 
   # 4. transparent allow — only a minted leaf can satisfy --cacert, so a
-  #    200 here proves the redirect→helper→engine path carried the flow.
-  & curl.exe -sS --cacert $caFile --max-time $curlMax -o NUL -w '%{http_code}' $allowedUrl | Out-Null
+  #    2xx here proves the redirect→helper→engine path carried the flow.
   $allowCode = & curl.exe -sS --cacert $caFile --max-time $curlMax -o NUL -w '%{http_code}' $allowedUrl
   Add-Verdict 'transparent-allow' ($allowCode -match '^\d+$' -and [int]$allowCode -lt 400) "curl https status=$allowCode"
 
-  # 5. transparent block — pinned via --resolve to a reachable IP so a
-  #    dead-DNS pass can't fake a block; the engine answers 403.
-  & curl.exe -sS --cacert $caFile --max-time $curlMax --resolve 'rehearse-block.example:443:93.184.216.34' -o NUL -w '%{http_code}' 'https://rehearse-block.example/' | Out-Null
-  $blockCode = & curl.exe -sS --cacert $caFile --max-time $curlMax --resolve 'rehearse-block.example:443:93.184.216.34' -o NUL -w '%{http_code}' 'https://rehearse-block.example/'
-  Add-Verdict 'transparent-block' ($blockCode -eq '403') "curl blocked status=$blockCode (expect 403)"
+  # 5. transparent block — two verdict shapes (mirrors
+  #    linux-capture-rehearse.sh). Pinned via --resolve to a reachable IP
+  #    so a dead-DNS pass can't fake a block.
+  #    :80 → the plain-HTTP block answers a REAL 403 response.
+  #    :443 → a socket DESTROY: raw TLS has no response channel — the
+  #    close IS the verdict, so the assertion is curl refusing (nonzero
+  #    exit / 000) AND the engine's own flowsBlocked delta ticking up.
+  $blockedHost = 'rehearse-block.example'
+  $blockedIp   = '93.184.216.34'
+  $httpCode = & curl.exe -sS --max-time $curlMax --resolve "${blockedHost}:80:${blockedIp}" -o NUL -w '%{http_code}' "http://$blockedHost/"
+  Add-Verdict 'transparent-block-http' ($httpCode -eq '403') "curl http status=$httpCode (expect 403)"
+
+  $status0 = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$($script:ControlPort)/v1/proxy/status" -TimeoutSec 5 | ConvertFrom-Json
+  $blockedBefore = [int]$status0.stats.flowsBlocked
+  $blockCode = & curl.exe -sS --cacert $caFile --max-time $curlMax --resolve "${blockedHost}:443:${blockedIp}" -o NUL -w '%{http_code}' "https://$blockedHost/"
+  $curlExit = $LASTEXITCODE
+  $status1 = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$($script:ControlPort)/v1/proxy/status" -TimeoutSec 5 | ConvertFrom-Json
+  $blockedAfter = [int]$status1.stats.flowsBlocked
+  $httpsRefused = ($curlExit -ne 0) -or ($blockCode -eq '000') -or ($blockCode -notmatch '^\d+$')
+  Add-Verdict 'transparent-block-https' ($httpsRefused -and $blockedAfter -gt $blockedBefore) "curl https status=$blockCode exit=$curlExit; flowsBlocked $blockedBefore->$blockedAfter"
 
   # 6. uninstall
   & powershell -NoProfile -ExecutionPolicy Bypass -File $uninstallPs

@@ -5,7 +5,11 @@
 
 .DESCRIPTION
   Stops and deletes BlockingmachineHelper + BlockingmachineProxy and the
-  installed helper binary. The WFP redirect filters need NO explicit
+  installed helper binary. BOTH services resolve to the same
+  redirect-helper.exe — the helper in redirect mode and the helper in
+  --engine-supervisor mode wrapping `node.exe <bundle>` (stopping the
+  proxy service kills the supervised engine via its Job Object — the
+  kill-on-close contract). The WFP redirect filters need NO explicit
   removal: they are session-dynamic objects owned by the helper's WFP
   engine handle — stopping the helper evaporates them atomically
   (fail-open by construction; there is no ruleset to flush and nothing
