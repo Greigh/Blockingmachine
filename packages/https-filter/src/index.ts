@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { createCosmeticIndex, createRequestEvaluator } from '@blockingmachine/core';
 import { CertAuthority } from './ca/certAuthority.js';
 import type { KeyWrapBackend } from './ca/keyWrap.js';
-import { startControlServer } from './control.js';
+import { isLoopbackBindHost, startControlServer } from './control.js';
 import { PolicyStore } from './policy/policyStore.js';
 import { startProxy, type RunningProxy } from './proxy/filterProxy.js';
 import type { RunningControl } from './control.js';
@@ -89,6 +89,25 @@ export interface FilterProxyConfig {
    * to `startProxy`.
    */
   injectionBudget?: number;
+  /**
+   * Shared data-port token (flag 127) — `BM_DATA_TOKEN`. When set,
+   * non-loopback peers authenticate before any flow handling: CONNECT and
+   * plain-HTTP present `Proxy-Authorization` (`Bearer <token>`, or `Basic`
+   * with the token as password) and earn a `407` on failure; PROXY-v2
+   * frames carry the pinned `0xE0` auth TLV in-band and die on a
+   * miss/mismatch. Loopback peers stay exempt — the local capture helper
+   * is the trust anchor. Absent → the port stays open: the recorded
+   * trusted-LAN fallback, logged once when the data bind is non-loopback.
+   */
+  dataAuthToken?: string;
+  /**
+   * Opt-in SSRF guard for LAN-hub deployments (flag 127) —
+   * `BM_DENY_PRIVATE_DESTINATIONS`: non-loopback peers may not aim flows
+   * at loopback/RFC1918/link-local/CGNAT/ULA/multicast/`localhost`
+   * destinations. Default off — a single-user LAN hub legitimately proxies
+   * to its own LAN services.
+   */
+  denyPrivateDestinations?: boolean;
 }
 
 export interface RunningFilterProxy {
@@ -168,8 +187,23 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
     // swaps them together.
     cosmeticIndex: createCosmeticIndex(rules),
     injectionBudget: config.injectionBudget,
+    authToken: config.dataAuthToken,
+    denyPrivateDestinations: config.denyPrivateDestinations,
     policy,
   });
+
+  // Flag 127's recorded fallback — one line, once: a LAN-bound data port
+  // with no token trusts the network, and that posture must be visible in
+  // the log rather than silently open. Loopback binds keep quiet (no
+  // network reaches them anyway); `/v1/proxy/status` reports the same
+  // truth as `dataAuthRequired`.
+  if (!isLoopbackBindHost(bindHost) && config.dataAuthToken === undefined) {
+    console.warn(
+      `[https-filter] data listener bound to ${bindHost} with no auth token — ` +
+        `trusted-LAN fallback: any reachable client may send flows ` +
+        `(set BM_DATA_TOKEN to require one)`,
+    );
+  }
 
   const reloadRules = async (): Promise<number> => {
     if (config.rulesPath === undefined) {
@@ -206,6 +240,8 @@ export async function startFilterProxy(config: FilterProxyConfig): Promise<Runni
       bindHost: controlBindHost,
       controlPort,
       dataBindHost: bindHost,
+      dataAuthRequired: config.dataAuthToken !== undefined && config.dataAuthToken !== '',
+      denyPrivateDestinations: config.denyPrivateDestinations === true,
       proxy,
       authority,
       policy,

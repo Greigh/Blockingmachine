@@ -94,6 +94,21 @@ export interface ControlApiDeps {
    * non-loopback value means the data port accepts flows from the network).
    */
   dataBindHost: string;
+  /**
+   * The data listener's flag-127 posture, surfaced on `/v1/proxy/status` as
+   * `dataAuthRequired`: true means a `BM_DATA_TOKEN` is configured and
+   * non-loopback peers must present it (CONNECT `Proxy-Authorization` or
+   * the pinned PROXY-v2 TLV); false means the port is open — the recorded
+   * trusted-LAN fallback the card and QR story must be able to name.
+   */
+  dataAuthRequired?: boolean;
+  /**
+   * Surfaced as `denyPrivateDestinations` on `/v1/proxy/status`: true means
+   * non-loopback peers may not aim flows at loopback/RFC1918/link-local/
+   * CGNAT/ULA/multicast destinations — the opt-in SSRF guard for LAN-hub
+   * deployments (default off).
+   */
+  denyPrivateDestinations?: boolean;
   proxy: RunningProxy;
   authority: CertAuthority;
   policy: PolicyStore;
@@ -365,11 +380,15 @@ export function startControlServer(deps: ControlApiDeps): Promise<RunningControl
             controlPort: boundPort,
             // The two binds are reported separately because they are
             // different postures: `bindHost` is the data listener's (a
-            // non-loopback value = LAN hub mode — the port accepts flows
-            // from the network with no authentication); `controlBindHost`
+            // non-loopback value = LAN hub mode — flows arrive from the
+            // network, token-gated per `dataAuthRequired`); `controlBindHost`
             // is this listener's, loopback by construction.
             bindHost: deps.dataBindHost,
             controlBindHost: deps.bindHost,
+            // Flag-127 posture, reported so a LAN hint can name the
+            // trusted-LAN fallback (or the token requirement) honestly.
+            dataAuthRequired: deps.dataAuthRequired === true,
+            denyPrivateDestinations: deps.denyPrivateDestinations === true,
             protectionEnabled: !paused,
             paused,
             policyDegraded: deps.policyDegraded,

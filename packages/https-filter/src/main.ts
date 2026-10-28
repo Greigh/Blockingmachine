@@ -23,9 +23,28 @@
  *   BM_BIND_HOST     bind host for the DATA listener only (default
  *                    127.0.0.1) — a LAN address here is the P4 hub posture:
  *                    the data port then accepts flows from the network
- *                    (unauthenticated — trusted-LAN deployments only). It
- *                    can never drag the control API along: /v1/proxy/* is
- *                    loopback by construction, not by convention.
+ *                    (token-gated per BM_DATA_TOKEN; absent = the recorded
+ *                    trusted-LAN fallback). It can never drag the control
+ *                    API along: /v1/proxy/* is loopback by construction,
+ *                    not by convention.
+ *   BM_DATA_TOKEN    shared data-port token (flag 127): when set,
+ *                    non-loopback peers authenticate — CONNECT and
+ *                    plain-HTTP present `Proxy-Authorization`
+ *                    (`Bearer <token>`, or `Basic` with the token as the
+ *                    password) and earn a 407 on failure; PROXY-v2 spliced
+ *                    flows carry the token in-band as the pinned `0xE0`
+ *                    TLV (see proxyProtocol.ts) and are closed on a
+ *                    miss/mismatch. Loopback peers stay exempt — the local
+ *                    capture helper is the trust anchor. Absent/empty →
+ *                    open port, the recorded trusted-LAN fallback (logged
+ *                    once on a LAN bind, surfaced as `dataAuthRequired:
+ *                    false` on /v1/proxy/status).
+ *   BM_DENY_PRIVATE_DESTINATIONS
+ *                    '1'/'true'/'on'/'yes' opts in the flag-127 SSRF
+ *                    guard: non-loopback peers may not aim flows at
+ *                    loopback/RFC1918/link-local/CGNAT/ULA/multicast/
+ *                    `localhost` destinations. Default off — a single-user
+ *                    LAN hub legitimately proxies to its own LAN.
  *   BM_CONTROL_BIND_HOST  control listener bind (default 127.0.0.1) — must
  *                    be a loopback address; anything else is refused at
  *                    config time, because a LAN-exposed control port would
@@ -94,6 +113,20 @@ export interface SpawnedProxyConfig {
    * bespoke backend construct `FilterProxyConfig` directly.
    */
   keyWrapBackend?: null;
+  /**
+   * `BM_DATA_TOKEN` — the flag-127 shared data-port credential. Set,
+   * non-loopback peers must authenticate (CONNECT `Proxy-Authorization`
+   * `Bearer <token>`/`Basic` password, or the pinned PROXY-v2 `0xE0` TLV);
+   * absent/empty → open port, the recorded trusted-LAN fallback.
+   */
+  dataAuthToken?: string;
+  /**
+   * `BM_DENY_PRIVATE_DESTINATIONS` — '1'/'true'/'on'/'yes' opts the flag-127
+   * SSRF guard in: non-loopback peers may not aim flows at
+   * loopback/RFC1918/link-local/CGNAT/ULA/multicast destinations. Anything
+   * else (including absent) is off.
+   */
+  denyPrivateDestinations?: boolean;
 }
 
 export type EnvParse = { ok: true; config: SpawnedProxyConfig } | { ok: false; error: string };
@@ -217,6 +250,17 @@ export function configFromEnv(env: NodeJS.ProcessEnv): EnvParse {
   }
   const keyWrap = env.BM_KEYWRAP?.trim().toLowerCase();
   const parentPid = envPid(env.BM_PARENT_PID);
+  // Flag 127: the token passes through verbatim (whitespace-trimmed; an
+  // empty value is no token — the open-port fallback), the denylist reads
+  // the same truthy set envPort uses elsewhere in spirit (digits-only is
+  // the port contract; booleans get the word forms).
+  const dataAuthToken = env.BM_DATA_TOKEN?.trim();
+  const denyPrivateRaw = env.BM_DENY_PRIVATE_DESTINATIONS?.trim().toLowerCase();
+  const denyPrivate =
+    denyPrivateRaw === '1' ||
+    denyPrivateRaw === 'true' ||
+    denyPrivateRaw === 'on' ||
+    denyPrivateRaw === 'yes';
   return {
     ok: true,
     config: {
@@ -230,6 +274,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv): EnvParse {
       ...(keyWrap === 'off' || keyWrap === 'none' || keyWrap === '0'
         ? { keyWrapBackend: null }
         : {}),
+      ...(dataAuthToken ? { dataAuthToken } : {}),
+      ...(denyPrivate ? { denyPrivateDestinations: true } : {}),
     },
   };
 }

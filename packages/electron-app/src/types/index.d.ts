@@ -440,6 +440,30 @@ export interface StoreSchema {
    */
   httpsFilterTrustedCaFingerprint?: string;
   /**
+   * Flag 127 — operator-set `BM_BIND_HOST` for a spawned engine: an IP
+   * literal making the app-launched engine a LAN hub. Absent keeps the
+   * loopback posture. No UI — the store is where this knob lives; a
+   * pasted-nonliteral would be one paste away from a published proxy.
+   */
+  httpsFilterDataBindHost?: string;
+  /**
+   * Flag 127 — the shared data-port token a spawned engine enforces on
+   * non-loopback peers (CONNECT `Proxy-Authorization`, or the pinned
+   * PROXY-v2 `0xE0` TLV). Sealed by `writeSecret` into
+   * `httpsFilterDataTokenEncrypted` when safeStorage is available; this
+   * plaintext sibling is the legacy/unsealed form. Absent → the engine's
+   * open trusted-LAN fallback. The pairing QR carries it as `httpsToken`.
+   */
+  httpsFilterDataToken?: string;
+  /** `safeStorage`-sealed sibling of `httpsFilterDataToken`. */
+  httpsFilterDataTokenEncrypted?: string;
+  /**
+   * Flag 127 — `BM_DENY_PRIVATE_DESTINATIONS` on a spawned engine: refuse
+   * non-loopback peers' flows to loopback/RFC1918/private destinations.
+   * Default off — a single-user LAN hub legitimately proxies to its LAN.
+   */
+  httpsFilterDenyPrivate?: boolean;
+  /**
    * What each deploy target's scheduled refresh has reported back, keyed by target id
    * (`unbound`, `bind`, …). The refresh command in the recipe POSTs its result to
    * `/v1/deploy-report`; this record is what survives the window where the hub was closed,
@@ -513,11 +537,21 @@ export interface HttpsFilterStatus {
   /**
    * The data listener's bound host — a non-loopback value means LAN hub
    * mode (P4 Android capture): the port accepts flows from the network,
-   * unauthenticated. Absent on engines that predate the field.
+   * token-gated per `dataAuthRequired`. Absent on engines that predate the
+   * field.
    */
   bindHost?: string;
   /** The control listener's bound host — loopback by engine construction. */
   controlBindHost?: string;
+  /**
+   * Flag-127 posture from the engine's status: true means a
+   * `BM_DATA_TOKEN` is configured and non-loopback peers must present it;
+   * false/absent means the port is open — the recorded trusted-LAN
+   * fallback.
+   */
+  dataAuthRequired?: boolean;
+  /** Flag-127's opt-in SSRF guard — refuse non-loopback private-destination flows. */
+  denyPrivateDestinations?: boolean;
   rulesLoaded: number;
   protectionEnabled: boolean;
   policyDegraded: boolean;
@@ -782,8 +816,20 @@ export interface ElectronAPI {
     running: boolean;
     url: string;
     tokenConfigured: boolean;
+    /** True when the engine answered /v1/proxy/ca — the QR carries the CA. */
+    httpsCaConfigured?: boolean;
+    /** True when a data-port token is stored — the QR carries `httpsToken`. */
+    httpsTokenConfigured?: boolean;
     payload: string;
   }>;
+  // Flag 127's data-port token — presence read, set/clear, one-shot generate.
+  getHttpsFilterDataToken?: () => Promise<{ configured: boolean }>;
+  setHttpsFilterDataToken?: (token: string) => Promise<{
+    success: boolean;
+    cleared?: boolean;
+    error?: string;
+  }>;
+  generateHttpsFilterDataToken?: () => Promise<{ success: boolean; token?: string; error?: string }>;
   getLaunchOnStartup?: () => Promise<boolean>;
   setLaunchOnStartup?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   getMenuBarAgent?: () => Promise<boolean>;

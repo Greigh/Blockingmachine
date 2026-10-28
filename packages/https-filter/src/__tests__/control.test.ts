@@ -256,6 +256,32 @@ describe('control API routes', () => {
       scriptletExceptions: 0,
       styles: 0,
     });
+    // Flag-127 posture fields — this engine runs without BM_DATA_TOKEN /
+    // BM_DENY_PRIVATE_DESTINATIONS, so status names the trusted-LAN
+    // fallback explicitly rather than implying auth.
+    expect(body.dataAuthRequired).toBe(false);
+    expect(body.denyPrivateDestinations).toBe(false);
+    expect(typeof body.stats.authRefusals).toBe('number');
+  });
+
+  test('a token-configured engine reports dataAuthRequired on status', async () => {
+    const gated = await startFilterProxy({
+      storeDir: join(dir, 'store-auth'),
+      dataPort: 0,
+      controlPort: 0,
+      keyWrapBackend: null,
+      dataAuthToken: 'tok-flag127-test',
+      denyPrivateDestinations: true,
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${gated.controlPort}/v1/proxy/status`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, any>;
+      expect(body.dataAuthRequired).toBe(true);
+      expect(body.denyPrivateDestinations).toBe(true);
+    } finally {
+      await gated.close();
+    }
   });
 
   test('POST /v1/proxy/toggle pauses → CONNECT blind-tunnels; resume re-terminates', async () => {

@@ -20,6 +20,24 @@
  * unrecognized returns null rather than a best-effort guess — a malformed
  * framing header is a helper bug, and an honest close beats a misrouted
  * socket.
+ *
+ * PINNED WIRE FORMAT — data-port token transport (flag 127): when the engine
+ * is configured with a shared data-port token, a helper-spliced PROXY-v2 flow
+ * presents it in-band as ONE custom TLV appended after the address block,
+ * inside the counted `len` region:
+ *
+ *   byte 0      type     0xE0 (PP2_TYPE_BM_AUTH — the spec reserves 0xE0–0xEF
+ *                        for application-specific types)
+ *   bytes 1–2   length   big-endian UTF-8 byte count of the token
+ *   bytes 3+    value    the token's raw UTF-8 bytes — no framing, no
+ *                        base64, no NUL terminator
+ *
+ * A helper that sends no TLV (or the wrong token) gets an honest close when
+ * a token is configured; a TLV that runs past the declared `len` stops
+ * parsing (the destination stays valid, the auth field stays absent — the
+ * flow then fails the token check and is refused, which is fail-closed).
+ * CONNECT-carried tokens use `Proxy-Authorization` instead — this TLV is the
+ * ONLY in-band shape spliced flows speak.
  */
 
 /** The 12-byte v2 signature, `\r\n\r\n\x00\r\nQUIT\n`. */
@@ -35,9 +53,35 @@ const FAM_INET6_STREAM = 0x21;
 const ADDR_LEN_V4 = 12;
 const ADDR_LEN_V6 = 36;
 
+/**
+ * The pinned data-port-token TLV type (flag 127) — 0xE0 opens the spec's
+ * application-reserved range. Emitted by `buildProxyV2AuthTlv` and by the
+ * mobile helper's `ProxyV2.kt`; the two encoders must stay byte-identical.
+ */
+export const PROXY_V2_TLV_AUTH = 0xe0;
+
 export interface ProxyV2Target {
   dstHost: string;
   dstPort: number;
+  /**
+   * The `0xE0` TLV's decoded UTF-8 value when the frame carried one — the
+   * in-band data-port token (flag 127). Absent when no TLV was sent.
+   */
+  authToken?: string;
+}
+
+/**
+ * Encode the flag-127 auth TLV a spliced flow prepends after the v2 address
+ * block: `[0xE0][len:2][utf8 token]`. Helpers append it inside the counted
+ * `len` region — `ProxyV2.kt` keeps the identical shape on Android.
+ */
+export function buildProxyV2AuthTlv(token: string): Buffer {
+  const value = Buffer.from(token, 'utf8');
+  const tlv = Buffer.alloc(3 + value.length);
+  tlv[0] = PROXY_V2_TLV_AUTH;
+  tlv.writeUInt16BE(value.length, 1);
+  value.copy(tlv, 3);
+  return tlv;
 }
 
 /**
@@ -114,5 +158,23 @@ export function parseProxyV2(buf: Buffer): ProxyV2Target | null {
   if (dstPort === 0) {
     return null;
   }
-  return { dstHost, dstPort };
+
+  // TLV walk (flag 127): [type:1][len:2][value:len] tuples occupy the rest of
+  // the counted `len` region. A truncated TLV ends the walk — the routable
+  // destination already parsed stays valid, while the auth field stays
+  // absent so a token-configured listener refuses the flow (fail-closed).
+  let authToken: string | undefined;
+  let off = buf[13] === FAM_INET_STREAM ? ADDR_LEN_V4 : ADDR_LEN_V6;
+  while (off + 3 <= addr.length) {
+    const type = addr[off];
+    const len = addr.readUInt16BE(off + 1);
+    if (off + 3 + len > addr.length) {
+      break;
+    }
+    if (type === PROXY_V2_TLV_AUTH) {
+      authToken = addr.subarray(off + 3, off + 3 + len).toString('utf8');
+    }
+    off += 3 + len;
+  }
+  return { dstHost, dstPort, ...(authToken !== undefined ? { authToken } : {}) };
 }

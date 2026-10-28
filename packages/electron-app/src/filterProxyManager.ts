@@ -29,12 +29,25 @@ export interface FilterProxyStatus {
   controlPort: number;
   /**
    * The data listener's bound host — a non-loopback value means LAN hub
-   * mode (P4): the port accepts flows from the network, unauthenticated.
-   * Absent on engines that predate the field, and when stopped.
+   * mode (P4): the port accepts flows from the network, token-gated per
+   * `dataAuthRequired`. Absent on engines that predate the field, and when
+   * stopped.
    */
   bindHost?: string;
   /** The control listener's bound host — loopback by engine construction. */
   controlBindHost?: string;
+  /**
+   * Flag-127 posture from the engine's `/v1/proxy/status`: true means a
+   * `BM_DATA_TOKEN` is configured and non-loopback peers must present it;
+   * false/absent means the port is open — the recorded trusted-LAN
+   * fallback the LAN-hub hint names.
+   */
+  dataAuthRequired?: boolean;
+  /**
+   * Flag-127's opt-in SSRF guard — true means non-loopback peers may not
+   * aim flows at loopback/RFC1918/private destinations.
+   */
+  denyPrivateDestinations?: boolean;
   rulesLoaded: number;
   protectionEnabled: boolean;
   /** Ledger fell back to in-memory — pins apply for the session, nothing persists. */
@@ -148,6 +161,9 @@ export class FilterProxyManager {
   private entryPath?: string;
   private captureServiceInstalledProbe?: () => boolean;
   private trustedCaFingerprint?: () => string | undefined;
+  private dataBindHostSource?: () => string | undefined;
+  private dataAuthTokenSource?: () => string | undefined;
+  private denyPrivateDestinationsSource?: () => boolean;
   private platformOverride?: NodeJS.Platform;
   private fileExistsProbe?: (p: string) => boolean;
   private serviceQueryProbe?: (
@@ -198,6 +214,29 @@ export class FilterProxyManager {
      * disables the check: `caDrift` stays false.
      */
     trustedCaFingerprint?: () => string | undefined;
+    /**
+     * Flag 127 — the DATA bind host `BM_BIND_HOST` carries to a spawned
+     * engine (index.ts backs it with the `httpsFilterDataBindHost` store
+     * key — an operator-set value a UI never needs). Absent/empty keeps
+     * `this.bindHost` (127.0.0.1); a LAN literal makes the spawned engine
+     * a hub. The control listener is never touched by it — loopback by
+     * construction.
+     */
+    dataBindHost?: () => string | undefined;
+    /**
+     * Flag 127 — the `BM_DATA_TOKEN` a spawned engine enforces on
+     * non-loopback peers (index.ts backs it with the `httpsFilterDataToken`
+     * store secret). Absent/empty → the spawned engine runs the open
+     * trusted-LAN fallback; a set value means the same engine demands the
+     * token the pairing QR carries as `httpsToken`.
+     */
+    dataAuthToken?: () => string | undefined;
+    /**
+     * Flag 127 — `BM_DENY_PRIVATE_DESTINATIONS=1` on the spawned engine:
+     * non-loopback peers may not aim flows at loopback/RFC1918/private
+     * destinations (the `httpsFilterDenyPrivate` store key). Default off.
+     */
+    denyPrivateDestinations?: () => boolean;
   }) {
     if (options?.controlPort) this.controlPort = options.controlPort;
     if (options?.dataPort) this.dataPort = options.dataPort;
@@ -207,6 +246,9 @@ export class FilterProxyManager {
     if (options?.entryPath) this.entryPath = options.entryPath;
     if (options?.captureServiceInstalled) this.captureServiceInstalledProbe = options.captureServiceInstalled;
     if (options?.trustedCaFingerprint) this.trustedCaFingerprint = options.trustedCaFingerprint;
+    if (options?.dataBindHost) this.dataBindHostSource = options.dataBindHost;
+    if (options?.dataAuthToken) this.dataAuthTokenSource = options.dataAuthToken;
+    if (options?.denyPrivateDestinations) this.denyPrivateDestinationsSource = options.denyPrivateDestinations;
     if (options?.platform) this.platformOverride = options.platform;
     if (options?.fileExists) this.fileExistsProbe = options.fileExists;
     if (options?.serviceQuery) this.serviceQueryProbe = options.serviceQuery;
@@ -255,6 +297,10 @@ export class FilterProxyManager {
           bindHost: typeof data.bindHost === 'string' ? data.bindHost : undefined,
           controlBindHost:
             typeof data.controlBindHost === 'string' ? data.controlBindHost : undefined,
+          // Flag-127 posture — absent on engines that predate the fields;
+          // `=== true` keeps the honest tri-state (absent ≠ false ≠ true).
+          dataAuthRequired: data.dataAuthRequired === true,
+          denyPrivateDestinations: data.denyPrivateDestinations === true,
           rulesLoaded: data.rulesLoaded || 0,
           protectionEnabled: data.protectionEnabled ?? !paused,
           policyDegraded,
@@ -587,6 +633,13 @@ export class FilterProxyManager {
     }
 
     const rulesPath = this.resolveRulesPath(options?.rulesPath);
+    // Flag 127 posture — store-backed knobs the pairing QR shares: the
+    // operator-set `httpsFilterDataBindHost` makes the spawned engine a LAN
+    // hub, `httpsFilterDataToken` is the credential non-loopback peers then
+    // present, and `httpsFilterDenyPrivate` opts the SSRF guard in. Absent
+    // values keep the loopback+open default.
+    const dataBindHost = this.dataBindHostSource?.()?.trim();
+    const dataAuthToken = this.dataAuthTokenSource?.()?.trim();
     const env = {
       ...process.env,
       // The spawn target is the Electron binary — run the engine's Node entry
@@ -595,12 +648,16 @@ export class FilterProxyManager {
       BM_STORE_DIR: storeDir,
       BM_DATA_PORT: String(this.dataPort),
       BM_CONTROL_PORT: String(this.controlPort),
-      BM_BIND_HOST: this.bindHost,
+      BM_BIND_HOST: dataBindHost || this.bindHost,
       // Detached + unref'd outlives an app quit — flag-101's watchdog bounds
       // that orphan to ~10s: our pid rides BM_PARENT_PID and the engine
       // self-retires the moment its signal-0 probe reads ESRCH.
       BM_PARENT_PID: String(process.pid),
       ...(rulesPath ? { BM_RULES_PATH: rulesPath } : {}),
+      ...(dataAuthToken ? { BM_DATA_TOKEN: dataAuthToken } : {}),
+      ...(this.denyPrivateDestinationsSource?.() === true
+        ? { BM_DENY_PRIVATE_DESTINATIONS: '1' }
+        : {}),
     };
 
     try {

@@ -228,7 +228,8 @@ export const HttpsFilterCard: React.FC = () => {
   // LAN hub mode (P4): the answering engine's data listener is bound off
   // loopback, so it accepts flows from the whole network — the posture
   // Android capture uses. The control API stays loopback by construction;
-  // the data port carries no authentication, so the hint says so.
+  // the hint names the flag-127 posture honestly (token required, or the
+  // open trusted-LAN fallback).
   const lanHub = engineAlive && typeof status?.bindHost === 'string' && !isLoopbackBind(status.bindHost);
   // The capture service owning the engine is NOT a stopped-and-startable
   // state — an unanswered probe is a transient KeepAlive gap, and a
@@ -315,11 +316,10 @@ export const HttpsFilterCard: React.FC = () => {
       .sort((a, b) => b.ts - a.ts);
   }, [pins]);
 
-  const fingerprintShort = useMemo(() => {
-    const fp = caTrust?.sha256Fingerprint;
-    if (!fp) return null;
-    return fp.length > 23 ? `${fp.slice(0, 23)}…` : fp;
-  }, [caTrust]);
+  // Flag 129: the FULL fingerprint renders — it is the out-of-band trust
+  // anchor a phone's install prompt compares against, so a truncated view
+  // would make the comparison the whole flow exists for impossible.
+  const fingerprint = useMemo(() => caTrust?.sha256Fingerprint ?? null, [caTrust]);
 
   // The content-depth line (P2 Task 4) — a secondary line under the strip
   // rather than more cells: every segment hides at zero so the ribbon stays
@@ -520,11 +520,16 @@ export const HttpsFilterCard: React.FC = () => {
         <p
           className="deploy-feed-box-desc"
           style={{ margin: '6px 0 0', color: 'var(--tone-warning)' }}
-          title="The engine's data listener is bound to a non-loopback address — LAN hub mode (BM_BIND_HOST). Any host that can route to this address can send traffic through the proxy: the data port carries no authentication, so use it only on trusted networks. The /v1/proxy/* control API stays bound to loopback regardless."
+          title="The engine's data listener is bound to a non-loopback address — LAN hub mode (BM_BIND_HOST). Any host that can route to this address can send traffic through the proxy; when a data-port token (BM_DATA_TOKEN) is configured, non-loopback peers must present it — phones receive it in the pairing QR as httpsToken. The /v1/proxy/* control API stays bound to loopback regardless."
         >
           LAN hub mode — the data listener accepts flows from the network on {status?.bindHost}:
-          {status?.port}. Only use on trusted networks — there is no authentication on the data
-          port. This is the mode Android capture uses to route a phone&apos;s traffic through
+          {status?.port}.
+          {status?.dataAuthRequired === true
+            ? ' A data-port token is required — paired phones carry it via the QR.'
+            : ' No data-port token is set — any device on this network may use it (trusted-LAN fallback).'}
+          {status?.denyPrivateDestinations === true &&
+            ' Loopback/private destinations are refused for network clients.'}
+          {' '}This is the mode Android capture uses to route a phone&apos;s traffic through
           this machine; the control API stays on loopback.
         </p>
       )}
@@ -566,8 +571,16 @@ export const HttpsFilterCard: React.FC = () => {
                 {TRUST_LABEL[trustState ?? ''] ?? (engineAlive ? 'checking…' : 'unknown')}
               </span>
             </div>
-            <p className="deploy-feed-box-desc" style={{ margin: '4px 0 0' }}>
-              {fingerprintShort ? `SHA-256 ${fingerprintShort}` : 'Fingerprint unavailable'}
+            <p
+              className="deploy-feed-box-desc"
+              style={{ margin: '4px 0 0', wordBreak: 'break-all' }}
+              title={
+                fingerprint
+                  ? `SHA-256 ${fingerprint} — compare this with the fingerprint a phone shows before installing the hub CA`
+                  : undefined
+              }
+            >
+              {fingerprint ? `SHA-256 ${fingerprint}` : 'Fingerprint unavailable'}
               {caTrust?.keyWrapped != null &&
                 ` · key ${caTrust.keyWrapped ? 'wrapped by the OS keychain' : 'unwrapped'}`}
               {/* The trust reply's own message names the concrete posture

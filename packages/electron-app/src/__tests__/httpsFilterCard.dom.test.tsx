@@ -177,7 +177,8 @@ describe('HttpsFilterCard — status surface', () => {
 
   it('surfaces the LAN hub hint only when the data bind is off loopback', async () => {
     // LAN-bound engine — the P4 hub posture; the hint must name the bind
-    // and the unauthenticated-data-port trade.
+    // and the flag-127 posture honestly (open trusted-LAN fallback here —
+    // the fixture reports no dataAuthRequired).
     installBridge({
       getHttpsFilterStatus: jest.fn(() =>
         Promise.resolve({ ...running, bindHost: '192.168.1.20', controlBindHost: '127.0.0.1' }),
@@ -190,8 +191,31 @@ describe('HttpsFilterCard — status surface', () => {
     });
     expect(screen.queryByText(/LAN hub mode/)).not.toBeNull();
     expect(screen.queryByText(/192\.168\.1\.20:9294/)).not.toBeNull();
-    expect(screen.queryByText(/no authentication on the data port/)).not.toBeNull();
+    expect(screen.queryByText(/trusted-LAN fallback/)).not.toBeNull();
     expect(screen.queryByText(/Android capture/)).not.toBeNull();
+
+    // A token-gated engine reads differently — the hint says the network
+    // needs the credential the QR carries.
+    cleanup();
+    installBridge({
+      getHttpsFilterStatus: jest.fn(() =>
+        Promise.resolve({
+          ...running,
+          bindHost: '192.168.1.20',
+          controlBindHost: '127.0.0.1',
+          dataAuthRequired: true,
+          denyPrivateDestinations: true,
+        }),
+      ),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/data-port token is required/)).not.toBeNull();
+    expect(screen.queryByText(/Loopback\/private destinations are refused/)).not.toBeNull();
+    expect(screen.queryByText(/trusted-LAN fallback/)).toBeNull();
 
     // Loopback binds never hint — including the ::1 and 127.x spellings.
     for (const loopback of ['127.0.0.1', '::1', 'localhost', '127.0.0.2']) {

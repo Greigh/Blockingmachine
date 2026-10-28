@@ -187,7 +187,13 @@ const Settings: React.FC<SettingsProps> = ({
   const [lanAuthMode, setLanAuthMode] = useState<'required' | 'open' | 'legacy'>('legacy');
   const [feedTokenMessage, setFeedTokenMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [generatedFeedToken, setGeneratedFeedToken] = useState('');
-  const [pairingPayload, setPairingPayload] = useState<{ url: string; payload: string; running: boolean; tokenConfigured: boolean } | null>(null);
+  // Flag 127's data-port token — a second credential beside the feed token,
+  // guarding the :9294 proxy listener instead of the feed API.
+  const [httpsDataToken, setHttpsDataToken] = useState('');
+  const [httpsDataTokenConfigured, setHttpsDataTokenConfigured] = useState(false);
+  const [httpsDataTokenMessage, setHttpsDataTokenMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [generatedHttpsDataToken, setGeneratedHttpsDataToken] = useState('');
+  const [pairingPayload, setPairingPayload] = useState<{ url: string; payload: string; running: boolean; tokenConfigured: boolean; httpsCaConfigured?: boolean; httpsTokenConfigured?: boolean } | null>(null);
   const [startingFeedForPairing, setStartingFeedForPairing] = useState(false);
 
   // Path state variables
@@ -326,6 +332,12 @@ const Settings: React.FC<SettingsProps> = ({
       }).catch(console.error);
     }
 
+    if (window.electron?.getHttpsFilterDataToken) {
+      window.electron.getHttpsFilterDataToken().then((res) => {
+        if (isMounted && res) setHttpsDataTokenConfigured(res.configured);
+      }).catch(console.error);
+    }
+
     if (window.electron?.getLaunchOnStartup) {
       window.electron.getLaunchOnStartup().then((val) => {
         if (isMounted) setLaunchOnStartup(Boolean(val));
@@ -455,6 +467,75 @@ const Settings: React.FC<SettingsProps> = ({
       safeSetTimeout(() => setFeedTokenMessage(null), 4000);
     } catch {
       setFeedTokenMessage({ text: 'Failed to generate feed token', type: 'error' });
+    }
+  };
+
+  // Flag 127's data-port token — same write-only convention as the feed
+  // token; it is the credential a token-gated :9294 listener demands from
+  // non-loopback peers, and the pairing QR carries it to phones.
+  const handleSaveHttpsDataToken = async () => {
+    if (!window.electron?.setHttpsFilterDataToken) return;
+    try {
+      const res = await window.electron.setHttpsFilterDataToken(httpsDataToken);
+      if (res?.success) {
+        const cleared = res.cleared === true;
+        setHttpsDataTokenConfigured(!cleared);
+        setHttpsDataToken('');
+        setGeneratedHttpsDataToken('');
+        setHttpsDataTokenMessage({
+          text: cleared
+            ? 'Data-port token cleared — the listener runs the open trusted-LAN fallback on next start'
+            : 'Data-port token saved — applies to the filter engine on its next start',
+          type: 'success',
+        });
+      } else {
+        setHttpsDataTokenMessage({ text: res?.error || 'Failed to save data-port token', type: 'error' });
+      }
+      safeSetTimeout(() => setHttpsDataTokenMessage(null), 4000);
+    } catch {
+      setHttpsDataTokenMessage({ text: 'Failed to save data-port token', type: 'error' });
+    }
+  };
+
+  const handleClearHttpsDataToken = async () => {
+    if (!window.electron?.setHttpsFilterDataToken) return;
+    try {
+      const res = await window.electron.setHttpsFilterDataToken('');
+      if (res?.success) {
+        setHttpsDataTokenConfigured(false);
+        setHttpsDataToken('');
+        setGeneratedHttpsDataToken('');
+        setHttpsDataTokenMessage({
+          text: 'Data-port token cleared — the listener runs the open trusted-LAN fallback on next start',
+          type: 'success',
+        });
+      } else {
+        setHttpsDataTokenMessage({ text: res?.error || 'Failed to clear data-port token', type: 'error' });
+      }
+      safeSetTimeout(() => setHttpsDataTokenMessage(null), 4000);
+    } catch {
+      setHttpsDataTokenMessage({ text: 'Failed to clear data-port token', type: 'error' });
+    }
+  };
+
+  const handleGenerateHttpsDataToken = async () => {
+    if (!window.electron?.generateHttpsFilterDataToken) return;
+    try {
+      const res = await window.electron.generateHttpsFilterDataToken();
+      if (res?.success && res.token) {
+        setHttpsDataTokenConfigured(true);
+        setHttpsDataToken('');
+        setGeneratedHttpsDataToken(res.token);
+        setHttpsDataTokenMessage({
+          text: 'Strong token generated and saved — shown once below and embedded in the pairing QR',
+          type: 'success',
+        });
+      } else {
+        setHttpsDataTokenMessage({ text: res?.error || 'Failed to generate data-port token', type: 'error' });
+      }
+      safeSetTimeout(() => setHttpsDataTokenMessage(null), 4000);
+    } catch {
+      setHttpsDataTokenMessage({ text: 'Failed to generate data-port token', type: 'error' });
     }
   };
 
@@ -1272,6 +1353,57 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
 
           <div className="setting-subsection">
+            <h3 className="setting-subsection-title">HTTPS Data-Port Token</h3>
+            <p className="setting-subsection-desc">
+              The filter engine&apos;s :9294 listener (CONNECT/PROXY-v2/plain-HTTP — the port a
+              captured phone talks to) can require this shared token from network clients. When
+              set, non-loopback peers must present it — phones receive it through the pairing QR
+              below; the engine reads it on its next start. When unset, the port stays open: the
+              deliberate trusted-LAN fallback for a single-user network.
+              {httpsDataTokenConfigured ? ' A token is currently configured.' : ''}
+            </p>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="password"
+                className="path-input"
+                placeholder={httpsDataTokenConfigured ? 'Token configured — enter a new one to replace, or Clear' : 'Leave empty to keep the listener open'}
+                value={httpsDataToken}
+                onChange={(e) => setHttpsDataToken(e.target.value)}
+                style={{ flex: '1 1 220px', minWidth: 0 }}
+                autoComplete="off"
+              />
+              <button type="button" className="browse-button secondary" onClick={() => void handleSaveHttpsDataToken()}>
+                Save
+              </button>
+              <button type="button" className="browse-button secondary" onClick={() => void handleGenerateHttpsDataToken()}>
+                Generate
+              </button>
+              {httpsDataTokenConfigured && (
+                <button type="button" className="browse-button secondary" onClick={() => void handleClearHttpsDataToken()}>
+                  Clear
+                </button>
+              )}
+            </div>
+            {generatedHttpsDataToken && (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <code style={{ fontSize: '0.72rem', wordBreak: 'break-all', opacity: 0.85 }}>{generatedHttpsDataToken}</code>
+                <button
+                  type="button"
+                  className="browse-button secondary"
+                  onClick={() => setGeneratedHttpsDataToken('')}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+            {httpsDataTokenMessage && (
+              <p className={`setting-message ${httpsDataTokenMessage.type}`} role={httpsDataTokenMessage.type === 'error' ? 'alert' : 'status'} style={{ marginTop: '2px' }}>
+                {httpsDataTokenMessage.text}
+              </p>
+            )}
+          </div>
+
+          <div className="setting-subsection">
             <h3 className="setting-subsection-title">Pair Mobile App</h3>
             <p className="setting-subsection-desc">
               The Blockingmachine iOS/Android app can scan a QR code instead of typing the
@@ -1313,6 +1445,12 @@ const Settings: React.FC<SettingsProps> = ({
                   {pairingPayload.tokenConfigured
                     ? ' — this code carries your feed token; treat it like a password.'
                     : ' — no feed token is configured, so the code carries only the address.'}
+                  {pairingPayload.httpsCaConfigured
+                    ? ' It also carries the hub CA + fingerprint, so the phone can install it without trusting the network.'
+                    : ''}
+                  {pairingPayload.httpsTokenConfigured
+                    ? ' The data-port token rides along too.'
+                    : ''}
                 </span>
               </div>
             )}

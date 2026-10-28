@@ -268,6 +268,41 @@ describe('configFromEnv', () => {
     expect(unset.ok).toBe(true);
     if (unset.ok) expect(unset.config.parentPid).toBeUndefined();
   });
+
+  test('BM_DATA_TOKEN / BM_DENY_PRIVATE_DESTINATIONS map onto the flag-127 config fields', () => {
+    const open = configFromEnv({ BM_STORE_DIR: '/tmp/x' });
+    expect(open.ok).toBe(true);
+    if (open.ok) {
+      expect(open.config.dataAuthToken).toBeUndefined();
+      expect(open.config.denyPrivateDestinations).toBeUndefined();
+    }
+    // An empty token is no token — the trusted-LAN fallback stays explicit.
+    const empty = configFromEnv({ BM_STORE_DIR: '/tmp/x', BM_DATA_TOKEN: '  ' });
+    expect(empty.ok).toBe(true);
+    if (empty.ok) expect(empty.config.dataAuthToken).toBeUndefined();
+
+    const gated = configFromEnv({
+      BM_STORE_DIR: '/tmp/x',
+      BM_DATA_TOKEN: ' sekrit ',
+      BM_DENY_PRIVATE_DESTINATIONS: 'yes',
+    });
+    expect(gated.ok).toBe(true);
+    if (gated.ok) {
+      expect(gated.config.dataAuthToken).toBe('sekrit');
+      expect(gated.config.denyPrivateDestinations).toBe(true);
+    }
+    // Truthy spellings only — anything else is off, never half-on.
+    for (const v of ['1', 'true', 'on', 'YES']) {
+      const p = configFromEnv({ BM_STORE_DIR: '/tmp/x', BM_DENY_PRIVATE_DESTINATIONS: v });
+      expect(p.ok).toBe(true);
+      if (p.ok) expect(p.config.denyPrivateDestinations).toBe(true);
+    }
+    for (const v of ['0', 'no', 'bogus', '2']) {
+      const p = configFromEnv({ BM_STORE_DIR: '/tmp/x', BM_DENY_PRIVATE_DESTINATIONS: v });
+      expect(p.ok).toBe(true);
+      if (p.ok) expect(p.config.denyPrivateDestinations).toBeUndefined();
+    }
+  });
 });
 
 describe('parent watchdog (BM_PARENT_PID)', () => {

@@ -46,8 +46,37 @@
  * (in-flight terminated flows finish on the pipe they already have).
  * `close()` stops accepting and destroys every tracked socket (client and
  * upstream alike).
+ *
+ * Flag 127 — data-port authentication and destination denylist:
+ *
+ *  - `authToken` set → non-loopback peers authenticate before any flow
+ *    handling: CONNECT/plain-HTTP present `Proxy-Authorization`
+ *    (`Bearer <token>` or `Basic` with the token as password) and earn an
+ *    explicit `407 Proxy Authentication Required` on failure; PROXY-v2
+ *    frames carry the token as the pinned `0xE0` TLV (see
+ *    `proxyProtocol.ts`) and die on a miss/mismatch — raw TLS has no
+ *    response channel, so the close IS the refusal and it precedes the
+ *    ClientHello peek (an unauthenticated client can never park the
+ *    socket). Headerless TLS splices carry no auth transport: refused
+ *    outright for non-loopback peers under a token. Loopback peers stay
+ *    exempt — the local capture helper is the trust anchor.
+ *  - `authToken` absent → the port is open: the recorded trusted-LAN
+ *    fallback for single-user deployments, surfaced as
+ *    `dataAuthRequired: false` on `/v1/proxy/status` and logged once at
+ *    engine start when the data bind is non-loopback.
+ *  - `denyPrivateDestinations` → a non-loopback peer may not aim a flow at
+ *    loopback/RFC1918/link-local/CGNAT/ULA/multicast/`localhost` —
+ *    403 for HTTP-shaped flows, an honest close on PROXY-v2. Off by
+ *    default: a single-user LAN hub proxies to its own LAN legitimately.
+ *
+ * Flag 129 — `GET /ca.pem`: a read-only, unauthenticated route answering
+ * `authority.caCertPem` — the LAN enrollment surface a phone fetches before
+ * verifying the fingerprint out-of-band. It is deliberately NOT a control
+ * surface (one static file; `/v1/proxy/*` stays loopback-only on :9293) and
+ * exempt from every gate — an unenrolled device is the caller it exists for.
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import net, { isIP } from 'node:net';
 import {
   createRequestEvaluator,
@@ -77,6 +106,7 @@ import {
   matchProxyV2Signature,
   parseProxyV2,
   proxyV2FrameLength,
+  type ProxyV2Target,
 } from './proxyProtocol.js';
 import { collectClientHello } from './sniPeek.js';
 import { terminateToHttp } from './terminate.js';
@@ -116,6 +146,14 @@ export interface ProxyStats {
   flowsTunneled: number;
   flowsTerminated: number;
   pinsLearned: number;
+  /**
+   * Flows refused by the data-port token gate (flag 127): a non-loopback
+   * peer with no/absent/wrong `Proxy-Authorization` on CONNECT or
+   * plain-HTTP (answered 407), or a PROXY-v2 frame without the pinned auth
+   * TLV / a headerless splice with no auth transport (honest close — raw
+   * TLS has no 407 to send).
+   */
+  authRefusals: number;
   /**
    * Rules in the live evaluator — seeded at start, refreshed by `reload()`.
    * `evaluator.size` is otherwise unobservable once a reload swaps it.
@@ -204,6 +242,38 @@ export interface StartProxyOptions {
    * `busy`); negative/absent values take the default.
    */
   injectionBudget?: number;
+  /**
+   * Shared data-port token (flag 127) — `BM_DATA_TOKEN`. When set, every
+   * non-loopback peer must authenticate before any flow handling:
+   * CONNECT and plain-HTTP requests carry `Proxy-Authorization` (a
+   * `Bearer <token>` value, or `Basic` credentials whose password field is
+   * the token) and are refused `407 Proxy Authentication Required`;
+   * PROXY-v2 spliced flows carry the token in-band as the pinned `0xE0`
+   * TLV (see proxyProtocol.ts) and are closed on a miss/mismatch — raw
+   * TLS has no response channel, so the close is the refusal and it must
+   * never hang. A headerless TLS splice has no in-band transport at all:
+   * non-loopback peers are refused outright under a token. Loopback peers
+   * stay exempt (the local capture helper is the trust anchor). Absent or
+   * empty → the port is open — the recorded trusted-LAN fallback.
+   */
+  authToken?: string;
+  /**
+   * Optional destination denylist (flag 127): when true, a NON-loopback
+   * peer may not aim a flow at a loopback, RFC1918, link-local, CGNAT,
+   * ULA, multicast/reserved, or `localhost` destination — the SSRF surface
+   * a LAN-reachable proxy otherwise carries (the hub's own services
+   * included). Literal destinations only — a hostname is the caller's
+   * routing answer, not a listener identity. Default off: the single-user
+   * LAN hub legitimately proxies to its own LAN services.
+   */
+  denyPrivateDestinations?: boolean;
+  /**
+   * Test seam — the loopback-peer predicate `authToken`/`denyPrivate...`
+   * consult (`sock.remoteAddress` in, exempt/not out). Default checks the
+   * loopback families; suites inject it to exercise the LAN-peer paths
+   * without a real second interface.
+   */
+  isLoopbackPeer?: (remoteAddress: string | undefined) => boolean;
 }
 
 /** Default cap on simultaneous injection buffers — ~32 MiB of worst-case held pages. */
@@ -221,8 +291,196 @@ const CONNECT_HEADER_LIMIT = 64 * 1024;
 const CONNECT_PREFIX = 'CONNECT ';
 const HEADER_END = '\r\n\r\n';
 
+/**
+ * The 407 every unauthenticated CONNECT/plain-HTTP request earns when a
+ * data-port token is configured (flag 127) — an explicit refusal, `close`,
+ * never a hang. `Proxy-Authenticate` names the realm so a generic proxy
+ * client surfaces a credentials prompt rather than a bare error.
+ */
+const PROXY_AUTH_REQUIRED =
+  'HTTP/1.1 407 Proxy Authentication Required\r\n' +
+  'Proxy-Authenticate: Basic realm="Blockingmachine"\r\n' +
+  'Content-Length: 0\r\nConnection: close\r\n\r\n';
+
 function sanitizeHeaderValue(value: string): string {
   return value.replace(/[\r\n]/g, '');
+}
+
+/** First `name:` header value in a latin1 request head, or null when absent. */
+function requestHeadHeaderValue(head: string, name: string): string | null {
+  const lineEnd = head.indexOf('\r\n');
+  for (const line of head.slice(lineEnd < 0 ? head.length : lineEnd + 2).split('\r\n')) {
+    const sep = line.indexOf(':');
+    if (sep > 0 && line.slice(0, sep).trim().toLowerCase() === name) {
+      return line.slice(sep + 1).trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Constant-time token comparison — a prefix-matching early-exit compare
+ * would leak the token's leading bytes through response timing to a LAN
+ * peer (the only clients this check exists for).
+ */
+function tokenEquals(candidate: string, expected: string): boolean {
+  const a = Buffer.from(candidate, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * The CONNECT/plain-HTTP auth check (flag 127): `Proxy-Authorization` must
+ * carry the token as `Bearer <token>` or as the password half of a `Basic`
+ * credential (`user:token` base64 — any username; what curl emits for
+ * `--proxy-user :<token>` and what generic proxy clients send for a
+ * proxy-auth challenge). Anything else — absent header, unknown scheme,
+ * wrong token — is a refusal.
+ */
+function proxyAuthorizationOk(requestHead: Buffer, token: string): boolean {
+  const raw = requestHeadHeaderValue(requestHead.toString('latin1'), 'proxy-authorization');
+  if (raw === null) {
+    return false;
+  }
+  const bearer = /^bearer[ \t]+(\S+)$/i.exec(raw);
+  if (bearer !== null) {
+    return tokenEquals(bearer[1], token);
+  }
+  const basic = /^basic[ \t]+(\S+)$/i.exec(raw);
+  if (basic !== null) {
+    const decoded = Buffer.from(basic[1], 'base64').toString('utf8');
+    const colon = decoded.indexOf(':');
+    return tokenEquals(colon < 0 ? decoded : decoded.slice(colon + 1), token);
+  }
+  return false;
+}
+
+/**
+ * The default loopback-peer predicate (flag 127): the engine's trust anchor
+ * is the local capture helper, so same-host flows stay exempt even when a
+ * token is configured. `remoteAddress` is always an IP literal — `localhost`
+ * never appears. `::ffff:`-mapped v4 peers (what a v6-capable listener
+ * reports for a v4 dial) get the v4 rule.
+ */
+function defaultIsLoopbackPeer(remoteAddress: string | undefined): boolean {
+  if (remoteAddress === undefined) {
+    return false;
+  }
+  let h = remoteAddress.toLowerCase();
+  if (h.startsWith('::ffff:')) {
+    h = h.slice('::ffff:'.length);
+  }
+  const version = isIP(h);
+  if (version === 4) {
+    return h.startsWith('127.');
+  }
+  if (version === 6) {
+    return h === '::1' || h === '0:0:0:0:0:0:0:1';
+  }
+  return false;
+}
+
+/**
+ * Expand a (verified, `isIP`===6) IPv6 literal to its eight hextets —
+ * embedded-v4 tails count double, `::` fills with zeros. Null on anything
+ * outside that verified shape.
+ */
+function expandV6(host: string): number[] | null {
+  let h = host;
+  const tail: number[] = [];
+  if (h.includes('.')) {
+    const lastColon = h.lastIndexOf(':');
+    if (lastColon < 0) {
+      return null;
+    }
+    const v4 = h.slice(lastColon + 1);
+    if (isIP(v4) !== 4) {
+      return null;
+    }
+    const parts = v4.split('.').map(Number);
+    tail.push((parts[0] << 8) | parts[1], (parts[2] << 8) | parts[3]);
+    h = h.slice(0, lastColon);
+  }
+  const halves = h.split('::');
+  if (halves.length > 2) {
+    return null;
+  }
+  const left = halves[0] === '' ? [] : halves[0].split(':');
+  const right =
+    halves.length === 2 ? (halves[1] === '' ? [] : halves[1].split(':')) : null;
+  if (right === null) {
+    if (left.length + tail.length !== 8) {
+      return null;
+    }
+    return [...left.map((g) => parseInt(g, 16)), ...tail];
+  }
+  const fill = 8 - left.length - right.length - tail.length;
+  if (fill < 0) {
+    return null;
+  }
+  return [
+    ...left.map((g) => parseInt(g, 16)),
+    ...new Array<number>(fill).fill(0),
+    ...right.map((g) => parseInt(g, 16)),
+    ...tail,
+  ];
+}
+
+/**
+ * The optional non-loopback-peer destination denylist (flag 127): the SSRF
+ * surface a LAN-reachable proxy carries — loopback (the hub's own services),
+ * RFC1918, link-local, CGNAT, ULA, `::`, multicast/reserved, `localhost`.
+ * Literal destinations only; a hostname is the caller's routing answer.
+ */
+function isPrivateDestinationHost(host: string): boolean {
+  let h = host.trim().toLowerCase().replace(/\.+$/, '');
+  if (h.startsWith('[') && h.endsWith(']')) {
+    h = h.slice(1, -1);
+  }
+  if (h === 'localhost' || h.endsWith('.localhost')) {
+    return true;
+  }
+  const version = isIP(h);
+  if (version === 4) {
+    const a = h.split('.').map(Number);
+    return (
+      a[0] === 0 || // "this network"
+      a[0] === 10 ||
+      a[0] === 127 ||
+      (a[0] === 169 && a[1] === 254) || // link-local
+      (a[0] === 172 && a[1] >= 16 && a[1] <= 31) ||
+      (a[0] === 192 && a[1] === 168) ||
+      (a[0] === 100 && a[1] >= 64 && a[1] <= 127) || // CGNAT 100.64/10
+      a[0] >= 224 // multicast (224/4) + reserved (240/4), broadcast included
+    );
+  }
+  if (version === 6) {
+    const groups = expandV6(h);
+    if (groups === null) {
+      return false;
+    }
+    if (groups.every((g) => g === 0)) {
+      return true; // :: — the wildcard
+    }
+    if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) {
+      return true; // ::1
+    }
+    if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
+      // ::ffff:a.b.c.d — a mapped v4 destination takes the v4 rules.
+      const v4 = `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
+      return isPrivateDestinationHost(v4);
+    }
+    if ((groups[0] & 0xffc0) === 0xfe80) {
+      return true; // fe80::/10 link-local
+    }
+    if ((groups[0] & 0xfe00) === 0xfc00) {
+      return true; // fc00::/7 ULA
+    }
+    if ((groups[0] & 0xff00) === 0xff00) {
+      return true; // ff00::/8 multicast
+    }
+  }
+  return false;
 }
 
 /**
@@ -311,6 +569,16 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   // self-target guard must compare the *bound* port, captured below.
   let boundDataPort = dataPort;
   let evaluator = opts.evaluator;
+  // Flag-127 posture: an absent/empty token is the recorded trusted-LAN
+  // fallback (open port); a configured token makes non-loopback peers
+  // authenticate before any destination work (loopback stays exempt — the
+  // local capture helper is the trust anchor). The denylist opts in to
+  // refusing private/loopback destinations for those same non-loopback
+  // peers; both gates consult the peer once, at accept time.
+  const authToken =
+    opts.authToken !== undefined && opts.authToken.length > 0 ? opts.authToken : undefined;
+  const denyPrivate = opts.denyPrivateDestinations === true;
+  const isLoopbackPeer = opts.isLoopbackPeer ?? defaultIsLoopbackPeer;
   // Snapshotted per flow next to `flowEvaluator` — a mid-flow reload must
   // not swap the cosmetic payload under in-flight responses either.
   let cosmeticIndex = opts.cosmeticIndex;
@@ -350,6 +618,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     flowsTunneled: 0,
     flowsTerminated: 0,
     pinsLearned: 0,
+    authRefusals: 0,
     rulesSize: evaluator.size,
     cosmetic: cosmeticIndex?.size() ?? null,
   };
@@ -455,6 +724,41 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         return isIP(mapped) === 4 && (mapped.startsWith('127.') || mapped === '0.0.0.0');
       }
       return h === '::1' || h === '0:0:0:0:0:0:0:1' || h === '::' || h === '0:0:0:0:0:0:0:0';
+    }
+    return false;
+  }
+
+  /**
+   * The read-only CA enrollment route (flag 129): `GET /ca.pem` on the DATA
+   * port answers `authority.caCertPem` — one file, always the same bytes,
+   * deliberately unauthenticated AND exempt from every gate (auth included):
+   * it is the path an unenrolled LAN device takes to fetch the CA whose
+   * fingerprint it then verifies against the pairing payload / the desktop
+   * card. Absolute-form `GET http://<this listener>/ca.pem` (what a
+   * proxied request to this port would emit) serves too — the authority
+   * must be this listener, or the request is just proxy traffic.
+   */
+  function isCaPemRequest(buf: Buffer): boolean {
+    const headEnd = buf.indexOf('\r\n\r\n');
+    const head = buf.subarray(0, headEnd < 0 ? buf.length : headEnd).toString('latin1');
+    const lineEnd = head.indexOf('\r\n');
+    const requestLine = lineEnd < 0 ? head : head.slice(0, lineEnd);
+    const match = /^([A-Z][A-Z0-9_-]{0,15})\s+(\S+)\s+HTTP\/\d+(?:\.\d+)?$/.exec(requestLine);
+    if (match === null || match[1] !== 'GET') {
+      return false;
+    }
+    const target = match[2];
+    if (target === '/ca.pem' || target.startsWith('/ca.pem?')) {
+      return true;
+    }
+    if (/^http:\/\//i.test(target)) {
+      try {
+        const parsed = new URL(target);
+        const port = parsed.port === '' ? 80 : Number(parsed.port);
+        return parsed.pathname === '/ca.pem' && isSelfTarget(parsed.hostname, port);
+      } catch {
+        return false;
+      }
     }
     return false;
   }
@@ -728,7 +1032,29 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
    * per-connection here (a blind splice cannot re-evaluate pipelined
    * requests); per-request evaluation is the terminated path's job.
    */
-  function handlePlainHttp(sock: net.Socket, buf: Buffer): void {
+  function handlePlainHttp(sock: net.Socket, buf: Buffer, peerLoopback: boolean): void {
+    // `GET /ca.pem` (flag 129) — the read-only enrollment surface, exempt
+    // from auth and the denylist alike: an unenrolled device IS the caller
+    // this route exists for. One static file, never a control surface.
+    if (isCaPemRequest(buf)) {
+      const body = Buffer.from(authority.caCertPem, 'utf8');
+      sock.end(
+        'HTTP/1.1 200 OK\r\n' +
+          'Content-Type: application/x-pem-file\r\n' +
+          `Content-Length: ${body.length}\r\n` +
+          'Connection: close\r\n\r\n' +
+          authority.caCertPem,
+      );
+      return;
+    }
+    // Flag 127 token gate — ahead of the self-target refusal too: an
+    // unauthenticated request earns 407 and learns nothing about the
+    // listener's own ports.
+    if (authToken !== undefined && !peerLoopback && !proxyAuthorizationOk(buf, authToken)) {
+      stats.authRefusals++;
+      sock.end(PROXY_AUTH_REQUIRED);
+      return;
+    }
     const parsed = parsePlainHttpTarget(buf);
     // Unparseable → 400. Absolute-form target disagreeing with the Host
     // header (RFC 7230 §5.4): evaluate BOTH authorities — a block on either
@@ -746,6 +1072,18 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // request — no preflight, no origin wall on this listener).
     if (isSelfTarget(parsed.host, parsed.port)) {
       sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    // Flag 127 denylist: a LAN peer asking this listener to dial the
+    // network's own private services gets a 403 — opted-in only, since a
+    // single-user LAN hub legitimately proxies to its own LAN.
+    if (denyPrivate && !peerLoopback && isPrivateDestinationHost(parsed.host)) {
+      stats.flowsBlocked++;
+      sock.end(
+        'HTTP/1.1 403 Forbidden\r\n' +
+          'X-Blockingmachine-Refused: private-destination\r\n' +
+          'Content-Length: 0\r\nConnection: close\r\n\r\n',
+      );
       return;
     }
     // Paused: verdicts off — forward verbatim like the allowed path, including
@@ -846,7 +1184,23 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
    * Explicit forward proxy: verdict on the CONNECT authority, then — for
    * allowed non-passthrough hosts — a bounded peek at what follows the 200.
    */
-  async function handleConnect(sock: net.Socket, requestHead: Buffer, rest: Buffer): Promise<void> {
+  async function handleConnect(
+    sock: net.Socket,
+    requestHead: Buffer,
+    rest: Buffer,
+    peerLoopback: boolean,
+  ): Promise<void> {
+    // Flag 127 token gate FIRST — before the authority parse: a refused
+    // request must not leak which targets were valid, and must never hang.
+    if (
+      authToken !== undefined &&
+      !peerLoopback &&
+      !proxyAuthorizationOk(requestHead, authToken)
+    ) {
+      stats.authRefusals++;
+      sock.end(PROXY_AUTH_REQUIRED);
+      return;
+    }
     const lineEnd = requestHead.indexOf('\r\n');
     const requestLine = requestHead
       .subarray(0, lineEnd < 0 ? requestHead.length : lineEnd)
@@ -865,6 +1219,16 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // accept+dial per level). 400, and dial nothing.
     if (isSelfTarget(host, port)) {
       sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    // Flag 127 denylist — the CONNECT twin of the plain-HTTP check.
+    if (denyPrivate && !peerLoopback && isPrivateDestinationHost(host)) {
+      stats.flowsBlocked++;
+      sock.end(
+        'HTTP/1.1 403 Forbidden\r\n' +
+          'X-Blockingmachine-Refused: private-destination\r\n' +
+          'Content-Length: 0\r\nConnection: close\r\n\r\n',
+      );
       return;
     }
 
@@ -958,14 +1322,44 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
    */
   async function handleTransparent(
     sock: net.Socket,
-    target: { dstHost: string; dstPort: number } | null,
+    target: ProxyV2Target | null,
     rest: Buffer,
+    peerLoopback: boolean,
   ): Promise<void> {
+    // Flag 127 token gate: a configured token requires the pinned `0xE0`
+    // TLV on the v2 frame (target === null is the headerless-splice path —
+    // it has no in-band auth transport at all, so a non-loopback peer gets
+    // refused outright). Raw TLS carries no 407 — the prompt close IS the
+    // refusal, and it happens before the ClientHello peek so an
+    // unauthenticated client can never park the socket on a byte deadline.
+    if (authToken !== undefined && !peerLoopback) {
+      const presented =
+        target !== null &&
+        target.authToken !== undefined &&
+        tokenEquals(target.authToken, authToken);
+      if (!presented) {
+        stats.authRefusals++;
+        sock.destroy();
+        return;
+      }
+    }
     // A PROXY-v2 destination is still client-supplied bytes — the v2 magic
     // is a wire prefix any local process can write — so the self-target
     // refusal applies before the paused shortcut too. Raw TLS has no honest
     // 400 to send; the close is the answer.
     if (target !== null && isSelfTarget(target.dstHost, target.dstPort)) {
+      sock.destroy();
+      return;
+    }
+    // Flag 127 denylist — the PROXY-v2 twin: the frame's announced
+    // destination is the dial target the same way CONNECT's authority is.
+    if (
+      denyPrivate &&
+      !peerLoopback &&
+      target !== null &&
+      isPrivateDestinationHost(target.dstHost)
+    ) {
+      stats.flowsBlocked++;
       sock.destroy();
       return;
     }
@@ -1057,6 +1451,11 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   function onConnection(sock: net.Socket): void {
     track(sock);
     stats.flowsTotal++;
+    // Flag 127: the peer's loopback-ness is decided once, at accept —
+    // remoteAddress is fixed for the socket's life, and both flag gates
+    // (the token requirement and the destination denylist) exempt loopback
+    // peers because the local capture helper is the trust anchor.
+    const peerLoopback = isLoopbackPeer(sock.remoteAddress);
     const chunks: Buffer[] = [];
     let mode: 'dispatch' | 'connect' | 'proxy2' | 'http' = 'dispatch';
 
@@ -1099,7 +1498,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           mode = 'http';
         } else if (cls === 'tls') {
           handOff(() => {
-            void handleTransparent(sock, null, buf).catch(() => sock.destroy());
+            void handleTransparent(sock, null, buf, peerLoopback).catch(() => sock.destroy());
           });
           return;
         } else {
@@ -1118,7 +1517,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
             sock.destroy(); // malformed/unsupportable frame — honest close
             return;
           }
-          void handleTransparent(sock, target, rest).catch(() => sock.destroy());
+          void handleTransparent(sock, target, rest, peerLoopback).catch(() => sock.destroy());
         });
         return;
       }
@@ -1130,7 +1529,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           }
           return;
         }
-        handOff(() => handlePlainHttp(sock, buf));
+        handOff(() => handlePlainHttp(sock, buf, peerLoopback));
         return;
       }
       if (mode === 'connect') {
@@ -1144,7 +1543,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
         const requestHead = buf.subarray(0, end + HEADER_END.length);
         const rest = buf.subarray(end + HEADER_END.length);
         handOff(() => {
-          void handleConnect(sock, requestHead, rest).catch(() => sock.destroy());
+          void handleConnect(sock, requestHead, rest, peerLoopback).catch(() => sock.destroy());
         });
       }
     };

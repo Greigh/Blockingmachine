@@ -310,6 +310,17 @@ const daemonManager = new DaemonManager();
 // after module init.
 const filterProxyManager = new FilterProxyManager({
   trustedCaFingerprint: () => store.get('httpsFilterTrustedCaFingerprint'),
+  // Flag 127: the three data-port posture knobs a spawned engine inherits.
+  // `httpsFilterDataBindHost` is operator-set (an IP literal — a UI field
+  // would be one wrong paste away from a published proxy); the token is a
+  // sealed secret the pairing QR shares as `httpsToken`; the denylist is
+  // the SSRF opt-in. All lazy — `store` is constructed below this line.
+  dataBindHost: () => store.get('httpsFilterDataBindHost'),
+  dataAuthToken: () => {
+    const token = readSecret(store, safeStorage, 'httpsFilterDataToken').trim();
+    return token.length > 0 ? token : undefined;
+  },
+  denyPrivateDestinations: () => store.get('httpsFilterDenyPrivate') === true,
 });
 
 const isMac = process.platform === 'darwin';
@@ -605,6 +616,15 @@ const store = new Store<StoreSchema>({
       // before that — absence = no drift baseline = the check is inert.
       type: 'string',
     },
+    // Flag 127's operator-set knobs — no defaults: absence is the honest
+    // loopback+open posture, and each carries a doc comment in
+    // StoreSchema. `httpsFilterDataTokenEncrypted` is the sealed sibling
+    // `writeSecret` writes; it exists by shape, not schema declaration
+    // (same convention as `feedTokenEncrypted`).
+    httpsFilterDataBindHost: { type: 'string' },
+    httpsFilterDenyPrivate: { type: 'boolean' },
+    httpsFilterDataToken: { type: 'string' },
+    httpsFilterDataTokenEncrypted: { type: 'string' },
     deployRefreshReports: {
       type: 'object',
       default: {},
@@ -5344,6 +5364,63 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         };
       }
       return await filterProxyManager.removePin(normalized);
+    });
+
+    /**
+     * Flag 127's data-port credential — a sealed secret that lives beside
+     * the feed token but guards a different surface: the :9294
+     * CONNECT/PROXY-v2/plain-HTTP listener's non-loopback auth. Presence
+     * only on read — the value is write-only like the feed token, and the
+     * pairing QR is the one place it is echoed out.
+     */
+    ipcMain.handle('httpsfilter:get-data-token', async () => {
+      const token = readSecret(store, safeStorage, 'httpsFilterDataToken').trim();
+      return { configured: token.length > 0 };
+    });
+
+    ipcMain.handle('httpsfilter:set-data-token', async (_event, token: unknown) => {
+      try {
+        if (typeof token !== 'string') {
+          return { success: false, error: 'Token must be a string' };
+        }
+        const val = token.trim();
+        if (val.length > 256) {
+          return { success: false, error: 'Token exceeds the 256-character limit' };
+        }
+        // Empty clears — the open-port trusted-LAN fallback is the
+        // documented posture when no token exists; unlike the feed
+        // credential there is no 'required' mode to protect here.
+        if (val.length === 0) {
+          writeSecret(store, safeStorage, 'httpsFilterDataToken', '');
+          return { success: true, cleared: true };
+        }
+        // Same entropy floor as the feed token — the credential is the
+        // only thing between a LAN guest and your HTTP(S) flows.
+        if (val.length < 16) {
+          return {
+            success: false,
+            error: 'Token must be at least 16 characters — use Generate for a strong one',
+          };
+        }
+        writeSecret(store, safeStorage, 'httpsFilterDataToken', val);
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err?.message || String(err) };
+      }
+    });
+
+    ipcMain.handle('httpsfilter:generate-data-token', async () => {
+      try {
+        // 192 bits CSPRNG, returned ONCE for the Settings display — the
+        // sealed store is never readable back. The token applies to a
+        // spawned engine on its NEXT start (BM_DATA_TOKEN); an
+        // externally-run engine needs the same value in its own env.
+        const token = randomBytes(24).toString('base64url');
+        writeSecret(store, safeStorage, 'httpsFilterDataToken', token);
+        return { success: true, token };
+      } catch (err) {
+        return { success: false, error: 'Failed to generate token' };
+      }
     });
 
     ipcMain.handle('test-sinkhole-connection', async (_event, service: 'pihole' | 'adguard' | 'webhook') => {

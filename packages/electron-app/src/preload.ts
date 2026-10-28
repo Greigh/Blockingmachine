@@ -114,7 +114,27 @@ contextBridge.exposeInMainWorld('electron', {
       running: boolean;
       url: string;
       tokenConfigured: boolean;
+      /** True when the engine answered /v1/proxy/ca — the QR carries the CA. */
+      httpsCaConfigured?: boolean;
+      /** True when a data-port token is stored — the QR carries `httpsToken`. */
+      httpsTokenConfigured?: boolean;
       payload: string;
+    }>,
+  // Flag 127's data-port token — presence-only read, set/clear, and the
+  // one-shot generate display. Same write-only convention as feedToken.
+  getHttpsFilterDataToken: () =>
+    ipcRenderer.invoke('httpsfilter:get-data-token') as Promise<{ configured: boolean }>,
+  setHttpsFilterDataToken: (token: string) =>
+    ipcRenderer.invoke('httpsfilter:set-data-token', token) as Promise<{
+      success: boolean;
+      cleared?: boolean;
+      error?: string;
+    }>,
+  generateHttpsFilterDataToken: () =>
+    ipcRenderer.invoke('httpsfilter:generate-data-token') as Promise<{
+      success: boolean;
+      token?: string;
+      error?: string;
     }>,
   getLaunchOnStartup: () => ipcRenderer.invoke('get-launch-on-startup'),
   setLaunchOnStartup: (enabled: boolean) => ipcRenderer.invoke('set-launch-on-startup', enabled),
