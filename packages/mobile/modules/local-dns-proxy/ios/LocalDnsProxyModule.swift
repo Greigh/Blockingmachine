@@ -7,7 +7,7 @@ import NetworkExtension
 /// Swift + NetworkExtension; only the control surface lives here.
 public class LocalDnsProxyModule: Module {
 
-    private static let extensionBundleId = "com.blockingmachine.mobile.dnsproxy"
+    private static let extensionBundleId = "com.greighstudios.blockingmachine.dnsproxy"
     private static let appGroup = "group.com.greighstudios.blockingmachine"
     private static let sharedRulesetName = "ruleset_native.txt"
 
@@ -17,7 +17,10 @@ public class LocalDnsProxyModule: Module {
         // {installed, enabled} — the extension is considered installed once the
         // manager's saved providerProtocol points at its bundle id.
         AsyncFunction("getStatus") { () async throws -> [String: Any] in
-            try await Self.loadManager()
+            // Without Apple's dns-proxy grant loadFromPreferences errors out —
+            // degrade to "not installed" rather than rejecting so the card
+            // still renders (the enable attempt surfaces the real error).
+            try? await Self.loadManager()
             let proto = NEDNSProxyManager.shared().providerProtocol
             return [
                 "installed": proto?.providerBundleIdentifier == Self.extensionBundleId,

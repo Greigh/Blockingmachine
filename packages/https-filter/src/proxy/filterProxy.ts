@@ -113,7 +113,8 @@ import {
   type ProxyV2Target,
 } from './proxyProtocol.js';
 import { collectClientHello } from './sniPeek.js';
-import { SELF_GET_CA_PATHS } from './selfRoutes.js';
+import { SELF_GET_CA_MOBILECONFIG_PATHS, SELF_GET_CA_PATHS } from './selfRoutes.js';
+import { buildCaMobileConfig } from './caMobileConfig.js';
 import { terminateToHttp } from './terminate.js';
 
 export interface ProxyStats {
@@ -1180,10 +1181,10 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
    * requests); per-request evaluation is the terminated path's job.
    */
   function handlePlainHttp(sock: net.Socket, buf: Buffer, peerLoopback: boolean): void {
-    // `GET /ca.pem` (flag 129) + `GET /proxy.pac` (P7) — the read-only
-    // self-routes, exempt from auth and the denylist alike: an unenrolled
-    // device / an OS PAC fetcher IS the caller these exist for. Static
-    // files, never a control surface.
+    // `GET /ca.pem` (flag 129) + `GET /ca.mobileconfig` (iOS install) +
+    // `GET /proxy.pac` (P7) — the read-only self-routes, exempt from auth
+    // and the denylist alike: an unenrolled device / an OS PAC fetcher IS
+    // the caller these exist for. Static files, never a control surface.
     const selfGet = parseSelfGetRequest(buf);
     if (selfGet !== null && SELF_GET_CA_PATHS.includes(selfGet.path)) {
       const body = Buffer.from(authority.caCertPem, 'utf8');
@@ -1193,6 +1194,26 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           `Content-Length: ${body.length}\r\n` +
           'Connection: close\r\n\r\n' +
           authority.caCertPem,
+      );
+      return;
+    }
+    if (selfGet !== null && SELF_GET_CA_MOBILECONFIG_PATHS.includes(selfGet.path)) {
+      // iOS's install surface — Safari turns this MIME into "Profile
+      // Downloaded". The profile wraps the same CA PEM; fail closed (500)
+      // rather than emit a half-written profile if it ever won't parse.
+      const profile = buildCaMobileConfig(authority.caCertPem);
+      if (profile === null) {
+        sock.end('HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      const body = Buffer.from(profile, 'utf8');
+      sock.end(
+        'HTTP/1.1 200 OK\r\n' +
+          'Content-Type: application/x-apple-aspen-config\r\n' +
+          'Content-Disposition: attachment; filename="blockingmachine-hub-ca.mobileconfig"\r\n' +
+          `Content-Length: ${body.length}\r\n` +
+          'Connection: close\r\n\r\n' +
+          profile,
       );
       return;
     }

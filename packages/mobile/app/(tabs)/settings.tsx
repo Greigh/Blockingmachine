@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -28,6 +29,7 @@ import {
   fetchHubCa,
   HUB_DATA_PORT,
   hostFromUrl,
+  hubDataUrl,
   isValidIpLiteral,
   loadCaFingerprint,
   loadHubHost,
@@ -39,8 +41,20 @@ import {
   type HubCa,
   type PairedCa,
 } from '../../src/filter/httpsCapture';
+import {
+  localDnsStatus,
+  startLocalDns,
+  stopLocalDns,
+  subscribeLocalDns,
+  type LocalDnsStatus,
+} from '../../src/filter/localDns';
 import { nativeRulesPath } from '../../src/filter/ruleset';
 import { parsePackageList, SELF_PACKAGE, toggledSelfList } from '../../src/filter/perAppBypass';
+import {
+  getDnsProxyStatus,
+  isDnsProxySupported,
+  setDnsProxyEnabled,
+} from '../../src/filter/dnsProxy';
 import { ActionButton, Card, Pill, SectionTitle } from '../../src/components/ui';
 import { describeError, UserError, type FriendlyError } from '../../src/errors';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
@@ -422,6 +436,304 @@ function HttpsCaptureCard() {
 }
 
 /**
+ * iOS-only card: the BlockingmachineDNSProxy app extension
+ * (`NEDNSProxyProvider`). Enabling registers it as the system DNS proxy —
+ * every cleartext DNS flow on the device routes through the appex, which
+ * answers against the synced ruleset mirrored into the app group. The first
+ * save surfaces the OS permission prompt; the extension also needs Apple's
+ * Network Extension entitlement on the provisioning profile to run at all.
+ */
+function SystemDnsCard({ ready }: { ready: boolean }) {
+  const status = useQuery({
+    queryKey: ['dnsproxy'],
+    queryFn: getDnsProxyStatus,
+    refetchInterval: 4000,
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<FriendlyError | null>(null);
+  const s = status.data;
+
+  const toggle = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await Promise.race([
+        setDnsProxyEnabled(!s?.enabled),
+        new Promise((_, reject) => setTimeout(() => reject(new UserError('The system didn\u2019t answer — try again.')), 45_000)),
+      ]);
+      haptics.success();
+    } catch (e) {
+      haptics.error();
+      setErr(describeError(e));
+    } finally {
+      setBusy(false);
+      void status.refetch();
+    }
+  };
+
+  return (
+    <Card>
+      <View style={styles.rowBetween}>
+        <SectionTitle icon="shield-checkmark-outline" label="Device-wide DNS" style={{ marginBottom: 0 }} />
+        {s?.enabled ? <Pill label="active" tone="ok" /> : null}
+      </View>
+      <Text style={styles.meta}>
+        {ready
+          ? 'Filters every app\u2019s DNS through the Blockingmachine extension — no VPN icon, works in the background. The system asks permission the first time.'
+          : 'Sync rules above first — the extension answers against the synced ruleset.'}
+      </Text>
+      {err ? (
+        <>
+          <Text style={styles.syncError}>{err.title}</Text>
+          {err.detail ? <Text style={styles.syncErrorDetail}>{err.detail}</Text> : null}
+        </>
+      ) : null}
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonFlex}>
+          <ActionButton
+            label={s?.enabled ? 'Disable device filter' : 'Enable device filter'}
+            tone={s?.enabled ? 'ghost' : 'primary'}
+            disabled={!ready || busy}
+            loading={busy}
+            onPress={() => void toggle()}
+          />
+        </View>
+      </View>
+      {s && !s.installed ? (
+        <Text style={styles.meta}>
+          Extension not registered yet — enabling installs its configuration.
+        </Text>
+      ) : null}
+    </Card>
+  );
+}
+
+/**
+ * iOS hub-filtering surface — iOS has no VpnService, so the workable story
+ * today is the hub's explicit proxy: point the Wi-Fi network at the PAC URL
+ * the engine serves on its data port and proxy-respecting traffic (Safari +
+ * most apps) gets engine verdicts. MITM content filtering additionally needs
+ * the hub CA trusted — the profile installs through Safari's "Profile
+ * Downloaded" flow from `/ca.mobileconfig`. The fingerprint gate is the same
+ * one the Android CA flow holds: neither the QR payload nor the LAN fetch
+ * authenticates itself, so the user compares the SHA-256 against the hub's
+ * own HTTPS Filtering card before the profile ever opens.
+ */
+function IosHubFilterCard() {
+  const { activeServer } = useServers();
+  const [hub, setHub] = useState('');
+  const [savedHub, setSavedHub] = useState<string | null>(null);
+  const [port, setPort] = useState(HUB_DATA_PORT);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<FriendlyError | null>(null);
+  const [line, setLine] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadHubHost().then((h) => {
+      setSavedHub(h);
+      if (h) setHub(h);
+    });
+    void loadHubPort().then((p) => {
+      if (p) setPort(p);
+    });
+  }, []);
+
+  // The paired server is usually the hub — offer its host as the default
+  // when it is already a literal address (same defaulting HttpsCaptureCard
+  // uses on Android).
+  useEffect(() => {
+    if (savedHub || hub) return;
+    const host = activeServer ? hostFromUrl(activeServer.baseUrl) : null;
+    if (host && isValidIpLiteral(host)) setHub(host);
+  }, [activeServer, savedHub, hub]);
+
+  const act = async (key: string, fn: () => Promise<unknown>) => {
+    setBusy(key);
+    setErr(null);
+    setLine(null);
+    try {
+      await Promise.race([
+        fn(),
+        new Promise((_, reject) => setTimeout(() => reject(new UserError('The system didn\u2019t answer — try again.')), 45_000)),
+      ]);
+      haptics.success();
+    } catch (e) {
+      haptics.error();
+      setErr(describeError(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const host = (savedHub ?? hub).trim();
+  const pacUrl = isValidIpLiteral(host) ? hubDataUrl(host, '/proxy.pac', port) : null;
+
+  const installCa = () =>
+    act('ca', async () => {
+      if (!isValidIpLiteral(host)) {
+        throw new UserError('Enter the hub\u2019s LAN IP address first — the CA and the proxy both come from it.');
+      }
+      await saveHubHost(host);
+      setSavedHub(host);
+      const paired = await loadPairedCa();
+      const ca: HubCa | PairedCa =
+        paired ?? (await fetchHubCa(host, fetch, port));
+      const fp = ca.sha256Fingerprint;
+      if (!fp) {
+        setErr({
+          title: 'No CA fingerprint to check',
+          detail: 'The hub didn\u2019t identify its CA — refusing to install a certificate that can\u2019t be verified.',
+        });
+        return;
+      }
+      const previous = await loadCaFingerprint();
+      const drifted = !!previous && previous !== fp;
+      const body =
+        'Compare this fingerprint with the one shown in the hub\u2019s HTTPS Filtering card — matching it is the only check that the CA wasn\u2019t swapped on the network.\n\n' +
+        `SHA-256\n${fp}` +
+        (drifted
+          ? '\n\nIt changed since you last confirmed it — make sure the hub\u2019s CA really was rotated.'
+          : '');
+      Alert.alert('Trust this hub CA?', body, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Install profile',
+          onPress: () =>
+            void act('ca', async () => {
+              await saveCaFingerprint(fp);
+              await Linking.openURL(hubDataUrl(host, '/v1/proxy/ca.mobileconfig', port));
+              setLine(
+                `Safari has the profile — install it under Settings › Profile Downloaded, then enable full trust under Settings › General › About › Certificate Trust Settings. CA sha256: ${fp}`,
+              );
+            }),
+        },
+      ]);
+    });
+
+  return (
+    <Card>
+      <SectionTitle icon="globe-outline" label="Web filtering via hub" />
+      <Text style={styles.meta}>
+        iOS has no VPN-based filter — instead, point this Wi-Fi network at the hub&apos;s proxy and Safari plus most apps get the engine&apos;s verdicts. Install the CA first: the engine terminates TLS, so every site errors until the CA is trusted.
+      </Text>
+      {err ? (
+        <>
+          <Text style={styles.syncError}>{err.title}</Text>
+          {err.detail ? <Text style={styles.syncErrorDetail}>{err.detail}</Text> : null}
+        </>
+      ) : null}
+      {line ? <Text style={styles.meta}>{line}</Text> : null}
+      <TextInput
+        style={styles.input}
+        placeholder="hub LAN IP (e.g. 192.168.1.20)"
+        placeholderTextColor={colors.textMuted}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="numbers-and-punctuation"
+        value={hub}
+        onChangeText={setHub}
+        onBlur={() => {
+          const h = hub.trim();
+          if (isValidIpLiteral(h)) {
+            void saveHubHost(h);
+            setSavedHub(h);
+          }
+        }}
+      />
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonFlex}>
+          <ActionButton
+            label="1. Install hub CA profile"
+            tone="primary"
+            disabled={busy !== null}
+            loading={busy === 'ca'}
+            onPress={() => void installCa()}
+          />
+        </View>
+      </View>
+      {pacUrl ? (
+        <>
+          <Text style={styles.meta}>
+            2. Settings › Wi-Fi › ⓘ next to this network › Configure Proxy › Automatic — paste:
+          </Text>
+          <Text style={styles.feedUrl} selectable>
+            {pacUrl}
+          </Text>
+          <Text style={styles.meta}>
+            Set per Wi-Fi network; cellular and other networks are unaffected, and apps that ignore the system proxy bypass it. Device-wide filtering for every app waits on Apple&apos;s Network Extension entitlement.
+          </Text>
+        </>
+      ) : null}
+    </Card>
+  );
+}
+
+/**
+ * Local DNS responder — the mobile counterpart of the desktop daemon's UDP
+ * listener. Both platforms: serves LAN devices (and this one, via a manual
+ * Wi-Fi DNS entry) while the app is open; on Android the VPN filter above is
+ * still the device-wide path.
+ */
+function LocalDnsCard({ ready }: { ready: boolean }) {
+  const [s, setS] = useState<LocalDnsStatus>(localDnsStatus);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<FriendlyError | null>(null);
+  useEffect(() => subscribeLocalDns(() => setS(localDnsStatus())), []);
+
+  const toggle = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      if (s.running) stopLocalDns();
+      else await startLocalDns();
+      haptics.success();
+    } catch (e) {
+      haptics.error();
+      setErr(describeError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <View style={styles.rowBetween}>
+        <SectionTitle icon="radio-outline" label="Local DNS service" style={{ marginBottom: 0 }} />
+        {s.running ? <Pill label="listening" tone="ok" /> : null}
+      </View>
+      <Text style={styles.meta}>
+        {ready
+          ? `Answers DNS on :${s.port} (UDP) while the app is open — blocked names sinkhole, the rest resolve through ${s.upstream}. Point another device's DNS at this phone's LAN address to filter it.`
+          : 'Sync rules above first — the service answers against the synced ruleset.'}
+      </Text>
+      {err ? (
+        <>
+          <Text style={styles.syncError}>{err.title}</Text>
+          {err.detail ? <Text style={styles.syncErrorDetail}>{err.detail}</Text> : null}
+        </>
+      ) : null}
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonFlex}>
+          <ActionButton
+            label={s.running ? 'Stop service' : 'Start service'}
+            tone={s.running ? 'ghost' : 'primary'}
+            disabled={!ready || busy}
+            loading={busy}
+            onPress={() => void toggle()}
+          />
+        </View>
+      </View>
+      {s.running ? (
+        <Text style={styles.meta}>
+          {s.queries.toLocaleString()} queries · {s.blocked.toLocaleString()} blocked · {s.forwarded.toLocaleString()} forwarded
+        </Text>
+      ) : null}
+      {s.lastError ? <Text style={styles.syncError}>{s.lastError}</Text> : null}
+    </Card>
+  );
+}
+
+/**
  * Android-only card: per-app bypass. Excluded packages never enter the VPN
  * tunnel at all — their DNS is unfiltered, nothing they send reaches the
  * hub, and QUIC is untouched. The set persists natively (SharedPreferences)
@@ -695,6 +1007,9 @@ export default function SettingsScreen() {
       {isLocalVpnSupported() ? <LocalFilterCard ready={filter.ready} /> : null}
       {isLocalVpnSupported() ? <HttpsCaptureCard /> : null}
       {isLocalVpnSupported() ? <PerAppBypassCard /> : null}
+      {isDnsProxySupported() ? <SystemDnsCard ready={filter.ready} /> : null}
+      {Platform.OS === 'ios' ? <IosHubFilterCard /> : null}
+      <LocalDnsCard ready={filter.ready} />
 
       {activeServerId ? (
         <Card>

@@ -135,7 +135,9 @@ fi
 
 if $do_prebuild; then
   echo "→ expo prebuild --platform ios --clean (dns-proxy extension stripped: entitlement not granted — flag 89)"
-  (cd "$MOBILE" && CI=1 BM_IOS_DNSPROXY=0 env -u ELECTRON_RUN_AS_NODE npx expo prebuild --platform ios --clean)
+  # LC_ALL: CocoaPods 1.17 under Ruby 4 dies on unicode_normalize ASCII-8BIT
+  # without a UTF-8 locale (hit once on this box already).
+  (cd "$MOBILE" && CI=1 LC_ALL=en_US.UTF-8 BM_IOS_DNSPROXY=0 env -u ELECTRON_RUN_AS_NODE npx expo prebuild --platform ios --clean)
 fi
 
 if [[ ! -d "$WORKSPACE" ]]; then

@@ -621,6 +621,46 @@ describe('flag 129 — GET /ca.pem on the data port', () => {
     sock.destroy();
   });
 
+  test('GET /v1/proxy/ca.mobileconfig → 200 + an Apple profile wrapping the same CA', async () => {
+    const sock = await dial(
+      proxy.port,
+      'GET /v1/proxy/ca.mobileconfig HTTP/1.1\r\nHost: x\r\n\r\n',
+    );
+    const reply = await withTimeout(collectBytes(sock, 1), 5_000, 'mobileconfig reply');
+    await withTimeout(once(sock, 'close'), 5_000, 'mobileconfig close');
+    const text = reply.toString('latin1');
+    const head = text.split('\r\n\r\n')[0];
+    expect(head.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+    expect(head).toContain('Content-Type: application/x-apple-aspen-config');
+    const body = text.slice(text.indexOf('\r\n\r\n') + 4);
+    expect(body).toContain('com.apple.security.root');
+    expect(body).toContain('Blockingmachine Hub CA');
+    // The profile's <data> is exactly the DER the PEM route serves.
+    const pemBody = /-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\r\n]+?)\s*-----END CERTIFICATE-----/
+      .exec(authority.caCertPem)![1]
+      .replace(/\s+/g, '');
+    expect(body).toContain(`<data>\n${pemBody}`);
+    sock.destroy();
+    // Short spelling serves the identical payload.
+    const sock2 = await dial(proxy.port, 'GET /ca.mobileconfig HTTP/1.1\r\nHost: x\r\n\r\n');
+    const reply2 = await withTimeout(collectBytes(sock2, 1), 5_000, 'short reply');
+    await withTimeout(once(sock2, 'close'), 5_000, 'short close');
+    const text2 = reply2.toString('latin1');
+    expect(text2.slice(text2.indexOf('\r\n\r\n') + 4)).toBe(body);
+    sock2.destroy();
+  });
+
+  test('GET /v1/proxy/ca.mobileconfig twice → identical body — the PayloadUUID is stable for iOS profile updates', async () => {
+    const get = async () => {
+      const sock = await dial(proxy.port, 'GET /v1/proxy/ca.mobileconfig HTTP/1.1\r\nHost: x\r\n\r\n');
+      const reply = await withTimeout(collectBytes(sock, 1), 5_000, 'reply');
+      await withTimeout(once(sock, 'close'), 5_000, 'close');
+      sock.destroy();
+      return reply.toString('latin1').slice(reply.toString('latin1').indexOf('\r\n\r\n') + 4);
+    };
+    expect(await get()).toBe(await get());
+  });
+
   test('GET /v1/proxy/ca.pem → 200 + the same PEM — the documented route fetchHubCa builds (M2)', async () => {
     const sock = await dial(
       proxy.port,
