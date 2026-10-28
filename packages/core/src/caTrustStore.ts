@@ -148,10 +148,10 @@ export interface CaTrustStoreOptions {
    * `/etc/pki/tls/certs/ca-bundle.crt`).
    */
   linuxSystemStore?: {
-    sourceDirs?: string[];
-    bundleFiles?: string[];
-    rhelAnchorDirs?: string[];
-    rhelBundleFiles?: string[];
+    sourceDirs?: readonly string[];
+    bundleFiles?: readonly string[];
+    rhelAnchorDirs?: readonly string[];
+    rhelBundleFiles?: readonly string[];
   };
 }
 
