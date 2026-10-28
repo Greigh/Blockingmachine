@@ -1259,7 +1259,14 @@ describe('httpsfilter:ca-* IPC handlers', () => {
 
   test('ca-install {elevate:true} reaches for the osascript admin prompt', async () => {
     caTrustOps.trustStatus.mockResolvedValue('trusted');
-    const res = await invoke('httpsfilter:ca-install', { elevate: true });
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    let res: Awaited<ReturnType<typeof invoke>>;
+    try {
+      res = await invoke('httpsfilter:ca-install', { elevate: true });
+    } finally {
+      Object.defineProperty(process, 'platform', { value: realPlatform });
+    }
     expect(res.success).toBe(true);
     expect(res.state).toBe('trusted');
     // installCa is skipped; the shell line handed to the admin prompt
@@ -1278,7 +1285,14 @@ describe('httpsfilter:ca-* IPC handlers', () => {
       cancelled: true,
       stderr: 'User canceled. (-128)',
     });
-    const res = await invoke('httpsfilter:ca-install', { elevate: true });
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    let res: Awaited<ReturnType<typeof invoke>>;
+    try {
+      res = await invoke('httpsfilter:ca-install', { elevate: true });
+    } finally {
+      Object.defineProperty(process, 'platform', { value: realPlatform });
+    }
     expect(res.success).toBe(false);
     expect(res.needsAdmin).toBe(true);
     expect(res.message).toContain('declined');

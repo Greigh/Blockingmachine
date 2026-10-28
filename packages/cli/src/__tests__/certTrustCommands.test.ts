@@ -164,29 +164,41 @@ describe("CertCommand trust verbs", () => {
 
   test("install needs-admin fails the verb and prints the sudo line", async () => {
     coreMock.installCa.mockResolvedValue("needs-admin");
-    const result = await cmd().execute({ action: "install" });
-    expect(result.success).toBe(false);
-    const warned = mockLogger.warn.mock.calls
-      .map((c: unknown[]) => String(c[0]))
-      .join("\n");
-    // The printed path is copy-pasteable: export first, then the sudo form.
-    expect(warned).toContain("blockingmachine cert export ca.pem");
-    expect(warned).toContain(
-      "sudo security add-trusted-cert -d -r trustRoot",
-    );
-    expect(warned).toContain("login.keychain-db");
-    expect(result.message).toContain("administrator");
+    const realPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const result = await cmd().execute({ action: "install" });
+      expect(result.success).toBe(false);
+      const warned = mockLogger.warn.mock.calls
+        .map((c: unknown[]) => String(c[0]))
+        .join("\n");
+      // The printed path is copy-pasteable: export first, then the sudo form.
+      expect(warned).toContain("blockingmachine cert export ca.pem");
+      expect(warned).toContain(
+        "sudo security add-trusted-cert -d -r trustRoot",
+      );
+      expect(warned).toContain("login.keychain-db");
+      expect(result.message).toContain("administrator");
+    } finally {
+      Object.defineProperty(process, "platform", { value: realPlatform });
+    }
   });
 
   test("install needs-admin --json carries the sudo command", async () => {
     coreMock.installCa.mockResolvedValue("needs-admin");
-    const stdout = await captureStdout(async () => {
-      const result = await cmd().execute({ action: "install", json: true });
-      expect(result.success).toBe(false);
-    });
-    const doc = parseJsonStdout<Record<string, unknown>>(stdout);
-    expect(doc.result).toBe("needs-admin");
-    expect(String(doc.sudoCommand)).toContain("sudo security add-trusted-cert");
+    const realPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const stdout = await captureStdout(async () => {
+        const result = await cmd().execute({ action: "install", json: true });
+        expect(result.success).toBe(false);
+      });
+      const doc = parseJsonStdout<Record<string, unknown>>(stdout);
+      expect(doc.result).toBe("needs-admin");
+      expect(String(doc.sudoCommand)).toContain("sudo security add-trusted-cert");
+    } finally {
+      Object.defineProperty(process, "platform", { value: realPlatform });
+    }
   });
 
   test("install needs-admin on linux prints the system-store sudo line", async () => {

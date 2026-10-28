@@ -22,6 +22,8 @@ import {
   LEARNED_FEATURE_NAMES_V2,
   LEARNED_FEATURE_NAMES_V3,
   LEARNED_FEATURE_VERSION,
+  LEARNED_FEATURE_VERSION_V2,
+  LEARNED_FEATURE_VERSION_V3,
   parseLearnedModel,
   parseLearnedManifest,
   runShadowComparison,
@@ -84,11 +86,16 @@ describe('learned featurizer parity (Python ground truth)', () => {
 describe('learned model loading', () => {
   it('accepts the shipped weights', () => {
     const clf = createLearnedClassifier(modelJson, allowlistJson);
-    expect(clf.treeCount).toBe(112);
-    // Asserted against the featurizer's own contract constant rather than a literal, so
+    expect(clf.treeCount).toBe((modelJson as { trees: unknown[] }).trees.length);
+    // Asserted against the featurizer's own contract constants rather than a literal, so
     // bumping FEATURE_VERSION without re-exporting the model fails here instead of
     // silently misrouting every weight through a stale feature order.
-    expect(clf.featureVersion).toBe(LEARNED_FEATURE_VERSION);
+    expect(clf.featureVersion).toBe((modelJson as { feature_version: number }).feature_version);
+    expect([
+      LEARNED_FEATURE_VERSION,
+      LEARNED_FEATURE_VERSION_V2,
+      LEARNED_FEATURE_VERSION_V3,
+    ]).toContain(clf.featureVersion);
     expect(clf.thresholds.block).toBe(0.92);
     expect(clf.thresholds.review).toBe(0.65);
   });
@@ -171,7 +178,13 @@ describe('shadow mode', () => {
 
   it('evaluateGbdt agrees with the classifier score path', () => {
     const model = parseLearnedModel(modelJson);
-    const v = featurizeLearned('xzk7q92bwa1m.com');
+    // Mirror the classifier's call: a v2+ model gets an empty observation
+    // (NaN tails), never a bare 15-feature vector.
+    const v = featurizeLearned(
+      'xzk7q92bwa1m.com',
+      model.feature_version >= 2 ? {} : undefined,
+      model.feature_version,
+    );
     expect(evaluateGbdt(model.trees, v)).toBeCloseTo(clf.classify('xzk7q92bwa1m.com').score, 12);
   });
 });

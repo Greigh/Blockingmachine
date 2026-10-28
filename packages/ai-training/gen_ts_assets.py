@@ -234,6 +234,10 @@ def gen_v3_fixtures(observations_db: str, live_db: str,
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True)
+    ap.add_argument("--artifacts", default="model_artifacts",
+                    help="export dir holding model.txt + allowlist.json (e.g. model_artifacts_v4)")
+    ap.add_argument("--model-json", default=None,
+                    help="converted bm-gbdt/1 JSON to ship (default: <artifacts>/model.json)")
     ap.add_argument("--observations", default=None,
                     help="observations.db; when given, also emit v2 fixtures")
     ap.add_argument("--live-observations", default=None,
@@ -250,18 +254,35 @@ def main() -> None:
     (learned / "featureSpec.ts").write_text(gen_feature_spec())
     print(f"wrote {learned / 'featureSpec.ts'}")
 
-    for name in ("model.json",):
-        shutil.copy(HERE / name, weights_dir / name)
-    shutil.copy(HERE / "model_artifacts" / "allowlist.json", weights_dir / "allowlist.json")
-    print(f"copied weights -> {weights_dir}")
+    artifacts = Path(args.artifacts)
+    model_json_src = Path(args.model_json) if args.model_json else artifacts / "model.json"
+    shipped_model = json.loads(model_json_src.read_text())
+    model_version = int(shipped_model["feature_version"])
+
+    shutil.copy(model_json_src, weights_dir / "model.json")
+    shutil.copy(artifacts / "allowlist.json", weights_dir / "allowlist.json")
+    print(f"copied weights -> {weights_dir} (feature_version {model_version})")
 
     shutil.copy(HERE / "fixtures.json", fixtures_dir / "learned-fixtures.json")
 
-    booster = lgb.Booster(model_file=str(HERE / "model_artifacts" / "model.txt"))
+    booster = lgb.Booster(model_file=str(artifacts / "model.txt"))
     trees = [convert_node(t["tree_structure"]) for t in booster.dump_model()["tree_info"]]
+
+    # Score domains through the same featurization the shipped model's schema
+    # expects — a v3 model sees the v3 vector with an empty (NaN) obs tail,
+    # never a bare v1 15-feature vector.
+    if model_version >= 3:
+        def featurize(d: str) -> list[float]:
+            return featurize_vector_v3(d, None, None)
+    elif model_version == 2:
+        def featurize(d: str) -> list[float]:
+            return featurize_vector_v2(d, None)
+    else:
+        featurize = featurize_vector
+
     scores = []
     for d in SCORE_DOMAINS:
-        v = featurize_vector(d)
+        v = featurize(d)
         ref = float(booster.predict([v])[0])
         mine = predict_one(trees, v)
         assert abs(ref - mine) < 1e-12, d

@@ -21,7 +21,8 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { LEARNED_SHADOW_SAMPLE_RATE } from '@blockingmachine/core';
 
 let userData: string;
@@ -215,14 +216,19 @@ describe('the per-sweep summary, without which the gate reads zero forever', () 
   });
 
   it('names the weights that scored the sweep, or admits there is no manifest', () => {
-    // The shipped weights predate the promotion manifest, so the honest value is null.
-    // A summary that claimed a version nothing could verify would let a gate report
-    // present unversioned evidence as though it identified a model.
+    // The shipped weights carry the promotion manifest, so the honest value is
+    // its verified version — read from the same bytes learnedShadow verified
+    // rather than a literal that goes stale at the next restage.
+    const req = createRequire(join(appPath, 'package.json'));
+    const corePkg = req.resolve('@blockingmachine/core/package.json');
+    const manifest = JSON.parse(
+      readFileSync(join(dirname(corePkg), 'ai-weights', 'manifest.json'), 'utf8'),
+    ) as { version: number };
     const result = shadowScoreWatchdogDomains(sweepDomains(200), () => 'allow', 0);
     const [summary] = readLog().filter((r) => r.type === 'summary');
     expect(summary).toBeDefined();
-    expect(summary.modelVersion).toBeNull();
-    expect(result!.modelVersion).toBeNull();
+    expect(summary.modelVersion).toBe(manifest.version);
+    expect(result!.modelVersion).toBe(manifest.version);
   });
 
   it('carries no hostname at all, which is what makes it safe to write unconditionally', () => {

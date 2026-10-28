@@ -357,6 +357,7 @@ describe('FilterProxyManager — one-engine lifecycle gates', () => {
         controlPort: 65431,
         dataPort: 65432,
         captureServiceInstalled: () => true,
+        platform: 'darwin',
       }),
     );
     const result = await manager.start({ storeDir: join(tmpBase, 'store-capped') });
@@ -409,6 +410,7 @@ describe('FilterProxyManager — one-engine lifecycle gates', () => {
       new FilterProxyManager({
         controlPort: 65431,
         captureServiceInstalled: () => true,
+        platform: 'darwin',
       }),
     );
     const result = await manager.stop();
@@ -440,7 +442,7 @@ describe('FilterProxyManager — one-engine lifecycle gates', () => {
     const dir = mkdtempSync(join(tmpBase, 'install-cmd-'));
     const entry = writeFakeEngine(dir);
 
-    const manager = new FilterProxyManager({ entryPath: entry });
+    const manager = new FilterProxyManager({ entryPath: entry, platform: 'darwin' });
     const res = manager.getCaptureInstallCommand(join(dir, 'rules', 'browser.txt'));
 
     expect(res.success).toBe(true);
