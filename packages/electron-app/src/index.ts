@@ -6026,11 +6026,18 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         if (!latest) {
           return { ok: false as const, current: app.getVersion(), error: 'Release check returned no version' };
         }
+        const updateAvailable = compareVersions(latest, app.getVersion()) > 0;
+        if (updateAvailable) {
+          // The renderer badge listens for this event — without it the
+          // sidebar dot could only appear if a push channel existed, and
+          // none does on this manual check path.
+          mainWindow?.webContents.send('update-available', { latest, url: rel?.html_url });
+        }
         return {
           ok: true as const,
           current: app.getVersion(),
           latest,
-          updateAvailable: compareVersions(latest, app.getVersion()) > 0,
+          updateAvailable,
           url: rel?.html_url ?? 'https://github.com/Greigh/Blockingmachine/releases/latest',
         };
       } catch (error) {
