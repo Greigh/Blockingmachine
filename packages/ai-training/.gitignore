@@ -42,4 +42,6 @@ __pycache__/
 *.pyc
 model_artifacts_v3/
 model_v3_experimental.json
+model_artifacts_v4/
+model_v4_experimental.json
 test_fps.json

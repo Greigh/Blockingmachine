@@ -324,6 +324,17 @@ def main() -> None:
             rec["learned_score"] = fresh["learned_score"]
             rec["learned_decision"] = fresh["learned_decision"]
             rec["reference_decision"] = fresh["reference_decision"]
+        else:
+            # Verdict fell out of the rebuilt population — it is still
+            # evidence, so re-score the domain against this candidate
+            # directly rather than carry the previous model's stale
+            # learned_* into the gate's reviewed.csv.
+            try:
+                s = float(booster.predict(np.array([featurize(rec["domain"])]))[0])
+            except ValueError:
+                s = float("nan")
+            rec["learned_score"] = round(s, 4)
+            rec["learned_decision"] = decision(s, block_t, review_t)
 
     # --auto: pre-asserted family/domain verdicts (the human typed them).
     for spec in args.auto.split():

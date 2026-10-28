@@ -247,22 +247,34 @@ def main() -> None:
     # overcount; one broken site is one veto, not N log lines) ---
     import csv
     seen: dict[str, dict] = {}
+    block_domains: set[str] = set()
     with open(args.reviews, newline="") as f:
         for rec in csv.DictReader(f):
+            dom = (rec.get("domain") or "").strip().lower()
+            # The block-direction floor is capped at what the *candidate*
+            # puts in the review population — review.py re-scores every row
+            # against the model under evaluation, so learned_decision is the
+            # candidate's, not the shadow log's frozen old-model verdicts.
+            # Sizing the floor from the stale log was provably unsatisfiable:
+            # a better candidate disagrees less, and a model must not fail a
+            # floor a worse model's larger error surface created. Counting
+            # every presented row (reviewed or not) keeps a reviewer from
+            # shrinking the floor by leaving block-direction rows unjudged.
+            if rec.get("learned_decision") == "block":
+                block_domains.add(dom)
             lab = (rec.get("reviewer_label") or "").strip()
             if lab not in ("0", "1"):
                 continue
-            seen.setdefault((rec.get("domain") or "").strip().lower(), rec)
+            seen.setdefault(dom, rec)
     reviewed = list(seen.values())
     n_rev = len(reviewed)
     block_rows = [r for r in reviewed if r.get("learned_decision") == "block"]
-    n_block_avail = len({r["domain"] for r in load_log(Path(args.shadow))
-                         if r["kind"] == "disagreement" and r["learnedDecision"] == "block"})
+    n_block_avail = len(block_domains)
     need_block = min(cfg["min_reviewed_block"], n_block_avail)
     check("reviewed_enough", n_rev >= cfg["min_reviewed"] and len(block_rows) >= need_block,
           f"{n_rev} distinct reviewed (min {cfg['min_reviewed']}), "
           f"{len(block_rows)} distinct in block direction (need {need_block}, "
-          f"{n_block_avail} available)", {"reviewed": n_rev, "block": len(block_rows)})
+          f"{n_block_avail} available in the review population)", {"reviewed": n_rev, "block": len(block_rows)})
     tp = sum(1 for r in block_rows if r["reviewer_label"] == "1")
     fp = sum(1 for r in block_rows if r["reviewer_label"] == "0")
     shadow_prec = tp / (tp + fp) if tp + fp else 0.0
