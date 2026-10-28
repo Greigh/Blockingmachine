@@ -26,13 +26,18 @@ import { useFilter } from '../../src/state/filter';
 import { LocalVpn, isLocalVpnSupported } from '../../src/filter/localVpn';
 import {
   fetchHubCa,
+  HUB_DATA_PORT,
   hostFromUrl,
   isValidIpLiteral,
   loadCaFingerprint,
   loadHubHost,
+  loadHubPort,
+  loadHubToken,
+  loadPairedCa,
   saveCaFingerprint,
   saveHubHost,
   type HubCa,
+  type PairedCa,
 } from '../../src/filter/httpsCapture';
 import { nativeRulesPath } from '../../src/filter/ruleset';
 import { parsePackageList, SELF_PACKAGE, toggledSelfList } from '../../src/filter/perAppBypass';
@@ -280,7 +285,10 @@ function HttpsCaptureCard() {
       if (!granted) throw new UserError('VPN access was declined — HTTPS capture needs it to run. Tap Start to try again.');
       await saveHubHost(host);
       setSavedHub(host);
-      await LocalVpn.startHttpsCapture(host);
+      // Flag 127/129: the paired data-port token + port ride the splice —
+      // an unpaired hub on the open fallback just gets null/9294.
+      const [token, port] = await Promise.all([loadHubToken(), loadHubPort()]);
+      await LocalVpn.startHttpsCapture(host, token, port ?? HUB_DATA_PORT);
     });
 
   const stop = () => act('capture', () => LocalVpn.stopHttpsCapture());
@@ -289,25 +297,38 @@ function HttpsCaptureCard() {
     act('ca', async () => {
       const host = (savedHub ?? hub).trim();
       if (!host) throw new UserError('Set the hub IP first.');
-      const ca = await fetchHubCa(host);
+      // Flag 129: a QR-paired CA is already on-device and re-verified by
+      // loadPairedCa — prefer it over a LAN fetch entirely; only fall back
+      // to the data port when pairing never carried one.
+      const paired = await loadPairedCa();
+      const ca: HubCa =
+        paired ??
+        (await fetchHubCa(host, fetch, (await loadHubPort()) ?? HUB_DATA_PORT));
       confirmCaInstall(ca, await loadCaFingerprint());
     });
 
   /**
-   * The CA PEM arrives over cleartext LAN HTTP — anything on the network
-   * could have swapped it. The confirm step is the flow's only authenticity
-   * check: show the fingerprint and have the user compare it against the
-   * hub's own HTTPS Filtering card before the install intent ever fires. A
-   * changed fingerprint vs. the last confirmed one is called out as drift.
+   * The fingerprint gate (flag 129): the CA either rode the QR or arrived
+   * over cleartext LAN HTTP — neither channel authenticates itself, so the
+   * confirm step is the flow's only authenticity check. Show the SHA-256
+   * this device computed and have the user compare it against the hub's own
+   * HTTPS Filtering card before the install intent ever fires. A changed
+   * fingerprint vs. the last confirmed one is called out as drift. No
+   * fingerprint, no install — the gate refuses rather than warns.
    */
-  const confirmCaInstall = (ca: HubCa, previousFingerprint: string | null) => {
+  const confirmCaInstall = (ca: HubCa | PairedCa, previousFingerprint: string | null) => {
     const fp = ca.sha256Fingerprint;
-    const drifted = !!previousFingerprint && !!fp && previousFingerprint !== fp;
+    if (!fp) {
+      setErr({
+        title: 'No CA fingerprint to check',
+        detail: 'The hub didn\u2019t identify its CA — refusing to install a certificate that can\u2019t be verified.',
+      });
+      return;
+    }
+    const drifted = !!previousFingerprint && previousFingerprint !== fp;
     const body =
-      'Compare this fingerprint with the one shown in the hub\u2019s HTTPS Filtering card — the CA is fetched over plain HTTP, so matching it is the only check that it wasn\u2019t swapped on the network.\n\n' +
-      (fp
-        ? `SHA-256\n${fp}`
-        : 'The hub didn\u2019t send a fingerprint — only continue on a network you fully trust.') +
+      'Compare this fingerprint with the one shown in the hub\u2019s HTTPS Filtering card — matching it is the only check that the CA wasn\u2019t swapped on the network.\n\n' +
+      `SHA-256\n${fp}` +
       (drifted
         ? '\n\nIt changed since you last confirmed it — make sure the hub\u2019s CA really was rotated.'
         : '');
@@ -318,10 +339,8 @@ function HttpsCaptureCard() {
         onPress: () =>
           void act('ca', async () => {
             await LocalVpn.installCaCertificate('Blockingmachine Hub CA', ca.certPem);
-            await saveCaFingerprint(fp ?? null);
-            setCaLine(
-              `Install prompt sent — Android asks you to confirm.${fp ? ` CA sha256: ${fp}` : ''}`,
-            );
+            await saveCaFingerprint(fp);
+            setCaLine(`Install prompt sent — Android asks you to confirm. CA sha256: ${fp}`);
           }),
       },
     ]);

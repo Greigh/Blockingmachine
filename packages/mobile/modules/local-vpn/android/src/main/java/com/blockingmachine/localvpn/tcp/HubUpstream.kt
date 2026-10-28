@@ -181,11 +181,12 @@ class HubUpstream(
   hubHost: String,
   hubPort: Int,
   protect: (Socket) -> Unit,
+  hubToken: String? = null,
   socketFactory: () -> Socket = { Socket() },
   connectTimeoutMs: Int = QueuedSocketUpstream.DEFAULT_CONNECT_TIMEOUT_MS,
 ) : QueuedSocketUpstream(
   endpoint = InetSocketAddress.createUnresolved(hubHost, hubPort),
-  preamble = ProxyV2.encode(key.srcAddr, key.srcPort, key.dstAddr, key.dstPort),
+  preamble = ProxyV2.encode(key.srcAddr, key.srcPort, key.dstAddr, key.dstPort, hubToken),
   protect = protect,
   socketFactory = socketFactory,
   connectTimeoutMs = connectTimeoutMs,

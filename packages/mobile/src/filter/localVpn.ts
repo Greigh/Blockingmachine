@@ -35,7 +35,7 @@ interface NativeLocalVpn {
   stopVpn(): Promise<boolean>;
   startProxy(rulesPath: string, port: number): Promise<boolean>;
   stopProxy(): Promise<boolean>;
-  startHttpsCapture(hubHost: string): Promise<boolean>;
+  startHttpsCapture(hubHost: string, hubToken: string | null, hubPort: number): Promise<boolean>;
   stopHttpsCapture(): Promise<boolean>;
   setDisallowedApps(pkgs: string[]): Promise<string[]>;
   getDisallowedApps(): Promise<string[]>;
@@ -109,9 +109,13 @@ export const LocalVpn = {
   stopVpn: () => get().stopVpn(),
   startProxy: (rulesPath: string, port = 8890) => get().startProxy(rulesPath, port),
   stopProxy: () => get().stopProxy(),
-  /** Arm hub HTTPS capture on the tunnel — the hub engine then owns :80/:443 verdicts. */
-  startHttpsCapture: (hubHost: string) =>
-    isLocalVpnSupported() ? get().startHttpsCapture(hubHost) : Promise.resolve(false),
+  /**
+   * Arm hub HTTPS capture on the tunnel — the hub engine then owns :80/:443
+   * verdicts. `hubToken` is the flag-127 data-port credential, emitted as the
+   * PROXY-v2 auth TLV on each flow; `hubPort` is the hub's data listener.
+   */
+  startHttpsCapture: (hubHost: string, hubToken: string | null = null, hubPort = 9294) =>
+    isLocalVpnSupported() ? get().startHttpsCapture(hubHost, hubToken, hubPort) : Promise.resolve(false),
   stopHttpsCapture: () => get().stopHttpsCapture(),
   /**
    * Replace the per-app bypass set (flag 128) — excluded packages never

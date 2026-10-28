@@ -72,6 +72,8 @@ class VpnFilterService : VpnService() {
     const val EXTRA_UPSTREAM = "upstreamDns"
     const val EXTRA_LABEL = "label"
     const val EXTRA_HUB_HOST = "hubHost"
+    const val EXTRA_HUB_TOKEN = "hubToken"
+    const val EXTRA_HUB_PORT = "hubPort"
 
     /** SharedPreferences file + key holding the per-app bypass package set (flag 128). */
     const val PREFS_NAME = "blockingmachine_localvpn"
@@ -117,6 +119,9 @@ class VpnFilterService : VpnService() {
   private var label: String = "Blockingmachine"
 
   @Volatile private var hubHost: String? = null
+  /** Flag 127 — the data-port credential the QR paired; emitted as the PROXY-v2 auth TLV. */
+  @Volatile private var hubToken: String? = null
+  @Volatile private var hubPort: Int = HUB_DATA_PORT
   @Volatile private var captureDispatcher: TcpDispatcher? = null
   @Volatile private var relayDispatcher: TcpDispatcher? = null
   @Volatile private var udpDispatcher: UdpDispatcher? = null
@@ -136,6 +141,13 @@ class VpnFilterService : VpnService() {
         // empty host (clear capture) — the extra is sticky, not a one-shot.
         if (intent.hasExtra(EXTRA_HUB_HOST)) {
           hubHost = intent.getStringExtra(EXTRA_HUB_HOST)?.trim()?.takeIf { it.isNotEmpty() }
+        }
+        if (intent.hasExtra(EXTRA_HUB_TOKEN)) {
+          hubToken = intent.getStringExtra(EXTRA_HUB_TOKEN)?.trim()?.takeIf { it.isNotEmpty() }
+        }
+        if (intent.hasExtra(EXTRA_HUB_PORT)) {
+          val p = intent.getIntExtra(EXTRA_HUB_PORT, HUB_DATA_PORT)
+          if (p in 1..65535) hubPort = p
         }
         blocklist = rulesPath?.let {
           runCatching { Blocklist.load(it) }
@@ -249,7 +261,7 @@ class VpnFilterService : VpnService() {
         // that isn't DNS or QUIC).
         val capture = TcpDispatcher(
           emit = emit,
-          upstreamFactory = { key -> HubUpstream(key, hub, HUB_DATA_PORT, { s: Socket -> requireProtected(s) }) },
+          upstreamFactory = { key -> HubUpstream(key, hub, hubPort, { s: Socket -> requireProtected(s) }, hubToken) },
         )
         val relay = TcpDispatcher(
           emit = emit,
@@ -266,7 +278,7 @@ class VpnFilterService : VpnService() {
         captureStats = capture.stats
         captureRunning.set(true)
         startTicker()
-        Log.i(TAG, "hub capture armed — TCP :80/:443 → $hub:$HUB_DATA_PORT, UDP relayed")
+        Log.i(TAG, "hub capture armed — TCP :80/:443 → $hub:$hubPort, UDP relayed${if (hubToken != null) ", token-bound" else ""}")
       }
     } catch (e: Exception) {
       Log.e(TAG, "tunnel pipeline setup failed — shutting down: $e")
@@ -374,6 +386,8 @@ class VpnFilterService : VpnService() {
    */
   private fun stopCapture() {
     hubHost = null
+    hubToken = null
+    hubPort = HUB_DATA_PORT
     if (running.get()) {
       startTunnel(label) // tears the old tunnel + dispatchers down first
     } else {

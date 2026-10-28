@@ -4941,16 +4941,36 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       // Multi-homed hosts (VPN, Docker/VM bridges) can order interfaces wrong —
       // `urls` lets the app try every LAN address instead of trusting the first.
       const urls = getLocalLanIps().map((ip) => `http://${ip}:${feedServerPort}`);
+      // Flags 127+129: the HTTPS capture material rides the same QR —
+      // `httpsCaPem`/`httpsCaSha256` let a phone install the hub CA without
+      // trusting a LAN fetch at all, `httpsToken` is the data-port
+      // credential a token-gated engine demands (the sealed
+      // `httpsFilterDataToken`, a different credential from `feedToken`),
+      // and `httpsDataPort` names the listener when the engine answers.
+      const ca = await filterProxyManager.getCaInfo();
+      const proxyStatus = await filterProxyManager.getStatus();
+      const httpsToken = readSecret(store, safeStorage, 'httpsFilterDataToken').trim();
+      const engineUp =
+        proxyStatus.status === 'running' ||
+        proxyStatus.status === 'paused' ||
+        proxyStatus.status === 'degraded';
       return {
         success: true,
         running: status.isRunning,
         url,
         tokenConfigured: token.length > 0,
+        httpsCaConfigured: ca !== null,
+        httpsTokenConfigured: httpsToken.length > 0,
         payload: JSON.stringify({
           v: 1,
           url,
           ...(urls.length > 1 ? { urls } : {}),
           ...(token ? { token } : {}),
+          ...(ca
+            ? { httpsCaPem: ca.certPem, httpsCaSha256: ca.sha256Fingerprint }
+            : {}),
+          ...(httpsToken ? { httpsToken } : {}),
+          ...(engineUp ? { httpsDataPort: proxyStatus.port } : {}),
         }),
       };
     });

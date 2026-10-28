@@ -115,22 +115,28 @@ class LocalVpnModule : Module() {
 
     /**
      * Arm hub HTTPS capture on the same tunnel: TCP :80/:443 is spliced to
-     * `<hubHost>:9294` (PROXY-v2), other TCP is relayed, QUIC is suppressed.
-     * Rides on ACTION_START — a running DNS filter keeps its ruleset.
+     * `<hubHost>:<hubPort>` (PROXY-v2, the flag-127 auth TLV when `hubToken`
+     * is paired), other TCP is relayed, QUIC is suppressed. Rides on
+     * ACTION_START — a running DNS filter keeps its ruleset.
      * [HubHost.requireLiteral] rejects names/empties and the tun's own
      * virtual space before the intent ever flies — a bad value surfaces as
-     * a rejected promise, not a silently broken tunnel.
+     * a rejected promise, not a silently broken tunnel. The token and port
+     * extras are sticky alongside the host: a re-START that doesn't carry
+     * them keeps the last armed values.
      */
-    AsyncFunction("startHttpsCapture") { hubHost: String ->
+    AsyncFunction("startHttpsCapture") { hubHost: String, hubToken: String?, hubPort: Int ->
       val host = HubHost.requireLiteral(
         hubHost,
         VpnFilterService.TUN_ADDR,
         VpnFilterService.VIRTUAL_DNS,
         VpnFilterService.TUN_ADDR6,
       )
+      val port = if (hubPort in 1..65535) hubPort else VpnFilterService.HUB_DATA_PORT
       Intent(context, VpnFilterService::class.java).apply {
         action = VpnFilterService.ACTION_START
         putExtra(VpnFilterService.EXTRA_HUB_HOST, host)
+        putExtra(VpnFilterService.EXTRA_HUB_TOKEN, hubToken?.takeIf { it.isNotBlank() })
+        putExtra(VpnFilterService.EXTRA_HUB_PORT, port)
       }.let {
         context.startForegroundService(it)
       }

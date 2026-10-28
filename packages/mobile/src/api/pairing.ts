@@ -13,6 +13,14 @@ export interface PairingPayload {
    *  multi-homed (VPN, Docker bridges) and the first interface may be wrong. */
   urls?: string[];
   token?: string;
+  /** Flag 129 — the hub's HTTPS-filter CA, so pairing alone can install it. */
+  httpsCaPem?: string;
+  /** The hub-rendered SHA-256 fingerprint of `httpsCaPem` (`AA:BB:…`). */
+  httpsCaSha256?: string;
+  /** Flag 127 — the data-port token the splice listener demands, when set. */
+  httpsToken?: string;
+  /** The data-port override when the hub moved it off :9294. */
+  httpsPort?: number;
 }
 
 export class PairingError extends Error {
@@ -65,7 +73,19 @@ export function decodePairingPayload(raw: string): PairingPayload {
     : undefined;
   const token =
     typeof obj.token === 'string' && obj.token.trim() ? obj.token.trim() : undefined;
-  return { url, urls, token };
+  const optStr = (k: string): string | undefined =>
+    typeof obj[k] === 'string' && obj[k].trim() ? (obj[k] as string).trim() : undefined;
+  const httpsCaPem = optStr('httpsCaPem');
+  const httpsCaSha256 = optStr('httpsCaSha256');
+  const httpsToken = optStr('httpsToken');
+  const httpsPort =
+    typeof obj.httpsPort === 'number' &&
+    Number.isInteger(obj.httpsPort) &&
+    obj.httpsPort > 0 &&
+    obj.httpsPort <= 65535
+      ? obj.httpsPort
+      : undefined;
+  return { url, urls, token, httpsCaPem, httpsCaSha256, httpsToken, httpsPort };
 }
 
 /** Serialise — used by the desktop side's tests to pin the contract both ways. */
@@ -75,5 +95,9 @@ export function encodePairingPayload(payload: PairingPayload): string {
     url: payload.url,
     ...(payload.urls?.length ? { urls: payload.urls } : {}),
     ...(payload.token ? { token: payload.token } : {}),
+    ...(payload.httpsCaPem ? { httpsCaPem: payload.httpsCaPem } : {}),
+    ...(payload.httpsCaSha256 ? { httpsCaSha256: payload.httpsCaSha256 } : {}),
+    ...(payload.httpsToken ? { httpsToken: payload.httpsToken } : {}),
+    ...(payload.httpsPort ? { httpsPort: payload.httpsPort } : {}),
   });
 }

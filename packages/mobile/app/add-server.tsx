@@ -21,6 +21,14 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { BlockingmachineClient, ApiError, normalizeBaseUrl } from '../src/api/client';
 import { browseServers, DiscoveredServer, isDiscoveryAvailable } from '../src/api/discovery';
 import { decodePairingPayload, PairingError, type PairingPayload } from '../src/api/pairing';
+import {
+  hostFromUrl,
+  isValidIpLiteral,
+  saveHubHost,
+  saveHubPort,
+  saveHubToken,
+  savePairedCa,
+} from '../src/filter/httpsCapture';
 import { useServers } from '../src/state/servers';
 import { ActionButton, Card, Pill } from '../src/components/ui';
 import { describeError, type FriendlyError } from '../src/errors';
@@ -34,6 +42,13 @@ interface PendingSave {
   label: string;
   origin: 'manual' | 'qr' | 'mdns';
   token?: string;
+  /** Flag 129 — the QR's HTTPS-capture material, persisted on save. */
+  https?: {
+    caPem?: string;
+    caSha256?: string;
+    token?: string;
+    port?: number;
+  };
 }
 
 export default function AddServerScreen() {
@@ -111,6 +126,19 @@ export default function AddServerScreen() {
       { baseUrl: pending.baseUrl, label: pending.label, origin: pending.origin },
       pending.token || token || undefined,
     );
+    // Flag 129: a QR that carried HTTPS-capture material persists it with the
+    // pairing — the capture card then offers the CA without a LAN fetch and
+    // the splice sends the flag-127 token. Only the QR origin writes this;
+    // manual/mDNS entries leave existing capture state alone.
+    if (pending.https) {
+      const hubHost = hostFromUrl(pending.baseUrl);
+      if (hubHost && isValidIpLiteral(hubHost)) await saveHubHost(hubHost);
+      await saveHubToken(pending.https.token ?? null);
+      await saveHubPort(pending.https.port ?? null);
+      if (pending.https.caPem && pending.https.caSha256) {
+        await savePairedCa({ certPem: pending.https.caPem, sha256Fingerprint: pending.https.caSha256 });
+      }
+    }
     router.back();
   };
 
@@ -120,6 +148,18 @@ export default function AddServerScreen() {
   const stageQr = async (payload: PairingPayload) => {
     setTesting(true);
     setError(null);
+    // Flag 129 material the QR carried — persisted only once the pairing is
+    // actually saved (the review card's Save), so a cancelled scan writes
+    // nothing.
+    const https =
+      payload.httpsCaPem || payload.httpsCaSha256 || payload.httpsToken || payload.httpsPort
+        ? {
+            caPem: payload.httpsCaPem,
+            caSha256: payload.httpsCaSha256,
+            token: payload.httpsToken,
+            port: payload.httpsPort,
+          }
+        : undefined;
     const candidates = payload.urls?.length ? payload.urls : [payload.url];
     let unauthorizedUrl: string | null = null;
     for (const baseUrl of candidates) {
@@ -131,6 +171,7 @@ export default function AddServerScreen() {
           label: status.service || 'Paired hub',
           origin: 'qr',
           token: payload.token,
+          https,
         });
         setTesting(false);
         return;
@@ -147,6 +188,7 @@ export default function AddServerScreen() {
         label: 'Paired hub',
         origin: 'qr',
         token: payload.token,
+        https,
       });
     } else {
       setError({

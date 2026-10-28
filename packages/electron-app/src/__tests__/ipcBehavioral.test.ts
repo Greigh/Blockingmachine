@@ -809,6 +809,84 @@ describe('IPC boundary — behavioral', () => {
     }
   });
 
+  test('Pairing: HTTPS capture material rides the QR — CA, fingerprint, and the flag-127 data token', async () => {
+    // The pairing handler asks the real filterProxyManager for CA + status —
+    // a fixture control server on :9293 answers so the fields land for real.
+    const PEM = '-----BEGIN CERTIFICATE-----\nFIXTURE-CA\n-----END CERTIFICATE-----\n';
+    const FP = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
+    const fixture = createServer((req, res) => {
+      if (req.url === '/v1/proxy/ca') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ certPem: PEM, sha256Fingerprint: FP, notAfter: 'x', keyWrapped: false }));
+        return;
+      }
+      if (req.url === '/v1/proxy/status') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: 'running',
+            dataPort: 9294,
+            controlPort: 9293,
+            bindHost: '192.168.7.10',
+            dataAuthRequired: true,
+            denyPrivateDestinations: false,
+            rulesLoaded: 0,
+            protectionEnabled: true,
+            paused: false,
+            uptimeSeconds: 1,
+            stats: {},
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve, reject) => {
+      fixture.once('error', reject);
+      fixture.listen(9293, '127.0.0.1', () => resolve());
+    });
+
+    try {
+      // The data-port credential is its own sealed secret — set path,
+      // presence read, and the entropy floor on user-typed values.
+      const weak = await invoke('httpsfilter:set-data-token', 'short');
+      expect(weak.success).toBe(false);
+      expect(weak.error).toMatch(/16/);
+      const presence = await invoke('httpsfilter:get-data-token');
+      expect(presence.configured).toBe(false);
+      const gen = await invoke('httpsfilter:generate-data-token');
+      expect(gen.success).toBe(true);
+      expect(gen.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+      const presence2 = await invoke('httpsfilter:get-data-token');
+      expect(presence2.configured).toBe(true);
+
+      const pairing = await invoke('get-feed-pairing-payload');
+      expect(pairing.success).toBe(true);
+      expect(pairing.httpsCaConfigured).toBe(true);
+      expect(pairing.httpsTokenConfigured).toBe(true);
+      const payload = JSON.parse(pairing.payload);
+      expect(payload.v).toBe(1);
+      expect(payload.httpsCaPem).toBe(PEM);
+      expect(payload.httpsCaSha256).toBe(FP);
+      expect(payload.httpsToken).toBe(gen.token);
+      expect(payload.httpsDataPort).toBe(9294);
+      // The feed token stays its own credential — not conflated.
+      expect(payload.token).toBeUndefined();
+
+      // Clearing the data token takes httpsToken out of the QR while the
+      // CA keeps riding (install needs no credential).
+      await invoke('httpsfilter:set-data-token', '');
+      const openPairing = await invoke('get-feed-pairing-payload');
+      const openPayload = JSON.parse(openPairing.payload);
+      expect(openPayload.httpsToken).toBeUndefined();
+      expect(openPayload.httpsCaPem).toBe(PEM);
+    } finally {
+      capturedStoreRef.current!.set('httpsFilterDataToken', '');
+      await new Promise<void>((resolve) => fixture.close(() => resolve()));
+    }
+  });
+
   test('LAN boundary: OPTIONS preflight is satisfied without offering POST', async () => {
     const started = await invoke('start-feed-server', 19197);
     expect(started.isRunning).toBe(true);
