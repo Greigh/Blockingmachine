@@ -27,6 +27,15 @@ Record kinds (all JSON, one per line):
 Unknown kinds are ignored so the format can grow without breaking
 this parser.
 
+Domain-bearing records (disagreements and samples) are dropped when the
+name fails `public_names.is_public_name` — the same boundary the recorder,
+the serving index, the shadow tail and obs_ingest enforce. Logs written
+before that boundary existed still carry mDNS/reverse/service names the
+model scored anyway; they are not evidence — the serving side can never
+produce such a disagreement again — so the review queue, the drift sample
+and the gate's block-availability count must not see them. Summary records
+have no domain and pass through untouched.
+
 Usage:
     .venv/bin/python shadow.py --log learned-shadow.jsonl --stats
     .venv/bin/python shadow.py --log learned-shadow.jsonl \\
@@ -40,6 +49,8 @@ import json
 import sys
 from collections import Counter
 from pathlib import Path
+
+from public_names import is_public_name
 
 DECISIONS = {"allow", "review", "block"}
 
@@ -81,14 +92,23 @@ def parse_line(line: str, lineno: int) -> dict | None:
 
 def load_log(path: Path) -> list[dict]:
     records = []
+    dropped_nonpublic = 0
     with open(path) as f:
         for i, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
             rec = parse_line(line, i)
-            if rec is not None:
-                records.append(rec)
+            if rec is None:
+                continue
+            domain = rec.get("domain")
+            if domain is not None and not is_public_name(domain):
+                dropped_nonpublic += 1
+                continue
+            records.append(rec)
+    if dropped_nonpublic:
+        print(f"note: dropped {dropped_nonpublic} records on non-public names "
+              f"(pre-boundary log residue — see public_names.py)", file=sys.stderr)
     return records
 
 

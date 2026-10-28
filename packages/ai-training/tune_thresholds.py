@@ -28,6 +28,7 @@ import lightgbm as lgb
 import numpy as np
 
 from train import load_featurizer
+from public_names import is_public_name
 
 
 def precision_recall_at(y: np.ndarray, s: np.ndarray, t: float, w: np.ndarray | None = None):
@@ -83,6 +84,8 @@ def from_shadow(path: Path, reviews: Path | None):
             continue
         if not row.get("sample"):
             continue
+        if not is_public_name(row.get("domain") or ""):
+            continue  # pre-boundary residue — same filter shadow.py applies
         ref = row.get("referenceDecision")
         if ref not in ("block", "allow"):
             continue

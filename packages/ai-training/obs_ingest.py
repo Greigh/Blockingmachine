@@ -22,6 +22,8 @@ import sys
 import time
 from pathlib import Path
 
+from public_names import is_public_name
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS dns_events (
   domain TEXT NOT NULL,
@@ -50,23 +52,6 @@ CREATE TABLE IF NOT EXISTS fanout (
 """
 
 
-# Mirror of NON_PUBLIC_SUFFIXES in packages/core/src/ai/hostname.ts — the daemon
-# now drops these at write time, but files written before that still carry them
-# and a rotated sibling keeps them readable. Keep the two lists identical;
-# parity drift here means the training corpus sees names the serving side
-# refuses to score.
-_NON_PUBLIC_SUFFIXES = (
-    ".local", ".localhost", ".internal", ".invalid", ".example", ".test",
-    ".arpa", ".lan", ".home", ".corp", ".localdomain",
-)
-
-
-def _is_public_name(domain: str) -> bool:
-    """Dotted name outside the discovery/private/reverse suffix space."""
-    d = domain.lower().rstrip(".")
-    return "." in d and not any(d.endswith(s) for s in _NON_PUBLIC_SUFFIXES)
-
-
 def _dns_paths(path: Path) -> list[Path]:
     """The stream plus its single rotated sibling, oldest first."""
     rotated = Path(str(path) + ".1")
@@ -92,8 +77,11 @@ def ingest_dns(con: sqlite3.Connection, path: Path) -> tuple[int, int]:
                 observed_at = r.get("observed_at")
                 if not isinstance(domain, str) or not isinstance(observed_at, str):
                     continue
-                if not _is_public_name(domain):
-                    continue  # mDNS/reverse/private names — dropped at write time now
+                if not is_public_name(domain):
+                    continue  # mDNS/reverse/private/service names — the daemon
+                    # drops them at write time now, but files written before
+                    # that still carry them and a rotated sibling keeps them
+                    # readable. Same boundary the serving side enforces.
                 cur = con.execute(
                     """INSERT OR IGNORE INTO dns_events
                        (domain, observed_at, qtype, verdict, rcode, upstream_ok,

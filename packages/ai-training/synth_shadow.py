@@ -42,13 +42,17 @@ def main() -> None:
     ap.add_argument("--sample-rate", type=float, default=0.01)
     ap.add_argument("--noise", type=float, default=0.02)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--observations", default=None)
+    ap.add_argument("--live-observations", default=None,
+                    help="v3: obs_ingest.py's daemon+fanout store (default live_observations.db)")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
     adir = Path(args.artifacts)
     raw = json.loads((adir / "test_set.json").read_text())
+    fversion = raw.get("feature_version", 1) if isinstance(raw, dict) else 1
     test = raw["test"] if isinstance(raw, dict) else raw
-    _, _, featurize, _ = load_featurizer(1, None)
+    _, _, featurize, _ = load_featurizer(fversion, args.observations, args.live_observations)
     booster = lgb.Booster(model_file=str(adir / "model.txt"))
 
     domains = [t["domain"] for t in test]

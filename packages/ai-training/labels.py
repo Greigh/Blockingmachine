@@ -11,9 +11,13 @@ higher trust weights.
 from __future__ import annotations
 
 import argparse
+import re
 import sqlite3
+import sys
 import time
 from pathlib import Path
+
+from public_names import is_public_name
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS labels (
@@ -28,14 +32,47 @@ CREATE INDEX IF NOT EXISTS idx_labels_domain ON labels(domain);
 """
 
 
+# Modifiers that scope a rule to a site, a cookie, or the page layer —
+# their presence means the list does NOT assert the domain itself is
+# blockable: `||google.com/*/ads.html$…,domain=napisy24.pl` does not make
+# google.com a tracker. Delivery-scope modifiers (third-party, script,
+# image, redirect=, …) still assert the domain's content is unwanted, so
+# `||adnxs.com^$redirect=nooptext` remains a valid positive.
+_SCOPE_MODS = (
+    "domain=", "cookie=", "generichide", "elemhide", "document", "popup",
+    "removeparam", "csp", "badfilter", "app=",
+)
+
+
 def parse_adblock_domains(text: str) -> list[str]:
-    """Extract domains from ||domain^ style rules."""
+    """Extract domains from ||domain rules asserting the domain is unwanted.
+
+    Rejects scope-qualified rules: a `/` in the tail means the rule targets
+    a path, not the domain (`||youtube.com/embed/…` does not label
+    youtube.com), and _SCOPE_MODS mark site/cookie/page-level scope
+    (`||bing.com^$cookie=ABDEF` does not label bing.com). Whatever survives
+    is validated against the serving boundary (is_public_name): IPs,
+    SRV/service names, malformed labels and non-public suffixes are not
+    learnable signal.
+    """
     domains = []
     for line in text.splitlines():
-        if line.startswith("||"):
-            host = line[2:].split("^")[0].split("/")[0]
-            if host and "." in host and "*" not in host:
-                domains.append(host.lower())
+        line = line.strip()
+        if not line.startswith("||"):
+            continue
+        body = line[2:]
+        m = re.match(r"([^/$^]+)(.*)$", body)
+        if not m:
+            continue
+        host, tail = m.group(1).strip().lower().rstrip("."), m.group(2)
+        if "/" in tail:
+            continue
+        if "$" in tail:
+            mods = tail.split("$", 1)[1]
+            if any(s in mods for s in _SCOPE_MODS):
+                continue
+        if host and "*" not in host and is_public_name(host):
+            domains.append(host)
     return sorted(set(domains))
 
 
@@ -47,19 +84,33 @@ def parse_majestic_domains(text: str, limit: int) -> list[str]:
             continue
         parts = line.split(",")
         if len(parts) >= 3 and parts[2]:
-            domains.append(parts[2].strip().lower())
+            d = parts[2].strip().lower().rstrip(".")
+            if is_public_name(d):
+                domains.append(d)
         if len(domains) >= limit:
             break
     return domains
 
 
 def ingest_rows(db_path: Path, rows: list[tuple[str, int, str, float]]) -> None:
-    """rows: (domain, label, source, weight). Positive label wins conflicts."""
+    """rows: (domain, label, source, weight). Positive label wins conflicts.
+
+    The corpus invariant lives here, not in each parser: a row whose
+    domain fails `is_public_name` is dropped for every writer — list
+    ingests, review merges, feedback — because the serving side can never
+    score such a name, so a label for it is noise (15 junk rows reached
+    the store before this existed: ABP `$`-modifier strings, SRV names,
+    IP literals, malformed labels).
+    """
+    kept = [r for r in rows if is_public_name(r[0])]
+    dropped = len(rows) - len(kept)
+    if dropped:
+        print(f"ingest_rows: dropped {dropped} non-public domain rows", file=sys.stderr)
     con = sqlite3.connect(db_path)
     con.executescript(SCHEMA)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     # Insert negatives first so a later positive insert wins the conflict.
-    ordered = sorted(rows, key=lambda r: r[1])
+    ordered = sorted(kept, key=lambda r: r[1])
     con.executemany(
         """INSERT INTO labels (domain, label, source, weight, observed_at)
            VALUES (?, ?, ?, ?, ?)

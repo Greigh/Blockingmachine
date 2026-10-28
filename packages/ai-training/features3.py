@@ -36,7 +36,10 @@ FEATURE_VERSION = 3
 V3_DNS_FEATURES: list[tuple[str, str | None]] = [
     ("dns_seen", None),               # any dns_events row exists (0/1, never NaN)
     ("dns_query_count", "n"),         # log1p of event count
-    ("dns_blocked", "blocked"),       # production ever answered BLOCKED
+    ("dns_blocked", "blocked"),       # production ever answered BLOCKED — the
+    # reference verdict itself as a feature: it can only parrot the lists, so
+    # treat any AP/P@R lift it claims at coverage as borrowed evidence, not
+    # marginal model value (the gate's bar exists to measure what lists miss).
     ("dns_cname_depth", "cdepth"),    # deepest chain seen
     ("dns_cname_foreign", "cforeign"),# any chain crossing registrable origin
     ("dns_nxdomain_rate", "nxrate"),  # share of answered events that NXDOMAIN'd

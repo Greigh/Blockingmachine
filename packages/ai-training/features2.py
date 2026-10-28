@@ -36,21 +36,30 @@ V2_FEATURES: list[tuple[str, str | None]] = [
 FEATURE_NAMES = V1_NAMES + [name for name, _ in V2_FEATURES]
 N_V1 = len(V1_NAMES)
 
-_obs_cache: dict[str, dict] | None = None
+_obs_cache: dict[str, dict[str, dict]] = {}
 
 
 def load_observations(db_path: str | Path) -> dict[str, dict]:
-    """{domain: row-dict} from observations.db. Cached per process."""
-    global _obs_cache
-    if _obs_cache is None:
+    """{domain: row-dict} from observations.db. Cached per process, per path.
+
+    An absent file returns {} rather than raising: sqlite3.connect would
+    otherwise *create* the database and crash on the missing table, and an
+    absent crawl corpus honestly means "no observations" — the same
+    NaN-everywhere semantics v3's `load_live_observations` already uses.
+    """
+    key = str(db_path)
+    if key not in _obs_cache:
+        if not Path(db_path).exists():
+            _obs_cache[key] = {}
+            return _obs_cache[key]
         con = sqlite3.connect(db_path)
         con.row_factory = sqlite3.Row
-        _obs_cache = {
+        _obs_cache[key] = {
             r["domain"]: dict(r)
             for r in con.execute("SELECT * FROM observations")
         }
         con.close()
-    return _obs_cache
+    return _obs_cache[key]
 
 
 def featurize_vector_v2(domain: str, observations: dict[str, dict] | None) -> list[float]:

@@ -38,9 +38,10 @@ N_BINS = 10
 EPS = 1e-6
 
 
-def train_matrix(db: str, fversion: int, observations: str | None):
+def train_matrix(db: str, fversion: int, observations: str | None,
+                 live_path: str | None = None):
     """Feature matrix of the TRAIN split — what the model learned."""
-    _, fnames, featurize, _ = load_featurizer(fversion, observations)
+    _, fnames, featurize, _ = load_featurizer(fversion, observations, live_path)
     con = sqlite3.connect(db)
     rows = con.execute("SELECT domain, label, weight FROM labels").fetchall()
     con.close()
@@ -61,8 +62,9 @@ def train_matrix(db: str, fversion: int, observations: str | None):
 
 
 def export_baseline(artifacts: Path, db: str, fversion: int,
-                    observations: str | None, out: Path) -> None:
-    fnames, X = train_matrix(db, fversion, observations)
+                    observations: str | None, out: Path,
+                    live_path: str | None = None) -> None:
+    fnames, X = train_matrix(db, fversion, observations, live_path)
     imp_path = artifacts / "importance.json"
     top = []
     if imp_path.exists():
@@ -127,7 +129,9 @@ def psi_for_feature(edges: list[float], base_props: list[float],
     return float(psi)
 
 
-def psi_report(baseline_path: Path, shadow_path: Path) -> dict:
+def psi_report(baseline_path: Path, shadow_path: Path,
+               live_path: str | None = None,
+               observations: str | None = None) -> dict:
     baseline = json.loads(baseline_path.read_text())
     fnames = baseline["feature_names"]
     fversion = baseline["feature_version"]
@@ -142,7 +146,7 @@ def psi_report(baseline_path: Path, shadow_path: Path) -> dict:
             "empty. Disagreement records alone cannot substitute — they are the "
             "biased population. See docs/learned-shadow-privacy.md."
         )
-    _, _, featurize, _ = load_featurizer(fversion, None)
+    _, _, featurize, _ = load_featurizer(fversion, observations, live_path)
     domains = [r["domain"] for r in samples]
     Xp, kept = [], []
     for d in domains:
@@ -175,8 +179,10 @@ def main() -> None:
     ap.add_argument("--psi", action="store_true")
     ap.add_argument("--artifacts", default="model_artifacts")
     ap.add_argument("--db", default="labels.db")
-    ap.add_argument("--features", type=int, default=1, choices=(1, 2))
+    ap.add_argument("--features", type=int, default=1, choices=(1, 2, 3))
     ap.add_argument("--observations", default=None)
+    ap.add_argument("--live-observations", default="live_observations.db",
+                    help="v3: obs_ingest.py's daemon+fanout store")
     ap.add_argument("--baseline", default="drift_baseline.json")
     ap.add_argument("--shadow", default=None)
     ap.add_argument("--out", default="drift_report.json")
@@ -184,11 +190,14 @@ def main() -> None:
 
     if args.export_baseline:
         export_baseline(Path(args.artifacts), args.db, args.features,
-                        args.observations, Path(args.baseline))
+                        args.observations, Path(args.baseline),
+                        args.live_observations)
     elif args.psi:
         if not args.shadow:
             raise SystemExit("--psi needs --shadow learned-shadow.jsonl")
-        report = psi_report(Path(args.baseline), Path(args.shadow))
+        report = psi_report(Path(args.baseline), Path(args.shadow),
+                            live_path=args.live_observations,
+                            observations=args.observations)
         Path(args.out).write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))
     else:

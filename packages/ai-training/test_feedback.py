@@ -14,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from labels import SCHEMA, ingest_rows
+from labels import ingest_rows
 
 PKG = Path(__file__).resolve().parent
 
@@ -40,9 +40,11 @@ def write_jsonl(path: Path, records: list[dict]) -> None:
 
 def main() -> int:
     bad = 0
+    total = 0
 
     def check(name: str, cond: bool) -> None:
-        nonlocal bad
+        nonlocal bad, total
+        total += 1
         if cond:
             print(f"  ok  {name}")
         else:
@@ -92,6 +94,7 @@ def main() -> int:
              "reporter": "local-user", "at": "2026-10-15T00:02:00Z"},
         ])
         r = run_merge(db, fb)
+        check("no-op reset merge exits clean", r.returncode == 0)
         got = labels(db)
         check("reset leaves list-sourced rows alone",
               got.get(("list-tracker.example.com", "adguard")) == 1)
@@ -105,7 +108,7 @@ def main() -> int:
         check("malformed lines skipped", r.returncode == 0
               and ("ok.example.com", "feedback") in labels(db))
 
-    print(f"\n{4 * 4 - bad}/{4 * 4} checks passed" if bad else "\nAll checks passed")
+    print(f"\n{total - bad}/{total} checks passed" if bad else "\nAll checks passed")
     return 1 if bad else 0
 
 

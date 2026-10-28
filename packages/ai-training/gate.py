@@ -122,6 +122,8 @@ def main() -> None:
     ap.add_argument("--baseline", required=True, help="drift_baseline.json for the candidate")
     ap.add_argument("--config", default=None, help="gate_config.json (defaults follow DESIGN.md)")
     ap.add_argument("--observations", default=None)
+    ap.add_argument("--live-observations", default=None,
+                    help="v3: obs_ingest.py's daemon+fanout store (default live_observations.db)")
     ap.add_argument("--out", default="gate_report.json")
     args = ap.parse_args()
 
@@ -142,7 +144,7 @@ def main() -> None:
     raw = json.loads((adir / "test_set.json").read_text())
     fversion = raw.get("feature_version", 1) if isinstance(raw, dict) else 1
     test = raw["test"] if isinstance(raw, dict) else raw
-    _, _, featurize, _ = load_featurizer(fversion, args.observations)
+    _, _, featurize, _ = load_featurizer(fversion, args.observations, args.live_observations)
     booster = lgb.Booster(model_file=str(adir / "model.txt"))
     y = np.array([t["label"] for t in test])
     s = booster.predict(np.array([featurize(t["domain"]) for t in test]))
@@ -200,7 +202,12 @@ def main() -> None:
         from features2 import FEATURE_NAMES as N2
     except ImportError:
         N2 = None
-    contract = {1: list(N1), 2: list(N2) if N2 else None}
+    try:
+        from features3 import FEATURE_NAMES as N3
+    except ImportError:
+        N3 = None
+    contract = {1: list(N1), 2: list(N2) if N2 else None,
+                3: list(N3) if N3 else None}
     names_ok = fv in contract and contract[fv] is not None and model.get("feature_names") == contract[fv]
     check("feature_contract", names_ok,
           f"feature_version={fv}, names match contract: {names_ok}", fv)
@@ -269,10 +276,13 @@ def main() -> None:
 
     print("== drift ==")
     try:
-        drep = psi_report(Path(args.baseline), Path(args.shadow))
+        drep = psi_report(Path(args.baseline), Path(args.shadow),
+                          live_path=args.live_observations,
+                          observations=args.observations)
         alerts = drep["top_feature_alerts"]
         check("drift_top10", not alerts,
-              f"top-10 PSI alerts: {alerts or 'none'} (threshold {cfg['max_psi_top10']})", alerts)
+              f"top-10 PSI alerts: {alerts or 'none'} (threshold {cfg['max_psi_top10']}) "
+              f"over n={drep['n_production']} production samples", alerts)
     except SystemExit as e:
         check("drift_top10", False, f"drift evidence missing: {e}", None)
 

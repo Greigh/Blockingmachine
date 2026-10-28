@@ -57,7 +57,9 @@ def load_featurizer(version: int, observations_path: str | None, live_path: str 
 PARAMS = {
     "objective": "binary",
     "metric": "average_precision",
-    "num_leaves": 63,
+    "num_leaves": 15,          # 2026-10-27 sweep: 63→561 KB export (over the 500 KB
+                             # artifact budget); 15→389 KB at AP −0.0002 / P@R0.9
+                             # −0.0038 — near-free compliance (error_anatomy.py)
     "min_data_in_leaf": 500,   # precision bias: fewer, high-confidence leaves
     "feature_fraction": 0.8,
     "seed": 42,
