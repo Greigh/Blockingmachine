@@ -3,7 +3,7 @@
 
 # Blockingmachine
 
-[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE) [![Release](https://img.shields.io/badge/Release-v1.0.0-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0) [![GitHub Packages](https://img.shields.io/badge/GitHub_Packages-v1.0.0-2ea44f.svg)](https://github.com/users/Greigh/packages?repo_name=Blockingmachine) [![Forgejo](https://img.shields.io/badge/Forgejo-git.greighstudios.com-ff6600.svg)](https://git.greighstudios.com/greighstudios/Blockingmachine) [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/) [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/) [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/) [![Tests](<https://img.shields.io/badge/Tests-2%2C900%2B%20Passing%20(100%25)-brightgreen.svg>)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml) [![CI](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml) [![CodeQL Analysis](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml) [![HACS Validation](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml) [![Security Policy](https://img.shields.io/badge/Security_Policy-Active-green.svg)](SECURITY.md)
+[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE) [![Release](https://img.shields.io/badge/Release-v1.0.0-orange.svg)](https://github.com/greigh/Blockingmachine/releases/tag/v1.0.0) [![GitHub Packages](https://img.shields.io/badge/GitHub_Packages-v1.0.0-2ea44f.svg)](https://github.com/users/Greigh/packages?repo_name=Blockingmachine) [![Forgejo](https://img.shields.io/badge/Forgejo-git.greighstudios.com-ff6600.svg)](https://git.greighstudios.com/greighstudios/Blockingmachine) [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24.0.0-339933.svg)](https://nodejs.org/) [![Built with Electron](https://img.shields.io/badge/Built%20with-Electron%2044-47848F.svg)](https://www.electronjs.org/) [![Written in TypeScript](https://img.shields.io/badge/Written%20in-TypeScript%205.8-3178C6.svg)](https://www.typescriptlang.org/) [![Tests](<https://img.shields.io/badge/Tests-2%2C900%2B%20Passing%20(100%25)-brightgreen.svg>)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml) [![CI](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/ci.yml) [![CodeQL Analysis](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/codeql.yml) [![HACS Validation](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml/badge.svg)](https://github.com/greigh/Blockingmachine/actions/workflows/hacs-validation.yml) [![Security Policy](https://img.shields.io/badge/Security_Policy-Active-green.svg)](SECURITY.md) [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/Greigh/badge.svg)](https://hub.xerj.org/contributors/Greigh)
 
 _A modern network defense suite and filter list compiler for AdGuard, uBlock Origin & EasyList. Features an Electron desktop app, MV3 extension, loopback DNS daemon, Home Assistant hub, an iOS/Android companion app, and embedded Mini-AI classification with intelligent rule deduplication, multi-format exports, and 100% local processing._
 
@@ -52,7 +52,7 @@ The signed Android APK is published on the Forgejo generic package registry:
 | ------------------- | -------- | -------- |
 | **Android APK** (`.apk`) | Android 7.0+ (`minSdk 24`) | [Download `app-release.apk`](https://git.greighstudios.com/api/packages/greighstudios/generic/blockingmachine-mobile/1.0.0/app-release.apk) |
 
-Built from `packages/mobile` with `expo prebuild` + `./gradlew assembleRelease`. The iOS build goes through the same Expo dev-client flow; an App Store/TestFlight artifact is not published yet.
+Built from `packages/mobile` with `expo prebuild` + `./gradlew assembleRelease`. The iOS build goes through the same Expo dev-client flow; iOS builds go through the same Expo dev-client flow and ship to TestFlight (`com.greighstudios.blockingmachine`); no App Store release yet.
 
 #### Checksum Verification
 
@@ -61,6 +61,23 @@ shasum -a 256 -c SHA256SUMS.txt
 ```
 
 ---
+
+### Platform Feature Matrix
+
+| Feature | iOS | Android | macOS |
+| --- | --- | --- | --- |
+| On-device DNS filter | ✅ packet tunnel (new) | ✅ VpnService | ✅ managed daemon |
+| Hub HTTPS capture | ✅ CA profile + PAC | ✅ TCP capture → PROXY-v2 | ✅ is the engine |
+| CA install | ✅ mobileconfig → trust | ✅ system intent | ✅ `security` CLI |
+| Pins / unpin | ✅ **added today** | ✅ **added today** | ✅ desktop UI |
+| Per-app bypass | ❌ *no iOS API exists* | ✅ disallowedApps | ❌ *pf can't scope by app* |
+| Protection pause | ✅ hub route | ✅ hub route | ✅ local |
+| Cosmetics / reload / daemon ctl | ✅ hub client | ✅ hub client | ✅ local |
+| Check-domain | ✅ shared screen | ✅ shared screen | ✅ dashboard |
+| Telemetry | ✅ shared screen | ✅ shared screen | ✅ dashboard |
+| QUIC suppression | n/a — no MITM | ✅ drops UDP/443 | ✅ flag 122 |
+| Local DNS responder | ✅ :15353 | ✅ :15353 | ✅ :5353 |
+| AI shadow accrual | hub-side | hub-side | ✅ host |
 
 ### NPM Packages
 
