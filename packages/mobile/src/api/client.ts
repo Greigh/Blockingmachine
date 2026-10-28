@@ -11,6 +11,8 @@ import type {
   ControlResult,
   ProtectionState,
   ProtectionToggleResult,
+  ProxyPinRemoveResult,
+  ProxyPinsResult,
   StatusPayload,
   TelemetryPayload,
 } from './types';
@@ -155,8 +157,8 @@ export class BlockingmachineClient {
     return this.request<CheckResult>(`/v1/check?domain=${encodeURIComponent(clean)}`);
   }
 
-  /** Hub serves GET /v1/protection; the add-on does not — callers should fall back
-   *  to the protection block inside getStatus(). */
+  /** Both surfaces serve GET /v1/protection — the hub reports the daemon's real
+   *  state, the add-on its embedded protection block (same shape). */
   getProtection(): Promise<ProtectionState> {
     return this.request<ProtectionState>('/v1/protection');
   }
@@ -198,4 +200,19 @@ export class BlockingmachineClient {
       15_000,
     );
   }
+
+  /** HTTPS-filter pin/bypass ledger — served by both surfaces (hub :9191 and
+   *  the add-on both proxy the engine's loopback control API). 503-class
+   *  failure when the engine is down; callers should degrade, not retry-loop. */
+  getProxyPins(): Promise<ProxyPinsResult> {
+    return this.request<ProxyPinsResult>('/v1/proxy/pins');
+  }
+
+  removeProxyPin(host: string): Promise<ProxyPinRemoveResult> {
+    return this.request<ProxyPinRemoveResult>('/v1/proxy/pins/remove', {
+      method: 'POST',
+      body: { host },
+    });
+  }
 }
+

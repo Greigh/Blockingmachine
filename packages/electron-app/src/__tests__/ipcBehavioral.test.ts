@@ -837,6 +837,80 @@ describe('IPC boundary — behavioral', () => {
     }
   });
 
+  test('Pins: LAN ledger + unpin proxy the engine control plane behind the usual gates', async () => {
+    // Fixture engine control API on the manager's default :9293 — the LAN
+    // route must proxy there, not try to answer from app state.
+    const ledger = [
+      { ts: 1, host: 'bank.example', action: 'pin' },
+      { ts: 2, host: 'cdn.example', action: 'bypass' },
+    ];
+    let removedHost = '';
+    const fixture = createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/v1/proxy/pins') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ pins: ledger, corruptLineCount: 0 }));
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/v1/proxy/pins/remove') {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => {
+          removedHost = JSON.parse(body).host;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+        });
+        return;
+      }
+      res.writeHead(404).end('{}');
+    });
+    await new Promise<void>((resolve) => fixture.listen(9293, '127.0.0.1', resolve));
+    try {
+      const gen = await invoke('generate-feed-token');
+      const started = await invoke('start-feed-server', 19203);
+      expect(started.isRunning).toBe(true);
+      try {
+        // The ledger names TLS hosts — browsing-adjacent: foreign origins out,
+        // unauthenticated reads out when a token is configured.
+        const foreign = await fetch('http://127.0.0.1:19203/v1/proxy/pins', {
+          headers: { Origin: 'https://attacker.example' },
+        });
+        expect(foreign.status).toBe(403);
+        const denied = await fetch('http://127.0.0.1:19203/v1/proxy/pins');
+        expect(denied.status).toBe(401);
+        const ok = await fetch('http://127.0.0.1:19203/v1/proxy/pins', {
+          headers: { Authorization: `Bearer ${gen.token}` },
+        });
+        expect(ok.status).toBe(200);
+        const body = await ok.json();
+        expect(body.pins).toHaveLength(2);
+        expect(body.pins[0].host).toBe('bank.example');
+
+        const deniedRemove = await fetch('http://127.0.0.1:19203/v1/proxy/pins/remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ host: 'bank.example' }),
+        });
+        expect(deniedRemove.status).toBe(401);
+        const remove = await fetch('http://127.0.0.1:19203/v1/proxy/pins/remove', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${gen.token}`,
+          },
+          body: JSON.stringify({ host: 'bank.example' }),
+        });
+        expect(remove.status).toBe(200);
+        expect(removedHost).toBe('bank.example');
+      } finally {
+        await invoke('clear-feed-token');
+        capturedStoreRef.current!.set('feedToken', '');
+        await invoke('stop-feed-server');
+      }
+    } finally {
+      fixture.close();
+    }
+  });
+
   test('Pairing: HTTPS capture material rides the QR — CA, fingerprint, and the flag-127 data token', async () => {
     // The pairing handler asks the real filterProxyManager for CA + status —
     // a fixture control server on :9293 answers so the fields land for real.

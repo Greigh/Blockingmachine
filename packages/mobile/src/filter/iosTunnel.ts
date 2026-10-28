@@ -3,7 +3,11 @@
  * `targets/BlockingmachineTunnel`). `NEPacketTunnelProvider` is the standard
  * Network Extensions route — `packet-tunnel-provider` runs on consumer
  * devices, unlike flag 89's `NEDNSProxyProvider` (supervised/MDM-only per
- * TN3134) — so this is the
+ * TN3134) — so this is the standalone path today. iOS 26 adds an
+ * unrestricted `url-filter-provider` to the same table — the eventual route
+ * past DNS-only filtering.
+ *
+ *
  * standalone filter path that ships on TestFlight today.
  *
  * Every call degrades gracefully: off iOS (or a build without the module)

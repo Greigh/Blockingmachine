@@ -170,3 +170,26 @@ export interface ControlResult {
   /** Present on /v1/control/daemon responses. */
   daemonStatus?: string;
 }
+
+/** One applied ledger line from GET /v1/proxy/pins — `pin` (learned on a
+ * client handshake abort), `bypass` (user-directed tunnel), `remove` (a
+ * retraction). The UI collapses the stream per host — last action wins. */
+export interface ProxyPinEntry {
+  ts: number;
+  host: string;
+  action: 'pin' | 'bypass' | 'remove';
+  reason?: string;
+}
+
+export interface ProxyPinsResult {
+  success: boolean;
+  pins?: ProxyPinEntry[];
+  corruptLineCount?: number;
+  error?: string;
+}
+
+export interface ProxyPinRemoveResult {
+  success: boolean;
+  message?: string;
+  error?: string;
+}

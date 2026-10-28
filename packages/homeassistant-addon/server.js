@@ -1354,6 +1354,76 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // 4a2. Pin/bypass ledger — the engine's loopback control plane, proxied to
+  // LAN clients (mobile app) that hit pinned-site failures through the data
+  // port. The ledger names TLS hosts, so it lives behind the same auth gate as
+  // every other /v1 read; the remove POST forwards the host verbatim like the
+  // hub's own route does.
+  if (pathname === '/v1/proxy/pins' || pathname === '/api/proxy/pins') {
+    if (req.method !== 'GET') {
+      res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'Method Not Allowed. Use GET.' }));
+      return;
+    }
+    try {
+      const upstream = await fetch(`${HTTPS_CONTROL_URL}/v1/proxy/pins`, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(5_000),
+      });
+      const body = await upstream.text();
+      res.writeHead(upstream.status, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(body);
+    } catch {
+      res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: false, error: 'HTTPS filter engine is not running — pins are unavailable.' }));
+    }
+    return;
+  }
+
+  if (pathname === '/v1/proxy/pins/remove' || pathname === '/api/proxy/pins/remove') {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST.' }));
+      return;
+    }
+    let pinsBody = '';
+    req.on('data', (chunk) => {
+      pinsBody += chunk;
+      if (pinsBody.length > 1e4) req.destroy();
+    });
+    req.on('end', async () => {
+      let host;
+      try {
+        host = JSON.parse(pinsBody || '{}').host;
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: 'Request body must be JSON' }));
+        return;
+      }
+      const normalized = typeof host === 'string' ? host.trim() : '';
+      if (normalized === '' || normalized.length > 253) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: 'pin-remove needs a non-empty hostname of at most 253 characters.' }));
+        return;
+      }
+      try {
+        const upstream = await fetch(`${HTTPS_CONTROL_URL}/v1/proxy/pins/remove`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ host: normalized }),
+          signal: AbortSignal.timeout(5_000),
+        });
+        const body = await upstream.text();
+        res.writeHead(upstream.status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(body);
+      } catch {
+        res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: 'HTTPS filter engine is not running — pins are unavailable.' }));
+      }
+    });
+    return;
+  }
+
   // 4b. LAN auth mode — the migration/opt-out switch. Privileged: this endpoint
   // changes the install's trust posture, so it demands the admin credential in
   // BOTH modes — never the feed token, never the session cookie, never a header

@@ -3397,6 +3397,67 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           return;
         }
 
+        if (lowerPath === '/v1/proxy/pins' || lowerPath === '/api/proxy/pins') {
+          // The pin/bypass ledger names which TLS hosts tripped client-pin
+          // aborts — browsing-adjacent data, so it takes the telemetry-class
+          // guard. It proxies the engine's loopback control plane, which stays
+          // LAN-closed; a stopped engine answers 503 rather than an empty list
+          // (same honesty as the IPC handler's pins-unavailable path).
+          if (req.method !== 'GET') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use GET.' }));
+            return;
+          }
+          if (rejectUnauthorisedRead('Cross-origin pins forbidden')) return;
+          const pinsRes = await filterProxyManager.getPins();
+          if (!pinsRes) {
+            res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'HTTPS filter proxy engine is not running — pins are unavailable.' }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ success: true, pins: pinsRes.pins, corruptLineCount: pinsRes.corruptLineCount }));
+          return;
+        }
+
+        if (lowerPath === '/v1/proxy/pins/remove' || lowerPath === '/api/proxy/pins/remove') {
+          if (rejectUnauthorisedMutation('Cross-origin pins forbidden')) return;
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use POST.' }));
+            return;
+          }
+          let pinsBody = '';
+          req.on('data', (chunk) => {
+            pinsBody += chunk;
+            if (pinsBody.length > 1e6) {
+              req.destroy();
+            }
+          });
+          req.on('end', async () => {
+            let host: unknown;
+            try {
+              host = (JSON.parse(pinsBody || '{}') as { host?: unknown }).host;
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: false, error: 'Request body must be JSON' }));
+              return;
+            }
+            // Same edge validation the IPC handler applies — name the argument,
+            // not the route.
+            const normalized = typeof host === 'string' ? host.trim() : '';
+            if (normalized === '' || normalized.length > 253) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: false, error: 'pin-remove needs a non-empty hostname of at most 253 characters.' }));
+              return;
+            }
+            const result = await filterProxyManager.removePin(normalized);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify(result));
+          });
+          return;
+        }
+
         if (lowerPath === '/ai-threats.txt' || lowerPath === '/ai-threats') {
           const quarantine = (storeRef.get('aiThreatQuarantine') || []) as ThreatQuarantineItem[];
           const highConfThreats = quarantine

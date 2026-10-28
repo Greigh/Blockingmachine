@@ -171,7 +171,9 @@ function LocalFilterCard({ ready }: { ready: boolean }) {
     act('vpn', async () => {
       const granted = await LocalVpn.requestVpnConsent();
       if (!granted) throw new UserError('VPN access was declined — the filter needs it to run. Tap Start to try again.');
-      await LocalVpn.startVpn(rules, '8.8.8.8', 'Blockingmachine');
+      // Quad9 — the same upstream the desktop daemon, the add-on resolver,
+      // and localDns all default to (was 8.8.8.8, the lone holdout).
+      await LocalVpn.startVpn(rules, '9.9.9.9', 'Blockingmachine');
     });
 
   const toggleVpn = () =>
@@ -817,6 +819,94 @@ function LocalDnsCard({ ready }: { ready: boolean }) {
     </Card>
   );
 }
+/**
+ * Hub pin/bypass ledger — which TLS hosts the engine learned to leave alone
+ * (client certificate pinning aborts) or a user explicitly bypassed. A phone
+ * browsing through the hub hits these failures, so the remove control lives
+ * here rather than only in the desktop UI. Both surfaces serve the route —
+ * the Electron hub and the HA add-on each proxy their engine's loopback
+ * control API; a stopped engine answers 503 and the card says so.
+ */
+function HubPinsCard() {
+  const client = useClient();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<FriendlyError | null>(null);
+  const pins = useQuery({
+    queryKey: ['proxy-pins'],
+    queryFn: () => client!.getProxyPins(),
+    enabled: !!client,
+    refetchInterval: 15_000,
+  });
+
+  // Collapse the ledger stream to per-host effective state — a host's LAST
+  // action wins, and a `remove` retraction erases it entirely.
+  const effective = new Map<string, { action: 'pin' | 'bypass'; ts: number }>();
+  for (const e of pins.data?.pins ?? []) {
+    if (e.action === 'remove') effective.delete(e.host);
+    else effective.set(e.host, { action: e.action, ts: e.ts });
+  }
+  const rows = [...effective.entries()].sort((a, b) => b[1].ts - a[1].ts);
+
+  const remove = (host: string) => {
+    if (!client) return;
+    setBusy(host);
+    setErr(null);
+    void client
+      .removeProxyPin(host)
+      .then((r) => {
+        if (!r.success) setErr({ title: 'The hub refused the unpin', detail: r.message ?? r.error });
+        else void pins.refetch();
+      })
+      .catch((e) => setErr(describeError(e)))
+      .finally(() => setBusy(null));
+  };
+
+  return (
+    <Card>
+      <View style={styles.rowBetween}>
+        <SectionTitle icon="pin-outline" label="Hub HTTPS pins" style={{ marginBottom: 0 }} />
+        {rows.length > 0 ? <Pill label={`${rows.length} active`} tone="muted" /> : null}
+      </View>
+      <Text style={styles.meta}>
+        Hosts the hub\u2019s HTTPS engine stops intercepting — learned when an app pins its certificate, or bypassed by hand. Removing an entry lets the engine filter that host again.
+      </Text>
+      {pins.error ? (
+        <Text style={styles.syncErrorDetail}>
+          {describeError(pins.error).title} — {describeError(pins.error).detail ?? 'the engine may be stopped'}
+        </Text>
+      ) : null}
+      {err ? (
+        <>
+          <Text style={styles.syncError}>{err.title}</Text>
+          {err.detail ? <Text style={styles.syncErrorDetail}>{err.detail}</Text> : null}
+        </>
+      ) : null}
+      {rows.length === 0 && !pins.error ? (
+        <Text style={styles.meta}>No pinned or bypassed hosts.</Text>
+      ) : null}
+      {rows.slice(0, 20).map(([host, e]) => (
+        <View key={host} style={styles.rowBetween}>
+          <Text style={styles.meta} numberOfLines={1}>{host}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Pill label={e.action} tone={e.action === 'pin' ? 'warn' : 'info'} />
+            <ActionButton
+              label="Unpin"
+              tone="ghost"
+              loading={busy === host}
+              disabled={busy !== null}
+              onPress={() => remove(host)}
+            />
+          </View>
+        </View>
+      ))}
+      {rows.length > 20 ? (
+        <Text style={styles.meta}>+ {rows.length - 20} more — trim older entries on the hub.</Text>
+      ) : null}
+    </Card>
+  );
+}
+
+
 
 /**
  * Android-only card: per-app bypass. Excluded packages never enter the VPN
@@ -1096,6 +1186,8 @@ export default function SettingsScreen() {
       {isDnsProxySupported() ? <SystemDnsCard ready={filter.ready} /> : null}
       {Platform.OS === 'ios' ? <IosHubFilterCard /> : null}
       <LocalDnsCard ready={filter.ready} />
+
+      {client ? <HubPinsCard /> : null}
 
       {activeServerId ? (
         <Card>

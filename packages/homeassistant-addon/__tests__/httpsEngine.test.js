@@ -39,6 +39,7 @@ function httpJson(url, opts = {}) {
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
     });
     req.on('error', reject);
+    if (opts.body !== undefined) req.write(opts.body);
     req.end();
   });
 }
@@ -220,4 +221,32 @@ test('a feed compile hot-reloads the engine rules', async (t) => {
   // rewrite it would have attempted a real dial.
   await delay(500);
   assert.equal(await connectProbe(DATA_PORT, 'example-blocked.test:443'), 403);
+});
+
+test('pin ledger + unpin proxy the engine loopback control plane', async (t) => {
+  const { feedPort } = await startServer(t);
+
+  // GET passes the engine's ledger through verbatim — fresh engine, empty set.
+  const res = await httpJson(`http://127.0.0.1:${feedPort}/v1/proxy/pins?token=${TOKEN}`);
+  assert.equal(res.status, 200);
+  const body = JSON.parse(res.body.toString('utf8'));
+  assert.ok(Array.isArray(body.pins));
+  assert.equal(body.pins.length, 0);
+
+  // The remove route forwards {host} to the engine — a no-op unpin on an absent
+  // host still answers engine-side, proving the chain reached the control API.
+  const rm = await httpJson(`http://127.0.0.1:${feedPort}/v1/proxy/pins/remove?token=${TOKEN}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ host: 'bank.example' }),
+  });
+  assert.notEqual(rm.status, 503);
+
+  // Edge validation names the argument before the engine is touched.
+  const bad = await httpJson(`http://127.0.0.1:${feedPort}/v1/proxy/pins/remove?token=${TOKEN}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ host: '' }),
+  });
+  assert.equal(bad.status, 400);
 });
