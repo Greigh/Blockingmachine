@@ -8,11 +8,15 @@
  * Storage layout:
  *   `${FileSystem.documentDirectory}ruleset.txt` — raw feed body
  *   `${FileSystem.documentDirectory}ruleset.meta.json` — { syncedAt, ruleCount, sourceUrl }
+ *   `group.com.greighstudios.blockingmachine` container — `ruleset_native.txt` copy for
+ *   the iOS DNS proxy extension (it cannot read the app's document directory)
  */
 
 import * as FileSystem from 'expo-file-system/legacy';
 import { UserError } from '../errors';
+import { credentialAllowed } from '../api/credentialScope';
 import { compileMatcher, type CompiledRuleset } from './matcher';
+import { publishDnsProxyRuleset } from './dnsProxy';
 
 const RULES_FILE = `${FileSystem.documentDirectory}ruleset.txt`;
 const META_FILE = `${FileSystem.documentDirectory}ruleset.meta.json`;
@@ -126,7 +130,10 @@ export async function syncRuleset(
   let res: Response;
   try {
     const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
+    // Same credential scope as the REST client — TLS or provably-local only.
+    if (token && credentialAllowed(url)) {
+      headers.Authorization = `Bearer ${token}`;
+    }
     res = await fetchImpl(url, { headers, signal: controller.signal });
   } finally {
     clearTimeout(timer);
@@ -144,6 +151,9 @@ export async function syncRuleset(
   }
   await FileSystem.writeAsStringAsync(RULES_FILE, body);
   await FileSystem.writeAsStringAsync(NATIVE_RULES_FILE, toNativeRules(rules).join('\n') + '\n');
+  // Hand the iOS DNS proxy extension the same file via the shared container —
+  // best-effort: a missing app-group entitlement must not fail the sync.
+  await publishDnsProxyRuleset(NATIVE_RULES_FILE);
   const meta: RulesetMeta = {
     syncedAt: Date.now(),
     ruleCount: rules.length,

@@ -2,20 +2,22 @@
   "expo": {
     "name": "Blockingmachine",
     "slug": "blockingmachine",
-    "version": "1.0.0",
-    "orientation": "portrait",
+    "version": "1.0.1",
+    "orientation": "default",
     "scheme": "blockingmachine",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0d1117",
     "icon": "./assets/icon.png",
     "splash": {
-      "image": "./assets/icon.png",
+      "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#0d1117"
     },
     "ios": {
+      "icon": "./assets/Blockingmachine.icon",
       "supportsTablet": true,
-      "bundleIdentifier": "com.blockingmachine.mobile",
+      "bundleIdentifier": "com.greighstudios.blockingmachine",
+      "buildNumber": "1",
       "appleTeamId": "365KR8NF53",
       "infoPlist": {
         "NSBonjourServices": [
@@ -25,14 +27,15 @@
         "NSLocalNetworkUsageDescription": "Blockingmachine finds hub servers on your local network so the app can report status and control protection.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
-        }
+        },
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "com.blockingmachine.mobile",
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0d1117"
       },
       "permissions": [
@@ -50,6 +53,7 @@
       "expo-secure-store",
       "./plugins/withCleartextTraffic",
       "./plugins/withIosDeploymentTargetClamp",
+      "./plugins/withDnsProxyTarget",
       "./plugins/withReleaseSigning",
       [
         "expo-font",

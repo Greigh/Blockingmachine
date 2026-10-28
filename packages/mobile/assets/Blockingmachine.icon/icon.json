@@ -1,0 +1,67 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "display-p3:0.11800,0.13300,0.25900,1.00000",
+      "display-p3:0.04300,0.05500,0.10200,1.00000"
+    ]
+  },
+  "groups": [
+    {
+      "blur-material": null,
+      "layers": [
+        {
+          "glass": true,
+          "image-name": "shield.png",
+          "name": "shield",
+          "position": {
+            "scale": 1.0,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.5
+      }
+    },
+    {
+      "blur-material": null,
+      "layers": [
+        {
+          "glass": false,
+          "image-name": "rings.png",
+          "name": "rings",
+          "position": {
+            "scale": 1.0,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": false,
+        "value": 0.6
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "iOS"
+    ]
+  }
+}
