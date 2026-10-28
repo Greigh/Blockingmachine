@@ -11,6 +11,8 @@ _A modern network defense suite and filter list compiler for AdGuard, uBlock Ori
 
 ---
 
+> **Coming soon — the 1.0.1 beta wave is building.** The Home Assistant add-on grows into a full filtering hub: the same HTTPS-filtering proxy the desktop runs (`:9294`, with CA enrolment and token-secured data port) plus a real filtering DNS resolver on `:53` — point your router's DHCP DNS at the Home Assistant host and the whole network blocks. The iOS companion app is rolling out through TestFlight with its CA-profile + PAC setup path, and the hub's data port now does authenticated pairing with fingerprint-confirmed CA delivery. Watch [Releases](https://github.com/Greigh/Blockingmachine/releases) for `v1.0.1-beta.1`.
+
 ## Overview
 
 **Blockingmachine** is a unified, privacy-first network defense ecosystem engineered to compile high-speed adblock and DNS filter lists, synchronize homelab sinkholes, detect zero-day ad trackers with on-device machine intelligence, and enforce system-wide and in-browser blocking with sub-microsecond latency.
