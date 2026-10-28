@@ -54,6 +54,7 @@
       "./plugins/withCleartextTraffic",
       "./plugins/withIosDeploymentTargetClamp",
       "./plugins/withDnsProxyTarget",
+      "./plugins/withTunnelTarget",
       "./plugins/withReleaseSigning",
       [
         "expo-font",

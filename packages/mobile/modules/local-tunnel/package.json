@@ -1,0 +1,10 @@
+{
+  "name": "local-tunnel",
+  "version": "0.1.0",
+  "description": "iOS NETunnelProviderManager bridge for the Blockingmachine packet-tunnel (on-device filtering VPN) extension",
+  "license": "UNLICENSED",
+  "private": true,
+  "author": "Greigh Studios LLC",
+  "homepage": "https://github.com/Greigh/Blockingmachine",
+  "authors": ["Greigh Studios LLC"]
+}

@@ -55,6 +55,11 @@ import {
   isDnsProxySupported,
   setDnsProxyEnabled,
 } from '../../src/filter/dnsProxy';
+import {
+  getIosTunnelStatus,
+  isIosTunnelSupported,
+  setIosTunnelEnabled,
+} from '../../src/filter/iosTunnel';
 import { ActionButton, Card, Pill, SectionTitle } from '../../src/components/ui';
 import { describeError, UserError, type FriendlyError } from '../../src/errors';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
@@ -443,6 +448,86 @@ function HttpsCaptureCard() {
  * save surfaces the OS permission prompt; the extension also needs Apple's
  * Network Extension entitlement on the provisioning profile to run at all.
  */
+/**
+ * iOS on-device filtering VPN — the standalone path that ships today. The
+ * packet-tunnel extension (`packet-tunnel-provider`, a standard Network
+ * Extensions capability — no Apple grant needed) advertises an on-tunnel DNS
+ * resolver; the system sends it every DNS query, blocked names sinkhole from
+ * the synced ruleset, and the rest forward to the configured upstream.
+ * The OS "Add VPN Configuration" consent is the first-enable gate. Honest
+ * scope: DNS-only — apps on DoH/DoT bypass it, and HTTPS MITM (the CA path)
+ * remains flag-125's on-device engine, not this tunnel.
+ */
+function IosTunnelCard({ ready }: { ready: boolean }) {
+  const status = useQuery({
+    queryKey: ['iostunnel'],
+    queryFn: getIosTunnelStatus,
+    refetchInterval: 4000,
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<FriendlyError | null>(null);
+  const s = status.data;
+  const active = s?.enabled && s.connection === 'connected';
+
+  const toggle = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await Promise.race([
+        setIosTunnelEnabled(!s?.enabled),
+        new Promise((_, reject) => setTimeout(() => reject(new UserError('The system didn’t answer — try again.')), 45_000)),
+      ]);
+      haptics.success();
+    } catch (e) {
+      haptics.error();
+      setErr(describeError(e));
+    } finally {
+      setBusy(false);
+      void status.refetch();
+    }
+  };
+
+  return (
+    <Card>
+      <View style={styles.rowBetween}>
+        <SectionTitle icon="lock-closed-outline" label="On-device filter" style={{ marginBottom: 0 }} />
+        {active ? <Pill label="active" tone="ok" /> : null}
+      </View>
+      <Text style={styles.meta}>
+        {ready
+          ? 'A local VPN filters every app’s DNS on this device — no hub needed. The system shows the VPN icon while it runs and asks permission the first time.'
+          : 'Sync rules above first — the tunnel answers against the synced ruleset.'}
+      </Text>
+      {err ? (
+        <>
+          <Text style={styles.syncError}>{err.title}</Text>
+          {err.detail ? <Text style={styles.syncErrorDetail}>{err.detail}</Text> : null}
+        </>
+      ) : null}
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonFlex}>
+          <ActionButton
+            label={s?.enabled ? 'Disable VPN filter' : 'Enable VPN filter'}
+            tone={s?.enabled ? 'ghost' : 'primary'}
+            disabled={!ready || busy}
+            loading={busy}
+            onPress={() => void toggle()}
+          />
+        </View>
+      </View>
+      {s && !s.installed ? (
+        <Text style={styles.meta}>
+          VPN profile not installed yet — enabling installs its configuration.
+        </Text>
+      ) : null}
+      {s?.enabled && s.connection !== 'connected' ? (
+        <Text style={styles.meta}>Tunnel {s.connection}…</Text>
+      ) : null}
+    </Card>
+  );
+}
+
+
 function SystemDnsCard({ ready }: { ready: boolean }) {
   const status = useQuery({
     queryKey: ['dnsproxy'],
@@ -1007,6 +1092,7 @@ export default function SettingsScreen() {
       {isLocalVpnSupported() ? <LocalFilterCard ready={filter.ready} /> : null}
       {isLocalVpnSupported() ? <HttpsCaptureCard /> : null}
       {isLocalVpnSupported() ? <PerAppBypassCard /> : null}
+      {isIosTunnelSupported() ? <IosTunnelCard ready={filter.ready} /> : null}
       {isDnsProxySupported() ? <SystemDnsCard ready={filter.ready} /> : null}
       {Platform.OS === 'ios' ? <IosHubFilterCard /> : null}
       <LocalDnsCard ready={filter.ready} />
