@@ -3,8 +3,9 @@ import NetworkExtension
 
 /// On-device DNS-filtering VPN — the iOS counterpart of the desktop managed
 /// daemon and Android's VpnService path. This is the *standard* Network
-/// Extensions surface (`packet-tunnel-provider`): no special Apple grant is
-/// required, unlike the `dns-proxy` entitlement tracked by flag 89.
+/// Extensions surface (`packet-tunnel-provider`): runs on any consumer
+/// device, unlike flag 89's `NEDNSProxyProvider`, which Apple restricts to
+/// supervised/MDM-managed devices (TN3134).
 ///
 /// Scope is deliberately DNS-only, the "local VPN" shape AdGuard/DNSCloak use:
 /// `NEDNSSettings` advertises an on-tunnel resolver address, and the IPv4/IPv6

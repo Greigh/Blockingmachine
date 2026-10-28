@@ -1,8 +1,9 @@
 /**
  * JS surface for the iOS on-device filtering VPN (`modules/local-tunnel` +
  * `targets/BlockingmachineTunnel`). `NEPacketTunnelProvider` is the standard
- * Network Extensions route — `packet-tunnel-provider` needs no Apple grant,
- * unlike the `dns-proxy` entitlement flag 89 waits on — so this is the
+ * Network Extensions route — `packet-tunnel-provider` runs on consumer
+ * devices, unlike flag 89's `NEDNSProxyProvider` (supervised/MDM-only per
+ * TN3134) — so this is the
  * standalone filter path that ships on TestFlight today.
  *
  * Every call degrades gracefully: off iOS (or a build without the module)

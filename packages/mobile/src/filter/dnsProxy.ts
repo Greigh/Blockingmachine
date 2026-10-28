@@ -55,7 +55,7 @@ export async function setDnsProxyEnabled(enabled: boolean): Promise<void> {
     // failed") — the useful context is what that means for this feature.
     const detail = e instanceof Error ? ` (${e.message})` : '';
     throw new UserError(
-      `The system refused the DNS proxy configuration${detail} — device-wide DNS needs Apple's Network Extension entitlement on the app's provisioning profile, and doesn't run in the Simulator.`,
+      `The system refused the DNS proxy configuration${detail} — Apple's DNS proxy provider only runs on supervised or MDM-managed devices; use "On-device filtering VPN" instead. Also doesn't run in the Simulator.`,
     );
   }
 }

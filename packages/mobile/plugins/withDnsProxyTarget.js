@@ -10,9 +10,12 @@
  * Entitlement notes: the app itself needs `networkextension`/`dns-proxy` to
  * drive NEDNSProxyManager, and both targets share
  * `group.com.greighstudios.blockingmachine` so `ruleset_native.txt` reaches
- * the extension. The dns-proxy capability needs Apple's approval on the
- * provisioning profile (flag 89) — BM_IOS_DNSPROXY=0 strips the extension +
- * its entitlements for builds where the grant has not landed (TestFlight).
+ * the extension. `dns-proxy` is a self-serve value under the standard
+ * Network Extensions capability — no Apple grant exists for it — but
+ * TN3134 restricts `NEDNSProxyProvider` app extensions on iOS to
+ * supervised/MDM-managed devices, enforced at runtime. BM_IOS_DNSPROXY=0
+ * strips the extension + its entitlements from consumer builds
+ * (TestFlight) where it could never run anyway (flag 89).
  */
 const { apply } = require('./lib/extensionTarget');
 
