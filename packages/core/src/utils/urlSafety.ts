@@ -233,3 +233,76 @@ export function isSafeLanEndpointUrl(urlStr: string): SafeUrlCheckResult {
 
   return { isSafe: true };
 }
+
+/**
+ * Whether a URL's host is provably on the local network — the credential-scope
+ * predicate. Feed/hub bearer tokens are LAN-scoped secrets: they may travel
+ * cleartext only where the wire cannot leave the local network.
+ *
+ * Local means: loopback/RFC1918/link-local IPv4 literals (including the
+ * v4-mapped-IPv6 forms `::ffff:10.0.0.5` and its canonical `::ffff:a00:5`),
+ * loopback/link-local/ULA IPv6 literals, or a name that cannot resolve off the
+ * LAN (`localhost`, single-label names, and the reserved non-global suffixes
+ * `.local`, `.lan`, `.internal`, `.localhost`, `.home.arpa`). The WHATWG parser
+ * canonicalizes integer/hex/octal/short IPv4 forms before we see the hostname,
+ * so `http://134744072/` arrives already decoded to `8.8.8.8` — public, withheld.
+ *
+ * Independent mirrors of this predicate exist where core cannot be imported:
+ * `packages/homeassistant-addon/feedSource.js` (zero-dependency add-on image)
+ * and `custom_components/blockingmachine/lan.py` (Python). Keep the host lists
+ * and address ranges in step when this changes.
+ */
+export function isLocalNetworkHost(urlStr: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlStr);
+  } catch {
+    return false;
+  }
+
+  let host = parsed.hostname.toLowerCase().replace(/\.+$/, '');
+  if (host.startsWith('[') && host.endsWith(']')) {
+    host = host.slice(1, -1);
+  }
+
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.lan') ||
+    host.endsWith('.internal') ||
+    host.endsWith('.home.arpa')
+  ) {
+    return true;
+  }
+
+  const octets = extractIpv4Octets(host);
+  if (octets) {
+    const [a, b] = octets;
+    return (
+      a === 127 || // loopback
+      a === 10 || // RFC1918
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254) // link-local
+    );
+  }
+
+  if (host.includes(':')) {
+    if (host === '::1') return true;
+    const prefix = parseInt(host.split(':')[0], 16);
+    return (prefix & 0xffc0) === 0xfe80 || (prefix & 0xfe00) === 0xfc00; // fe80::/10 link-local, fc00::/7 ULA
+  }
+
+  return !host.includes('.');
+}
+
+/**
+ * Whether a credential may be attached to a request for `url`: either the wire
+ * is protected (TLS) or the destination is provably local. A cleartext public
+ * URL still gets its request — an open feed has no token to withhold — just
+ * without the secret, and the server's own 401 surfaces the real problem.
+ */
+export function credentialAllowed(urlStr: string): boolean {
+  return urlStr.startsWith('https:') || isLocalNetworkHost(urlStr);
+}

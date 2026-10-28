@@ -9,6 +9,7 @@ import { DaemonConfig, DaemonStats, DnsVerdict, EvaluationResult, QueryTelemetry
 export class DnsServer {
   private socket: dgram.Socket;
   private tcpServer: net.Server | null = null;
+  private tcpConns = new Set<net.Socket>();
   private trie: DomainTrie;
   private forwarder: DohForwarder;
   private config: DaemonConfig;
@@ -247,8 +248,11 @@ export class DnsServer {
   /** RFC 7766 framing — u16 length before each message; frames may arrive split or pipelined. */
   private handleTcpConnection(conn: net.Socket): void {
     let pending = Buffer.alloc(0);
+    this.tcpConns.add(conn);
+    conn.on('close', () => this.tcpConns.delete(conn));
     conn.on('data', (chunk) => {
-      pending = Buffer.concat([pending, chunk]);
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'latin1');
+      pending = Buffer.concat([pending, buf]);
       while (pending.length >= 2) {
         const len = pending.readUInt16BE(0);
         if (pending.length < 2 + len) break;
@@ -274,7 +278,8 @@ export class DnsServer {
   stop(): Promise<void> {
     return new Promise((resolve) => {
       this.tcpServer?.close();
-      this.tcpServer?.closeAllConnections?.();
+      for (const conn of this.tcpConns) conn.destroy();
+      this.tcpConns.clear();
       this.socket.close(() => resolve());
     });
   }
