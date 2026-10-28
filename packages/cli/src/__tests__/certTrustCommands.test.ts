@@ -36,6 +36,10 @@ jest.unstable_mockModule("@blockingmachine/core", async () => {
     trustStatus: (pem: string) => coreMock.trustStatus(pem),
     installCa: (pem: string) => coreMock.installCa(pem),
     removeCa: (pem: string) => coreMock.removeCa(pem),
+    // The real probe would read the TEST HOST's store (a RHEL CI runner
+    // would flip the printed line to update-ca-trust) — pin it so the
+    // linux needs-admin tests assert the Debian render deterministically.
+    linuxSystemStoreMechanism: () => Promise.resolve(null),
   };
 });
 

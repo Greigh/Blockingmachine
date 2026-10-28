@@ -39,6 +39,7 @@ const HELPER_SRC = join(HELPER_DIR, 'redirect-helper.c');
 const CORE_SRC = join(PKG_DIR, 'helper', 'common', 'splice.c');
 const BUILD_SH = join(HELPER_DIR, 'build.sh');
 const ANCHOR_SH = join(HELPER_DIR, 'bm-anchor.sh');
+const SUPERVISE_SH = join(HELPER_DIR, 'bm-supervise.sh');
 const GATE_MJS = join(PKG_DIR, 'helper', 'build-if-linux.mjs');
 const PKG = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8'));
 
@@ -181,6 +182,31 @@ describe('linux bm-anchor.sh — mechanism + state contract', () => {
     expect(sh).toContain('-p udp --dport 443 -j DROP');
   });
 
+  test('flag-122 quic exemptions render udp/443-scoped RETURNS between redirect and drop', () => {
+    // The per-user opt-out is scoped to udp/443 by construction — the
+    // exempt identity's tcp:{80,443} flows still ride the capture.
+    expect(sh).toContain('meta skuid %s udp dport 443 return');
+    expect(sh).toContain('-p udp --dport 443 -m owner --uid-owner %s -j RETURN');
+    // Config surface: env + flag, validated, recorded for re-arm/flush.
+    expect(sh).toContain('BM_QUIC_EXEMPT_UIDS');
+    expect(sh).toContain('--quic-exempt)');
+    expect(sh).toContain('QUIC_EXEMPT_UIDS=%s');
+    expect(sh).toMatch(/state_get QUIC_EXEMPT_UIDS/);
+    expect(sh).toMatch(/invalid --quic-exempt entry/);
+    // Exempt lines emit inside the render functions, between the
+    // self-return/redirect pair and the drop — assert the CALL-SITE
+    // ordering by source position (the function definition itself sits
+    // above the renderers).
+    const exemptAt = sh.indexOf('    quic_exempt_nft_lines\n');
+    const dropAt = sh.indexOf('    udp dport 443 drop');
+    expect(exemptAt).toBeGreaterThan(-1);
+    expect(exemptAt).toBeLessThan(dropAt);
+    const xtExempt = sh.indexOf('quic_exempt_xt_lines "$action"');
+    const xtDrop = sh.indexOf('-t filter ${action} OUTPUT -p udp --dport 443 -j DROP');
+    expect(xtExempt).toBeGreaterThan(-1);
+    expect(xtExempt).toBeLessThan(xtDrop);
+  });
+
   test('state file records mechanism + uid + ports; flush replays the recorded mechanism', () => {
     expect(sh).toContain('/etc/blockingmachine-capture-linux.state');
     for (const key of ['MECHANISM=', 'UID=', 'PORTS=', 'HELPER_PORT=', 'V6_ARMED=']) {
@@ -200,6 +226,30 @@ describe('linux bm-anchor.sh — mechanism + state contract', () => {
     expect(sh).toMatch(/flock -x -w 5 9/);
     expect(sh).not.toMatch(/flock -x "-w 5" 9|flock -x '-w 5' 9/);
     expect(sh).toContain('blockingmachine-capture.lock');
+  });
+});
+
+describe('linux bm-supervise.sh — the sysvinit respawn wrapper (flag 118)', () => {
+  const sh = readFileSync(SUPERVISE_SH, 'utf8');
+
+  test('respawns the child forever on exit — the Restart=always shape sysvinit lacks', () => {
+    expect(sh).toMatch(/while :; do/);
+    expect(sh).toContain('"$@" &');
+    expect(sh).toContain('wait "$CHILD"');
+    expect(sh).toMatch(/respawning in %ss/);
+    // Default delay matches the units' RestartSec=2.
+    expect(sh).toContain('BM_RESPAWN_DELAY:-2');
+  });
+
+  test('TERM forwards to the child — the init.d stop path must not orphan a live daemon', () => {
+    expect(sh).toMatch(/trap on_term TERM INT/);
+    expect(sh).toMatch(/kill "\$CHILD"/);
+    expect(sh).toContain('exit 0');
+  });
+
+  test('argv contract: <name> -- <command>, dies on a missing command', () => {
+    expect(sh).toContain('bm-supervise.sh <name> -- <command>');
+    expect(sh).toMatch(/\$# -gt 0/);
   });
 });
 

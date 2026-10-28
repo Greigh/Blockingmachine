@@ -132,24 +132,6 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **Fix shape:** if the window ever bites in practice, the helper could arm a dedicated pf token/anchor-pair that a crash takes down with it (fork-and-hold a sentinel fd), or the anchor could be made conditional on a live-socket probe — both are anchor-design work, not config.
 - **Verify:** `kill -9` the helper under live traffic — connections RST until KeepAlive relaunches it; the rehearsal script's kickstart leg exercises the adjacent path.
 
-### 117. Linux with no NSS certutil and no distro CA-store paths answers 'unsupported' (`linux-no-ca-store`)
-
-- **Where:** `linuxTrustStatus`/`linuxInstallCa`/`linuxRemoveCa` in `packages/core/src/caTrustStore.ts` — the branch where `linuxProbeNssDb` returns `no-certutil` and `linuxProbeSystemStore` finds no source dir or bundle file.
-- **What:** linux CA trust is driven through two mechanisms — the user-scope NSS db (`certutil` on `~/.pki/nssdb`, what Chrome/Chromium read) and the Debian-style system store (`/usr/local/share/ca-certificates` + `update-ca-certificates`, probed live at `/etc/ssl/certs/ca-certificates.crt`; the RHEL-family `/etc/pki/tls/certs/ca-bundle.crt` is presence-probed only — its `update-ca-trust` write path is not implemented). A minimal box with neither mechanism gets an honest `'unsupported'`, not a fabricated install.
-- **Why left:** the third mechanism — `update-ca-trust`/`trust anchor` on RHEL/Fedora-likes and anything further afield — is a second system-store write path that needs its own verification pass; probing the RHEL bundle for *presence* is free, but writing it honestly is not the same op as the Debian flow.
-- **Decision (2026-10-27):** do it — add the `update-ca-trust` anchors write path as a third needs-admin escalation.
-- **Fix shape:** add the `update-ca-trust` anchors path (`/etc/pki/ca-trust/source/anchors/` + `update-ca-trust extract`) as a third needs-admin escalation with its own rendered command line.
-- **Verify:** `caTrustStore.test.ts` forces `linuxSystemStore` probe paths to empty + a rejecting runner to hit the 'unsupported' leg today; closing this means a RHEL-family box (or a mocked probe) where install returns `needs-admin` with an `update-ca-trust` line instead.
-
-### 118. The linux capture installer is systemd-only — sysvinit/openrc/alpine die honestly (`sysvinit-openrc-capture`)
-
-- **Where:** `scripts/install-linux-capture.sh` (the `systemctl` gate that dies naming the unsupported inits), the linux branch of `isCaptureServiceInstalled` in `packages/electron-app/src/filterProxyManager.ts` (probes `/etc/systemd/system/blockingmachine-proxy.service` only).
-- **What:** the linux capture install is a systemd unit + an iptables `REDIRECT` anchor supervised by `Restart=always`; on a sysvinit/openrc/alpine host the installer refuses with a named-unsupported error rather than half-installing, and the manager's installed-probe cannot see a non-systemd service anyway.
-- **Why left:** the supervision contract is the load-bearing piece — capture owns the redirect anchor, so helper death must be fail-closed-until-restarted (systemd gives that); openrc/sysvinit restart semantics differ and writing them blind would claim a posture the code cannot prove.
-- **Decision (2026-10-27):** do it — openrc + sysvinit supervisor wrappers around the same `bm-anchor.sh` core, with the matching installed-probe branches.
-- **Fix shape:** an openrc service file + a sysvinit init script that replicate the redirect anchor and restart-on-death semantics, plus the matching probe branches — same `bm-anchor.sh` core, new supervisor wrappers.
-- **Verify:** an openrc or sysvinit box where the install script completes, `isCaptureServiceInstalled` reports true through the new probe, and killing the helper shows the supervisor restart keeping the anchor fail-closed.
-
 ### 120. WinDivert stays the documented Windows fallback — named, never silently substituted (`windivert-fallback`)
 
 - **Where:** `docs/https-filtering-p3-plan.md` (the fallback note), the `BM_WFP_PATH_STATUS` banner in `helper/windows/redirect-helper.c`.
@@ -165,15 +147,6 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 - **Why left:** recorded decision, not a gap — the nft/iptables REDIRECT path was live-rehearsed in a NET_ADMIN container (`scripts/linux-capture-rehearse.sh`) and the structural suite pins the absence of the TPROXY sockopts.
 - **Fix shape:** none planned; revisit only if semantics beyond origdst are ever required (e.g. preserving the client source on the upstream side — out of scope for a loopback capture).
 - **Verify:** `helper-linux.test.ts` asserts no `IP_TRANSPARENT`/`IP_RECVORIGDSTADDR`/`SOL_TRANSPARENT` in the helper; the docker rehearsal is the standing proof.
-
-### 122. QUIC suppression drops ALL of UDP/443 — the per-user scoping question stays open (`quic-udp443-granularity`)
-
-- **Where:** `helper/linux/bm-anchor.sh` renders (`udp dport 443 drop` / `-t filter … -j DROP` after the skuid RETURN), the macOS pf anchor's `block drop … user != _blockingmachine` line.
-- **What:** UDP/443 is invisible to a TCP capture, so it is dropped to force the HTTP/3→TCP fallback the redirect can see. The drop is scoped like the capture itself — OUTPUT-hook only (locally-originated flows; forwarded traffic never traverses it) and behind the service-user exemption so the engine's own QUIC dials survive — but every other local process loses QUIC too, not just browsers under capture.
-- **Why left:** accepted granularity — no netfilter primitive scopes a drop finer than skuid, and the HTTP/3 fallback is the designed behavior (clients retry TCP/443). The trade is recorded: a non-browser UDP/443 application on the same host is collateral.
-- **Decision (2026-10-27):** make it configurable — a per-user QUIC opt-out (extra exempted uids/users rendered as additional RETURN rules ahead of the drop) so a host running a real QUIC workload can spare it without giving up suppression for everything else.
-- **Fix shape:** if a real workload surfaces, scope finer — e.g. exempt additional named uids via a second RETURN, or drop only for dports that would otherwise be captured; nothing narrower exists today.
-- **Verify:** the rendered rules carry the exemption-first ordering; the docker rehearsal's allow leg proves the fallback works end-to-end.
 
 ### 125. Android HTTPS capture depends on a LAN hub — an on-device engine (nodejs-mobile) is the full-MITM-without-hub track (`android-no-ondevice-engine`)
 

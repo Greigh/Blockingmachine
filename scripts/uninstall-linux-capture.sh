@@ -11,17 +11,20 @@
 #   2. flushes the capture rules via the installed bm-anchor.sh —
 #      FIRST, so netfilter stops delivering new flows before the
 #      listeners die (in-flight splices finish naturally)
-#   3. stops + disables all three units (proxy, helper, capture-rules —
-#      stopping capture-rules fires its ExecStop=flush-only, a second
-#      flush for free)
+#   3. stops + disables the service trio under whichever supervisor
+#      installed it (systemd units, openrc-run services, or sysvinit
+#      init.d scripts — flag 118; stopping the capture-rules leg fires
+#      its flush-only, a second flush for free)
 #   4. flushes AGAIN — the helper's startup re-arm can fire between the
 #      first flush and its own stop (a Restart=always'd helper that saw
 #      rules absent with a live engine reloads them, and loaded rules
 #      outlive the process that loaded them — the P1 race lesson,
 #      identical mechanism to the macOS second pfctl flush)
-#   5. removes the unit files, the state file, and the installed
-#      helper + bm-anchor.sh from /usr/local/libexec/blockingmachine
-#   6. daemon-reload
+#   5. removes the unit/init.d files, the state file, and the installed
+#      helper + bm-anchor.sh + bm-supervise.sh from
+#      /usr/local/libexec/blockingmachine
+#   6. daemon-reload (systemd only — nothing to reload under openrc/
+#      sysvinit; rc-update/update-rc.d removals happened in step 3)
 #
 # Deliberately KEPT on the machine (reinstall must find state intact):
 #   - the `blockingmachine` service account
@@ -36,9 +39,12 @@ set -euo pipefail
 LIBEXEC_DIR="/usr/local/libexec/blockingmachine"
 ANCHOR_DST="$LIBEXEC_DIR/bm-anchor.sh"
 HELPER_DST="$LIBEXEC_DIR/redirect-helper"
+SUPERVISE_DST="$LIBEXEC_DIR/bm-supervise.sh"
 STATE_FILE="/etc/blockingmachine-capture-linux.state"
 UNIT_DIR="/etc/systemd/system"
 UNITS=(blockingmachine-proxy.service blockingmachine-helper.service blockingmachine-capture-rules.service)
+INITD_DIR="/etc/init.d"
+SERVICES=(blockingmachine-proxy blockingmachine-helper blockingmachine-capture-rules)
 
 log() { printf '[uninstall] %s\n' "$*"; }
 die() { printf '[uninstall] error: %s\n' "$*" >&2; exit 1; }
@@ -67,14 +73,39 @@ else
   log "bm-anchor.sh absent — best-effort direct flush done"
 fi
 
-# --- 2. stop + disable the units (tolerant: absent units return nonzero) ---
+# --- 2. stop + disable the service trio under whatever installed it ---
+# (tolerant: absent units/services return nonzero). systemd first, then
+# the flag-118 openrc/sysvinit artifacts — probed by file presence, so a
+# partial or cross-supervisor install still unwinds fully.
 if command -v systemctl >/dev/null 2>&1; then
   systemctl stop "${UNITS[@]}" >/dev/null 2>&1 || true
   # stopping capture-rules fires ExecStop=flush-only — a second flush
   systemctl disable "${UNITS[@]}" >/dev/null 2>&1 || true
   log "stopped + disabled ${UNITS[*]}"
 else
-  log "systemctl absent — units already can't run; continuing"
+  log "systemctl absent — systemd units already can't run; checking openrc/sysvinit artifacts"
+fi
+if command -v rc-service >/dev/null 2>&1; then
+  for svc in "${SERVICES[@]}"; do
+    if [[ -f "$INITD_DIR/$svc" ]]; then
+      rc-service "$svc" stop >/dev/null 2>&1 || true
+      rc-update del "$svc" default >/dev/null 2>&1 || true
+      log "stopped + del'ed openrc service $svc"
+    fi
+  done
+elif [[ -d "$INITD_DIR" ]]; then
+  # sysvinit: stop through the script, then unwire the runlevels via
+  # update-rc.d when that was the enabler (absent → the installer's
+  # warning said boot-enable was never wired; nothing to unwire).
+  for svc in "${SERVICES[@]}"; do
+    if [[ -f "$INITD_DIR/$svc" ]]; then
+      "$INITD_DIR/$svc" stop >/dev/null 2>&1 || true
+      if command -v update-rc.d >/dev/null 2>&1; then
+        update-rc.d -f "$svc" remove >/dev/null 2>&1 || true
+      fi
+      log "stopped + removed sysvinit service $svc"
+    fi
+  done
 fi
 
 # --- 3. flush the rules a second time ---
@@ -91,7 +122,10 @@ fi
 for f in "$UNIT_DIR/blockingmachine-proxy.service" \
          "$UNIT_DIR/blockingmachine-helper.service" \
          "$UNIT_DIR/blockingmachine-capture-rules.service" \
-         "$HELPER_DST" "$ANCHOR_DST" "$STATE_FILE"; do
+         "$INITD_DIR/blockingmachine-proxy" \
+         "$INITD_DIR/blockingmachine-helper" \
+         "$INITD_DIR/blockingmachine-capture-rules" \
+         "$HELPER_DST" "$ANCHOR_DST" "$SUPERVISE_DST" "$STATE_FILE"; do
   if [[ -e "$f" ]]; then
     rm -f "$f"
     log "removed $f"

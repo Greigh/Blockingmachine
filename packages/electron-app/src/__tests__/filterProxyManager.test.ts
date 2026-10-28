@@ -476,6 +476,28 @@ describe('FilterProxyManager — one-engine lifecycle gates', () => {
     );
     expect((await linuxInstalled.getStatus()).captureServiceInstalled).toBe(true);
 
+    // flag 118: the openrc/sysvinit legs land the proxy service under
+    // /etc/init.d — same file-presence idiom, different supervisor.
+    const linuxInitd = tracked(
+      new FilterProxyManager({
+        controlPort: 65431,
+        platform: 'linux',
+        fileExists: (p) => p === '/etc/init.d/blockingmachine-proxy',
+      }),
+    );
+    expect((await linuxInitd.getStatus()).captureServiceInstalled).toBe(true);
+
+    // A half-enabled openrc install (script written, rc-update failed)
+    // still reports via the runlevel symlink probe.
+    const linuxRunlevel = tracked(
+      new FilterProxyManager({
+        controlPort: 65431,
+        platform: 'linux',
+        fileExists: (p) => p === '/etc/runlevels/default/blockingmachine-proxy',
+      }),
+    );
+    expect((await linuxRunlevel.getStatus()).captureServiceInstalled).toBe(true);
+
     const linuxAbsent = tracked(
       new FilterProxyManager({ controlPort: 65431, platform: 'linux', fileExists: () => false }),
     );

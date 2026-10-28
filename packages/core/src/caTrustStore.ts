@@ -62,15 +62,18 @@
  *   carries `T` (e.g. `CT,,`) is a trust root. `-A -t "CT,C,C"` installs,
  *   `-D -n <nick>` removes, `-N --empty-password` creates the db. No admin
  *   needed — the db is the user's own.
- * - The distro system store (`/usr/local/share/ca-certificates/*.crt` +
- *   `update-ca-certificates` on Debian-likes; the live bundle is checked at
- *   `/etc/ssl/certs/ca-certificates.crt`, and the RHEL-family
- *   `/etc/pki/tls/certs/ca-bundle.crt` is probed for presence only — its
- *   `update-ca-trust` write path is flagged, not implemented). Writes need
- *   root, so a missing certutil + present system store answers
- *   `needs-admin` and the caller prints the sudo line
- *   (`linuxSystemStoreCommands`). certutil missing AND no system paths at
- *   all → `unsupported` (known-issues 117, linux-no-ca-store).
+ * - The distro system stores — two write paths, each needs-admin:
+ *   Debian-style `/usr/local/share/ca-certificates/*.crt` +
+ *   `update-ca-certificates` (live bundle checked at
+ *   `/etc/ssl/certs/ca-certificates.crt`), and the RHEL-family
+ *   `update-ca-trust` anchors path `/etc/pki/ca-trust/source/anchors/` +
+ *   `update-ca-trust extract` (live bundle at
+ *   `/etc/pki/tls/certs/ca-bundle.crt`; RHEL is detected by that bundle's
+ *   presence, an anchors dir, or `update-ca-trust` on PATH — flag 117).
+ *   Writes need root, so a missing certutil + a present system store
+ *   answers `needs-admin` and the caller prints the sudo line
+ *   (`linuxSystemStoreCommands`, mechanism-aware). certutil missing AND no
+ *   system paths at all → `unsupported`.
  * - Fingerprint matching against the system store is done in-process with
  *   `X509Certificate` rather than by shelling `openssl` — the fallback path
  *   exists precisely for minimal systems where helper tools may be absent,
@@ -138,10 +141,18 @@ export interface CaTrustStoreOptions {
   tmpDir?: string;
   /**
    * Test seam — the linux system-store probe paths. `sourceDirs` holds the
-   * drop-in CA dirs (`/usr/local/share/ca-certificates`), `bundleFiles` the
-   * live aggregated bundles `update-ca-certificates` produces.
+   * Debian-style drop-in CA dirs (`/usr/local/share/ca-certificates`),
+   * `bundleFiles` the live aggregated bundles `update-ca-certificates`
+   * produces; `rhelAnchorDirs`/`rhelBundleFiles` are the RHEL-family
+   * `update-ca-trust` twins (`/etc/pki/ca-trust/source/anchors`,
+   * `/etc/pki/tls/certs/ca-bundle.crt`).
    */
-  linuxSystemStore?: { sourceDirs?: string[]; bundleFiles?: string[] };
+  linuxSystemStore?: {
+    sourceDirs?: string[];
+    bundleFiles?: string[];
+    rhelAnchorDirs?: string[];
+    rhelBundleFiles?: string[];
+  };
 }
 
 const TOOL_TIMEOUT_MS = 10_000;
@@ -612,98 +623,184 @@ async function linuxNssState(
   return null;
 }
 
+/** The Debian-style write path — `update-ca-certificates` source + live bundle. */
 const LINUX_CA_SOURCE_DIRS = ["/usr/local/share/ca-certificates"];
-const LINUX_CA_BUNDLE_FILES = [
-  "/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu (update-ca-certificates)
-  "/etc/pki/tls/certs/ca-bundle.crt", // RHEL/Fedora (update-ca-trust output — read-only probe)
-];
+const LINUX_CA_BUNDLE_FILES = ["/etc/ssl/certs/ca-certificates.crt"];
+/**
+ * The RHEL-family write path (flag 117) — `update-ca-trust` drops anchors
+ * into the source dir and `extract` rebuilds the live bundle. The bundle is
+ * also the RHEL detection signal the flag names, alongside the tool on PATH.
+ */
+const LINUX_RHEL_ANCHOR_DIRS = ["/etc/pki/ca-trust/source/anchors"];
+const LINUX_RHEL_BUNDLE_FILES = ["/etc/pki/tls/certs/ca-bundle.crt"];
+
+/**
+ * Which distro system-store family the box carries — which write path the
+ * `needs-admin` escalation should name. `"rhel"` wins on any `/etc/pki`
+ * marker (anchors dir or the pki bundle — RHEL-family identity), `"debian"`
+ * on the Debian source/bundle paths, and a bare `update-ca-trust` on PATH
+ * with no store paths at all still lands `"rhel"` — its write path exists
+ * even though the fs evidence is empty.
+ */
+export type LinuxCaStoreMechanism = "debian" | "rhel";
 
 interface LinuxSystemStoreProbe {
   state: "trusted" | "installed-untrusted" | "absent";
-  /** Any source dir or bundle file exists at all — the mechanism exists. */
+  /** Any source dir, anchors dir, bundle file, or the update-ca-trust tool — a mechanism exists. */
   storePresent: boolean;
   /** The cert's fingerprint is in a live bundle — trusted by openssl/gnutls clients. */
   inBundle: boolean;
-  /** The cert sits in a source dir but no bundle — staged, update-ca-certificates pending. */
+  /** The cert sits in a source dir but no bundle — staged, the store's update pass pending. */
   inSource: boolean;
+  /** Which family's rendered command a `needs-admin` reply should carry; null when no store exists. */
+  mechanism: LinuxCaStoreMechanism | null;
+}
+
+/**
+ * Scan one CA drop-in dir: existence counts toward the family present-flag;
+ * each `.crt` inside is fingerprint-matched for the staged-install state.
+ */
+async function linuxScanSourceDir(
+  dir: string,
+  fingerprint256: string,
+): Promise<{ present: boolean; inSource: boolean }> {
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return { present: false, inSource: false }; // absent dir — other candidates still count
+  }
+  let inSource = false;
+  for (const name of names) {
+    if (!name.endsWith(".crt")) continue;
+    let data: Buffer;
+    try {
+      data = await fs.readFile(path.join(dir, name));
+    } catch {
+      continue;
+    }
+    try {
+      if (
+        new X509Certificate(data).fingerprint256
+          .replace(/:/g, "")
+          .toUpperCase() === fingerprint256
+      ) {
+        inSource = true;
+      }
+    } catch {
+      // Not a parseable cert — foreign content in the dir is not our problem.
+    }
+  }
+  return { present: true, inSource };
+}
+
+/** Scan one live bundle file: existence counts toward present; PEM blocks fingerprinted in-process. */
+async function linuxScanBundleFile(
+  file: string,
+  fingerprint256: string,
+): Promise<{ present: boolean; inBundle: boolean }> {
+  let text: string;
+  try {
+    text = await fs.readFile(file, "utf8");
+  } catch {
+    return { present: false, inBundle: false };
+  }
+  // The bundle is PEM blocks concatenated — fingerprint each in-process
+  // (no openssl dependency; this fallback path exists for minimal systems).
+  for (const m of text.matchAll(
+    /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g,
+  )) {
+    try {
+      if (
+        new X509Certificate(m[0]).fingerprint256
+          .replace(/:/g, "")
+          .toUpperCase() === fingerprint256
+      ) {
+        return { present: true, inBundle: true };
+      }
+    } catch {
+      continue;
+    }
+  }
+  return { present: true, inBundle: false };
 }
 
 async function linuxProbeSystemStore(
   fingerprint256: string,
+  run: PlatformRunner,
   options?: CaTrustStoreOptions,
 ): Promise<LinuxSystemStoreProbe> {
   const sourceDirs = options?.linuxSystemStore?.sourceDirs ?? LINUX_CA_SOURCE_DIRS;
   const bundleFiles = options?.linuxSystemStore?.bundleFiles ?? LINUX_CA_BUNDLE_FILES;
+  const anchorDirs = options?.linuxSystemStore?.rhelAnchorDirs ?? LINUX_RHEL_ANCHOR_DIRS;
+  const rhelBundleFiles = options?.linuxSystemStore?.rhelBundleFiles ?? LINUX_RHEL_BUNDLE_FILES;
 
-  let storePresent = false;
+  let debianStore = false;
+  let rhelStore = false;
   let inSource = false;
   let inBundle = false;
 
   for (const dir of sourceDirs) {
-    let names: string[];
-    try {
-      names = await fs.readdir(dir);
-    } catch {
-      continue; // absent dir — other candidates still count
-    }
-    storePresent = true;
-    for (const name of names) {
-      if (!name.endsWith(".crt")) continue;
-      let data: Buffer;
-      try {
-        data = await fs.readFile(path.join(dir, name));
-      } catch {
-        continue;
-      }
-      try {
-        if (
-          new X509Certificate(data).fingerprint256
-            .replace(/:/g, "")
-            .toUpperCase() === fingerprint256
-        ) {
-          inSource = true;
-        }
-      } catch {
-        // Not a parseable cert — foreign content in the dir is not our problem.
-      }
-    }
+    const scan = await linuxScanSourceDir(dir, fingerprint256);
+    debianStore ||= scan.present;
+    inSource ||= scan.inSource;
+  }
+  for (const dir of anchorDirs) {
+    const scan = await linuxScanSourceDir(dir, fingerprint256);
+    rhelStore ||= scan.present;
+    inSource ||= scan.inSource;
+  }
+  for (const file of bundleFiles) {
+    const scan = await linuxScanBundleFile(file, fingerprint256);
+    debianStore ||= scan.present;
+    inBundle ||= scan.inBundle;
+  }
+  for (const file of rhelBundleFiles) {
+    const scan = await linuxScanBundleFile(file, fingerprint256);
+    rhelStore ||= scan.present;
+    inBundle ||= scan.inBundle;
   }
 
-  for (const file of bundleFiles) {
-    let text: string;
+  // `update-ca-trust` on PATH is the second RHEL detection signal the flag
+  // names — a spawn-level rejection means the tool is absent; ANY result
+  // (even a nonzero exit) means it exists. The spawn only runs when no
+  // filesystem store was found at all: on a box whose fs already names a
+  // family the PATH signal could only misfire (a foreign `update-ca-trust`
+  // sitting beside a real Debian store), and probing a tool on every call
+  // costs a spawn the common path never needed.
+  let rhelTool = false;
+  if (!debianStore && !rhelStore) {
     try {
-      text = await fs.readFile(file, "utf8");
+      await run("update-ca-trust", ["--help"]);
+      rhelTool = true;
     } catch {
-      continue;
+      rhelTool = false;
     }
-    storePresent = true;
-    // The bundle is PEM blocks concatenated — fingerprint each in-process
-    // (no openssl dependency; this fallback path exists for minimal systems).
-    for (const m of text.matchAll(
-      /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g,
-    )) {
-      try {
-        if (
-          new X509Certificate(m[0]).fingerprint256
-            .replace(/:/g, "")
-            .toUpperCase() === fingerprint256
-        ) {
-          inBundle = true;
-          break;
-        }
-      } catch {
-        continue;
-      }
-    }
-    if (inBundle) break;
   }
 
   return {
     state: inBundle ? "trusted" : inSource ? "installed-untrusted" : "absent",
-    storePresent,
+    storePresent: debianStore || rhelStore || rhelTool,
     inBundle,
     inSource,
+    mechanism: rhelStore ? "rhel" : debianStore ? "debian" : rhelTool ? "rhel" : null,
   };
+}
+
+/**
+ * Which system-store write path a linux `needs-admin` should name — the
+ * companion to the `needs-admin` outcome: install/remove answer the bare
+ * string, the caller asks this which rendered command line to print
+ * (`linuxSystemStoreCommands(pem, mechanism)`). `null` means no store exists
+ * at all (the `unsupported` posture); `"rhel"` is any RHEL marker — the
+ * pki anchors dir, the pki bundle, or `update-ca-trust` on PATH.
+ */
+export async function linuxSystemStoreMechanism(
+  options?: CaTrustStoreOptions,
+): Promise<LinuxCaStoreMechanism | null> {
+  const run = resolveRunner(options);
+  const probe = await linuxProbeSystemStore("", run, options);
+  return probe.mechanism;
 }
 
 async function linuxTrustStatus(
@@ -720,10 +817,10 @@ async function linuxTrustStatus(
     if (state) return state;
   }
 
-  const sys = await linuxProbeSystemStore(fingerprint256, options);
-  // Neither mechanism exists at all → the platform genuinely cannot be
-  // driven (known-issues 117, linux-no-ca-store). A working certutil alone still
-  // means 'absent' is honest — the db is creatable on install.
+  const sys = await linuxProbeSystemStore(fingerprint256, run, options);
+  // No store mechanism exists at all → the platform genuinely cannot be
+  // driven. A working certutil alone still means 'absent' is honest — the
+  // db is creatable on install.
   if (!sys.storePresent && probe.kind === "no-certutil") return "unsupported";
   return sys.state;
 }
@@ -741,9 +838,12 @@ async function linuxInstallCa(
     // No NSS tooling → the only store left is the distro one, and its write
     // (`cp` + `update-ca-certificates`) needs root. When no system paths
     // exist either, there is no mechanism at all → honest 'unsupported'.
-    const sys = await linuxProbeSystemStore(fingerprint256, options);
+    const sys = await linuxProbeSystemStore(fingerprint256, run, options);
     if (!sys.storePresent) return "unsupported";
-    return "needs-admin"; // the caller prints linuxSystemStoreCommands()
+    // The caller prints linuxSystemStoreCommands(pem, mechanism) — the
+    // probe's `mechanism` picks the Debian update-ca-certificates line or
+    // the RHEL update-ca-trust anchors line (flag 117).
+    return "needs-admin";
   }
 
   if (probe.kind === "no-db") {
@@ -824,11 +924,11 @@ async function linuxRemoveCa(
     }
   }
 
-  const sys = await linuxProbeSystemStore(fingerprint256, options);
+  const sys = await linuxProbeSystemStore(fingerprint256, run, options);
   if (sys.inBundle || sys.inSource) {
-    // The cert lives in the distro store — removal is `sudo rm` +
-    // `update-ca-certificates`, which this process cannot run. Any nssdb
-    // copy above was still cleaned honestly first.
+    // The cert lives in a distro store — removal is `sudo rm` +
+    // `update-ca-certificates`/`update-ca-trust extract`, which this process
+    // cannot run. Any nssdb copy above was still cleaned honestly first.
     return "needs-admin";
   }
   if (!sys.storePresent && probe.kind === "no-certutil") return "unsupported";
@@ -1230,16 +1330,33 @@ export async function firefoxRemoveCa(
 export const LINUX_SYSTEM_CA_TARGET =
   "/usr/local/share/ca-certificates/blockingmachine-ca.crt";
 
+/** Canonical install target inside the RHEL-style `update-ca-trust` anchors dir. */
+export const LINUX_RHEL_CA_TARGET =
+  "/etc/pki/ca-trust/source/anchors/blockingmachine-ca.crt";
+
 /**
  * The manual write paths for the distro system store — `pemPath` is the
  * exported CA file the user produced (`blockingmachine cert export ca.pem`).
  * Rendered for the CLI's needs-admin print and the app's needsAdmin message.
+ * `mechanism` (from `linuxSystemStoreMechanism`, or the probe inside the op
+ * that answered `needs-admin`) picks which store the line drives: the
+ * Debian `update-ca-certificates` pair or the RHEL-family
+ * `update-ca-trust` anchors write + extract (flag 117).
  */
-export function linuxSystemStoreCommands(pemPath = "ca.pem"): {
+export function linuxSystemStoreCommands(
+  pemPath = "ca.pem",
+  mechanism: LinuxCaStoreMechanism = "debian",
+): {
   install: string;
   remove: string;
 } {
   const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+  if (mechanism === "rhel") {
+    return {
+      install: `sudo cp ${q(pemPath)} ${LINUX_RHEL_CA_TARGET} && sudo update-ca-trust extract`,
+      remove: `sudo rm ${LINUX_RHEL_CA_TARGET} && sudo update-ca-trust extract`,
+    };
+  }
   return {
     install: `sudo cp ${q(pemPath)} ${LINUX_SYSTEM_CA_TARGET} && sudo update-ca-certificates`,
     remove: `sudo rm ${LINUX_SYSTEM_CA_TARGET} && sudo update-ca-certificates`,
@@ -1276,7 +1393,9 @@ export async function trustStatus(
  * `certutil -user -addstore Root` (no admin; the escalation is the machine
  * store). linux: `certutil -A -t "CT,C,C"` on `~/.pki/nssdb` (db created via
  * `-N` when absent); no certutil → the system store needs root →
- * `needs-admin` and the caller prints `linuxSystemStoreCommands().install`.
+ * `needs-admin` and the caller prints `linuxSystemStoreCommands(pem,
+ * mechanism).install` — `mechanism` from `linuxSystemStoreMechanism` picks
+ * the Debian or RHEL (`update-ca-trust`) line.
  */
 export async function installCa(
   caPem: string,
@@ -1295,7 +1414,8 @@ export async function installCa(
  * drops cert + user-domain settings, `remove-trusted-cert -d` clears the
  * admin-domain ones (best-effort). win32: `certutil -user -delstore Root`.
  * linux: `certutil -D` on the nssdb row; a system-store copy needs root →
- * `needs-admin` (`linuxSystemStoreCommands().remove`). Every path re-probes
+ * `needs-admin` (`linuxSystemStoreCommands(pem, mechanism).remove` — the
+ * same mechanism-aware pair). Every path re-probes
  * by fingerprint — a surviving copy throws rather than reporting 'removed'.
  */
 export async function removeCa(

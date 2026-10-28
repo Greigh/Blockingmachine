@@ -139,6 +139,12 @@ const LAUNCHD_PLIST = '/Library/LaunchDaemons/com.blockingmachine.proxy.plist';
 // reliably either), and the Windows installer registers the SCM service
 // `BlockingmachineProxy` (`sc.exe query` is the service idiom there).
 const SYSTEMD_PROXY_UNIT = '/etc/systemd/system/blockingmachine-proxy.service';
+// Flag 118: openrc + sysvinit installs land their proxy service under
+// /etc/init.d instead of /etc/systemd/system — same filename either way.
+// The openrc enable step symlinks the script into the runlevel dir, so a
+// partial install (script written, rc-update failed) still reads present.
+const INITD_PROXY_SERVICE = '/etc/init.d/blockingmachine-proxy';
+const OPENRC_RUNLEVEL_PROXY = '/etc/runlevels/default/blockingmachine-proxy';
 const WINDOWS_PROXY_SERVICE = 'BlockingmachineProxy';
 
 /** The capture installer script per platform — P1 shipped macos, P3 adds linux/windows. */
@@ -340,8 +346,12 @@ export class FilterProxyManager {
    * True when the platform's capture install owns the engine. Per platform:
    * darwin keys on the launchd plist (`/Library/LaunchDaemons` services live
    * in the SYSTEM domain a user-context `launchctl list` cannot see — the
-   * file IS the whole signal); linux keys on the rendered systemd unit file
-   * the installer writes (same file-presence idiom); win32 asks the SCM via
+   * file IS the whole signal); linux keys on the rendered unit file the
+   * installer writes — the systemd unit, or the openrc/sysvinit init.d
+   * script (flag 118; both non-systemd supervisors land the same
+   * /etc/init.d path, and the openrc runlevel symlink is checked too so a
+   * half-enabled openrc install still reports honestly) — same
+   * file-presence idiom; win32 asks the SCM via
    * `sc.exe query` (a `STATE:` line means the service object exists in any
    * run state; error 1060 / "does not exist" is the absent case; a failed
    * spawn reads false rather than claiming capture). Checked per call so
@@ -355,7 +365,13 @@ export class FilterProxyManager {
     const platform = this.platformOverride ?? process.platform;
     const exists = this.fileExistsProbe ?? existsSync;
     if (platform === 'darwin') return exists(LAUNCHD_PLIST);
-    if (platform === 'linux') return exists(SYSTEMD_PROXY_UNIT);
+    if (platform === 'linux') {
+      return (
+        exists(SYSTEMD_PROXY_UNIT) ||
+        exists(INITD_PROXY_SERVICE) ||
+        exists(OPENRC_RUNLEVEL_PROXY)
+      );
+    }
     if (platform === 'win32') return this.windowsServiceInstalled(WINDOWS_PROXY_SERVICE);
     return false;
   }
@@ -370,14 +386,24 @@ export class FilterProxyManager {
         : 'macOS capture service';
   }
 
-  /** The supervisor that restarts the capture engine — launchd/systemd/SCM. */
+  /** The supervisor that restarts the capture engine — launchd/systemd/openrc/sysvinit/SCM. */
   private captureSupervisorLabel(): string {
     const platform = this.platformOverride ?? process.platform;
-    return platform === 'linux'
-      ? 'systemd Restart=always'
-      : platform === 'win32'
-        ? 'the SCM failure actions'
-        : 'launchd KeepAlive';
+    if (platform === 'linux') {
+      // Flag 118: name the supervisor whose artifact is present. The
+      // openrc + sysvinit legs share the /etc/init.d path — both are
+      // respawn-supervised (supervise-daemon / the bm-supervise loop), so
+      // the label states the posture without claiming which init wrote it.
+      const exists = this.fileExistsProbe ?? existsSync;
+      if (exists(SYSTEMD_PROXY_UNIT)) return 'systemd Restart=always';
+      if (exists(INITD_PROXY_SERVICE) || exists(OPENRC_RUNLEVEL_PROXY)) {
+        return 'the init.d supervisor (supervise-daemon / bm-supervise respawn)';
+      }
+      return 'the installed service supervisor';
+    }
+    return platform === 'win32'
+      ? 'the SCM failure actions'
+      : 'launchd KeepAlive';
   }
 
   private windowsServiceInstalled(service: string): boolean {
@@ -756,7 +782,8 @@ export class FilterProxyManager {
       const platform = this.platformOverride ?? process.platform;
       const verb =
         platform === 'linux'
-          ? 'systemctl stop blockingmachine-proxy.service (or the uninstaller)'
+          ? // flag 118: the stop verb depends on which init wrote the service
+            'systemctl/rc-service/init.d stop blockingmachine-proxy (or the uninstaller)'
           : platform === 'win32'
             ? 'sc.exe stop BlockingmachineProxy (or the uninstaller)'
             : 'launchctl bootout system/com.blockingmachine.proxy (or the uninstaller)';

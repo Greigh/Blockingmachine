@@ -154,6 +154,7 @@ import {
   macOsLoginKeychainPath,
   firefoxNssProfileDbs,
   linuxSystemStoreCommands,
+  linuxSystemStoreMechanism,
   // P7 system-proxy layer (flag 123) — OS HTTP(S) proxy / PAC auto-config
   // writes behind consent + snapshot-first reversion.
   systemProxySupported,
@@ -5183,19 +5184,24 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
 
     // The needs-admin reply text per platform. darwin: the pane's second
     // click pops the auth sheet. linux: the system-store write is
-    // `sudo cp` + `update-ca-certificates` — print the literal line.
+    // `sudo cp` + `update-ca-certificates` — or the RHEL-family
+    // `update-ca-trust` anchors pair when the probe reads an /etc/pki
+    // store (flag 117; the mechanism call re-asks the same probe the op
+    // used, falling back to the Debian line when it cannot answer).
     // win32: the user-store write was denied, so the escalation is the
     // machine-scope Root store from an elevated prompt.
-    const needsAdminInstallMessage = () =>
+    const linuxMechanism = async () =>
+      (await linuxSystemStoreMechanism().catch(() => null)) ?? 'debian';
+    const needsAdminInstallMessage = async () =>
       process.platform === 'linux'
-        ? `Trust install needs root — run: ${linuxSystemStoreCommands('ca.pem').install} (export the CA first with 'blockingmachine cert export ca.pem').`
+        ? `Trust install needs root — run: ${linuxSystemStoreCommands('ca.pem', await linuxMechanism()).install} (export the CA first with 'blockingmachine cert export ca.pem').`
         : process.platform === 'win32'
           ? `The user-scope certutil install was denied — run 'certutil -addstore Root ca.pem' from an elevated prompt to trust the CA machine-wide.`
           : 'Administrator approval is required to trust the CA — confirm to show the macOS prompt.';
 
-    const needsAdminRemoveMessage = () =>
+    const needsAdminRemoveMessage = async () =>
       process.platform === 'linux'
-        ? `The CA lives in the system trust store — removal needs root: ${linuxSystemStoreCommands().remove}.`
+        ? `The CA lives in the system trust store — removal needs root: ${linuxSystemStoreCommands('ca.pem', await linuxMechanism()).remove}.`
         : process.platform === 'win32'
           ? `Removing the CA from the certificate store was denied — re-run removal from an elevated prompt.`
           : 'Administrator approval is required to remove the CA.';
@@ -5272,7 +5278,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
               success: false,
               state: 'needs-admin',
               needsAdmin: true,
-              message: needsAdminInstallMessage(),
+              message: await needsAdminInstallMessage(),
             };
           }
           const outcome = await caTrustInstall(certPem);
@@ -5296,7 +5302,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             success: false,
             state: 'needs-admin',
             needsAdmin: true,
-            message: needsAdminInstallMessage(),
+            message: await needsAdminInstallMessage(),
           };
         }),
     );
@@ -5312,13 +5318,14 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           };
         }
         if (outcome === 'needs-admin') {
-          // linux system-store copies need `sudo rm` + update-ca-certificates;
+          // linux system-store copies need `sudo rm` + the distro extract
+          // (update-ca-certificates or update-ca-trust per the probe);
           // a win32 removal the SCM denied likewise wants elevation.
           return {
             success: false,
             state: 'needs-admin',
             needsAdmin: true,
-            message: needsAdminRemoveMessage(),
+            message: await needsAdminRemoveMessage(),
           };
         }
         return {

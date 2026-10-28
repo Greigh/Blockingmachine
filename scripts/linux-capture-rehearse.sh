@@ -11,12 +11,13 @@
 # container's own netns: the repo is mounted read-only at /bm.
 #
 # Honest caveats (same posture as openwrt-live.sh):
-#   - No systemd in a plain container: PID 1 is sleep, so the units
-#     can't be exercised here. The rehearsal performs the installer's
-#     steps by hand (useradd, file layout, engine+helper under the real
+#   - No service supervisor in a plain container: PID 1 is sleep, so
+#     none of the systemd/openrc/sysvinit service legs (flag 118) can be
+#     exercised here. The rehearsal performs the installer's steps by
+#     hand (useradd, file layout, engine+helper under the real
 #     accounts, bm-anchor.sh load/flush) — the same binaries and the
-#     same rules, minus the unit supervisor. The units themselves are
-#     rendered+diff-asserted by the captureScripts suite.
+#     same rules, minus the supervisor. The rendered units/init.d
+#     scripts themselves are diff-asserted by the captureScripts suite.
 #   - The container netns is disposable: rules we add exist only inside
 #     it. The host is never touched.
 #   - debian bookworm's iptables is the nft-backend CLI — the iptables
@@ -43,7 +44,13 @@
 #
 # Env knobs: BM_LINUX_IMAGE (default node:20-bookworm — a LOCAL image),
 #            BM_LINUX_CONTAINER, BM_REHEARSE_MECHANISMS ("nft iptables"),
-#            BM_REHEARSE_KEEP=1 leaves the container for inspection.
+#            BM_REHEARSE_KEEP=1 leaves the container for inspection,
+#            BM_QUIC_EXEMPT_UIDS (flag 122) — comma-separated users/uids
+#            exempted from the UDP/443 drop; forwarded to the
+#            `bm-anchor.sh load --quic-exempt` arm exactly as the
+#            installer's --quic-exempt flag renders it, and asserted in
+#            the loaded ruleset each pass. Empty (default) = the
+#            byte-identical pre-flag-122 posture.
 # Exits 0 on PASS, 1 on the first failed assertion, 2 on gate failure.
 
 set -eu
@@ -100,7 +107,8 @@ docker run -d --name "$CONTAINER" --cap-add NET_ADMIN \
 INNER="$(mktemp "${TMPDIR:-/tmp}/bm-linux-inner.XXXXXX.sh")"
 cat > "$INNER" <<'INNER_EOF'
 #!/bin/sh
-# Runs INSIDE the NET_ADMIN'd container. argv: $1 = mechanism list.
+# Runs INSIDE the NET_ADMIN'd container. argv: $1 = mechanism list,
+# $2 = optional --quic-exempt list (flag 122).
 set -eu
 
 say()  { printf '\033[1m== %s\033[0m\n' "$*"; }
@@ -115,6 +123,11 @@ BLOCKED_HOST=rehearsal-block.example.com
 RULES=/tmp/bm-rules.txt
 ENGINE_PID=""
 HELPER_PID=""
+# Flag 122 — the rehearsal forwards the host's BM_QUIC_EXEMPT_UIDS into
+# the arm call exactly like installer's --quic-exempt renders it.
+QUIC_EXEMPT="${2:-}"
+QUIC_EXEMPT_ARG=""
+[ -n "$QUIC_EXEMPT" ] && QUIC_EXEMPT_ARG="--quic-exempt $QUIC_EXEMPT"
 
 json_field() { # stdin json → field value (node is guaranteed by the image)
   node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{process.stdout.write(String(JSON.parse(d)[process.argv[1]]??""))})' "$1"
@@ -177,12 +190,29 @@ rehearse() {
 
   # -- 2. helper, then the arm -----------------------------------------
   start_helper
-  "$LIBEXEC/bm-anchor.sh" load --uid blockingmachine --helper-port 9295 \
+  # shellcheck disable=SC2086 — QUIC_EXEMPT_ARG is one validated flag pair.
+  "$LIBEXEC/bm-anchor.sh" load --uid blockingmachine --helper-port 9295 $QUIC_EXEMPT_ARG \
     || { cat /tmp/helper.log; fail "bm-anchor.sh load"; }
   "$LIBEXEC/bm-anchor.sh" status >/dev/null 2>&1 || fail "status after load"
   grep -q "MECHANISM=$mech" /etc/blockingmachine-capture-linux.state \
     || fail "state file did not record MECHANISM=$mech: $(cat /etc/blockingmachine-capture-linux.state)"
-  ok "rules armed via $mech (state file recorded)"
+  # Flag 122: when the rehearsal arms exemptions, the loaded ruleset must
+  # carry each RETURN before the drop — and the state file records it so
+  # the helper's bare re-arm replays the same posture.
+  if [ -n "$QUIC_EXEMPT" ]; then
+    grep -q "QUIC_EXEMPT_UIDS=" /etc/blockingmachine-capture-linux.state \
+      || fail "state file did not record QUIC_EXEMPT_UIDS"
+    case "$mech" in
+      nft)      rules_text="$(nft list table ip blockingmachine_nat 2>/dev/null || true)" ;;
+      iptables) rules_text="$(iptables -t filter -S OUTPUT 2>/dev/null || true)" ;;
+    esac
+    exempt_re="$(printf '%s' "$QUIC_EXEMPT" | tr ',' '|')"
+    printf '%s' "$rules_text" | grep -qE "skuid ($exempt_re)|uid-owner ($exempt_re)" \
+      || fail "exempt identities absent from loaded $mech ruleset"
+    ok "rules armed via $mech (state file recorded; quic exemptions live)"
+  else
+    ok "rules armed via $mech (state file recorded)"
+  fi
 
   # -- 3. transparent allow ---------------------------------------------
   code="$(curl -s --cacert /tmp/ca.pem --max-time 15 -o /tmp/allowed.body -w '%{http_code}' https://example.com/ || true)"
@@ -256,6 +286,8 @@ chown -R blockingmachine:blockingmachine "$STORE" 2>/dev/null || chown -R blocki
 chmod 0700 "$STORE"
 install -m 0755 /tmp/redirect-helper "$LIBEXEC/redirect-helper"
 install -m 0755 "$REPO/packages/https-filter/helper/linux/bm-anchor.sh" "$LIBEXEC/bm-anchor.sh"
+# flag 118 — the sysvinit leg's respawn wrapper ships beside the anchor.
+install -m 0755 "$REPO/packages/https-filter/helper/linux/bm-supervise.sh" "$LIBEXEC/bm-supervise.sh"
 ok "user + store + libexec layout installed"
 
 for mech in $1; do
@@ -278,6 +310,6 @@ say "all Linux capture rehearsal assertions passed"
 INNER_EOF
 
 docker cp "$INNER" "$CONTAINER:/tmp/bm-inner.sh"
-docker exec "$CONTAINER" sh /tmp/bm-inner.sh "$MECHANISMS"
+docker exec "$CONTAINER" sh /tmp/bm-inner.sh "$MECHANISMS" "${BM_QUIC_EXEMPT_UIDS:-}"
 
 say "rehearsal PASS — compile → selftest → install → MITM'd allow → 403/close blocks → watchdog flush → fail-open → flush-only clean"

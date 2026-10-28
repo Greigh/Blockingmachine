@@ -9,6 +9,7 @@ import {
   trustStatus,
   firefoxNssProfileDbs,
   linuxSystemStoreCommands,
+  linuxSystemStoreMechanism,
   type CaInstallOutcome,
   type CaRemoveOutcome,
   type CaTrustState,
@@ -173,7 +174,7 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
     }
 
     if (outcome === "needs-admin") {
-      const sudoCommand = this.adminInstallCommand();
+      const sudoCommand = await this.adminInstallCommand();
       const message =
         "Trust install needs administrator rights from this context. Run: " +
         sudoCommand;
@@ -210,15 +211,18 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
    *   WRONG user's home, so the printed line names the concrete file the
    *   write targets.
    * - linux: `sudo cp` into the distro source dir + `update-ca-certificates`
-   *   — the line core's `linuxSystemStoreCommands` renders.
+   *   — or the RHEL-family `update-ca-trust` anchors pair when the box's
+   *   store is the `/etc/pki` mechanism (flag 117; the mechanism probe
+   *   picks the line core's `linuxSystemStoreCommands` renders).
    * - win32: elevated `certutil -addstore Root` — the MACHINE Root store
    *   (the user store refused), covering every account on the box.
    * `cert export` precedes each pair so the pem the line consumes exists.
    */
-  private adminInstallCommand(): string {
+  private async adminInstallCommand(): Promise<string> {
     const exportStep = "blockingmachine cert export ca.pem";
     if (process.platform === "linux") {
-      return `${exportStep} && ${linuxSystemStoreCommands("ca.pem").install}`;
+      const mechanism = await this.linuxMechanism();
+      return `${exportStep} && ${linuxSystemStoreCommands("ca.pem", mechanism).install}`;
     }
     if (process.platform === "win32") {
       return `${exportStep}, then 'certutil -addstore Root ca.pem' from an elevated prompt`;
@@ -258,11 +262,13 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
     }
 
     if (outcome === "needs-admin") {
-      // linux: the cert lives in the distro system store — `sudo rm` +
-      // `update-ca-certificates` is the removal; win32: elevation denied.
+      // linux: the cert lives in a distro system store — `sudo rm` +
+      // `update-ca-certificates`/`update-ca-trust extract` is the removal
+      // (mechanism picked by the same probe install uses); win32: elevation
+      // denied.
       const line =
         process.platform === "linux"
-          ? linuxSystemStoreCommands().remove
+          ? linuxSystemStoreCommands("ca.pem", await this.linuxMechanism()).remove
           : process.platform === "win32"
             ? "certutil -delstore Root <sha1-thumbprint> from an elevated prompt"
             : "an administrator session";
@@ -289,6 +295,17 @@ export class CertCommand extends BaseCommand<CertCommandOptions> {
       this.logger.info(`✓ ${message}`);
     }
     return this.success({ result: outcome }, message);
+  }
+
+  /**
+   * Which linux system-store write path the printed sudo line names — the
+   * probe `installCa`/`removeCa` ran internally, re-asked so the rendered
+   * command matches the box's real store. A probe that cannot answer
+   * (foreign platform, dead runner) falls back to the Debian line the
+   * pre-flag-117 behavior printed.
+   */
+  private async linuxMechanism() {
+    return (await linuxSystemStoreMechanism().catch(() => null)) ?? "debian";
   }
 
   /** The OS store the platform's trust ops write — keeps prose honest. */

@@ -293,6 +293,39 @@ describe('macos capture scripts — hygiene', () => {
     expect(anchor).toMatch(/block drop out quick proto udp from any to any port 443 user != _blockingmachine/);
   });
 
+  test('--quic-exempt renders user = pass lines ahead of the drop; empty stays byte-identical (flag 122)', () => {
+    const exempt = ((args: string[]): string => {
+      const out = mkdtempSync(join(tmpdir(), 'bm-render-quic-'));
+      tmpDirs.push(out);
+      execFileSync('bash', [INSTALL, '--render-only', out, '/pkg/dist/main.js', '/runner/node', ...args], {
+        stdio: 'pipe',
+      });
+      return readFileSync(join(out, 'com.blockingmachine.anchor'), 'utf8');
+    })(['--quic-exempt', 'alice,501']);
+    // `user =` pass lines land BEFORE the drop — quick-first-match is the
+    // exemption semantics; the service account's own `user !=` stays on
+    // the drop itself.
+    expect(exempt).toContain('pass out quick proto udp from any to any port 443 user = alice');
+    expect(exempt).toContain('pass out quick proto udp from any to any port 443 user = 501');
+    const u501 = exempt.indexOf('user = 501');
+    const drop = exempt.indexOf('block drop out quick proto udp');
+    expect(u501).toBeGreaterThan(-1);
+    expect(u501).toBeLessThan(drop);
+    // Empty config: the drop line is the only udp/443 filter rule, and
+    // no `user =` line renders at all.
+    const plain = readFileSync(join(dir, 'com.blockingmachine.anchor'), 'utf8');
+    expect(plain).not.toMatch(/user = /);
+    expect(plain.match(/proto udp from any to any port 443/g)).toHaveLength(1);
+    // A grammar-shaped token is rejected by the installer, not rendered.
+    const bad = spawnSync(
+      'bash',
+      [INSTALL, '--render-only', join(tmpdir(), 'unused'), '/p', '/r', '--quic-exempt', 'x;block'],
+      { encoding: 'utf8' },
+    );
+    expect(bad.status).not.toBe(0);
+    expect(`${bad.stderr}`).toMatch(/invalid --quic-exempt entry/);
+  });
+
   test('natlook plist invokes helper 9295 → 127.0.0.1:9294 with KeepAlive', () => {
     const plist = readFileSync(join(dir, 'com.blockingmachine.natlook.plist'), 'utf8');
     expect(plist).toContain('<string>com.blockingmachine.natlook</string>');
@@ -474,8 +507,9 @@ const INSTALL_LX = join(SCRIPTS, 'install-linux-capture.sh');
 const UNINSTALL_LX = join(SCRIPTS, 'uninstall-linux-capture.sh');
 const REHEARSE_LX = join(SCRIPTS, 'linux-capture-rehearse.sh');
 const BM_ANCHOR = join(REPO_ROOT, 'packages/https-filter/helper/linux/bm-anchor.sh');
+const BM_SUPERVISE = join(REPO_ROOT, 'packages/https-filter/helper/linux/bm-supervise.sh');
 const BUILD_LX = join(REPO_ROOT, 'packages/https-filter/helper/linux/build.sh');
-const ALL_LINUX_SCRIPTS = [INSTALL_LX, UNINSTALL_LX, REHEARSE_LX, BM_ANCHOR, BUILD_LX];
+const ALL_LINUX_SCRIPTS = [INSTALL_LX, UNINSTALL_LX, REHEARSE_LX, BM_ANCHOR, BM_SUPERVISE, BUILD_LX];
 const isLinux = process.platform === 'linux';
 const hasSs = (() => {
   try {
@@ -503,19 +537,58 @@ describe('linux capture scripts — hygiene', () => {
     expect(euidAt).toBeLessThan(armAt);
   });
 
-  test('installer dies honestly when systemctl is absent — no silent sysvinit fallback', () => {
+  test('installer detects systemd/openrc/sysvinit and refuses unknown inits by name (flag 118)', () => {
     const text = readFileSync(INSTALL_LX, 'utf8');
-    expect(text).toContain('command -v systemctl');
-    expect(text).toMatch(/die "systemd required \(no systemctl\)/);
-    expect(text).toMatch(/sysvinit\/openrc\/alpine are unsupported/);
-    // The check sits after the EUID gate and before the port preflight /
+    // Three-way branch on the tools each init family actually ships —
+    // the decision's named probes, in that order.
+    expect(text).toMatch(/command -v systemctl/);
+    expect(text).toMatch(/command -v rc-service/);
+    expect(text).toMatch(/-d "\$INITD_DIR".*start-stop-daemon|start-stop-daemon.*-d "\$INITD_DIR"/s);
+    // The unsupported else is a named refusal that reports what it found —
+    // never a silent partial install.
+    expect(text).toMatch(/no supported service supervisor/);
+    expect(text).toMatch(/found: \$\{found\[\*\]/);
+    // The gate sits after the EUID check and before the port preflight /
     // user creation — nothing is probed or mutated on a foreign init.
-    const gateAt = text.indexOf('command -v systemctl >/dev/null');
+    const gateAt = text.indexOf('detect_init_system\n');
     const preflightCall = text.indexOf('\nport_preflight\n');
     const useraddAt = text.indexOf('useradd -r -s "$NOLOGIN"');
     expect(gateAt).toBeGreaterThan(-1);
     expect(gateAt).toBeLessThan(preflightCall);
     expect(gateAt).toBeLessThan(useraddAt);
+  });
+
+  test('install branches per supervisor — units vs init.d scripts, same trio + ordering', () => {
+    const text = readFileSync(INSTALL_LX, 'utf8');
+    // openrc: openrc-run scripts into /etc/init.d, supervise-daemon does
+    // the restart-on-death the systemd Restart=always encoded.
+    expect(text).toContain('render_openrc_proxy');
+    expect(text).toContain('render_openrc_helper');
+    expect(text).toContain('render_openrc_rules');
+    expect(text).toContain('rc-update add "$svc" default');
+    expect(text).toContain('rc-service blockingmachine-proxy restart');
+    // sysvinit: LSB init.d scripts; bm-supervise.sh holds the respawn
+    // posture under start-stop-daemon (decision: watchdog loop or
+    // equivalent — the shipped wrapper IS the loop).
+    expect(text).toContain('render_sysvinit_proxy');
+    expect(text).toContain('render_sysvinit_helper');
+    expect(text).toContain('render_sysvinit_rules');
+    expect(text).toContain('bm-supervise.sh');
+    expect(text).toContain('update-rc.d "$svc" defaults');
+    expect(text).toContain('"$PROXY_INITD" start');
+    // The recorded supervisor rides the state file for observability.
+    expect(text).toContain('SUPERVISOR=%s');
+  });
+
+  test('uninstall unwinds openrc + sysvinit artifacts too, tolerantly (flag 118)', () => {
+    const text = readFileSync(UNINSTALL_LX, 'utf8');
+    expect(text).toContain('rc-service "$svc" stop');
+    expect(text).toContain('rc-update del "$svc" default');
+    expect(text).toContain('"$INITD_DIR/$svc" stop');
+    expect(text).toContain('update-rc.d -f "$svc" remove');
+    expect(text).toContain('blockingmachine-capture-rules');
+    // The respawn wrapper is uninstalled with the rest of libexec.
+    expect(text).toContain('bm-supervise.sh');
   });
 
   test('installer refuses occupied capture ports BEFORE any mutation (ss + /proc fallback)', () => {
@@ -603,8 +676,12 @@ describe('linux capture scripts — hygiene', () => {
     expect(text).toContain('flush-only');
     expect(text).toContain('--selftest');
     expect(text).toContain('runuser -u blockingmachine');
-    // Systemd is honestly out of scope in the container — named as such.
-    expect(text).toMatch(/No systemd in a plain container/);
+    // No service supervisor is honestly out of scope in the container —
+    // named as such (flag 118 widened the wording past systemd).
+    expect(text).toMatch(/No service supervisor in a plain container/);
+    // Flag 122: the --quic-exempt knob is documented + threaded into the arm.
+    expect(text).toContain('BM_QUIC_EXEMPT_UIDS');
+    expect(text).toContain('--quic-exempt');
   });
 });
 
@@ -619,7 +696,7 @@ describe('linux capture scripts — hygiene', () => {
   };
   const dir = render();
 
-  test('rendered file set is exactly three units + the mechanism rule renders', () => {
+  test('rendered file set is the three units + init.d trios + the mechanism rule renders', () => {
     expect(readdirSync(dir).sort()).toEqual([
       'blockingmachine-capture-rules.service',
       'blockingmachine-helper.service',
@@ -627,7 +704,17 @@ describe('linux capture scripts — hygiene', () => {
       'blockingmachine.nft',
       'ip6tables.rules',
       'iptables.rules',
+      'openrc',
+      'sysvinit',
     ]);
+    // flag 118: each non-systemd supervisor's trio renders too.
+    for (const sub of ['openrc', 'sysvinit']) {
+      expect(readdirSync(join(dir, sub)).sort()).toEqual([
+        'blockingmachine-capture-rules',
+        'blockingmachine-helper',
+        'blockingmachine-proxy',
+      ]);
+    }
   });
 
   test('nft render carries nat output chains (both families), skuid exemption, redirect, QUIC drop', () => {
@@ -726,6 +813,158 @@ describe('linux capture scripts — hygiene', () => {
     expect(nft).toContain('meta skuid 998 return');
     const ip4 = readFileSync(join(out, 'iptables.rules'), 'utf8');
     expect(ip4).toContain('--uid-owner 998');
+  });
+
+  test('openrc renders: openrc-run shebang, supervise-daemon respawn contract, arm+flush rules service', () => {
+    const proxy = readFileSync(join(dir, 'openrc', 'blockingmachine-proxy'), 'utf8');
+    const helper = readFileSync(join(dir, 'openrc', 'blockingmachine-helper'), 'utf8');
+    const rules = readFileSync(join(dir, 'openrc', 'blockingmachine-capture-rules'), 'utf8');
+    for (const svc of [proxy, helper, rules]) {
+      expect(svc).toMatch(/^#!\/sbin\/openrc-run/);
+    }
+    // Engine under the service user, supervised — the openrc names for
+    // systemd's Restart=always/RestartSec=2 pair.
+    expect(proxy).toContain('supervisor="supervise-daemon"');
+    expect(proxy).toContain('command="/usr/bin/node"');
+    expect(proxy).toContain('command_args="/pkg/dist/main.js"');
+    expect(proxy).toContain('command_user="blockingmachine"');
+    expect(proxy).toContain('respawn_delay=2');
+    expect(proxy).toContain('respawn_max=0');
+    expect(proxy).toContain('export BM_STORE_DIR="/var/lib/blockingmachine/https-filter"');
+    expect(proxy).toContain('export BM_DATA_PORT="9294"');
+    expect(proxy).toContain('export BM_CONTROL_PORT="9293"');
+    expect(proxy).toContain('export BM_RULES_PATH="/rules/compiled.rules"');
+    // Helper supervised as root (no command_user), ordered after proxy.
+    expect(helper).toContain('supervisor="supervise-daemon"');
+    expect(helper).toContain('respawn_delay=2');
+    expect(helper).not.toContain('command_user=');
+    expect(helper).toMatch(/depend\(\)[^}]*after blockingmachine-proxy/s);
+    // Rules service is the arm+flush pair — same bm-anchor.sh calls the
+    // systemd oneshot Execs.
+    expect(rules).toContain('/usr/local/libexec/blockingmachine/bm-anchor.sh load --uid blockingmachine --helper-port 9295');
+    expect(rules).toContain('/usr/local/libexec/blockingmachine/bm-anchor.sh flush-only');
+  });
+
+  test('sysvinit renders: LSB headers, start-stop-daemon --make-pidfile --background, bm-supervise respawn', () => {
+    const proxy = readFileSync(join(dir, 'sysvinit', 'blockingmachine-proxy'), 'utf8');
+    const helper = readFileSync(join(dir, 'sysvinit', 'blockingmachine-helper'), 'utf8');
+    const rules = readFileSync(join(dir, 'sysvinit', 'blockingmachine-capture-rules'), 'utf8');
+    for (const svc of [proxy, helper, rules]) {
+      expect(svc).toMatch(/^#!\/bin\/sh/);
+      expect(svc).toContain('### BEGIN INIT INFO');
+      expect(svc).toContain('### END INIT INFO');
+      expect(svc).toContain('Default-Start:     2 3 4 5');
+    }
+    // The decision's respawn semantics: supervise loop under
+    // start-stop-daemon --make-pidfile --background; engine as the
+    // service user via --chuid; TERM-to-child forwarding is what the
+    // stop path depends on.
+    expect(proxy).toContain('start-stop-daemon --start --quiet --pidfile "$PIDFILE" --make-pidfile');
+    expect(proxy).toContain('--background --chuid blockingmachine --startas "$SUPERVISOR"');
+    expect(proxy).toContain('SUPERVISOR=/usr/local/libexec/blockingmachine/bm-supervise.sh');
+    expect(proxy).toContain('BM_DATA_PORT="9294"');
+    expect(proxy).toContain('BM_RULES_PATH="/rules/compiled.rules"');
+    expect(proxy).toContain('--retry=TERM/10/KILL/5');
+    expect(helper).toContain('--startas "$SUPERVISOR"');
+    expect(helper).not.toContain('--chuid'); // helper runs as root
+    expect(helper).toContain('blockingmachine-proxy'); // Required-Start ordering
+    // Rules init script carries the arm+flush pair and LSB ordering.
+    expect(rules).toContain('bm-anchor.sh load --uid blockingmachine --helper-port 9295');
+    expect(rules).toContain('bm-anchor.sh flush-only');
+    expect(rules).toContain('Required-Start:    $network $remote_fs blockingmachine-proxy blockingmachine-helper');
+  });
+
+  test('bm-supervise.sh: the sysvinit respawn loop — restart-on-death, TERM forwarded to the child', () => {
+    const sh = readFileSync(BM_SUPERVISE, 'utf8');
+    expect(sh).toMatch(/while :; do/);
+    expect(sh).toContain('"$@" &');
+    expect(sh).toContain('wait "$CHILD"');
+    expect(sh).toContain('sleep "$RESPAWN_DELAY"');
+    // stop kills the supervisor pid; without the forward the child would
+    // be orphaned alive while the pidfile died.
+    expect(sh).toMatch(/kill "\$CHILD"/);
+    expect(sh).toMatch(/trap on_term TERM INT/);
+  });
+});
+
+describe('linux capture scripts — quic exemptions (flag 122)', () => {
+  const renderAnchors = (extra: string[]): string => {
+    const out = mkdtempSync(join(tmpdir(), 'bm-render-quic-'));
+    tmpDirs.push(out);
+    execFileSync('bash', [INSTALL_LX, '--render-only', out, '/pkg/main.js', '/usr/bin/node', ...extra], {
+      stdio: 'pipe',
+    });
+    return out;
+  };
+
+  test('empty config renders byte-identical rules — no exemptions, no stray lines', () => {
+    const a = renderAnchors([]);
+    const nft = readFileSync(join(a, 'blockingmachine.nft'), 'utf8');
+    expect(nft).not.toMatch(/skuid \S+ udp dport 443 return/);
+    for (const f of ['iptables.rules', 'ip6tables.rules']) {
+      const rules = readFileSync(join(a, f), 'utf8');
+      expect(rules).not.toMatch(/udp --dport 443 -m owner --uid-owner/);
+      expect(rules.match(/-j RETURN/g)).toHaveLength(2); // just the two owner lines
+    }
+    // And the arm lines carry no flag either.
+    expect(readFileSync(join(a, 'blockingmachine-capture-rules.service'), 'utf8')).not.toContain(
+      '--quic-exempt',
+    );
+  });
+
+  test('--quic-exempt renders per-identity RETURNS after self-exempt, before the drop', () => {
+    const a = renderAnchors(['--quic-exempt', 'alice,1001']);
+    const nft = readFileSync(join(a, 'blockingmachine.nft'), 'utf8');
+    // nft: exempt skuid lines live between the redirect and the drop.
+    expect(nft).toContain('meta skuid alice udp dport 443 return');
+    expect(nft).toContain('meta skuid 1001 udp dport 443 return');
+    const self = nft.indexOf('meta skuid blockingmachine return');
+    const alice = nft.indexOf('meta skuid alice');
+    const u1001 = nft.indexOf('meta skuid 1001');
+    const drop = nft.indexOf('udp dport 443 drop');
+    // Self-exemption first; every exemption before the drop.
+    expect(self).toBeGreaterThan(-1);
+    expect(self).toBeLessThan(alice);
+    expect(alice).toBeLessThan(u1001);
+    expect(u1001).toBeLessThan(drop);
+    const ip4 = readFileSync(join(a, 'iptables.rules'), 'utf8');
+    expect(ip4).toContain('-t filter -A OUTPUT -p udp --dport 443 -m owner --uid-owner alice -j RETURN');
+    expect(ip4).toContain('-t filter -A OUTPUT -p udp --dport 443 -m owner --uid-owner 1001 -j RETURN');
+    expect(ip4.indexOf('--uid-owner 1001')).toBeLessThan(ip4.indexOf('-p udp --dport 443 -j DROP'));
+    // The exemption is udp/443-scoped only — no bare-uid RETURN that
+    // would exempt the user's tcp flows from capture. A bare line would
+    // read `OUTPUT -m owner --uid-owner alice` with no udp match first.
+    expect(ip4).not.toContain('-A OUTPUT -m owner --uid-owner alice');
+    expect(nft).not.toMatch(/meta skuid alice return\n/);
+    // The arm line carries the flag through every supervisor path.
+    const unit = readFileSync(join(a, 'blockingmachine-capture-rules.service'), 'utf8');
+    expect(unit).toContain('load --uid blockingmachine --helper-port 9295 --quic-exempt alice,1001');
+    const openrc = readFileSync(join(a, 'openrc', 'blockingmachine-capture-rules'), 'utf8');
+    expect(openrc).toContain('--quic-exempt alice,1001');
+    const sysv = readFileSync(join(a, 'sysvinit', 'blockingmachine-capture-rules'), 'utf8');
+    expect(sysv).toContain('--quic-exempt alice,1001');
+  });
+
+  test('bm-anchor.sh validates entries — a pf-grammar-shaped token dies, not renders', () => {
+    const out = mkdtempSync(join(tmpdir(), 'bm-quic-bad-'));
+    tmpDirs.push(out);
+    const r = spawnSync('bash', [BM_ANCHOR, 'render', out, '--uid', '998', '--quic-exempt', 'ok-user,bad;injection'], {
+      encoding: 'utf8',
+    });
+    expect(r.status).not.toBe(0);
+    expect(`${r.stderr}`).toMatch(/invalid --quic-exempt entry/);
+    const r2 = spawnSync('bash', [INSTALL_LX, '--render-only', out, '/p', '/r', '--quic-exempt', 'ok,bad;injection'], {
+      encoding: 'utf8',
+    });
+    expect(r2.status).not.toBe(0);
+    expect(`${r2.stderr}`).toMatch(/invalid --quic-exempt entry/);
+  });
+
+  test('state file records the exempt list so the helper re-arm + flush replay it', () => {
+    const sh = readFileSync(BM_ANCHOR, 'utf8');
+    expect(sh).toContain('QUIC_EXEMPT_UIDS=');
+    expect(sh).toMatch(/state_get QUIC_EXEMPT_UIDS/);
+    expect(sh).toContain('BM_QUIC_EXEMPT_UIDS');
   });
 });
 

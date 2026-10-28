@@ -21,6 +21,7 @@ import {
   firefoxTrustStatus,
   installCa,
   linuxSystemStoreCommands,
+  linuxSystemStoreMechanism,
   macOsLoginKeychainPath,
   removeCa,
   trustStatus,
@@ -453,7 +454,12 @@ const noCertutilRunner: PlatformRunner = async (file) => {
 
 describe("linux NSS certutil trust ops", () => {
   const noSystemStore = {
-    linuxSystemStore: { sourceDirs: ["/nonexistent/src"], bundleFiles: ["/nonexistent/bundle.crt"] },
+    linuxSystemStore: {
+      sourceDirs: ["/nonexistent/src"],
+      bundleFiles: ["/nonexistent/bundle.crt"],
+      rhelAnchorDirs: ["/nonexistent/rhel-anchors"],
+      rhelBundleFiles: ["/nonexistent/rhel-bundle.crt"],
+    },
   };
 
   it("trustStatus reads 'trusted' when the nssdb row flags our fingerprint 'T'", async () => {
@@ -503,7 +509,12 @@ describe("linux NSS certutil trust ops", () => {
         platformRunner: runner,
         homeDir: "/home/t",
         ...LINUX,
-        linuxSystemStore: { sourceDirs: [dir], bundleFiles: [path.join(dir, "no-bundle.crt")] },
+        linuxSystemStore: {
+          sourceDirs: [dir],
+          bundleFiles: [path.join(dir, "no-bundle.crt")],
+          rhelAnchorDirs: [path.join(dir, "no-anchors")],
+          rhelBundleFiles: [path.join(dir, "no-rhel.crt")],
+        },
       }),
     ).resolves.toBe("absent");
     await fs.rm(dir, { recursive: true, force: true });
@@ -519,7 +530,12 @@ describe("linux NSS certutil trust ops", () => {
         platformRunner: runner,
         homeDir: "/home/t",
         ...LINUX,
-        linuxSystemStore: { sourceDirs: [path.join(dir, "no-src")], bundleFiles: [bundle] },
+        linuxSystemStore: {
+          sourceDirs: [path.join(dir, "no-src")],
+          bundleFiles: [bundle],
+          rhelAnchorDirs: [path.join(dir, "no-anchors")],
+          rhelBundleFiles: [path.join(dir, "no-rhel.crt")],
+        },
       }),
     ).resolves.toBe("trusted");
     expect(calls).toHaveLength(1); // no per-cert dumps needed — fs did it
@@ -537,7 +553,12 @@ describe("linux NSS certutil trust ops", () => {
         platformRunner: runner,
         homeDir: "/home/t",
         ...LINUX,
-        linuxSystemStore: { sourceDirs: [src], bundleFiles: [path.join(dir, "no-bundle.crt")] },
+        linuxSystemStore: {
+          sourceDirs: [src],
+          bundleFiles: [path.join(dir, "no-bundle.crt")],
+          rhelAnchorDirs: [path.join(dir, "no-anchors")],
+          rhelBundleFiles: [path.join(dir, "no-rhel.crt")],
+        },
       }),
     ).resolves.toBe("installed-untrusted");
     await fs.rm(dir, { recursive: true, force: true });
@@ -549,7 +570,12 @@ describe("linux NSS certutil trust ops", () => {
         platformRunner: noCertutilRunner,
         homeDir: "/home/t",
         ...LINUX,
-        linuxSystemStore: { sourceDirs: ["/nonexistent"], bundleFiles: ["/nonexistent/x.crt"] },
+        linuxSystemStore: {
+          sourceDirs: ["/nonexistent"],
+          bundleFiles: ["/nonexistent/x.crt"],
+          rhelAnchorDirs: ["/nonexistent/anchors"],
+          rhelBundleFiles: ["/nonexistent/rhel.crt"],
+        },
       }),
     ).resolves.toBe("unsupported");
   });
@@ -608,7 +634,12 @@ describe("linux NSS certutil trust ops", () => {
         platformRunner: noCertutilRunner,
         homeDir: "/home/t",
         ...LINUX,
-        linuxSystemStore: { sourceDirs: [dir], bundleFiles: [] },
+        linuxSystemStore: {
+          sourceDirs: [dir],
+          bundleFiles: [],
+          rhelAnchorDirs: ["/nonexistent/anchors"],
+          rhelBundleFiles: ["/nonexistent/rhel.crt"],
+        },
       }),
     ).resolves.toBe("needs-admin");
     await fs.rm(dir, { recursive: true, force: true });
@@ -620,7 +651,12 @@ describe("linux NSS certutil trust ops", () => {
         platformRunner: noCertutilRunner,
         homeDir: "/home/t",
         ...LINUX,
-        linuxSystemStore: { sourceDirs: ["/nonexistent"], bundleFiles: ["/nonexistent/x"] },
+        linuxSystemStore: {
+          sourceDirs: ["/nonexistent"],
+          bundleFiles: ["/nonexistent/x"],
+          rhelAnchorDirs: ["/nonexistent/anchors"],
+          rhelBundleFiles: ["/nonexistent/rhel.crt"],
+        },
       }),
     ).resolves.toBe("unsupported");
   });
@@ -670,10 +706,41 @@ describe("linux NSS certutil trust ops", () => {
         platformRunner: noCertutilRunner,
         homeDir: "/home/t",
         ...LINUX,
-        linuxSystemStore: { sourceDirs: [src], bundleFiles: [path.join(dir, "no-bundle.crt")] },
+        linuxSystemStore: {
+          sourceDirs: [src],
+          bundleFiles: [path.join(dir, "no-bundle.crt")],
+          rhelAnchorDirs: [path.join(dir, "no-anchors")],
+          rhelBundleFiles: [path.join(dir, "no-rhel.crt")],
+        },
       }),
     ).resolves.toBe("needs-admin");
     await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("removeCa answers 'needs-admin' when the cert sits only in the RHEL anchors dir", async () => {
+    // Flag 117: the anchors dir is a source dir like the Debian one — a
+    // staged cert there is a store copy, so removal is the sudo pair.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bm-linux-rhel-rm-"));
+    const anchors = path.join(dir, "anchors");
+    await fs.mkdir(anchors);
+    await fs.writeFile(path.join(anchors, "blockingmachine-ca.crt"), CA_PEM);
+    try {
+      await expect(
+        removeCa(CA_PEM, {
+          platformRunner: noCertutilRunner,
+          homeDir: "/home/t",
+          ...LINUX,
+          linuxSystemStore: {
+            sourceDirs: ["/nonexistent"],
+            bundleFiles: ["/nonexistent/x"],
+            rhelAnchorDirs: [anchors],
+            rhelBundleFiles: [path.join(dir, "no-rhel.crt")],
+          },
+        }),
+      ).resolves.toBe("needs-admin");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("removeCa answers 'absent' when nothing holds the cert, and 'unsupported' with no store at all", async () => {
@@ -683,7 +750,12 @@ describe("linux NSS certutil trust ops", () => {
         platformRunner: runner,
         homeDir: "/home/t",
         ...LINUX,
-        linuxSystemStore: { sourceDirs: ["/nonexistent"], bundleFiles: ["/nonexistent/x"] },
+        linuxSystemStore: {
+          sourceDirs: ["/nonexistent"],
+          bundleFiles: ["/nonexistent/x"],
+          rhelAnchorDirs: ["/nonexistent/anchors"],
+          rhelBundleFiles: ["/nonexistent/rhel.crt"],
+        },
       }),
     ).resolves.toBe("absent");
     await expect(
@@ -691,9 +763,191 @@ describe("linux NSS certutil trust ops", () => {
         platformRunner: noCertutilRunner,
         homeDir: "/home/t",
         ...LINUX,
-        linuxSystemStore: { sourceDirs: ["/nonexistent"], bundleFiles: ["/nonexistent/x"] },
+        linuxSystemStore: {
+          sourceDirs: ["/nonexistent"],
+          bundleFiles: ["/nonexistent/x"],
+          rhelAnchorDirs: ["/nonexistent/anchors"],
+          rhelBundleFiles: ["/nonexistent/rhel.crt"],
+        },
       }),
     ).resolves.toBe("unsupported");
+  });
+});
+
+// ============================================================================
+// linux RHEL update-ca-trust path (flag 117) — the third needs-admin
+// escalation. The /etc/pki anchors dir + bundle identify RHEL-family; a
+// bare `update-ca-trust` on PATH is the fallback signal on minimal boxes.
+// ============================================================================
+
+/** Runner: certutil is absent but `update-ca-trust` is on PATH. */
+const rhelToolRunner: PlatformRunner = async (file, args) => {
+  if (file === "update-ca-trust") return ok("usage: update-ca-trust ...");
+  throw new Error(`${file} could not run: spawn ${file} ENOENT`);
+};
+
+/** Probe paths where every store candidate is absent. */
+const EMPTY_STORE = {
+  sourceDirs: ["/nonexistent/src"],
+  bundleFiles: ["/nonexistent/bundle.crt"],
+  rhelAnchorDirs: ["/nonexistent/anchors"],
+  rhelBundleFiles: ["/nonexistent/rhel.crt"],
+} as const;
+
+describe("linux RHEL update-ca-trust path (flag 117)", () => {
+  it("an anchors dir marks the mechanism 'rhel' — install answers needs-admin carrying the update-ca-trust line", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bm-linux-rhel-"));
+    const anchors = path.join(dir, "anchors");
+    await fs.mkdir(anchors);
+    try {
+      const options = {
+        platformRunner: noCertutilRunner,
+        homeDir: "/home/t",
+        ...LINUX,
+        linuxSystemStore: {
+          sourceDirs: ["/nonexistent"],
+          bundleFiles: ["/nonexistent/x"],
+          rhelAnchorDirs: [anchors],
+          rhelBundleFiles: ["/nonexistent/rhel.crt"],
+        },
+      } as const;
+      // The flag's verify: needs-admin, never silent-unsupported, while a
+      // store path exists — and the escalation line is update-ca-trust's.
+      await expect(installCa(CA_PEM, options)).resolves.toBe("needs-admin");
+      await expect(linuxSystemStoreMechanism(options)).resolves.toBe("rhel");
+      const cmds = linuxSystemStoreCommands("ca.pem", "rhel");
+      expect(cmds.install).toBe(
+        "sudo cp 'ca.pem' /etc/pki/ca-trust/source/anchors/blockingmachine-ca.crt && sudo update-ca-trust extract",
+      );
+      expect(cmds.remove).toBe(
+        "sudo rm /etc/pki/ca-trust/source/anchors/blockingmachine-ca.crt && sudo update-ca-trust extract",
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the pki ca-bundle alone is RHEL-family evidence → 'rhel', needs-admin, trusted when the CA is in it", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bm-linux-rhel-bundle-"));
+    const bundle = path.join(dir, "ca-bundle.crt");
+    await fs.writeFile(bundle, CA_PEM);
+    try {
+      const options = {
+        platformRunner: noCertutilRunner,
+        homeDir: "/home/t",
+        ...LINUX,
+        linuxSystemStore: {
+          sourceDirs: ["/nonexistent"],
+          bundleFiles: ["/nonexistent/x"],
+          rhelAnchorDirs: ["/nonexistent/anchors"],
+          rhelBundleFiles: [bundle],
+        },
+      } as const;
+      await expect(linuxSystemStoreMechanism(options)).resolves.toBe("rhel");
+      // The live RHEL bundle anchors trust exactly like the Debian one.
+      await expect(trustStatus(CA_PEM, options)).resolves.toBe("trusted");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`update-ca-trust` on PATH alone is a real mechanism — needs-admin, never silent-unsupported", async () => {
+    // Every fs candidate absent, but the tool spawns: the RHEL write path
+    // exists, so 'unsupported' would be a lie — this is the flag's PATH leg.
+    const options = {
+      platformRunner: rhelToolRunner,
+      homeDir: "/home/t",
+      ...LINUX,
+      linuxSystemStore: { ...EMPTY_STORE },
+    } as const;
+    await expect(installCa(CA_PEM, options)).resolves.toBe("needs-admin");
+    await expect(linuxSystemStoreMechanism(options)).resolves.toBe("rhel");
+    // Status is honest too: a mechanism exists, the cert just is not in it.
+    await expect(trustStatus(CA_PEM, options)).resolves.toBe("absent");
+  });
+
+  it("a tool-less box with only Debian paths stays 'debian'; nothing at all stays null + unsupported", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bm-linux-deb-"));
+    try {
+      const debian = {
+        platformRunner: noCertutilRunner,
+        homeDir: "/home/t",
+        ...LINUX,
+        linuxSystemStore: { ...EMPTY_STORE, sourceDirs: [dir] },
+      } as const;
+      await expect(linuxSystemStoreMechanism(debian)).resolves.toBe("debian");
+      const bare = {
+        platformRunner: noCertutilRunner,
+        homeDir: "/home/t",
+        ...LINUX,
+        linuxSystemStore: { ...EMPTY_STORE },
+      } as const;
+      await expect(linuxSystemStoreMechanism(bare)).resolves.toBe(null);
+      await expect(installCa(CA_PEM, bare)).resolves.toBe("unsupported");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a staged cert in the anchors dir reads 'installed-untrusted' (extract pending)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bm-linux-rhel-src-"));
+    const anchors = path.join(dir, "anchors");
+    await fs.mkdir(anchors);
+    await fs.writeFile(path.join(anchors, "blockingmachine-ca.crt"), CA_PEM);
+    try {
+      await expect(
+        trustStatus(CA_PEM, {
+          platformRunner: noCertutilRunner,
+          homeDir: "/home/t",
+          ...LINUX,
+          linuxSystemStore: {
+            sourceDirs: ["/nonexistent"],
+            bundleFiles: ["/nonexistent/x"],
+            rhelAnchorDirs: [anchors],
+            rhelBundleFiles: ["/nonexistent/rhel.crt"],
+          },
+        }),
+      ).resolves.toBe("installed-untrusted");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("RHEL fs evidence wins over a coexisting Debian path — the family marker decides", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bm-linux-hybrid-"));
+    const debianSrc = path.join(dir, "ca-certificates");
+    const anchors = path.join(dir, "anchors");
+    await fs.mkdir(debianSrc);
+    await fs.mkdir(anchors);
+    try {
+      await expect(
+        linuxSystemStoreMechanism({
+          platformRunner: noCertutilRunner,
+          homeDir: "/home/t",
+          ...LINUX,
+          linuxSystemStore: {
+            sourceDirs: [debianSrc],
+            bundleFiles: ["/nonexistent/x"],
+            rhelAnchorDirs: [anchors],
+            rhelBundleFiles: ["/nonexistent/rhel.crt"],
+          },
+        }),
+      ).resolves.toBe("rhel");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the default render stays the Debian pair byte-for-byte — mechanism must be asked for explicitly", async () => {
+    // Backward-compat pin: existing callers passing no mechanism keep the
+    // pre-flag-117 string verbatim.
+    const cmds = linuxSystemStoreCommands("my ca.pem");
+    expect(cmds.install).toBe(
+      "sudo cp 'my ca.pem' /usr/local/share/ca-certificates/blockingmachine-ca.crt && sudo update-ca-certificates",
+    );
+    expect(cmds.remove).toBe(
+      "sudo rm /usr/local/share/ca-certificates/blockingmachine-ca.crt && sudo update-ca-certificates",
+    );
   });
 });
 

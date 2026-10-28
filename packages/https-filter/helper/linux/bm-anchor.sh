@@ -17,13 +17,13 @@
 #     re-arm, gated on a live engine probe).
 #
 # Verbs:
-#   bm-anchor.sh render <dir> [--uid N|name] [--helper-port P] [--ports L]
+#   bm-anchor.sh render <dir> [--uid N|name] [--helper-port P] [--ports L] [--quic-exempt L]
 #       Write the rendered rules for BOTH mechanisms into <dir>
 #       (blockingmachine.nft, iptables.rules, ip6tables.rules) — touches
 #       no system state, needs no root. The captureScripts suite
 #       diff-asserts these bytes; `load` renders through the same
 #       functions so the tested bytes are the deployed bytes.
-#   bm-anchor.sh load [--uid N|name] [--helper-port P] [--ports L]
+#   bm-anchor.sh load [--uid N|name] [--helper-port P] [--ports L] [--quic-exempt L]
 #       Detect the mechanism (native nft preferred — `command -v nft`
 #       plus a real `nft list ruleset` kernel probe — else iptables),
 #       apply the rules, and write the state file recording what was
@@ -56,6 +56,13 @@
 #     skuid return above exempts the engine's own QUIC dials. nft keeps
 #     it in the same table so the flush is atomic; iptables puts it in
 #     the filter table — see below.
+#   * flag-122 per-user QUIC opt-out: `--quic-exempt u1,u2` (or the
+#     BM_QUIC_EXEMPT_UIDS env) renders one udp/443-scoped RETURN per
+#     extra identity AHEAD of the drop — a uid running a real QUIC
+#     workload keeps UDP/443 while its tcp:{80,443} flows stay captured.
+#     The list is recorded in the state file so the helper's bare `load`
+#     re-arm and `flush-only` replay it. Empty config renders
+#     byte-identical rules to before the flag existed.
 #
 # nftables note: `drop` is a legal terminal verdict in a nat-type chain —
 # the rules deliberately share one `blockingmachine_nat` table per family
@@ -85,6 +92,13 @@ PORTS="80,443"
 HELPER_PORT=9295
 SERVICE_UID=""
 V6_ARMED=1
+# Flag 122 — comma-separated extra identities exempt from the UDP/443
+# drop only (never from the tcp capture). Env is the config layer;
+# --quic-exempt argv overrides it; `load` falls back to the recorded
+# list when neither is given.
+QUIC_EXEMPT_UIDS="${BM_QUIC_EXEMPT_UIDS:-}"
+QUIC_EXEMPT_GIVEN=0
+[[ -n "$QUIC_EXEMPT_UIDS" ]] && QUIC_EXEMPT_GIVEN=1
 
 log() { printf '[bm-anchor] %s\n' "$*" >&2; }
 die() { printf '[bm-anchor] error: %s\n' "$*" >&2; exit 1; }
@@ -120,30 +134,58 @@ take_lock() {
 # Render — single source for the rule bytes, every family + mechanism   #
 # ------------------------------------------------------------------ #
 
+# Flag-122 exemption lines — one udp/443-scoped RETURN per configured
+# identity, emitted between the redirect and the drop. Scoping the match
+# to udp/443 (not a bare `skuid u return`) keeps the opt-out QUIC-only:
+# the exempt user's tcp:{80,443} flows still hit the REDIRECT above.
+quic_exempt_nft_lines() {
+  local u
+  for u in ${QUIC_EXEMPT_UIDS//,/ }; do
+    printf '    meta skuid %s udp dport 443 return\n' "$u"
+  done
+}
+
+quic_exempt_xt_lines() {
+  local action="$1" u
+  for u in ${QUIC_EXEMPT_UIDS//,/ }; do
+    printf -- '-t filter %s OUTPUT -p udp --dport 443 -m owner --uid-owner %s -j RETURN\n' "$action" "$u"
+  done
+}
+
 render_nft_v4() {
-  cat <<EOF
+  {
+    cat <<EOF
 table ip ${TABLE_NAME} {
   chain output {
     type nat hook output priority -100; policy accept;
     meta skuid ${SERVICE_UID} return
     tcp dport { ${PORTS} } redirect to :${HELPER_PORT}
+EOF
+    quic_exempt_nft_lines
+    cat <<EOF
     udp dport 443 drop
   }
 }
 EOF
+  }
 }
 
 render_nft_v6() {
-  cat <<EOF
+  {
+    cat <<EOF
 table ip6 ${TABLE_NAME} {
   chain output {
     type nat hook output priority -100; policy accept;
     meta skuid ${SERVICE_UID} return
     tcp dport { ${PORTS} } redirect to :${HELPER_PORT}
+EOF
+    quic_exempt_nft_lines
+    cat <<EOF
     udp dport 443 drop
   }
 }
 EOF
+  }
 }
 
 # Argument lines — `iptables $line` / `ip6tables $line` (the SAME lines;
@@ -152,12 +194,17 @@ EOF
 # nf_tables backend (see the header note).
 render_xtables() {
   local action="$1"
-  cat <<EOF
+  {
+    cat <<EOF
 -t nat ${action} OUTPUT -m owner --uid-owner ${SERVICE_UID} -j RETURN
 -t nat ${action} OUTPUT -p tcp -m multiport --dports ${PORTS} -j REDIRECT --to-ports ${HELPER_PORT}
 -t filter ${action} OUTPUT -m owner --uid-owner ${SERVICE_UID} -j RETURN
+EOF
+    quic_exempt_xt_lines "$action"
+    cat <<EOF
 -t filter ${action} OUTPUT -p udp --dport 443 -j DROP
 EOF
+  }
 }
 
 # ------------------------------------------------------------------ #
@@ -202,6 +249,7 @@ write_state() {
     printf 'PORTS=%s\n' "$PORTS"
     printf 'HELPER_PORT=%s\n' "$HELPER_PORT"
     printf 'V6_ARMED=%s\n' "$V6_ARMED"
+    printf 'QUIC_EXEMPT_UIDS=%s\n' "$QUIC_EXEMPT_UIDS"
   } > "$STATE_FILE"
   chmod 0600 "$STATE_FILE"
 }
@@ -311,6 +359,7 @@ while [[ $# -gt 0 ]]; do
     --uid)         SERVICE_UID="${2:?--uid needs a value}"; shift 2 ;;
     --helper-port) HELPER_PORT="${2:?--helper-port needs a value}"; shift 2 ;;
     --ports)       PORTS="${2:?--ports needs a value}"; shift 2 ;;
+    --quic-exempt) QUIC_EXEMPT_UIDS="${2:?--quic-exempt needs a value}"; QUIC_EXEMPT_GIVEN=1; shift 2 ;;
     -h|--help)     usage ;;
     -*)            die "unknown option: $1" ;;
     *)             RENDER_DIR="$1"; shift ;;
@@ -357,6 +406,41 @@ resolve_uid() {
   fi
 }
 
+# Flag-122 QUIC exemption list — same identity contract as --uid: numeric
+# or login-name shape; `load` resolves each entry to its number (the state
+# file carries only validated+resolved values, but validate anyway — the
+# list lands inside an iptables argv word). `load` with no explicit list
+# inherits the recorded one so the helper's bare re-arm restores the
+# posture the installer armed.
+validate_quic_exempt() {
+  local u
+  for u in ${QUIC_EXEMPT_UIDS//,/ }; do
+    [[ "$u" =~ ^[0-9]+$ || "$u" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid --quic-exempt entry '$u' — numeric uid or login-name shape"
+  done
+}
+
+resolve_quic_exempt() {
+  local out="" u resolved
+  for u in ${QUIC_EXEMPT_UIDS//,/ }; do
+    resolved="$(resolve_uid "$u")" || die "--quic-exempt entry '$u' does not resolve to a user"
+    out="${out:+$out,}$resolved"
+  done
+  printf '%s' "$out"
+}
+
+case "$VERB" in
+  render)
+    validate_quic_exempt
+    ;;
+  load)
+    if [[ "$QUIC_EXEMPT_GIVEN" -eq 0 && -z "$QUIC_EXEMPT_UIDS" ]]; then
+      QUIC_EXEMPT_UIDS="$(state_get QUIC_EXEMPT_UIDS || true)"
+    fi
+    validate_quic_exempt
+    QUIC_EXEMPT_UIDS="$(resolve_quic_exempt)"
+    ;;
+esac
+
 case "$VERB" in
 
   render)
@@ -400,6 +484,10 @@ case "$VERB" in
     [[ -n "$PORTS" ]] || PORTS="80,443"
     HELPER_PORT="$(state_get HELPER_PORT || true)"
     [[ -n "$HELPER_PORT" ]] || HELPER_PORT=9295
+    # The recorded QUIC list replays into the -D twins — missing entries
+    # would leave RETURN lines behind.
+    QUIC_EXEMPT_UIDS="$(state_get QUIC_EXEMPT_UIDS || true)"
+    validate_quic_exempt
     case "$mech" in
       nft)
         remove_nft

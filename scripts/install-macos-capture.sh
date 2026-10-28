@@ -29,6 +29,11 @@
 #                         captureScripts suite drives it by squatting a port.
 #     --service-user NAME override the dedicated service account
 #                         (default _blockingmachine).
+#     --quic-exempt LIST  comma-separated users/numeric uids exempt from
+#                         the UDP/443 drop only (flag 122) — a pass rule
+#                         renders ahead of the block for each; their
+#                         tcp:{80,443} flows are still captured. Also
+#                         readable from BM_QUIC_EXEMPT_UIDS.
 #
 # What it does, in order:
 #   1. refuses unless EUID=0 (after arg parse, before any touch)
@@ -118,6 +123,8 @@ CONTROL_PORT=9293
 SERVICE_USER="_blockingmachine"
 RENDER_ONLY=""
 PREFLIGHT_ONLY=0
+# Flag 122 — extra identities exempt from the UDP/443 drop only.
+QUIC_EXEMPT="${BM_QUIC_EXEMPT_UIDS:-}"
 
 ANCHOR_NAME="com.apple/com.blockingmachine"
 ANCHOR_FILE="/etc/pf.anchors/com.blockingmachine"
@@ -140,6 +147,7 @@ usage:
     --render-only DIR    write rendered anchor + plists into DIR, touch nothing
     --preflight-only     run only the port preflight and exit
     --service-user NAME  service account name (default _blockingmachine)
+    --quic-exempt LIST   comma-separated users/uids exempt from the udp/443 drop
 EOF
   exit 2
 }
@@ -164,6 +172,7 @@ while [[ $# -gt 0 ]]; do
     --render-only)   RENDER_ONLY="${2:?--render-only needs a dir}"; shift 2 ;;
     --preflight-only) PREFLIGHT_ONLY=1; shift ;;
     --service-user)  SERVICE_USER="${2:?--service-user needs a name}"; shift 2 ;;
+    --quic-exempt)   QUIC_EXEMPT="${2:?--quic-exempt needs a value}"; shift 2 ;;
     -h|--help)       usage ;;
     --)              shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
     -*)              die "unknown option: $1" ;;
@@ -207,6 +216,14 @@ fi
 # at pfctl with a confusing syntax error (or worse, parses as pf grammar).
 [[ "$SERVICE_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid --service-user '$SERVICE_USER' — must match [a-z_][a-z0-9_-]*"
 
+# Flag 122 — each exempt identity lands inside a pf `user =` clause in the
+# anchor; same login-name/numeric contract as --service-user so a config
+# string can never inject pf grammar.
+for _qe in ${QUIC_EXEMPT//,/ }; do
+  [[ "$_qe" =~ ^[0-9]+$ || "$_qe" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid --quic-exempt entry '$_qe' — numeric uid or login-name shape"
+done
+unset _qe
+
 xml_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
 }
@@ -247,9 +264,18 @@ pass out quick route-to lo0 inet proto tcp from any to any port { 80, 443 } user
 pass out quick route-to lo0 inet6 proto tcp from any to any port { 80, 443 } user != ${SERVICE_USER} keep state
 # QUIC suppression (spec §10 helper-side decision): UDP/443 is invisible to
 # TCP capture — drop it so clients fall back to TCP/443 which rdr can see.
-# Same `user !=` scoping as the route-to rules: the service account's egress
+# Same "user !=" scoping as the route-to rules: the service account's egress
 # is exempt, and forwarded packets (user "unknown") never match a user
 # clause — an unscoped drop would also kill routed LAN clients' QUIC.
+# Flag-122 per-user opt-outs render as "user =" pass lines ahead of the
+# drop — "quick" makes the first match win, so a configured uid keeps
+# QUIC while its tcp:{80,443} flows still ride the route-to capture.
+EOF
+  local _qe
+  for _qe in ${QUIC_EXEMPT//,/ }; do
+    printf 'pass out quick proto udp from any to any port 443 user = %s\n' "$_qe"
+  done
+  cat <<EOF
 block drop out quick proto udp from any to any port 443 user != ${SERVICE_USER}
 EOF
 }
