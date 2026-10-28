@@ -729,38 +729,70 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
   }
 
   /**
-   * The read-only CA enrollment route (flag 129): `GET /ca.pem` on the DATA
-   * port answers `authority.caCertPem` — one file, always the same bytes,
-   * deliberately unauthenticated AND exempt from every gate (auth included):
-   * it is the path an unenrolled LAN device takes to fetch the CA whose
-   * fingerprint it then verifies against the pairing payload / the desktop
-   * card. Absolute-form `GET http://<this listener>/ca.pem` (what a
-   * proxied request to this port would emit) serves too — the authority
-   * must be this listener, or the request is just proxy traffic.
+   * The self-route parser the read-only surfaces share (flag 129 `/ca.pem`,
+   * P7 `/proxy.pac`): a GET in origin form (`GET /x`) answers its path
+   * verbatim; an absolute-form target (`GET http://<this listener>/x`) only
+   * answers when the authority is THIS listener — a foreign authority is
+   * ordinary proxy traffic, never a self-route. The request's own authority
+   * (Host header, else the absolute-form authority) rides back so the PAC
+   * body can emit the address the client actually used — a LAN-hub fetch
+   * gets the LAN answer, not 127.0.0.1.
    */
-  function isCaPemRequest(buf: Buffer): boolean {
+  function parseSelfGetRequest(buf: Buffer): { path: string; authority: string | null } | null {
     const headEnd = buf.indexOf('\r\n\r\n');
     const head = buf.subarray(0, headEnd < 0 ? buf.length : headEnd).toString('latin1');
     const lineEnd = head.indexOf('\r\n');
     const requestLine = lineEnd < 0 ? head : head.slice(0, lineEnd);
     const match = /^([A-Z][A-Z0-9_-]{0,15})\s+(\S+)\s+HTTP\/\d+(?:\.\d+)?$/.exec(requestLine);
     if (match === null || match[1] !== 'GET') {
-      return false;
+      return null;
     }
     const target = match[2];
-    if (target === '/ca.pem' || target.startsWith('/ca.pem?')) {
-      return true;
+    const hostHeader = /\r\nhost:\s*(\S+)/i.exec(head)?.[1] ?? null;
+    if (target.startsWith('/') && !target.startsWith('//')) {
+      return { path: target.split('?')[0], authority: hostHeader };
     }
     if (/^http:\/\//i.test(target)) {
       try {
         const parsed = new URL(target);
         const port = parsed.port === '' ? 80 : Number(parsed.port);
-        return parsed.pathname === '/ca.pem' && isSelfTarget(parsed.hostname, port);
+        if (!isSelfTarget(parsed.hostname, port)) {
+          return null;
+        }
+        return { path: parsed.pathname, authority: hostHeader ?? parsed.host };
       } catch {
-        return false;
+        return null;
       }
     }
-    return false;
+    return null;
+  }
+
+  /**
+   * The PAC body (P7): `FindProxyForURL` sends LAN/intranet-shaped
+   * destinations DIRECT and everything else to `PROXY <authority>; DIRECT`
+   * — the fallback tail is the fail-open: a stopped engine degrades to
+   * direct connectivity instead of holding it. The authority is the
+   * request's own (Host header or bound address), so a PAC fetched off a
+   * LAN bind names the LAN address the client dialed.
+   */
+  function buildPacFile(authority: string): string {
+    return [
+      '// Blockingmachine HTTPS filter — system-proxy PAC (P7, flag 123)',
+      'function FindProxyForURL(url, host) {',
+      '  host = host.toLowerCase();',
+      '  if (isPlainHostName(host) ||',
+      '      host === "localhost" || host === "::1" ||',
+      '      dnsDomainIs(host, ".local") ||',
+      '      isInNet(host, "127.0.0.0", "255.0.0.0") ||',
+      '      isInNet(host, "10.0.0.0", "255.0.0.0") ||',
+      '      isInNet(host, "172.16.0.0", "255.240.0.0") ||',
+      '      isInNet(host, "192.168.0.0", "255.255.0.0") ||',
+      '      isInNet(host, "169.254.0.0", "255.255.0.0")) {',
+      '    return "DIRECT";',
+      '  }',
+      `  return "PROXY ${authority}; DIRECT";`,
+      '}',
+    ].join('\r\n');
   }
 
   /**
@@ -1033,10 +1065,12 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
    * requests); per-request evaluation is the terminated path's job.
    */
   function handlePlainHttp(sock: net.Socket, buf: Buffer, peerLoopback: boolean): void {
-    // `GET /ca.pem` (flag 129) — the read-only enrollment surface, exempt
-    // from auth and the denylist alike: an unenrolled device IS the caller
-    // this route exists for. One static file, never a control surface.
-    if (isCaPemRequest(buf)) {
+    // `GET /ca.pem` (flag 129) + `GET /proxy.pac` (P7) — the read-only
+    // self-routes, exempt from auth and the denylist alike: an unenrolled
+    // device / an OS PAC fetcher IS the caller these exist for. Static
+    // files, never a control surface.
+    const selfGet = parseSelfGetRequest(buf);
+    if (selfGet?.path === '/ca.pem') {
       const body = Buffer.from(authority.caCertPem, 'utf8');
       sock.end(
         'HTTP/1.1 200 OK\r\n' +
@@ -1044,6 +1078,22 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           `Content-Length: ${body.length}\r\n` +
           'Connection: close\r\n\r\n' +
           authority.caCertPem,
+      );
+      return;
+    }
+    if (selfGet?.path === '/proxy.pac') {
+      // The authority the PAC emits is the one the client used to fetch it —
+      // a LAN-hub PAC names the LAN address, a loopback fetch the loopback.
+      const body = Buffer.from(
+        buildPacFile(selfGet.authority ?? `${bindHost}:${boundDataPort}`),
+        'utf8',
+      );
+      sock.end(
+        'HTTP/1.1 200 OK\r\n' +
+          'Content-Type: application/x-ns-proxy-autoconfig\r\n' +
+          `Content-Length: ${body.length}\r\n` +
+          'Connection: close\r\n\r\n' +
+          body.toString('latin1'),
       );
       return;
     }

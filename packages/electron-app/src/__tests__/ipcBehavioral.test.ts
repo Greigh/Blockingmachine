@@ -195,6 +195,27 @@ jest.unstable_mockModule('../adminShell', () => ({
   runShellAsAdmin: (cmd: string) => runShellAsAdminMock(cmd),
 }));
 
+/**
+ * The P7 system-proxy spawn paths (flag 123) — `readSystemProxyState`,
+ * `applySystemProxy`, `revertSystemProxy` shell `networksetup`/`reg`/`gsettings`
+ * against the REAL OS store, so under jest they delegate to these recording
+ * fns. The pure planners + matchers (`planSystemProxyApply`,
+ * `stateMatchesConfig`, `stateMatchesSnapshot`, `normalizeSystemProxyState`,
+ * `summarizeSystemProxyState`, `systemProxySupported`) stay real — they're
+ * what the handlers' argv and drift checks actually run.
+ */
+const sysProxyOps = {
+  readState: jest.fn(async (_opts?: unknown): Promise<any> => 'unsupported'),
+  apply: jest.fn(async (_config: unknown, _opts?: unknown): Promise<any> => ({
+    outcome: 'unsupported',
+    message: 'not configured',
+  })),
+  revert: jest.fn(async (_record: unknown, _opts?: unknown): Promise<any> => ({
+    outcome: 'reverted',
+    message: 'reverted',
+  })),
+};
+
 // The reputation DB refresh hits the network at boot — stub just that edge and keep the
 // real core for everything else (sanitizers, classifiers, formatters under test).
 jest.unstable_mockModule('@blockingmachine/core', async () => {
@@ -206,6 +227,9 @@ jest.unstable_mockModule('@blockingmachine/core', async () => {
     trustStatus: (pem: string) => caTrustOps.trustStatus(pem),
     installCa: (pem: string) => caTrustOps.installCa(pem),
     removeCa: (pem: string) => caTrustOps.removeCa(pem),
+    readSystemProxyState: (opts?: unknown) => sysProxyOps.readState(opts),
+    applySystemProxy: (config: unknown, opts?: unknown) => sysProxyOps.apply(config, opts),
+    revertSystemProxy: (record: unknown, opts?: unknown) => sysProxyOps.revert(record, opts),
   };
 });
 
@@ -1467,5 +1491,305 @@ describe('httpsfilter:* lifecycle + policy IPC handlers', () => {
       // must still carry a message.
       expect(res.message).toBeTruthy();
     }
+  });
+});
+
+describe('httpsfilter:system-proxy-* IPC handlers (P7, flag 123)', () => {
+  // A darwin-flavored fixture pair — the machine running this suite is macOS;
+  // the pure matchers (`stateMatchesConfig` et al.) stay real so the fixtures
+  // must be real leg shapes, not shorthand.
+  const LEGS_OFF = {
+    web: { enabled: false, server: '', port: 0 },
+    secure: { enabled: false, server: '', port: 0 },
+    auto: { enabled: false, url: '' },
+    bypass: ['*.local', '169.254/16'],
+  };
+  const stateOff = { platform: 'darwin', services: [{ name: 'Wi-Fi', ...LEGS_OFF }] };
+  const statePac = {
+    platform: 'darwin',
+    services: [
+      {
+        name: 'Wi-Fi',
+        web: { enabled: false, server: '', port: 0 },
+        secure: { enabled: false, server: '', port: 0 },
+        auto: { enabled: true, url: 'http://127.0.0.1:9294/proxy.pac' },
+        bypass: ['*.local', '169.254/16'],
+      },
+    ],
+  };
+  const pacConfig = { mode: 'pac', pacUrl: 'http://127.0.0.1:9294/proxy.pac' };
+  const manualConfig = { mode: 'manual', host: '127.0.0.1', port: 9294 };
+
+  let fetchSpy: jest.SpiedFunction<typeof fetch>;
+  const engineRunning = () =>
+    new Response(
+      JSON.stringify({
+        status: 'running',
+        dataPort: 9294,
+        controlPort: 9293,
+        protectionEnabled: true,
+        paused: false,
+        stats: {},
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+
+  beforeEach(() => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch');
+    sysProxyOps.readState.mockReset().mockResolvedValue('unsupported');
+    sysProxyOps.apply
+      .mockReset()
+      .mockResolvedValue({ outcome: 'unsupported', message: 'not configured' });
+    sysProxyOps.revert.mockReset().mockResolvedValue({ outcome: 'reverted', message: 'reverted' });
+    runShellAsAdminMock
+      .mockReset()
+      .mockResolvedValue({ success: true, cancelled: false, stderr: '' });
+    capturedStoreRef.current!.delete('httpsFilterSystemProxy');
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    capturedStoreRef.current!.delete('httpsFilterSystemProxy');
+  });
+
+  test('status reports the live posture + the ownership record + drift, never spawns a write', async () => {
+    sysProxyOps.readState.mockResolvedValue(statePac);
+    fetchSpy.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    const res = await invoke('httpsfilter:system-proxy-status');
+    expect(res.success).toBe(true);
+    expect(res.supported).toBe(true);
+    expect(res.enabled).toBe(true);
+    expect(res.mode).toBe('pac');
+    expect(res.pacUrl).toBe('http://127.0.0.1:9294/proxy.pac');
+    expect(res.ours).toBeNull();
+    expect(res.drift).toBe(false);
+    // The read ran once; no write path exists in status.
+    expect(sysProxyOps.apply).not.toHaveBeenCalled();
+    expect(sysProxyOps.revert).not.toHaveBeenCalled();
+  });
+
+  test('status marks drift when the OS settings no longer equal what we wrote', async () => {
+    capturedStoreRef.current!.set('httpsFilterSystemProxy', {
+      applied: pacConfig,
+      prior: stateOff,
+      at: 1,
+    });
+    // The live state is a foreign manual write — not ours.
+    sysProxyOps.readState.mockResolvedValue({
+      platform: 'darwin',
+      services: [
+        {
+          name: 'Wi-Fi',
+          web: { enabled: true, server: '10.0.0.9', port: 3128 },
+          secure: { enabled: true, server: '10.0.0.9', port: 3128 },
+          auto: { enabled: false, url: '' },
+          bypass: ['*.local'],
+        },
+      ],
+    });
+    const res = await invoke('httpsfilter:system-proxy-status');
+    expect(res.drift).toBe(true);
+    expect(res.ours).toEqual({ mode: 'pac', at: 1 });
+  });
+
+  test('apply validates mode before any platform call', async () => {
+    for (const bad of ['auto', '', 42, null, { mode: 'pac' }]) {
+      const res = await invoke('httpsfilter:system-proxy-apply', bad);
+      expect(res.success).toBe(false);
+      expect(res.outcome).toBe('invalid');
+    }
+    expect(sysProxyOps.apply).not.toHaveBeenCalled();
+    expect(sysProxyOps.readState).not.toHaveBeenCalled();
+  });
+
+  test('apply refuses when the engine is down — never a proxy aimed at a dead port', async () => {
+    fetchSpy.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    const res = await invoke('httpsfilter:system-proxy-apply', 'pac');
+    expect(res.success).toBe(false);
+    expect(res.outcome).toBe('engine-down');
+    expect(sysProxyOps.apply).not.toHaveBeenCalled();
+  });
+
+  test('apply(pac) snapshots the pre-write state into the ownership record', async () => {
+    fetchSpy.mockImplementation(async (u) =>
+      String(u).includes('/v1/proxy/status')
+        ? engineRunning()
+        : new Response('not found', { status: 404 }),
+    );
+    sysProxyOps.apply.mockResolvedValue({ outcome: 'applied', prior: stateOff, message: 'applied' });
+    const res = await invoke('httpsfilter:system-proxy-apply', 'pac');
+    expect(res.success).toBe(true);
+    expect(res.outcome).toBe('applied');
+    expect(sysProxyOps.apply).toHaveBeenCalledWith(pacConfig, undefined);
+    const record = capturedStoreRef.current!.get('httpsFilterSystemProxy') as any;
+    expect(record.applied).toEqual(pacConfig);
+    expect(record.prior).toEqual(stateOff);
+    expect(typeof record.at).toBe('number');
+  });
+
+  test('apply(manual) writes the loopback authority from the live engine port', async () => {
+    fetchSpy.mockImplementation(async (u) =>
+      String(u).includes('/v1/proxy/status')
+        ? engineRunning()
+        : new Response('not found', { status: 404 }),
+    );
+    sysProxyOps.apply.mockResolvedValue({ outcome: 'applied', prior: stateOff, message: 'applied' });
+    const res = await invoke('httpsfilter:system-proxy-apply', 'manual');
+    expect(res.success).toBe(true);
+    expect(sysProxyOps.apply).toHaveBeenCalledWith(manualConfig, undefined);
+    const record = capturedStoreRef.current!.get('httpsFilterSystemProxy') as any;
+    expect(record.applied).toEqual(manualConfig);
+  });
+
+  test('a needs-admin apply answer travels to the renderer untouched', async () => {
+    fetchSpy.mockImplementation(async (u) =>
+      String(u).includes('/v1/proxy/status')
+        ? engineRunning()
+        : new Response('not found', { status: 404 }),
+    );
+    sysProxyOps.apply.mockResolvedValue({
+      outcome: 'needs-admin',
+      message: 'The authorization was denied.',
+    });
+    const res = await invoke('httpsfilter:system-proxy-apply', 'pac');
+    expect(res.success).toBe(false);
+    expect(res.outcome).toBe('needs-admin');
+    expect(res.needsAdmin).toBe(true);
+    // No ownership record — nothing was written.
+    expect(capturedStoreRef.current!.get('httpsFilterSystemProxy')).toBeUndefined();
+  });
+
+  test('revert restores the recorded prior and releases the record', async () => {
+    capturedStoreRef.current!.set('httpsFilterSystemProxy', {
+      applied: pacConfig,
+      prior: stateOff,
+      at: 1,
+    });
+    const res = await invoke('httpsfilter:system-proxy-revert');
+    expect(res.success).toBe(true);
+    expect(res.outcome).toBe('reverted');
+    expect(sysProxyOps.revert).toHaveBeenCalledWith(
+      { applied: pacConfig, prior: stateOff },
+      undefined,
+    );
+    expect(capturedStoreRef.current!.get('httpsFilterSystemProxy')).toBeUndefined();
+  });
+
+  test('a skipped-foreign revert still releases the record — the user owns the drifted settings now', async () => {
+    capturedStoreRef.current!.set('httpsFilterSystemProxy', {
+      applied: manualConfig,
+      prior: stateOff,
+      at: 1,
+    });
+    sysProxyOps.revert.mockResolvedValue({
+      outcome: 'skipped-foreign',
+      message: 'Current settings differ from what this app wrote — left untouched.',
+    });
+    const res = await invoke('httpsfilter:system-proxy-revert');
+    expect(res.success).toBe(true);
+    expect(res.outcome).toBe('skipped-foreign');
+    expect(capturedStoreRef.current!.get('httpsFilterSystemProxy')).toBeUndefined();
+  });
+
+  test('revert without a record answers absent — idempotent, never spawns', async () => {
+    const res = await invoke('httpsfilter:system-proxy-revert');
+    expect(res.success).toBe(true);
+    expect(res.outcome).toBe('absent');
+    expect(sysProxyOps.revert).not.toHaveBeenCalled();
+  });
+
+  test('httpsfilter:stop reverts a recorded MANUAL write first; PAC records stay', async () => {
+    // Refused fetch: an unstubbed probe could hit a real dev-machine engine —
+    // the suite's standing rule (a test never POSTs a real shutdown).
+    fetchSpy.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    capturedStoreRef.current!.set('httpsFilterSystemProxy', {
+      applied: manualConfig,
+      prior: stateOff,
+      at: 1,
+    });
+    const stopped = await invoke('httpsfilter:stop');
+    expect(sysProxyOps.revert).toHaveBeenCalledWith(
+      { applied: manualConfig, prior: stateOff },
+      undefined,
+    );
+    expect(capturedStoreRef.current!.get('httpsFilterSystemProxy')).toBeUndefined();
+    expect(stopped.message).toContain('system-proxy write was reverted first');
+
+    // The PAC twin: mode 'pac' rides the `; DIRECT` tail — stop leaves it.
+    capturedStoreRef.current!.set('httpsFilterSystemProxy', {
+      applied: pacConfig,
+      prior: stateOff,
+      at: 1,
+    });
+    sysProxyOps.revert.mockClear();
+    await invoke('httpsfilter:stop');
+    expect(sysProxyOps.revert).not.toHaveBeenCalled();
+    expect(capturedStoreRef.current!.get('httpsFilterSystemProxy')).toBeTruthy();
+  });
+
+  test('darwin elevate-apply runs one admin batch (revert-of-old + apply) then stores the TRUE prior', async () => {
+    if (process.platform !== 'darwin') return; // the elevate branch is darwin-gated
+    fetchSpy.mockImplementation(async (u) =>
+      String(u).includes('/v1/proxy/status')
+        ? engineRunning()
+        : new Response('not found', { status: 404 }),
+    );
+    // An existing MANUAL record — the true prior is its own prior, not the
+    // currently-live state the batch is about to overwrite.
+    const oldManual = { mode: 'manual', host: '127.0.0.1', port: 9294 };
+    const stateManual = {
+      platform: 'darwin',
+      services: [
+        {
+          name: 'Wi-Fi',
+          web: { enabled: true, server: '127.0.0.1', port: 9294 },
+          secure: { enabled: true, server: '127.0.0.1', port: 9294 },
+          auto: { enabled: false, url: '' },
+          bypass: ['localhost', '127.0.0.0/8', '::1', '*.local', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16'],
+        },
+      ],
+    };
+    capturedStoreRef.current!.set('httpsFilterSystemProxy', {
+      applied: oldManual,
+      prior: stateOff,
+      at: 1,
+    });
+    sysProxyOps.readState
+      .mockReset()
+      .mockResolvedValueOnce(stateManual) // pre-write read → what the batch reverts+applies over
+      .mockResolvedValueOnce(statePac); // post-write verify
+    const res = await invoke('httpsfilter:system-proxy-apply', 'pac', { elevate: true });
+    expect(res.success).toBe(true);
+    expect(res.outcome).toBe('applied');
+    // ONE osascript batch — the unprivileged spawn path was never reached.
+    expect(runShellAsAdminMock).toHaveBeenCalledTimes(1);
+    expect(sysProxyOps.apply).not.toHaveBeenCalled();
+    const shell = String(runShellAsAdminMock.mock.calls[0][0]);
+    // The batch reverts the OLD write to its true prior, then applies PAC.
+    expect(shell).toContain(`'-setwebproxystate' 'Wi-Fi' 'off'`);
+    expect(shell).toContain(`'-setautoproxyurl' 'Wi-Fi' 'http://127.0.0.1:9294/proxy.pac'`);
+    const record = capturedStoreRef.current!.get('httpsFilterSystemProxy') as any;
+    expect(record.applied).toEqual(pacConfig);
+    // The stored prior is the ORIGINAL pre-first-write state — not the
+    // manual state the batch just reverted through.
+    expect(record.prior).toEqual(stateOff);
+  });
+
+  test('darwin elevate-revert restores prior via the admin batch and releases the record', async () => {
+    if (process.platform !== 'darwin') return;
+    capturedStoreRef.current!.set('httpsFilterSystemProxy', {
+      applied: pacConfig,
+      prior: stateOff,
+      at: 1,
+    });
+    sysProxyOps.readState.mockReset().mockResolvedValue(stateOff); // post-revert verify
+    const res = await invoke('httpsfilter:system-proxy-revert', { elevate: true });
+    expect(res.success).toBe(true);
+    expect(res.outcome).toBe('reverted');
+    expect(runShellAsAdminMock).toHaveBeenCalledTimes(1);
+    const shell = String(runShellAsAdminMock.mock.calls[0][0]);
+    expect(shell).toContain(`'-setautoproxystate' 'Wi-Fi' 'off'`);
+    expect(sysProxyOps.revert).not.toHaveBeenCalled();
+    expect(capturedStoreRef.current!.get('httpsFilterSystemProxy')).toBeUndefined();
   });
 });

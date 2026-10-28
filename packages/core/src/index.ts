@@ -187,3 +187,34 @@ export {
   type PlatformRunner,
   type PlatformRunResult,
 } from "./caTrustStore.js";
+
+// OS system-proxy writes (P7, flag 123) — the capture-free coverage layer:
+// manual HTTP(S) proxy or PAC auto-config URL pointed at the engine's :9294.
+// darwin runs networksetup per enabled service (verified unprivileged),
+// win32 runs reg against the per-user Internet Settings key, linux runs
+// gsettings against org.gnome.system.proxy (the only linux proxy surface —
+// nmcli carries none; other platforms/desktops answer 'unsupported'). Apply
+// snapshots full prior state before the first write; revert restores it only
+// while the current state still equals what we wrote ('skipped-foreign'
+// otherwise — never revert settings the user has since touched).
+export {
+  systemProxySupported,
+  readSystemProxyState,
+  planSystemProxyApply,
+  planSystemProxyRevert,
+  applySystemProxy,
+  revertSystemProxy,
+  stateMatchesConfig,
+  stateMatchesSnapshot,
+  normalizeSystemProxyState,
+  summarizeSystemProxyState,
+  type SystemProxyMode,
+  type SystemProxyConfig,
+  type SystemProxyState,
+  type SystemProxySpawn,
+  type SystemProxyOptions,
+  type SystemProxyApplyResult,
+  type SystemProxyRevertResult,
+  type SystemProxyRecord,
+  type NormalizedSystemProxy,
+} from "./systemProxy.js";

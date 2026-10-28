@@ -564,3 +564,87 @@ describe('flag 129 — GET /ca.pem on the data port', () => {
     sock.destroy();
   });
 });
+
+describe('flag 123 — GET /proxy.pac on the data port (P7)', () => {
+  let proxy: RunningProxy;
+
+  beforeAll(async () => {
+    // Same hostile-looking envelope as the ca.pem suite — token + LAN peer +
+    // denylist — because an OS PAC fetcher is exactly the unenrolled caller
+    // this route exists for; it must answer regardless.
+    proxy = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator([]),
+      policy,
+      authToken: 'tok-flag127-test',
+      denyPrivateDestinations: true,
+      isLoopbackPeer: () => false,
+    });
+  });
+
+  afterAll(async () => {
+    await proxy.close();
+  });
+
+  test('GET /proxy.pac → 200 + PAC content-type + a FindProxyForURL body', async () => {
+    const sock = await dial(
+      proxy.port,
+      `GET /proxy.pac HTTP/1.1\r\nHost: 127.0.0.1:${proxy.port}\r\n\r\n`,
+    );
+    const reply = await withTimeout(collectBytes(sock, 1), 5_000, 'proxy.pac reply');
+    await withTimeout(once(sock, 'close'), 5_000, 'proxy.pac close');
+    const text = reply.toString('latin1');
+    const head = text.split('\r\n\r\n')[0];
+    expect(head.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+    expect(head).toContain('Content-Type: application/x-ns-proxy-autoconfig');
+    const body = text.slice(text.indexOf('\r\n\r\n') + 4);
+    expect(body).toContain('function FindProxyForURL(url, host)');
+    // The body names the authority the client dialed — the request's own
+    // Host header, not a hardcoded 127.0.0.1.
+    expect(body).toContain(`PROXY 127.0.0.1:${proxy.port}; DIRECT`);
+    // LAN/intranet-shaped names must bypass the proxy — a machine in the
+    // same house as the hub never routes its LAN through it.
+    expect(body).toContain('isInNet(host, "10.0.0.0", "255.0.0.0")');
+    expect(body).toContain('dnsDomainIs(host, ".local")');
+    // The DIRECT tail is the fail-open: engine stopped → direct, not dead.
+    expect(body).toContain('return "DIRECT";');
+    sock.destroy();
+  });
+
+  test('the emitted authority follows the request Host header (a LAN fetch names the LAN address)', async () => {
+    const sock = await dial(
+      proxy.port,
+      `GET /proxy.pac HTTP/1.1\r\nHost: 192.168.1.40:9294\r\n\r\n`,
+    );
+    const reply = await withTimeout(collectBytes(sock, 1), 5_000, 'LAN-authority reply');
+    await withTimeout(once(sock, 'close'), 5_000, 'LAN-authority close');
+    const body = reply.toString('latin1').slice(reply.toString('latin1').indexOf('\r\n\r\n') + 4);
+    expect(body).toContain('PROXY 192.168.1.40:9294; DIRECT');
+    sock.destroy();
+  });
+
+  test('absolute-form GET to this listener → served; ?query tolerated', async () => {
+    const sock = await dial(
+      proxy.port,
+      `GET http://127.0.0.1:${proxy.port}/proxy.pac?v=2 HTTP/1.1\r\nHost: 127.0.0.1:${proxy.port}\r\n\r\n`,
+    );
+    const reply = await withTimeout(collectBytes(sock, 1), 5_000, 'absolute-form pac reply');
+    await withTimeout(once(sock, 'close'), 5_000, 'absolute-form pac close');
+    expect(reply.toString('latin1').split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+    sock.destroy();
+  });
+
+  test('POST /proxy.pac is not the route — it flows through the normal path', async () => {
+    const sock = await dial(
+      proxy.port,
+      `POST /proxy.pac HTTP/1.1\r\nHost: 127.0.0.1:${proxy.port}\r\nContent-Length: 0\r\n\r\n`,
+    );
+    const reply = await withTimeout(collectBytes(sock, 1), 5_000, 'POST pac reply');
+    // The normal path 407s this peer (no auth); it never earns a PAC body.
+    const text = reply.toString('latin1');
+    expect(text).not.toContain('FindProxyForURL');
+    sock.destroy();
+  });
+});

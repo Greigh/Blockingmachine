@@ -70,15 +70,6 @@ The next step needs a person — a physical device, hardware this host cannot ru
 - **Fix shape:** Run `scripts/windows-capture-rehearse.ps1` elevated on a real Windows 10+ box (or windows-latest CI) — it asserts the full path end-to-end: minted-leaf allow on :443, a real 403 on the :80 plain-HTTP block leg, a socket-destroy + `flowsBlocked` delta (via `/v1/proxy/status`) on the :443 leg, and a clean session-dynamic uninstall.
 - **Verify:** A successful rehearsal transcript lands in this entry and the source banner flips to validated; until then the flag IS the record that "compiles on paper" ≠ "works on the wire".
 
-### 123. System-proxy/PAC auto-configuration stays a product decision — explicit CONNECT already covers the opt-in path (`pac-system-proxy`)
-
-- **Where:** `docs/https-filtering-p3-plan.md` non-goals; `packages/electron-app/src/filterProxyManager.ts` (the manager owns engine lifecycle, not OS proxy settings).
-- **What:** Transparent capture (WFP/netfilter/pf) is one coverage layer; an orthogonal, capture-free layer exists — writing the OS system proxy or a PAC URL pointed at `127.0.0.1:9294` gives CONNECT-based filtering with zero kernel surface, no service account, and no driver. P3 deliberately did not build it: auto-mutating the OS proxy config is a product decision (consent UX, per-user vs machine scope, reversion semantics on uninstall), not an engineering default.
-- **Why left:** The trade is the owner's call — proxy-aware apps obey the system proxy so coverage is app-subset rather than system-wide, but the footprint is zero; whether that layer belongs in the product at all is not a code question.
-- **Decision (2026-10-27):** build it — per-platform write paths behind a consent flow, honest "proxy-aware apps only" labeling, and uninstall reversion. It becomes a third coverage layer beside transparent capture and explicit CONNECT.
-- **Fix shape:** If adopted — per-platform write paths (registry `ProxyServer`/`AutoConfigURL` on Windows, `networksetup` on macOS, gsettings/nm on Linux) behind their own consent flow, plus uninstall reversion and an honest "proxy-aware apps only" label wherever capture coverage is described.
-- **Verify:** A product decision first; the engineering proof would be a proxy-configured client receiving verdicts with capture uninstalled.
-
 ### 124. The helper binaries ship unsigned — SmartScreen/AV posture is a release-pipeline question (`unsigned-helper-binaries`)
 
 - **Where:** `packages/https-filter/helper/windows/build.ps1` (unsigned `redirect-helper.exe` output), `scripts/install-windows-capture.ps1`, the codesign/notarize legs in `forge.config.cjs`/`publish.yml`/`release.mjs`.

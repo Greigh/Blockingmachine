@@ -627,3 +627,177 @@ describe('HttpsFilterCard — polling lifecycle', () => {
     consoleError.mockRestore();
   });
 });
+
+describe('HttpsFilterCard — system-proxy row (P7, flag 123)', () => {
+  const sysOff = {
+    success: true,
+    supported: true,
+    enabled: false,
+    mode: 'off' as const,
+    summary: 'off',
+    ours: null,
+    drift: false,
+  };
+  const sysPacOurs = {
+    success: true,
+    supported: true,
+    enabled: true,
+    mode: 'pac' as const,
+    pacUrl: 'http://127.0.0.1:9294/proxy.pac',
+    summary: 'PAC http://127.0.0.1:9294/proxy.pac',
+    ours: { mode: 'pac' as const, at: 1_700_000_000_000 },
+    drift: false,
+  };
+
+  function sysProxyBridge(statusReply: unknown, overrides: Record<string, unknown> = {}) {
+    return installBridge({
+      getHttpsFilterSystemProxyStatus: jest.fn(() => Promise.resolve(statusReply)),
+      applyHttpsFilterSystemProxy: jest.fn(() =>
+        Promise.resolve({ success: true, outcome: 'applied', message: 'applied' }),
+      ),
+      revertHttpsFilterSystemProxy: jest.fn(() =>
+        Promise.resolve({ success: true, outcome: 'reverted', message: 'reverted' }),
+      ),
+      ...overrides,
+    });
+  }
+
+  it('probes on mount and renders the off row with the honest proxy-aware-apps bound', async () => {
+    const bridge = sysProxyBridge(sysOff);
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(bridge.getHttpsFilterSystemProxyStatus).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('System proxy')).not.toBeNull();
+    expect(screen.queryByText('off')).not.toBeNull();
+    // The coverage bound is stated on the row itself — never implied.
+    expect(screen.queryByText(/proxy-aware apps only/)).not.toBeNull();
+    const enable = screen.getByRole('button', { name: 'Enable' });
+    expect((enable as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('unsupported probe → the row hides entirely (no dead button)', async () => {
+    sysProxyBridge({ success: true, supported: false, enabled: false, mode: 'off', summary: 'x', ours: null, drift: false });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('System proxy')).toBeNull();
+  });
+
+  it('Enable opens the consent strip; Apply writes PAC mode by default', async () => {
+    const bridge = sysProxyBridge(sysOff);
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    });
+    // The consent text names the write, the snapshot contract, the bound.
+    expect(screen.queryByText(/writes your operating system/)).not.toBeNull();
+    expect(screen.queryByText(/snapshotted first and restored exactly/)).not.toBeNull();
+    expect(screen.queryByText(/PAC auto-config \(recommended\)/)).not.toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+      await Promise.resolve();
+    });
+    expect(bridge.applyHttpsFilterSystemProxy).toHaveBeenCalledWith('pac', undefined);
+  });
+
+  it('the manual radio applies manual mode', async () => {
+    const bridge = sysProxyBridge(sysOff);
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Manual proxy/));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+      await Promise.resolve();
+    });
+    expect(bridge.applyHttpsFilterSystemProxy).toHaveBeenCalledWith('manual', undefined);
+  });
+
+  it('needsAdmin holds for explicit approval — the second click is the only {elevate:true}', async () => {
+    const bridge = sysProxyBridge(sysOff, {
+      applyHttpsFilterSystemProxy: jest
+        .fn()
+        .mockImplementationOnce(() =>
+          Promise.resolve({ success: false, outcome: 'needs-admin', needsAdmin: true, message: 'needs admin' }),
+        )
+        .mockImplementation(() =>
+          Promise.resolve({ success: true, outcome: 'applied', message: 'applied' }),
+        ),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+      await Promise.resolve();
+    });
+    // The admin strip parked the op — the affirmative button is the proof
+    // (two nodes carry the "Administrator approval required" phrasing).
+    expect(screen.getByRole('button', { name: /Approve & apply/ })).not.toBeNull();
+    expect(bridge.applyHttpsFilterSystemProxy).toHaveBeenCalledWith('pac', undefined);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Approve & apply/ }));
+      await Promise.resolve();
+    });
+    expect(bridge.applyHttpsFilterSystemProxy).toHaveBeenLastCalledWith('pac', { elevate: true });
+  });
+
+  it('ours=pac renders the owned pill + Disable → revert', async () => {
+    const bridge = sysProxyBridge(sysPacOurs);
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('on (PAC, this app)')).not.toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Disable' }));
+      await Promise.resolve();
+    });
+    expect(bridge.revertHttpsFilterSystemProxy).toHaveBeenCalledWith(undefined);
+  });
+
+  it('drift renders the changed-outside pill and still offers release', async () => {
+    sysProxyBridge({ ...sysPacOurs, drift: true, summary: 'manual 10.0.0.9:3128' });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('changed outside the app')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Disable' })).not.toBeNull();
+  });
+
+  it('a stopped engine disables Enable — the proxy must not point at a dead port', async () => {
+    sysProxyBridge(sysOff, {
+      getHttpsFilterStatus: jest.fn(() => Promise.resolve(stopped)),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect((screen.getByRole('button', { name: 'Enable' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});

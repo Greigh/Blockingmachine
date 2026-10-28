@@ -298,6 +298,14 @@ contextBridge.exposeInMainWorld('electron', {
   toggleHttpsFilterPause: (enabled?: boolean) => ipcRenderer.invoke('httpsfilter:toggle-pause', enabled),
   getHttpsFilterPins: () => ipcRenderer.invoke('httpsfilter:pins'),
   removeHttpsFilterPin: (host: string) => ipcRenderer.invoke('httpsfilter:pin-remove', host),
+  // P7 system-proxy/PAC coverage layer (flag 123) — OS proxy writes behind
+  // consent + snapshot-first reversion; `{elevate:true}` pops the macOS auth
+  // sheet only on the renderer's explicit second click.
+  getHttpsFilterSystemProxyStatus: () => ipcRenderer.invoke('httpsfilter:system-proxy-status'),
+  applyHttpsFilterSystemProxy: (mode: 'manual' | 'pac', options?: { elevate?: boolean }) =>
+    ipcRenderer.invoke('httpsfilter:system-proxy-apply', mode, options),
+  revertHttpsFilterSystemProxy: (options?: { elevate?: boolean }) =>
+    ipcRenderer.invoke('httpsfilter:system-proxy-revert', options),
 
   // Secure channel-checked fallback for legacy listeners
   receive: (channel: string, callback: (...args: unknown[]) => void) => {

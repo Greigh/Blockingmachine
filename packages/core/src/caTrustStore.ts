@@ -149,9 +149,10 @@ const TOOL_TIMEOUT_MS = 10_000;
 /**
  * The default runner: `execFile(file, args)`, no shell, 10s bound, stderr
  * captured — the same discipline `security` got on darwin, now shared by
- * certutil on every platform.
+ * certutil on every platform. Exported for sibling OS-write modules
+ * (`systemProxy.ts`) that run the same seam against different tools.
  */
-function defaultPlatformRunner(file: string, args: string[]): Promise<PlatformRunResult> {
+export function defaultPlatformRunner(file: string, args: string[]): Promise<PlatformRunResult> {
   return new Promise((resolve, reject) => {
     execFile(
       file,

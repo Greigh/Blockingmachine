@@ -59,5 +59,5 @@ T1 ∥ T2 (disjoint files — common core lands in T1 and T2 consumes it; sequen
 - Android/iOS (P4/separate tracks).
 - NE sysex upgrade on macOS (P5).
 - TPROXY/ebpf/sockmap Linux variants.
-- PAC-file/system-proxy-settings capture (explicit mode already works; system proxy auto-set is a separate product decision — flag it).
+- PAC-file/system-proxy-settings capture (explicit mode already works; system proxy auto-set was a separate product decision — flagged 123, decided 2026-10-27, built as P7 in `docs/https-filtering-p7-plan.md` + `packages/core/src/systemProxy.ts`).
 - Store-signed service binaries (helper ships unsigned for now — SmartScreen/AV posture is a release-pipeline question, flag it).

@@ -35,6 +35,25 @@ interface CaTrustInfo {
   needsAdmin?: boolean;
 }
 
+/**
+ * The P7 system-proxy layer's status reply (`httpsfilter:system-proxy-status`).
+ * `ours` is this app's recorded write (mode + timestamp); `drift` means the OS
+ * settings no longer equal what we wrote — the user touched them, and revert
+ * will skip rather than fight them.
+ */
+interface SysProxyInfo {
+  success: boolean;
+  supported?: boolean;
+  enabled?: boolean;
+  mode?: 'off' | 'manual' | 'pac' | 'both' | 'other';
+  manual?: { host: string; port: number };
+  pacUrl?: string;
+  summary?: string;
+  ours?: { mode: 'manual' | 'pac'; at: number } | null;
+  drift?: boolean;
+  message?: string;
+}
+
 const TRUST_LABEL: Record<string, string> = {
   trusted: 'trusted',
   'installed-untrusted': 'in keychain, not trusted',
@@ -97,6 +116,13 @@ export const HttpsFilterCard: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [awaitingAdmin, setAwaitingAdmin] = useState(false);
+  // P7 system-proxy layer — the OS-proxy posture + consent/admin strips.
+  const [sysProxy, setSysProxy] = useState<SysProxyInfo | null>(null);
+  const [sysProxyConsent, setSysProxyConsent] = useState(false);
+  const [sysProxyMode, setSysProxyMode] = useState<'manual' | 'pac'>('pac');
+  // Which system-proxy op is parked on a needs-admin reply — the strip's
+  // affirmative button re-invokes THAT op with {elevate:true}.
+  const [sysProxyAdminOp, setSysProxyAdminOp] = useState<'apply' | 'revert' | null>(null);
   // The rendered install-macos-capture.sh invocation for the capture hint —
   // absolute paths, so it pastes on a machine with no repo checkout.
   const [installHint, setInstallHint] = useState<{ command?: string; message?: string } | null>(null);
@@ -111,6 +137,19 @@ export const HttpsFilterCard: React.FC = () => {
       if (isMountedRef.current) setCaTrust(ca);
     } catch {
       // a CA probe failure leaves the last-known row in place
+    }
+  }, []);
+
+  // The system-proxy probe shells `networksetup`/`reg`/`gsettings` — the
+  // same subprocess weight as the CA probes, so it shares their cadence:
+  // mount, actions, engine transitions, and the 60s slow poll.
+  const refreshSysProxy = useCallback(async () => {
+    if (!window.electron?.getHttpsFilterSystemProxyStatus) return;
+    try {
+      const sp = await window.electron.getHttpsFilterSystemProxyStatus();
+      if (isMountedRef.current) setSysProxy(sp);
+    } catch {
+      // a probe failure leaves the last-known row in place
     }
   }, []);
 
@@ -135,17 +174,19 @@ export const HttpsFilterCard: React.FC = () => {
       if (Date.now() - lastCaRefreshRef.current > CA_TRUST_REFRESH_MS) {
         lastCaRefreshRef.current = Date.now();
         void refreshCa();
+        void refreshSysProxy();
       }
     } catch {
       // status probe failures read as engine-down through last-known state
     }
-  }, [refreshCa]);
+  }, [refreshCa, refreshSysProxy]);
 
   useEffect(() => {
     isMountedRef.current = true;
     lastCaRefreshRef.current = Date.now();
     void refresh();
     void refreshCa();
+    void refreshSysProxy();
     const timer = setInterval(() => void refresh(), POLL_MS);
     // A hidden (menu-bar) window's interval is clamped by Chromium — refresh on
     // resurface so the card never shows minute-stale engine state.
@@ -158,7 +199,7 @@ export const HttpsFilterCard: React.FC = () => {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [refresh, refreshCa]);
+  }, [refresh, refreshCa, refreshSysProxy]);
 
   const runAction = useCallback(
     async (action: () => Promise<{ success: boolean; message?: string } | undefined>) => {
@@ -217,6 +258,66 @@ export const HttpsFilterCard: React.FC = () => {
       await refreshCa();
     },
     [refreshCa],
+  );
+
+  // P7 system-proxy apply — mirrors installCa's consent contract: the first
+  // (unprivileged) write attempt may answer needsAdmin; only the explicit
+  // second click re-invokes with {elevate:true} and pops the macOS sheet.
+  const applySysProxy = useCallback(
+    async (mode: 'manual' | 'pac', elevate: boolean) => {
+      setBusy(true);
+      setMessage(null);
+      try {
+        const res = await window.electron.applyHttpsFilterSystemProxy!(mode, elevate ? { elevate: true } : undefined);
+        if (!isMountedRef.current) return;
+        if (res?.needsAdmin) {
+          setSysProxyAdminOp('apply');
+          setMessage(
+            status?.platform === 'darwin'
+              ? 'Administrator approval required — confirm below to show the macOS prompt.'
+              : (res.message || 'The system-proxy write needs administrator rights.'),
+          );
+        } else {
+          setSysProxyAdminOp(null);
+          setSysProxyConsent(false);
+          if (res && !res.success) setMessage(res.message || 'System-proxy write failed.');
+        }
+      } catch (err: any) {
+        if (isMountedRef.current) setMessage(err?.message || 'System-proxy write failed.');
+      } finally {
+        if (isMountedRef.current) setBusy(false);
+      }
+      await refreshSysProxy();
+    },
+    [refreshSysProxy, status?.platform],
+  );
+
+  const revertSysProxy = useCallback(
+    async (elevate: boolean) => {
+      setBusy(true);
+      setMessage(null);
+      try {
+        const res = await window.electron.revertHttpsFilterSystemProxy!(elevate ? { elevate: true } : undefined);
+        if (!isMountedRef.current) return;
+        if (res?.needsAdmin) {
+          setSysProxyAdminOp('revert');
+          setMessage(
+            status?.platform === 'darwin'
+              ? 'Administrator approval required — confirm below to show the macOS prompt.'
+              : (res.message || 'Reverting the system proxy needs administrator rights.'),
+          );
+        } else {
+          setSysProxyAdminOp(null);
+          if (res && !res.success) setMessage(res.message || 'System-proxy revert failed.');
+        }
+      } catch (err: any) {
+        if (isMountedRef.current) setMessage(err?.message || 'System-proxy revert failed.');
+      } finally {
+        if (isMountedRef.current) setBusy(false);
+      }
+      await refreshSysProxy();
+    },
+    [refreshSysProxy, status?.platform],
   );
 
   const running = status?.status === 'running';
@@ -654,6 +755,198 @@ export const HttpsFilterCard: React.FC = () => {
               className="deploy-btn"
               disabled={busy}
               onClick={() => setAwaitingAdmin(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* P7 system-proxy row (flag 123) — the capture-free coverage layer:
+          writes the OS HTTP(S) proxy or PAC URL at this engine for
+          proxy-aware apps, zero kernel surface. When transparent capture is
+          installed it reads as the lighter alternative, not redundant —
+          capture covers ALL TCP flows; the system proxy covers only apps
+          that honor OS proxy settings. The honest bound is stated in the
+          row copy, always. */}
+      {sysProxy != null && sysProxy.success !== false && sysProxy.supported !== false && (
+        <div
+          style={{
+            marginTop: 12,
+            paddingTop: 10,
+            borderTop: '1px solid var(--border-color)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="protection-live-name">System proxy</span>
+              <span className="deploy-pane-status-pill">
+                <span className={`status-indicator-dot ${sysProxy.ours != null ? 'active' : ''}`} />
+                {sysProxy.drift === true
+                  ? 'changed outside the app'
+                  : sysProxy.ours != null
+                    ? sysProxy.ours.mode === 'pac'
+                      ? 'on (PAC, this app)'
+                      : 'on (manual, this app)'
+                    : sysProxy.enabled === true
+                      ? 'on'
+                      : 'off'}
+              </span>
+            </div>
+            <p
+              className="deploy-feed-box-desc"
+              style={{ margin: '4px 0 0', wordBreak: 'break-word' }}
+            >
+              {sysProxy.ours != null && sysProxy.enabled === true
+                ? `OS proxy → ${sysProxy.summary ?? 'configured'} — proxy-aware apps only; apps that ignore the system proxy bypass by design.` +
+                  (sysProxy.ours.mode === 'pac'
+                    ? ' The PAC falls back to a direct connection when the engine is off.'
+                    : ' If the engine stops, proxy-aware apps lose connectivity until this is disabled — stopping the engine reverts it automatically.')
+                : sysProxy.drift === true
+                  ? `The OS proxy settings changed outside this app (${sysProxy.summary ?? 'current settings differ'}) — the recorded write no longer matches; disabling releases the record without touching your settings.`
+                  : sysProxy.enabled === true
+                    ? `A system proxy is on but was not configured by this app — ${sysProxy.summary ?? 'current settings'}.`
+                    : captureOwned
+                      ? 'Capture is installed for system-wide coverage; the system-proxy layer is the lighter, capture-free alternative — not redundant, just narrower: proxy-aware apps only, others bypass by design.'
+                      : 'Point the OS at the filter for a capture-free coverage layer — proxy-aware apps only (browsers and apps that honor the system proxy); others bypass by design. No drivers, no service account.'}
+            </p>
+          </div>
+          <div className="deploy-actions-row" style={{ marginTop: 0 }}>
+            {sysProxy.ours != null ? (
+              <button
+                type="button"
+                className="deploy-btn"
+                disabled={busy || !window.electron?.revertHttpsFilterSystemProxy}
+                title="Restores exactly the OS proxy settings that were in place before this app wrote them — and only if they have not been changed since."
+                onClick={() => void revertSysProxy(false)}
+              >
+                Disable
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="deploy-btn"
+                disabled={busy || !engineAlive || !window.electron?.applyHttpsFilterSystemProxy}
+                title={
+                  engineAlive
+                    ? 'Choose how the OS should route proxy-aware apps through the filter.'
+                    : 'Start the engine first — the OS proxy must not point at a dead port.'
+                }
+                onClick={() => setSysProxyConsent(true)}
+              >
+                Enable
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* The P7 consent strip — the explicit step before ANY OS write. It
+          names exactly what will be written, the snapshot/revert contract,
+          and the honest coverage bound. */}
+      {sysProxyConsent && (
+        <div
+          className="deploy-feed-box-desc"
+          style={{
+            marginTop: 10,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+          }}
+        >
+          <span>
+            This writes your operating system&apos;s proxy settings — the current values are
+            snapshotted first and restored exactly when you disable it, and only ever the settings
+            this app wrote. Coverage is <strong>proxy-aware apps only</strong>: apps that ignore the
+            system proxy bypass by design.
+          </span>
+          <label style={{ display: 'flex', gap: '8px', alignItems: 'baseline', cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="bm-sysproxy-mode"
+              checked={sysProxyMode === 'pac'}
+              onChange={() => setSysProxyMode('pac')}
+            />
+            <span>
+              <strong>PAC auto-config (recommended)</strong> — writes the URL
+              http://127.0.0.1:{status?.port ?? 9294}/proxy.pac; apps fall back to a direct
+              connection when the engine is off.
+            </span>
+          </label>
+          <label style={{ display: 'flex', gap: '8px', alignItems: 'baseline', cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="bm-sysproxy-mode"
+              checked={sysProxyMode === 'manual'}
+              onChange={() => setSysProxyMode('manual')}
+            />
+            <span>
+              <strong>Manual proxy</strong> — writes HTTP+HTTPS proxy 127.0.0.1:{status?.port ?? 9294}
+              directly; proxy-aware apps lose connectivity if the engine stops, until the proxy is
+              disabled (stopping the engine reverts it automatically).
+            </span>
+          </label>
+          <div className="deploy-actions-row" style={{ marginTop: 0 }}>
+            <button
+              type="button"
+              className="deploy-btn primary"
+              disabled={busy || !window.electron?.applyHttpsFilterSystemProxy}
+              onClick={() => void applySysProxy(sysProxyMode, false)}
+            >
+              {busy ? 'Applying…' : 'Apply'}
+            </button>
+            <button
+              type="button"
+              className="deploy-btn"
+              disabled={busy}
+              onClick={() => setSysProxyConsent(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* The system-proxy needs-admin strip — same contract as the CA one:
+          the affirmative click is the only thing that pops the macOS sheet. */}
+      {sysProxyAdminOp !== null && (
+        <div
+          className="deploy-feed-box-desc"
+          style={{
+            marginTop: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            flexWrap: 'wrap',
+          }}
+        >
+          <span>
+            {status?.platform === 'darwin'
+              ? 'Administrator approval required — macOS will ask for your password to change the system proxy.'
+              : 'Administrator rights required — re-run the change elevated.'}
+          </span>
+          <div className="deploy-actions-row" style={{ marginTop: 0 }}>
+            <button
+              type="button"
+              className="deploy-btn primary"
+              disabled={busy}
+              onClick={() =>
+                void (sysProxyAdminOp === 'apply' ? applySysProxy(sysProxyMode, true) : revertSysProxy(true))
+              }
+            >
+              Approve &amp; {sysProxyAdminOp === 'apply' ? 'apply' : 'revert'}
+            </button>
+            <button
+              type="button"
+              className="deploy-btn"
+              disabled={busy}
+              onClick={() => setSysProxyAdminOp(null)}
             >
               Cancel
             </button>

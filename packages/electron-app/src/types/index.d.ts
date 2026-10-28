@@ -464,6 +464,18 @@ export interface StoreSchema {
    */
   httpsFilterDenyPrivate?: boolean;
   /**
+   * P7 (flag 123) — the system-proxy write record: `{applied, prior, at}`
+   * where `applied` is the config written (manual host:port or the PAC URL)
+   * and `prior` is the platform state snapshot taken before the first write.
+   * Presence means this app owns OS proxy settings; revert restores `prior`
+   * exactly and only while the live state still equals `applied`.
+   */
+  httpsFilterSystemProxy?: {
+    applied: { mode: 'manual' | 'pac'; host?: string; port?: number; pacUrl?: string };
+    prior: unknown;
+    at: number;
+  };
+  /**
    * What each deploy target's scheduled refresh has reported back, keyed by target id
    * (`unbound`, `bind`, …). The refresh command in the recipe POSTs its result to
    * `/v1/deploy-report`; this record is what survives the window where the hub was closed,
@@ -904,6 +916,41 @@ export interface ElectronAPI {
     message?: string;
   }>;
   removeHttpsFilterPin?: (host: string) => Promise<{ success: boolean; message: string }>;
+  /**
+   * P7 system-proxy/PAC coverage layer (flag 123). `status` reports the live
+   * OS proxy posture plus this app's recorded write (`ours`) and `drift`
+   * (the OS settings no longer equal what we wrote — the user touched them).
+   * `apply` writes manual or pac mode behind the card's consent step;
+   * `{elevate:true}` is the darwin admin path (one auth sheet, explicit
+   * second click only). `revert` restores the recorded prior state exactly.
+   */
+  getHttpsFilterSystemProxyStatus?: () => Promise<{
+    success: boolean;
+    supported?: boolean;
+    enabled?: boolean;
+    mode?: 'off' | 'manual' | 'pac' | 'both' | 'other';
+    manual?: { host: string; port: number };
+    pacUrl?: string;
+    summary?: string;
+    ours?: { mode: 'manual' | 'pac'; at: number } | null;
+    drift?: boolean;
+    message?: string;
+  }>;
+  applyHttpsFilterSystemProxy?: (
+    mode: 'manual' | 'pac',
+    options?: { elevate?: boolean },
+  ) => Promise<{
+    success: boolean;
+    outcome?: string;
+    needsAdmin?: boolean;
+    message?: string;
+  }>;
+  revertHttpsFilterSystemProxy?: (options?: { elevate?: boolean }) => Promise<{
+    success: boolean;
+    outcome?: string;
+    needsAdmin?: boolean;
+    message?: string;
+  }>;
 }
 
 // Global declarations

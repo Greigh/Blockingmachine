@@ -154,6 +154,21 @@ import {
   macOsLoginKeychainPath,
   firefoxNssProfileDbs,
   linuxSystemStoreCommands,
+  // P7 system-proxy layer (flag 123) — OS HTTP(S) proxy / PAC auto-config
+  // writes behind consent + snapshot-first reversion.
+  systemProxySupported,
+  readSystemProxyState,
+  planSystemProxyApply,
+  planSystemProxyRevert,
+  applySystemProxy,
+  revertSystemProxy,
+  stateMatchesConfig,
+  stateMatchesSnapshot,
+  normalizeSystemProxyState,
+  summarizeSystemProxyState,
+  type SystemProxyConfig,
+  type SystemProxyState,
+  type SystemProxyRecord,
   type CaTrustState,
   type TierFileInput,
   type AiProviderConfig,
@@ -625,6 +640,10 @@ const store = new Store<StoreSchema>({
     httpsFilterDenyPrivate: { type: 'boolean' },
     httpsFilterDataToken: { type: 'string' },
     httpsFilterDataTokenEncrypted: { type: 'string' },
+    // P7 (flag 123): the system-proxy write record — `{applied, prior, at}`.
+    // Presence means this app owns OS proxy settings; revert restores
+    // `prior` exactly and only while current still equals `applied`.
+    httpsFilterSystemProxy: { type: 'object' },
     deployRefreshReports: {
       type: 'object',
       default: {},
@@ -5337,7 +5356,25 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
     });
 
     ipcMain.handle('httpsfilter:stop', async () => {
-      return await filterProxyManager.stop();
+      // P7 fail-safe (flag 123): a MANUAL OS proxy aimed at :9294 would hold
+      // proxy-aware apps' connectivity once the engine dies — revert a
+      // recorded manual write BEFORE stopping. PAC records stay: the PAC's
+      // `; DIRECT` tail absorbs the gap by design.
+      const record = store.get('httpsFilterSystemProxy') as SystemProxyRecord | undefined;
+      let revertNote = '';
+      if (record?.applied?.mode === 'manual' && record.prior) {
+        try {
+          const rev = await revertSystemProxy({ applied: record.applied, prior: record.prior });
+          if (rev.outcome === 'reverted' || rev.outcome === 'skipped-foreign') {
+            store.delete('httpsFilterSystemProxy');
+            if (rev.outcome === 'reverted') revertNote = ' The system-proxy write was reverted first.';
+          }
+        } catch {
+          // stop proceeds anyway — the status surface keeps the record honest
+        }
+      }
+      const res = await filterProxyManager.stop();
+      return { ...res, message: res.message + revertNote };
     });
 
     // The capture-install invocation rendered for THIS host — absolute
@@ -5440,6 +5477,263 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         return { success: true, token };
       } catch (err) {
         return { success: false, error: 'Failed to generate token' };
+      }
+    });
+
+    // ====================================================================
+    // HTTPS Filter — system-proxy/PAC coverage layer (P7, flag 123)
+    // ====================================================================
+    // The capture-free layer: write the OS HTTP(S) proxy or a PAC auto-config
+    // URL at the loopback engine and proxy-aware apps get CONNECT filtering —
+    // zero kernel surface. The store's `httpsFilterSystemProxy` record is the
+    // ownership ledger: presence means THIS app wrote OS proxy settings, and
+    // revert restores `prior` exactly while current still equals `applied`
+    // (drift → 'skipped-foreign', never a revert under the user's own edits).
+
+    /** Shell-quote one argv element for the darwin osascript batch — the same shape installCaAsAdmin uses. */
+    const sysProxyShellQuote = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+
+    /** Render a spawn plan into one ` && `-joined shell line for runShellAsAdmin. */
+    const sysProxyPlanShell = (plan: { file: string; args: string[] }[]): string =>
+      plan.map((w) => [w.file, ...w.args].map(sysProxyShellQuote).join(' ')).join(' && ');
+
+    const sysProxyRecord = (): SystemProxyRecord | undefined =>
+      store.get('httpsFilterSystemProxy') as SystemProxyRecord | undefined;
+
+    ipcMain.handle('httpsfilter:system-proxy-status', async () => {
+      const record = sysProxyRecord();
+      const ours =
+        record?.applied?.mode === 'manual' || record?.applied?.mode === 'pac'
+          ? { mode: record.applied.mode, at: record.at }
+          : null;
+      if (!systemProxySupported()) {
+        return {
+          success: true,
+          supported: false,
+          enabled: false,
+          mode: 'off',
+          summary: `System-proxy writes are not implemented on ${process.platform}.`,
+          ours,
+          drift: false,
+        };
+      }
+      try {
+        const state = await readSystemProxyState();
+        if (state === 'unsupported') {
+          return {
+            success: true,
+            supported: false,
+            enabled: false,
+            mode: 'off',
+            summary:
+              process.platform === 'linux'
+                ? 'No GNOME proxy settings found — KDE and other desktops are not implemented.'
+                : `System-proxy writes are not implemented on ${process.platform}.`,
+            ours,
+            drift: false,
+          };
+        }
+        const n = normalizeSystemProxyState(state);
+        return {
+          success: true,
+          supported: true,
+          enabled: n.enabled,
+          mode: n.mode,
+          manual: n.manual,
+          pacUrl: n.pacUrl,
+          summary: summarizeSystemProxyState(state),
+          ours,
+          // Drift: our record exists but the OS settings no longer equal
+          // what we wrote — the user touched them; revert will skip-foreign.
+          drift: record !== undefined && record.applied !== undefined ? !stateMatchesConfig(state, record.applied) : false,
+        };
+      } catch (err: any) {
+        return { success: false, message: err?.message || String(err) };
+      }
+    });
+
+    ipcMain.handle(
+      'httpsfilter:system-proxy-apply',
+      async (_event, mode: unknown, options?: { elevate?: boolean }) => {
+        if (mode !== 'manual' && mode !== 'pac') {
+          return { success: false, outcome: 'invalid', message: "mode must be 'manual' or 'pac'." };
+        }
+        if (!systemProxySupported()) {
+          return {
+            success: false,
+            outcome: 'unsupported',
+            message:
+              process.platform === 'linux'
+                ? 'No GNOME proxy settings found on this system — KDE and other desktops are not implemented.'
+                : `System-proxy writes are not implemented on ${process.platform}.`,
+          };
+        }
+        // A proxy pointed at a dead engine is a connectivity bug, not a
+        // config — the write only happens while the listener answers.
+        const engine = await filterProxyManager.getStatus();
+        const engineAlive =
+          engine.status === 'running' || engine.status === 'paused' || engine.status === 'degraded';
+        if (!engineAlive) {
+          return {
+            success: false,
+            outcome: 'engine-down',
+            message: 'Start the HTTPS filter engine first — the OS proxy must not point at a dead port.',
+          };
+        }
+        const dataPort = engine.port || 9294;
+        const config: SystemProxyConfig =
+          mode === 'manual'
+            ? { mode: 'manual', host: '127.0.0.1', port: dataPort }
+            : { mode: 'pac', pacUrl: `http://127.0.0.1:${dataPort}/proxy.pac` };
+        const existing = sysProxyRecord();
+
+        // darwin elevate: one osascript batch (one auth sheet) runs the
+        // revert-of-old + apply-of-new plan end to end, then verifies.
+        if (options?.elevate === true && process.platform === 'darwin') {
+          try {
+            const current = await readSystemProxyState();
+            if (current === 'unsupported') {
+              return { success: false, outcome: 'unsupported', message: 'System-proxy reads are not implemented on this platform.' };
+            }
+            const plan = [
+              ...(existing?.prior ? planSystemProxyRevert(existing.prior, 'darwin') : []),
+              ...planSystemProxyApply(config, 'darwin', current),
+            ];
+            const res = await runShellAsAdmin(sysProxyPlanShell(plan));
+            if (!res.success) {
+              return {
+                success: false,
+                outcome: 'needs-admin',
+                needsAdmin: true,
+                message: res.cancelled
+                  ? 'Administrator approval was declined — the system proxy was not changed.'
+                  : `Elevated system-proxy write failed: ${res.stderr}`,
+              };
+            }
+            const post = await readSystemProxyState();
+            if (post === 'unsupported' || !stateMatchesConfig(post, config)) {
+              return {
+                success: false,
+                message: 'The elevated writes ran but the OS proxy state did not take — check it manually.',
+              };
+            }
+            store.set('httpsFilterSystemProxy', {
+              applied: config,
+              // The true prior is what the in-batch revert restored — an old
+              // record's own prior — else the pre-write state just read.
+              prior: existing?.prior ?? current,
+              at: Date.now(),
+            } satisfies SystemProxyRecord);
+            return { success: true, outcome: 'applied', message: 'System proxy configured with administrator approval.' };
+          } catch (err: any) {
+            return { success: false, outcome: 'error', message: err?.message || String(err) };
+          }
+        }
+
+        // An existing record is ours — restore its true prior first so the
+        // new snapshot records what was actually there (not our own writes).
+        if (existing?.applied && existing?.prior) {
+          try {
+            const rev = await revertSystemProxy({ applied: existing.applied, prior: existing.prior });
+            if (rev.outcome !== 'reverted') {
+              return {
+                success: false,
+                outcome: rev.outcome,
+                needsAdmin: rev.outcome === 'needs-admin',
+                message: `${rev.message} Re-apply was not attempted.`,
+              };
+            }
+          } catch (err: any) {
+            return { success: false, outcome: 'error', message: `Pre-apply revert failed: ${err?.message || String(err)}` };
+          }
+        }
+
+        try {
+          const res = await applySystemProxy(config);
+          if (res.outcome !== 'applied') {
+            return {
+              success: false,
+              outcome: res.outcome,
+              needsAdmin: res.outcome === 'needs-admin',
+              message: res.message,
+            };
+          }
+          if (res.prior === undefined) {
+            // A reported apply without its pre-write snapshot would make the
+            // stored record unrevertable-by-construction — refuse to record it.
+            return {
+              success: false,
+              outcome: 'error',
+              message: 'The apply reported success but returned no prior-state snapshot — refusing to record an unrevertable write.',
+            };
+          }
+          store.set('httpsFilterSystemProxy', {
+            applied: config,
+            prior: res.prior,
+            at: Date.now(),
+          } satisfies SystemProxyRecord);
+          return {
+            success: true,
+            outcome: 'applied',
+            message: res.message,
+          };
+        } catch (err: any) {
+          return { success: false, outcome: 'error', message: err?.message || String(err) };
+        }
+      },
+    );
+
+    ipcMain.handle('httpsfilter:system-proxy-revert', async (_event, options?: { elevate?: boolean }) => {
+      const record = sysProxyRecord();
+      if (!record?.applied || !record?.prior) {
+        return {
+          success: true,
+          outcome: 'absent',
+          message: 'No system-proxy write by this app is recorded — nothing to revert.',
+        };
+      }
+      if (options?.elevate === true && process.platform === 'darwin') {
+        try {
+          const plan = planSystemProxyRevert(record.prior, 'darwin');
+          const res = await runShellAsAdmin(sysProxyPlanShell(plan));
+          if (!res.success) {
+            return {
+              success: false,
+              outcome: 'needs-admin',
+              needsAdmin: true,
+              message: res.cancelled
+                ? 'Administrator approval was declined — the system proxy was not changed.'
+                : `Elevated revert failed: ${res.stderr}`,
+            };
+          }
+          const post = await readSystemProxyState();
+          if (post === 'unsupported' || !stateMatchesSnapshot(post, record.prior)) {
+            return {
+              success: false,
+              message: 'The elevated revert ran but the OS proxy state did not restore — check it manually.',
+            };
+          }
+          store.delete('httpsFilterSystemProxy');
+          return { success: true, outcome: 'reverted', message: 'System proxy settings restored to their previous state.' };
+        } catch (err: any) {
+          return { success: false, outcome: 'error', message: err?.message || String(err) };
+        }
+      }
+      try {
+        const res = await revertSystemProxy({ applied: record.applied, prior: record.prior });
+        // 'reverted' and 'skipped-foreign' both release our claim — foreign
+        // settings are the user's to keep; the record would never fire again.
+        if (res.outcome === 'reverted' || res.outcome === 'skipped-foreign') {
+          store.delete('httpsFilterSystemProxy');
+        }
+        return {
+          success: res.outcome === 'reverted' || res.outcome === 'skipped-foreign',
+          outcome: res.outcome,
+          needsAdmin: res.outcome === 'needs-admin',
+          message: res.message,
+        };
+      } catch (err: any) {
+        return { success: false, outcome: 'error', message: err?.message || String(err) };
       }
     });
 
