@@ -16,6 +16,7 @@ describe('iosTunnel surface', () => {
     jest.doMock('../../modules/local-tunnel/src', () => {
       throw new Error('Cannot find native module LocalTunnel');
     });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const m = require('../filter/iosTunnel') as typeof import('../filter/iosTunnel');
     expect(m.isIosTunnelSupported()).toBe(false);
     expect(await m.getIosTunnelStatus()).toEqual({
@@ -40,6 +41,7 @@ describe('iosTunnel surface', () => {
         setEnabled,
       },
     }));
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const m = require('../filter/iosTunnel') as typeof import('../filter/iosTunnel');
     expect(m.isIosTunnelSupported()).toBe(true);
     expect(await m.getIosTunnelStatus()).toEqual({
@@ -67,9 +69,11 @@ describe('iosTunnel surface', () => {
         },
       },
     }));
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const m = require('../filter/iosTunnel') as typeof import('../filter/iosTunnel');
     // Post-reset class identity: re-require errors so instanceof compares the
     // same UserError the module under test throws.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { UserError } = require('../errors') as typeof import('../errors');
     await expect(m.setIosTunnelEnabled(true)).rejects.toThrow(UserError);
     await expect(m.setIosTunnelEnabled(true)).rejects.toThrow(/VPN configuration/);

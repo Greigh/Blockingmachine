@@ -67,20 +67,20 @@ function withAppEntitlements(config, { appGroup, entitlement }) {
   });
 }
 
-function buildSettings(kind, { targetName, extBundleId }) {
+function buildSettings(kind, { targetName, extBundleId, marketingVersion, projectVersion }) {
   const base = {
     ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: 'YES',
     APPLICATION_EXTENSION_API_ONLY: 'YES',
     CLANG_ENABLE_MODULES: 'YES',
     CODE_SIGN_ENTITLEMENTS: `${targetName}/${targetName}.entitlements`,
     CODE_SIGN_STYLE: 'Automatic',
-    CURRENT_PROJECT_VERSION: '1',
+    CURRENT_PROJECT_VERSION: projectVersion || '1',
     GENERATE_INFOPLIST_FILE: 'NO',
     INFOPLIST_FILE: `${targetName}/Info.plist`,
     IPHONEOS_DEPLOYMENT_TARGET: '16.4',
     LD_RUNPATH_SEARCH_PATHS:
       '"$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"',
-    MARKETING_VERSION: '1.0',
+    MARKETING_VERSION: marketingVersion || '1.0',
     PRODUCT_BUNDLE_IDENTIFIER: extBundleId,
     PRODUCT_BUNDLE_PACKAGE_TYPE: '"XPC!"',
     PRODUCT_NAME: '"$(TARGET_NAME)"',
@@ -101,7 +101,7 @@ function buildSettings(kind, { targetName, extBundleId }) {
 }
 
 /** All pbxproj wiring, guarded so a second prebuild run is a no-op. */
-function addExtensionTarget(proj, { targetName, extBundleId, swiftFiles, metaFiles }) {
+function addExtensionTarget(proj, { targetName, extBundleId, swiftFiles, metaFiles, marketingVersion, projectVersion }) {
   if (proj.pbxTargetByName(targetName)) return;
 
   const objs = proj.hash.project.objects;
@@ -207,13 +207,13 @@ function addExtensionTarget(proj, { targetName, extBundleId, swiftFiles, metaFil
   const releaseUuid = uuid();
   objs.XCBuildConfiguration[debugUuid] = {
     isa: 'XCBuildConfiguration',
-    buildSettings: buildSettings('Debug', { targetName, extBundleId }),
+    buildSettings: buildSettings('Debug', { targetName, extBundleId, marketingVersion, projectVersion }),
     name: 'Debug',
   };
   objs.XCBuildConfiguration[`${debugUuid}_comment`] = 'Debug';
   objs.XCBuildConfiguration[releaseUuid] = {
     isa: 'XCBuildConfiguration',
-    buildSettings: buildSettings('Release', { targetName, extBundleId }),
+    buildSettings: buildSettings('Release', { targetName, extBundleId, marketingVersion, projectVersion }),
     name: 'Release',
   };
   objs.XCBuildConfiguration[`${releaseUuid}_comment`] = 'Release';
@@ -315,7 +315,15 @@ function apply(config, opts) {
   config = withAppEntitlements(config, opts);
   config = copySources(config, opts);
   config = withXcodeProject(config, (cfg) => {
-    addExtensionTarget(cfg.modResults, { ...opts, swiftFiles, metaFiles });
+    addExtensionTarget(cfg.modResults, {
+      ...opts,
+      swiftFiles,
+      metaFiles,
+      // Track the app's version — ASC warns when an appex's CFBundle*
+      // strings diverge from its containing app.
+      marketingVersion: config.version,
+      projectVersion: config.ios?.buildNumber,
+    });
     return cfg;
   });
   return config;
