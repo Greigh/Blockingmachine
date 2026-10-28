@@ -2,6 +2,22 @@ export interface DaemonConfig {
   bindHost: string;
   dnsPort: number;
   controlPort: number;
+  /**
+   * Bind host for the CONTROL API only — defaults to 127.0.0.1 and stays
+   * there unless deliberately overridden. The DNS listener may legitimately
+   * bind a LAN address (a router-facing resolver), but the control surface
+   * carries the query log (a browsing history) and the protection toggle —
+   * its no-Origin trust model is a loopback boundary, not LAN auth, so it
+   * must never ride a non-loopback bind by accident.
+   */
+  controlBindHost?: string;
+  /**
+   * Set by embedders (the Home Assistant add-on runs the daemon in-process):
+   * skips the SIGINT/SIGTERM handlers and keeps a control-API failure from
+   * exiting the host process — the embedder owns lifecycle and surfaces the
+   * failure in its own status instead.
+   */
+  embedded?: boolean;
   upstreamDoHUrl: string;
   sinkholeIpv4: string;
   sinkholeIpv6: string;

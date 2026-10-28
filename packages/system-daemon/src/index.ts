@@ -326,7 +326,7 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
           if (rejected.length > 0) {
             // `rejected` holds the caller's raw strings — strip control characters so a
             // refused name cannot forge extra log lines.
-            const shown = rejected.slice(0, 5).map((d) => d.replace(/[\x00-\x1f\x7f]+/g, ' '));
+            const shown = rejected.slice(0, 5).map((d) => d.replace(/[\n\r\x00-\x08\x0b-\x1f\x7f]+/g, ' '));
             console.warn(`[Daemon] Refused ${rejected.length} invalid quarantine domain(s): ${shown.join(', ')}`);
           }
           console.log(`[Daemon] Injected ${injected} quarantined threat domain(s) into active DNS trie memory.`);
@@ -346,23 +346,28 @@ export async function startDaemon(config: DaemonConfig = defaultConfig) {
 
   // An unhandled 'error' (EADDRINUSE on the control port) would throw and kill the
   // process after DNS was already live — log and exit so supervision can restart cleanly.
+  // Embedded in a host process (the add-on) it logs instead: the embedder owns the
+  // lifecycle and reports the failure through its own status surface.
   controlServer.on('error', (err) => {
     console.error('[Daemon] Control API failed:', err);
-    process.exit(1);
+    if (!config.embedded) process.exit(1);
   });
-  controlServer.listen(config.controlPort, config.bindHost, () => {
-    console.log(`[Daemon] Control API listening on http://${config.bindHost}:${config.controlPort}`);
+  const controlBindHost = config.controlBindHost ?? '127.0.0.1';
+  controlServer.listen(config.controlPort, controlBindHost, () => {
+    console.log(`[Daemon] Control API listening on http://${controlBindHost}:${config.controlPort}`);
   });
 
-  const shutdown = async () => {
-    console.log('\n[Daemon] Gracefully stopping system daemon...');
-    await dnsServer.stop();
-    controlServer.close();
-    process.exit(0);
-  };
+  if (!config.embedded) {
+    const shutdown = async () => {
+      console.log('\n[Daemon] Gracefully stopping system daemon...');
+      await dnsServer.stop();
+      controlServer.close();
+      process.exit(0);
+    };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  }
 
   return { dnsServer, controlServer, trie };
 }

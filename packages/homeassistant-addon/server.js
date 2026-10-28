@@ -47,6 +47,15 @@ const HTTPS_DATA_PORT = parseInt(process.env.HTTPS_DATA_PORT || '9294', 10);
 const HTTPS_DATA_TOKEN = (process.env.HTTPS_DATA_TOKEN || '').trim();
 const HTTPS_CONTROL_PORT = parseInt(process.env.HTTPS_CONTROL_PORT || '9293', 10);
 const HTTPS_CONTROL_URL = `http://127.0.0.1:${HTTPS_CONTROL_PORT}`;
+// The filtering DNS resolver — the same daemon the desktop's "Start DNS
+// Protection" runs, bundled as dns-daemon.mjs. A router's DHCP can hand the
+// add-on's address out as the LAN resolver: blocked names sinkhole, allowed
+// ones forward over DoH. UDP+TCP on :53; its control API stays on 127.0.0.1
+// inside the container — its query log is a browsing history, not LAN data.
+const DNS_FILTER_ENABLED = (process.env.DNS_FILTER || '').toLowerCase() === 'true';
+const DNS_PORT = parseInt(process.env.DNS_PORT || '53', 10);
+const DNS_UPSTREAM = (process.env.DNS_UPSTREAM || 'https://dns.quad9.net/dns-query').trim();
+const DNS_CONTROL_PORT = parseInt(process.env.DNS_CONTROL_PORT || '9295', 10);
 const STARTED_AT = Date.now();
 
 // The `log_level` option (info|debug|warning|error) gates chatter, never failures:
@@ -1220,6 +1229,17 @@ const server = createServer(async (req, res) => {
         caSha256: httpsFilter.caSha256,
         error: httpsFilter.error,
       },
+      dnsFilter: {
+        enabled: dnsFilter.enabled,
+        running: dnsFilter.running,
+        port: dnsFilter.port,
+        upstream: dnsFilter.upstream,
+        error: dnsFilter.error,
+        // Live query counters when running — the same DaemonStats shape the
+        // desktop control API reports, so a router-level deployment can see
+        // the filter working without shell access.
+        stats: dnsDaemonRunning ? dnsDaemonRunning.dnsServer.getStats() : null,
+      },
       feedServer: {
         port: PORT,
         requiresAuth: ENV_FEED_TOKEN ? true : lanAuthMode === 'required',
@@ -1325,6 +1345,7 @@ const server = createServer(async (req, res) => {
         return;
       }
       await persistJson(PROTECTION_PATH, protection);
+      syncDnsProtection();
       broadcastSse('protection_changed', protection);
       log('info', `[Add-on Hub] Protection ${protection.enabled && protection.pausedUntil === null ? 'resumed' : 'paused'}`);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -1725,20 +1746,33 @@ function caFingerprint256(certPem) {
     .join(':');
 }
 
-/** POST /v1/proxy/reload on the loopback control listener — fire-and-forget after each compile. */
+/** POST the rules-reload routes on both loopback control listeners — fire-and-forget after each compile. */
 async function reloadFilterRules() {
-  if (!filterProxyRunning) return;
-  try {
-    // The engine's control plane gates every POST on Content-Type:
-    // application/json (same drive-by rule as this server) — a bare fetch 415s.
-    const res = await fetch(`${HTTPS_CONTROL_URL}/v1/proxy/reload`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    });
-    if (!res.ok) log('warning', `[Add-on Hub] filter reload answered ${res.status}`);
-  } catch (err) {
-    log('warning', '[Add-on Hub] filter reload failed:', err instanceof Error ? err.message : err);
+  if (filterProxyRunning) {
+    try {
+      // The engine's control plane gates every POST on Content-Type:
+      // application/json (same drive-by rule as this server) — a bare fetch 415s.
+      const res = await fetch(`${HTTPS_CONTROL_URL}/v1/proxy/reload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (!res.ok) log('warning', `[Add-on Hub] filter reload answered ${res.status}`);
+    } catch (err) {
+      log('warning', '[Add-on Hub] filter reload failed:', err instanceof Error ? err.message : err);
+    }
+  }
+  if (dnsDaemonRunning) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${DNS_CONTROL_PORT}/v1/reload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (!res.ok) log('warning', `[Add-on Hub] DNS reload answered ${res.status}`);
+    } catch (err) {
+      log('warning', '[Add-on Hub] DNS reload failed:', err instanceof Error ? err.message : err);
+    }
   }
 }
 
@@ -1766,8 +1800,66 @@ if (HTTPS_FILTER_ENABLED) {
   }
 }
 
+// ─── Filtering DNS resolver ─────────────────────────────────────────────────
+// The desktop's system daemon, embedded. LAN clients (via the router's DHCP
+// DNS option) query it directly — blocked names sinkhole or NXDOMAIN, allowed
+// ones forward over the configured DoH upstream. Its own control API binds
+// loopback only: the query log it exposes is the LAN's browsing history.
+const dnsFilter = {
+  enabled: DNS_FILTER_ENABLED,
+  running: false,
+  port: DNS_PORT,
+  upstream: DNS_UPSTREAM,
+  error: null,
+};
+let dnsDaemonRunning = null;
+let dnsPauseTimer = null;
+
+/** The add-on's protection toggle is the daemon's too — including timed-pause expiry. */
+function syncDnsProtection() {
+  if (!dnsDaemonRunning) return;
+  const active = protection.enabled && (protection.pausedUntil === null || protection.pausedUntil > Date.now());
+  dnsDaemonRunning.dnsServer.setProtection(active);
+  if (dnsPauseTimer) clearTimeout(dnsPauseTimer);
+  if (protection.pausedUntil !== null && protection.pausedUntil > Date.now()) {
+    dnsPauseTimer = setTimeout(syncDnsProtection, protection.pausedUntil - Date.now() + 250);
+    dnsPauseTimer.unref?.();
+  }
+}
+
+if (DNS_FILTER_ENABLED) {
+  try {
+    const { startDaemon } = await import('./dns-daemon.mjs');
+    const token = currentToken();
+    dnsDaemonRunning = await startDaemon({
+      bindHost: '0.0.0.0',
+      dnsPort: DNS_PORT,
+      controlPort: DNS_CONTROL_PORT,
+      controlBindHost: '127.0.0.1',
+      upstreamDoHUrl: DNS_UPSTREAM,
+      sinkholeIpv4: '0.0.0.0',
+      sinkholeIpv6: '::',
+      // Rules come from this add-on's own compiled feed — token carried when
+      // auth is on, the on-disk file as the fallback snapshot.
+      feedUrl: `http://127.0.0.1:${PORT}/dns.txt${token ? `?token=${encodeURIComponent(token)}` : ''}`,
+      feedFile: join(DATA_DIR, 'dns.txt'),
+      observationsFile: join(DATA_DIR, 'observations.jsonl'),
+      embedded: true,
+    });
+    dnsFilter.running = true;
+    syncDnsProtection();
+    log('info', `[Blockingmachine Add-on] DNS resolver on :${DNS_PORT} (UDP+TCP) — upstream ${DNS_UPSTREAM}`);
+  } catch (err) {
+    dnsFilter.error = err instanceof Error ? err.message : String(err);
+    log('error', '[Blockingmachine Add-on] DNS resolver failed to start — feeds/API continue without it:', dnsFilter.error);
+  }
+}
+
 process.on('SIGTERM', () => {
-  void filterProxyRunning?.close().finally(() => process.exit(0));
+  const closing = filterProxyRunning?.close() ?? Promise.resolve();
+  dnsDaemonRunning?.dnsServer.stop();
+  dnsDaemonRunning?.controlServer.close();
+  void closing.finally(() => process.exit(0));
   setTimeout(() => process.exit(0), 3_000).unref();
 });
 

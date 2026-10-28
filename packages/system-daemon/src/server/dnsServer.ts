@@ -1,4 +1,5 @@
 import dgram from 'node:dgram';
+import net from 'node:net';
 import dnsPacket from 'dns-packet';
 import { DomainTrie } from '../engine/domainTrie.js';
 import { DohForwarder } from './dohForwarder.js';
@@ -7,6 +8,7 @@ import { DaemonConfig, DaemonStats, DnsVerdict, EvaluationResult, QueryTelemetry
 
 export class DnsServer {
   private socket: dgram.Socket;
+  private tcpServer: net.Server | null = null;
   private trie: DomainTrie;
   private forwarder: DohForwarder;
   private config: DaemonConfig;
@@ -128,100 +130,151 @@ export class DnsServer {
 
       this.socket.on('message', async (msg, rinfo) => {
         try {
-          const decoded = dnsPacket.decode(msg);
-          const question = decoded.questions?.[0];
-
-          if (!question || !question.name) return;
-
-          const evaluation: EvaluationResult = this.protectionEnabled
-            ? this.trie.evaluate(question.name)
-            : { domain: question.name, verdict: 'ALLOWED' };
-
-          this.recordQuery(question.name, evaluation.verdict, rinfo.address, evaluation.matchingRule);
-
-          if (evaluation.verdict === 'BLOCKED') {
-            // A blocked name never reaches upstream — the observation records the query
-            // itself (verdict + qtype) so the label store still sees it was requested.
-            this.recorder?.observe({
-              domain: question.name,
-              observed_at: new Date().toISOString(),
-              qtype: String(question.type),
-              verdict: evaluation.verdict,
-              rcode: null,
-              upstream_ok: false,
-              cname_depth: 0,
-            });
-            // Sinkhole only the address-record types — answering an A record to an MX/TXT/ANY
-            // query is a type-confused response some resolvers treat as bogus. Non-address
-            // queries on a blocked name get NXDOMAIN: same outcome, honest shape.
-            const isAaaa = question.type === 'AAAA';
-            const isA = question.type === 'A';
-            // dns-packet encodes only the `flags` field — the response code is its low
-            // nibble, so NXDOMAIN/SERVFAIL go in as their IANA numbers, not names.
-            const responseBuffer = isAaaa || isA
-              ? dnsPacket.encode({
-                  type: 'response',
-                  id: decoded.id,
-                  flags: dnsPacket.AUTHORITATIVE_ANSWER,
-                  questions: decoded.questions,
-                  answers: [
-                    {
-                      name: question.name,
-                      type: isAaaa ? ('AAAA' as const) : ('A' as const),
-                      class: 'IN' as const,
-                      ttl: 60,
-                      data: isAaaa ? this.config.sinkholeIpv6 : this.config.sinkholeIpv4,
-                    },
-                  ],
-                })
-              : dnsPacket.encode({
-                  type: 'response',
-                  id: decoded.id,
-                  flags: dnsPacket.AUTHORITATIVE_ANSWER | 3, // 3 = NXDOMAIN
-                  questions: decoded.questions,
-                  answers: [],
-                });
-
-            this.socket.send(responseBuffer, rinfo.port, rinfo.address);
-          } else {
-            // Forward to upstream DoH resolver — a failed upstream answers SERVFAIL rather
-            // than leaving the client to time out and retry-storm a dead resolver.
-            const queriedAt = Date.now();
-            const upstreamAnswer = await this.forwarder.resolvePacket(msg);
-            if (upstreamAnswer) {
-              this.recordObservation(question.name, question.type, evaluation.verdict, upstreamAnswer, queriedAt);
-              this.socket.send(upstreamAnswer, rinfo.port, rinfo.address);
-            } else {
-              this.recordObservation(question.name, question.type, evaluation.verdict, null, queriedAt);
-              try {
-                const servfail = dnsPacket.encode({
-                  type: 'response',
-                  id: decoded.id,
-                  flags: dnsPacket.RECURSION_AVAILABLE | 2, // 2 = SERVFAIL
-                  questions: decoded.questions,
-                  answers: [],
-                });
-                this.socket.send(servfail, rinfo.port, rinfo.address);
-              } catch {
-                // Response encoding of a malformed inbound packet can itself fail — drop it.
-              }
-            }
-          }
+          const out = await this.answerQuery(msg, rinfo.address);
+          if (out) this.socket.send(out, rinfo.port, rinfo.address);
         } catch (err) {
           console.warn('[DnsServer] Packet decode failed:', err);
         }
       });
 
       this.socket.bind(this.config.dnsPort, this.config.bindHost, () => {
-        started = true;
-        console.log(`[DnsServer] Listening on ${this.config.bindHost}:${this.config.dnsPort} (UDP)`);
-        resolve();
+        // The TCP half of the resolver contract (RFC 7766): a client whose
+        // UDP answer truncates retries over stream DNS, and some stacks query
+        // TCP directly. UDP-only would strand those clients entirely — same
+        // pipeline answers, only the framing (a u16 length prefix) differs.
+        this.tcpServer = net.createServer((conn) => this.handleTcpConnection(conn));
+        this.tcpServer.on('error', (err) => {
+          console.error('[DnsServer] TCP socket error:', err);
+          if (!started) {
+            this.socket.close();
+            reject(err);
+          }
+        });
+        this.tcpServer.listen(this.config.dnsPort, this.config.bindHost, () => {
+          started = true;
+          console.log(`[DnsServer] Listening on ${this.config.bindHost}:${this.config.dnsPort} (UDP+TCP)`);
+          resolve();
+        });
       });
     });
   }
 
+  /**
+   * Evaluate one raw DNS message and return the response bytes (or null when
+   * nothing should be sent — an undecodable packet, an empty question). Both
+   * transports call this; UDP adds destination addressing, TCP adds the
+   * two-byte length frame.
+   */
+  private async answerQuery(msg: Buffer, clientIp: string): Promise<Buffer | null> {
+    const decoded = dnsPacket.decode(msg);
+    const question = decoded.questions?.[0];
+
+    if (!question || !question.name) return null;
+
+    const evaluation: EvaluationResult = this.protectionEnabled
+      ? this.trie.evaluate(question.name)
+      : { domain: question.name, verdict: 'ALLOWED' };
+
+    this.recordQuery(question.name, evaluation.verdict, clientIp, evaluation.matchingRule);
+
+    if (evaluation.verdict === 'BLOCKED') {
+      // A blocked name never reaches upstream — the observation records the query
+      // itself (verdict + qtype) so the label store still sees it was requested.
+      this.recorder?.observe({
+        domain: question.name,
+        observed_at: new Date().toISOString(),
+        qtype: String(question.type),
+        verdict: evaluation.verdict,
+        rcode: null,
+        upstream_ok: false,
+        cname_depth: 0,
+      });
+      // Sinkhole only the address-record types — answering an A record to an MX/TXT/ANY
+      // query is a type-confused response some resolvers treat as bogus. Non-address
+      // queries on a blocked name get NXDOMAIN: same outcome, honest shape.
+      const isAaaa = question.type === 'AAAA';
+      const isA = question.type === 'A';
+      // dns-packet encodes only the `flags` field — the response code is its low
+      // nibble, so NXDOMAIN/SERVFAIL go in as their IANA numbers, not names.
+      return isAaaa || isA
+        ? dnsPacket.encode({
+            type: 'response',
+            id: decoded.id,
+            flags: dnsPacket.AUTHORITATIVE_ANSWER,
+            questions: decoded.questions,
+            answers: [
+              {
+                name: question.name,
+                type: isAaaa ? ('AAAA' as const) : ('A' as const),
+                class: 'IN' as const,
+                ttl: 60,
+                data: isAaaa ? this.config.sinkholeIpv6 : this.config.sinkholeIpv4,
+              },
+            ],
+          })
+        : dnsPacket.encode({
+            type: 'response',
+            id: decoded.id,
+            flags: dnsPacket.AUTHORITATIVE_ANSWER | 3, // 3 = NXDOMAIN
+            questions: decoded.questions,
+            answers: [],
+          });
+    }
+
+    // Forward to upstream DoH resolver — a failed upstream answers SERVFAIL rather
+    // than leaving the client to time out and retry-storm a dead resolver.
+    const queriedAt = Date.now();
+    const upstreamAnswer = await this.forwarder.resolvePacket(msg);
+    if (upstreamAnswer) {
+      this.recordObservation(question.name, question.type, evaluation.verdict, upstreamAnswer, queriedAt);
+      return upstreamAnswer;
+    }
+    this.recordObservation(question.name, question.type, evaluation.verdict, null, queriedAt);
+    try {
+      return dnsPacket.encode({
+        type: 'response',
+        id: decoded.id,
+        flags: dnsPacket.RECURSION_AVAILABLE | 2, // 2 = SERVFAIL
+        questions: decoded.questions,
+        answers: [],
+      });
+    } catch {
+      // Response encoding of a malformed inbound packet can itself fail — drop it.
+      return null;
+    }
+  }
+
+  /** RFC 7766 framing — u16 length before each message; frames may arrive split or pipelined. */
+  private handleTcpConnection(conn: net.Socket): void {
+    let pending = Buffer.alloc(0);
+    conn.on('data', (chunk) => {
+      pending = Buffer.concat([pending, chunk]);
+      while (pending.length >= 2) {
+        const len = pending.readUInt16BE(0);
+        if (pending.length < 2 + len) break;
+        const frame = pending.subarray(2, 2 + len);
+        pending = pending.subarray(2 + len);
+        void this.answerQuery(frame, conn.remoteAddress ?? '')
+          .then((out) => {
+            if (out && !conn.destroyed) {
+              const head = Buffer.alloc(2);
+              head.writeUInt16BE(out.length);
+              conn.write(Buffer.concat([head, out]));
+            }
+          })
+          .catch((err) => console.warn('[DnsServer] TCP query failed:', err));
+      }
+      // A pending buffer past the DNS message ceiling is a misframed stream —
+      // letting it grow turns one broken client into unbounded held memory.
+      if (pending.length > 66_000) conn.destroy();
+    });
+    conn.on('error', () => conn.destroy());
+  }
+
   stop(): Promise<void> {
     return new Promise((resolve) => {
+      this.tcpServer?.close();
+      this.tcpServer?.closeAllConnections?.();
       this.socket.close(() => resolve());
     });
   }

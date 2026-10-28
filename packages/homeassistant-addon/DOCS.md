@@ -67,7 +67,17 @@ One deliberate non-feature: the `X-Ingress-Path`/`X-Hass-Source` headers that ma
 4. Locate **Blockingmachine** and click **Install**.
 5. Enable **Show in sidebar** and click **Start**.
 
-The add-on publishes two ports: `9191/tcp` — the feed server, REST API, and dashboard — and `9294/tcp` — the HTTPS-filter data listener (disable it with the `https_filter` option and the port serves nothing). It does **not** run a DNS resolver, so nothing binds `5353/udp`: DNS-level blocking stays with the resolver that subscribes to the feeds (AdGuard Home, Pi-hole, Unbound, Shadowrocket), and no port on the host can collide with mDNS because none is claimed.
+The add-on publishes three surfaces: `9191/tcp` — the feed server, REST API, and dashboard — `9294/tcp` — the HTTPS-filter data listener (disable it with the `https_filter` option) — and `53/udp`+`53/tcp` — the filtering DNS resolver (off by default; enable `dns_filter` for router-level blocking, see *DNS filtering for the whole network*). If another add-on already owns `:53` on the host (Pi-hole, AdGuard Home), either keep `dns_filter` off and blank this add-on's `53` host-port fields under **Settings → Network**, or keep that add-on as the feed subscriber — a port claimed twice keeps the add-on from starting at all.
+
+## DNS filtering for the whole network
+
+With `dns_filter` on, the add-on runs the same filtering resolver the desktop app's "Start DNS Protection" does — UDP **and** TCP on `:53`. Point the router's **DHCP DNS option** at the Home Assistant host's IP (or, on routers without a DHCP-DNS setting, set the WAN/upstream DNS to it): every client the router serves then resolves through the add-on. A name on the compiled blocklist answers `0.0.0.0` for A/AAAA (NXDOMAIN for other record types — a fake A record to an MX query is a type-confused response some resolvers treat as bogus); everything else forwards to the configured DoH upstream (**`dns_upstream`**, default Quad9 `https://dns.quad9.net/dns-query` — the query never leaves your network in plaintext DNS).
+
+This is the real resolver, not another feed render: rules load from the add-on's own `dns.txt` at boot and hot-reload on every compile, the dashboard's protection pause/resume applies to it too, and `/v1/status` reports live counters under `dnsFilter` (queries, blocks, rules loaded) so you can watch it work. Per-query observations stream to `observations.jsonl` in the data dir — the behavioural corpus the AI shadow classifier accrues from.
+
+Two honest limits. **Encrypted DNS bypasses it by design**: a client running its own DoH/DoT (Firefox's built-in DoH, iCloud Private Relay, a hardcoded-DoT app) never asks your resolver — blocking those is a router firewall job, not a DNS server's, and many routers can hijack port-53 which *redirects* plaintext DNS but not the encrypted kind. And **the daemon's control API is loopback-only inside the container** — the query log it exposes is the LAN's browsing history, so it deliberately isn't in the port map; `/v1/status` on `9191` is the LAN-visible summary.
+
+If the resolver fails to start (port already claimed, bad upstream URL) the rest of the add-on keeps running and `/v1/status` reports `dnsFilter.running: false` with the error.
 
 ## HTTPS filtering proxy
 

@@ -13,6 +13,9 @@ ENABLE_AI=true
 HTTPS_FILTER=true
 HTTPS_DATA_PORT=9294
 HTTPS_DATA_TOKEN=""
+DNS_FILTER=false
+DNS_PORT=53
+DNS_UPSTREAM="https://dns.quad9.net/dns-query"
 LOG_LEVEL="info"
 
 if [ -f "$OPTIONS_FILE" ]; then
@@ -25,6 +28,9 @@ if [ -f "$OPTIONS_FILE" ]; then
     HTTPS_FILTER=$(jq -r '.https_filter // true' "$OPTIONS_FILE")
     HTTPS_DATA_PORT=$(jq -r '.https_data_port // 9294' "$OPTIONS_FILE")
     HTTPS_DATA_TOKEN=$(jq -r '.https_data_token // ""' "$OPTIONS_FILE")
+    DNS_FILTER=$(jq -r '.dns_filter // false' "$OPTIONS_FILE")
+    DNS_PORT=$(jq -r '.dns_port // 53' "$OPTIONS_FILE")
+    DNS_UPSTREAM=$(jq -r '.dns_upstream // "https://dns.quad9.net/dns-query"' "$OPTIONS_FILE")
     LOG_LEVEL=$(jq -r '.log_level // "info"' "$OPTIONS_FILE")
 fi
 
@@ -37,6 +43,9 @@ export ENABLE_AI="$ENABLE_AI"
 export HTTPS_FILTER="$HTTPS_FILTER"
 export HTTPS_DATA_PORT="$HTTPS_DATA_PORT"
 export HTTPS_DATA_TOKEN="$HTTPS_DATA_TOKEN"
+export DNS_FILTER="$DNS_FILTER"
+export DNS_PORT="$DNS_PORT"
+export DNS_UPSTREAM="$DNS_UPSTREAM"
 export LOG_LEVEL="$LOG_LEVEL"
 export DATA_DIR="/data/blockingmachine"
 
@@ -63,6 +72,12 @@ if [ "$HTTPS_FILTER" = "true" ]; then
     fi
 else
     echo "  - HTTPS filter proxy: disabled (https_filter option)"
+fi
+if [ "$DNS_FILTER" = "true" ]; then
+    echo "  - DNS resolver: :$DNS_PORT (UDP+TCP), upstream $DNS_UPSTREAM"
+    echo "    point the router's DHCP DNS option at this host for network-wide filtering"
+else
+    echo "  - DNS resolver: disabled (dns_filter option)"
 fi
 
 exec node /app/server.js
