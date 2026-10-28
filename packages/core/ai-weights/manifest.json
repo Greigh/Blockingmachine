@@ -1,15 +1,15 @@
 {
   "format": "bm-manifest/1",
-  "version": 1,
-  "model_sha256": "1d1028e6e71e7fdc9c42fc4cb89f955cd24ff9c188bccef03ec7ef9ef858dc89",
-  "allowlist_sha256": "66b265311228cd3e52e584d4ba17b87e7dff7373961f8b1cd72a03fb9a53a995",
+  "version": 2,
+  "model_sha256": "c4f2ed965119be22ee14565ba35412b4d59e7a97042f498983532bdb54eaaf6a",
+  "allowlist_sha256": "67a919f3dcb9656ec40f56b615e27303f7682bada299db04201e92d2b9aafea3",
   "feature_version": 3,
-  "trained_at": "2026-10-27T22:53:56Z",
+  "trained_at": "2026-10-28T02:08:38Z",
   "thresholds": {
     "block": 0.92,
     "review": 0.65
   },
-  "gate_report_sha256": "944a1671f340aaa7e4d720d30d6a7b7f544a5f3dfc063d07b4b3ee0e784b5f14",
-  "promoted_at": "2026-10-28T00:42:29.083129+00:00",
-  "note": "staged for shadow-evidence accrual under owner decision 2026-10-27 \u2014 gate verdict FAIL at staging (shadow_days/shadow_scored/reviewed_enough/drift outstanding); quality bar passed (P@R 0.9963). Not a gate-approved promotion."
+  "gate_report_sha256": "e69130617feb5ffd23d3055e25f486a948f7e44a39d6f123551ac0c6533fa032",
+  "promoted_at": "2026-10-28T02:10:45.481787+00:00",
+  "note": "v4 candidate \u2014 retrained on the 137 review-ceremony labels (weight 3.0); staged for shadow-evidence accrual, NOT a gate-approved promotion. Gate 9/3 at staging: quality bar passed (P@R 0.9991, AP 0.9914, 194 trees/359KB, zero confirmed breakage \u2014 all 19 v3-violating domains cleared below block), residual FAILs all accrual-bound (shadow_days/shadow_scored/drift_top10)."
 }

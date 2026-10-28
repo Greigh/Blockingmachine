@@ -1,6 +1,6 @@
 {
   "name": "blockingmachine-monorepo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "High-performance adblock compiler, DNS rule deduplicator, and AI-powered network defense suite for Pi-hole, AdGuard Home, and modern desktops.",
   "license": "BSD-3-Clause",
@@ -38,6 +38,15 @@
     "ledger:merge": "node scripts/merge-browser-ledger.mjs",
     "check:hotlist": "node scripts/build-hot-list.mjs --check",
     "check:path-decidability": "node scripts/check-path-decidability.mjs",
+    "ai:drive": "cd packages/ai-training && .venv/bin/python drive_traffic.py",
+    "ai:ingest": "cd packages/ai-training && .venv/bin/python obs_ingest.py --db live_observations.db --dns \"$HOME/Library/Application Support/Blockingmachine/dns-observations.jsonl\" --fanout \"$HOME/Library/Application Support/Blockingmachine/browser-fanout.json\"",
+    "ai:train": "cd packages/ai-training && .venv/bin/python train.py --features 3 --observations observations-2026-09-29.db --live-observations live_observations.db --out model_artifacts_v4",
+    "ai:export": "cd packages/ai-training && .venv/bin/python evaluate.py --artifacts model_artifacts_v4 --features 3 --observations observations-2026-09-29.db --live-observations live_observations.db && .venv/bin/python export.py --artifacts model_artifacts_v4 --features 3 --observations observations-2026-09-29.db --live-observations live_observations.db --out model_v4_experimental.json",
+    "ai:anatomy": "cd packages/ai-training && .venv/bin/python error_anatomy.py",
+    "ai:review": "cd packages/ai-training && .venv/bin/python review.py",
+    "ai:hints": "cd packages/ai-training && .venv/bin/python ghostery_hints.py",
+    "ai:gate": "cd packages/ai-training && .venv/bin/python gate.py --artifacts model_artifacts_v4 --export model_v4_experimental.json --allowlist model_artifacts_v4/allowlist.json --shadow \"$HOME/Library/Application Support/Blockingmachine/learned-shadow.jsonl\" --reviews reviewed.csv --baseline drift_baseline_v4.json --observations observations-2026-09-29.db --live-observations live_observations.db --out gate_report_v4.json",
+    "ai:cycle": "npm run ai:ingest && npm run ai:train && npm run ai:export && npm run ai:anatomy && npm run ai:gate",
     "package:extension": "node scripts/package-extension.mjs",
     "package:all": "node scripts/package-all.mjs",
     "rehearse:release": "node scripts/release-rehearsal.mjs",
@@ -66,16 +75,15 @@
     "uuid": "^11.1.1",
     "extract-zip": "npm:@electron-internal/extract-zip@^1.0.5",
     "image-size": "^2.0.4",
-    "query-string": {
-      "decode-uri-component": "^0.5.0"
-    },
     "@electron-forge/plugin-webpack": {
       "webpack-dev-server": "^5.2.6"
+    },
+    "@expo/cli": {
+      "zod": "^4.6.7"
     }
   },
   "devDependencies": {
     "braces": "file:vendor/braces",
-    "decode-uri-component": "file:vendor/decode-uri-component",
     "node-forge": "file:vendor/node-forge"
   },
   "allowScripts": {
