@@ -10,6 +10,9 @@ FEED_SOURCE_URL=""
 FEED_SOURCE_TOKEN=""
 AUTO_COMPILE="24h"
 ENABLE_AI=true
+HTTPS_FILTER=true
+HTTPS_DATA_PORT=9294
+HTTPS_DATA_TOKEN=""
 LOG_LEVEL="info"
 
 if [ -f "$OPTIONS_FILE" ]; then
@@ -19,6 +22,9 @@ if [ -f "$OPTIONS_FILE" ]; then
     FEED_SOURCE_TOKEN=$(jq -r '.feed_source_token // ""' "$OPTIONS_FILE")
     AUTO_COMPILE=$(jq -r '.auto_compile_interval // "24h"' "$OPTIONS_FILE")
     ENABLE_AI=$(jq -r '.enable_ai_radar // true' "$OPTIONS_FILE")
+    HTTPS_FILTER=$(jq -r '.https_filter // true' "$OPTIONS_FILE")
+    HTTPS_DATA_PORT=$(jq -r '.https_data_port // 9294' "$OPTIONS_FILE")
+    HTTPS_DATA_TOKEN=$(jq -r '.https_data_token // ""' "$OPTIONS_FILE")
     LOG_LEVEL=$(jq -r '.log_level // "info"' "$OPTIONS_FILE")
 fi
 
@@ -28,6 +34,9 @@ export FEED_SOURCE_URL="$FEED_SOURCE_URL"
 export FEED_SOURCE_TOKEN="$FEED_SOURCE_TOKEN"
 export AUTO_COMPILE="$AUTO_COMPILE"
 export ENABLE_AI="$ENABLE_AI"
+export HTTPS_FILTER="$HTTPS_FILTER"
+export HTTPS_DATA_PORT="$HTTPS_DATA_PORT"
+export HTTPS_DATA_TOKEN="$HTTPS_DATA_TOKEN"
 export LOG_LEVEL="$LOG_LEVEL"
 export DATA_DIR="/data/blockingmachine"
 
@@ -47,5 +56,13 @@ echo "[Blockingmachine Add-on] Dedicated endpoints available:"
 echo "  - DNS feed: http://homeassistant.local:$FEED_PORT/dns.txt"
 echo "  - Browser feed: http://homeassistant.local:$FEED_PORT/browser.txt"
 echo "  - REST API: http://homeassistant.local:$FEED_PORT/v1/status"
+if [ "$HTTPS_FILTER" = "true" ]; then
+    echo "  - HTTPS filter proxy: homeassistant.local:$HTTPS_DATA_PORT (PAC at :$HTTPS_DATA_PORT/proxy.pac, CA at :$HTTPS_DATA_PORT/ca.pem)"
+    if [ -z "$HTTPS_DATA_TOKEN" ]; then
+        echo "    (open-LAN data port — set https_data_token to require a shared token)"
+    fi
+else
+    echo "  - HTTPS filter proxy: disabled (https_filter option)"
+fi
 
 exec node /app/server.js

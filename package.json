@@ -84,6 +84,7 @@
   },
   "devDependencies": {
     "braces": "file:vendor/braces",
+    "esbuild": "^0.28.2",
     "node-forge": "file:vendor/node-forge"
   },
   "allowScripts": {

@@ -13,10 +13,12 @@ ingress_port: 9191
 panel_icon: "mdi:shield-lock"
 ports:
   9191/tcp: 9191
+  9294/tcp: 9294
 options:
   feed_port: 9191
   auto_compile_interval: "24h"
   enable_ai_radar: true
+  https_filter: true
   log_level: "info"
 schema:
   feed_port: int
@@ -25,4 +27,7 @@ schema:
   feed_source_token: password?
   auto_compile_interval: list(disabled|12h|24h|weekly)
   enable_ai_radar: bool
+  https_filter: bool
+  https_data_port: int?
+  https_data_token: password?
   log_level: list(info|debug|warning|error)

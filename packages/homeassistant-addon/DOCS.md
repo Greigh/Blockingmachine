@@ -18,6 +18,7 @@ AI-powered adblock compiler, segregated DNS/Browser feed server, and local netwo
   - `http://homeassistant.local:9191/shadowrocket.conf`: The DNS rules rendered as a Surge-style rule set for a phone on this LAN, so Shadowrocket subscribes to the add-on instead of a desktop that has to stay on.
   - `http://homeassistant.local:9191/privoxy.action`: The DNS rules rendered as a Privoxy `{+block}` action file, for the copy-and-restart deploy recipe.
   - `http://homeassistant.local:9191/db.blockingmachine.rpz`: The DNS rules rendered as a BIND Response Policy Zone — SOA preamble plus wildcard record pairs — for the same copy-and-reload recipe.
+- **HTTPS Filtering Proxy (hub mode)**: The same `https-filter` engine the desktop app runs, inside the add-on — an explicit proxy on `9294` that evaluates CONNECT/plain-HTTP flows against the compiled rules and can mint per-site certificates once a device trusts its CA. Phones and laptops join it with the read-only enrollment routes on the data port (`/ca.pem`, `/v1/proxy/ca.mobileconfig`, `/proxy.pac`); see *HTTPS filtering proxy* below.
 - **Integration Ready**: Works seamlessly with the `blockingmachine` Home Assistant Custom Integration for Lovelace cards, automations, and live sensor monitoring.
 
 ## REST API
@@ -66,11 +67,23 @@ One deliberate non-feature: the `X-Ingress-Path`/`X-Hass-Source` headers that ma
 4. Locate **Blockingmachine** and click **Install**.
 5. Enable **Show in sidebar** and click **Start**.
 
-The add-on publishes only `9191/tcp` — the feed server and REST API. It does
-**not** run a DNS resolver, so nothing binds `5353/udp`: blocking itself stays
-with the resolver that subscribes to the feeds (AdGuard Home, Pi-hole, Unbound,
-Shadowrocket), and no port on the host can collide with mDNS because none is
-claimed.
+The add-on publishes two ports: `9191/tcp` — the feed server, REST API, and dashboard — and `9294/tcp` — the HTTPS-filter data listener (disable it with the `https_filter` option and the port serves nothing). It does **not** run a DNS resolver, so nothing binds `5353/udp`: DNS-level blocking stays with the resolver that subscribes to the feeds (AdGuard Home, Pi-hole, Unbound, Shadowrocket), and no port on the host can collide with mDNS because none is claimed.
+
+## HTTPS filtering proxy
+
+With `https_filter` on (the default), the add-on runs the same engine as the desktop hub on `9294` — an explicit proxy, not a transparent one: a client is pointed at it (per-app proxy settings, a Wi-Fi network's *Configure Proxy*, or a PAC URL) and every CONNECT or plain-HTTP flow is judged against the compiled feed rules before it is forwarded. Blocked flows are refused with `403`; allowed ones are relayed, and flows to a device that trusts the add-on's CA are spliced for content-level filtering (cosmetic injection, tracker stripping). The engine's rules come from the same feeds the add-on serves — every compile rewrites `engine-rules.txt` in the data dir and hot-reloads the evaluator, so the proxy never runs a stale list. Its `/v1/proxy/*` control API binds `127.0.0.1:9293` **inside the container only** — it is deliberately not in `config.yaml`'s port map, so the LAN can reach the data port but never the control plane.
+
+Three read-only routes live on the data port for enrolment — they are unauthenticated by design because an unenrolled device is exactly who fetches them:
+
+- `GET /ca.pem` — the add-on's root CA in PEM form.
+- `GET /v1/proxy/ca.mobileconfig` — the same CA wrapped in an Apple configuration profile, so Safari on an iPhone/iPad offers "Profile Downloaded" (also served at `/ca.mobileconfig`).
+- `GET /proxy.pac` — a PAC file pointing proxy-aware clients at `PROXY <host>:9294; DIRECT`, failing open to direct connectivity if the add-on stops.
+
+Joining a device is the same flow as against the desktop hub: fetch the CA (the add-on prints its SHA-256 fingerprint in `/v1/status` under `httpsFilter.caSha256` — confirm that string on the device before installing), set the Wi-Fi network's proxy to `homeassistant.local:9294` or its automatic-URL to `http://homeassistant.local:9294/proxy.pac`. Without the CA installed the proxy still blocks by hostname/SNI; content-level filtering needs the trust.
+
+The data port has its own credential, independent of `feed_token`: set **`https_data_token`** and every non-loopback client must present it (`Proxy-Authorization: Bearer …` or the PROXY-v2 auth TLV used by splice clients) before a flow is handled — refusals are `407`. Loopback peers are exempt by design, and with no token configured the port is open-LAN — convenient on a trusted network, visible in `/v1/status` (`httpsFilter.authRequired`) and in the startup log, but set the token if anything untrusted can reach `9294`. The CA, its key, and the pin/bypass ledger persist under `/data/blockingmachine/https-filter/`, so restarts and add-on updates keep the same CA — a device that trusted it stays trusted.
+
+Two honest limits: the proxy filters only clients pointed at it — apps that ignore proxy settings bypass it entirely — and on iOS the PAC path is per-Wi-Fi-network (there is no entitlement-free device-wide proxy on iOS). If the engine fails to start (port in use, a bad option) the feed server keeps running and `/v1/status` reports `httpsFilter.running: false` with the error.
 
 ## Wiring into AdGuard Home Add-on
 

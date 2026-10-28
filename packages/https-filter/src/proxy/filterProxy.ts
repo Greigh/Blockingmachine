@@ -1237,13 +1237,18 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           ? requested
           : `${bindHost}:${boundDataPort}`;
       const body = Buffer.from(buildPacFile(authority), 'utf8');
-      sock.end(
+      // Headers as a latin1 write, then the Buffer verbatim — a latin1
+      // round-trip inside one end(string) would re-encode ≥0x80 bytes as
+      // two-byte UTF-8 and overrun Content-Length (strict clients see
+      // HPE_CLOSED_CONNECTION on the em-dash in the PAC's comment header).
+      sock.write(
         'HTTP/1.1 200 OK\r\n' +
           'Content-Type: application/x-ns-proxy-autoconfig\r\n' +
           `Content-Length: ${body.length}\r\n` +
-          'Connection: close\r\n\r\n' +
-          body.toString('latin1'),
+          'Connection: close\r\n\r\n',
+        'latin1',
       );
+      sock.end(body);
       return;
     }
     // Flag 127 token gate — ahead of the self-target refusal too: an

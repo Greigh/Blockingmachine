@@ -20,7 +20,7 @@
 import { createServer } from 'node:http';
 import { promises as fs, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { renderUnboundFeed, rulesToUnboundZones } from './unboundFeed.js';
 import { renderShadowrocketFeed, shadowrocketHostCount } from './shadowrocketFeed.js';
 import { renderPrivoxyFeed, privoxyPatternCount } from './privoxyFeed.js';
@@ -37,6 +37,16 @@ const ENABLE_AI = process.env.ENABLE_AI !== 'false';
 // whatever already sits in DATA_DIR (or the bundled baseline).
 const FEED_SOURCE_URL = (process.env.FEED_SOURCE_URL || '').trim().replace(/\/+$/, '');
 const FEED_SOURCE_TOKEN = (process.env.FEED_SOURCE_TOKEN || '').trim();
+// The HTTPS-filter engine — the same one the desktop hub runs, bundled into
+// engine.mjs so the add-on image stays dependency-free. Explicit-proxy surface
+// on :9294 (CONNECT/PROXY-v2/plain-HTTP) plus the read-only enrollment routes
+// (/ca.pem, /ca.mobileconfig, /proxy.pac). Its control listener stays on
+// 127.0.0.1:9293 inside the container — config.yaml maps the data port only.
+const HTTPS_FILTER_ENABLED = (process.env.HTTPS_FILTER || '').toLowerCase() === 'true';
+const HTTPS_DATA_PORT = parseInt(process.env.HTTPS_DATA_PORT || '9294', 10);
+const HTTPS_DATA_TOKEN = (process.env.HTTPS_DATA_TOKEN || '').trim();
+const HTTPS_CONTROL_PORT = parseInt(process.env.HTTPS_CONTROL_PORT || '9293', 10);
+const HTTPS_CONTROL_URL = `http://127.0.0.1:${HTTPS_CONTROL_PORT}`;
 const STARTED_AT = Date.now();
 
 // The `log_level` option (info|debug|warning|error) gates chatter, never failures:
@@ -45,9 +55,13 @@ const STARTED_AT = Date.now();
 const LOG_LEVEL = (process.env.LOG_LEVEL || 'info').toLowerCase();
 const LOG_RANK = { debug: 0, info: 1, warning: 2, error: 3 };
 const logLevelRank = LOG_RANK[LOG_LEVEL] ?? LOG_RANK.info;
+// Log-injection guard at the sink: a request-shaped string reaching the log —
+// including through a call site that forgot to clean it — gets its line-breaks
+// and control characters flattened so one event can never print as two lines.
+const logSafe = (v) => (typeof v === 'string' ? v.replace(/[\n\r\x00-\x08\x0b-\x1f\x7f]+/g, ' ') : v);
 const log = (level, ...args) => {
   if ((LOG_RANK[level] ?? LOG_RANK.info) < logLevelRank) return;
-  (level === 'error' || level === 'warning' ? console.error : console.log)(...args);
+  (level === 'error' || level === 'warning' ? console.error : console.log)(...args.map(logSafe));
 };
 
 // ─── Feed authentication ──────────────────────────────────────────────────────
@@ -548,6 +562,18 @@ async function recomputeStats() {
   compileStats.dnsRules = dns.rules.length;
   compileStats.browserRules = browser.rules.length;
   compileStats.totalRules = dns.rules.length + browser.rules.length;
+  // The HTTPS-filter engine reads one rules file at boot and on /v1/proxy/reload
+  // — request rules judge CONNECT/plain-HTTP flows, `##`/`#@#` cosmetic rules
+  // feed the injection index, so it gets both feeds concatenated.
+  try {
+    await fs.writeFile(
+      join(DATA_DIR, 'engine-rules.txt'),
+      `${[...dns.rules, ...browser.rules].join('\n')}\n`,
+      'utf8',
+    );
+  } catch (err) {
+    log('error', '[Add-on Hub] Failed to write engine-rules.txt:', err);
+  }
   return { dns, browser };
 }
 
@@ -612,6 +638,9 @@ async function runCompile() {
       browser: compileStats.browserRules,
       durationMs: compileStats.lastCompileMs,
     });
+    // The engine re-reads engine-rules.txt on this loopback call — keeps its
+    // evaluator in step with the feeds the add-on just recounted.
+    void reloadFilterRules();
     const sourceNote = dns.source === 'baseline' && browser.source === 'baseline'
       ? ' (baseline rules — set feed_source_url to the desktop hub to publish full feeds)'
       : '';
@@ -1181,6 +1210,16 @@ const server = createServer(async (req, res) => {
       compileCount: compileStats.compileCount,
       autoCompile: AUTO_COMPILE,
       aiRadar: { enabled: ENABLE_AI },
+      httpsFilter: {
+        enabled: httpsFilter.enabled,
+        running: httpsFilter.running,
+        dataPort: httpsFilter.dataPort,
+        authRequired: httpsFilter.authRequired,
+        // The CA's SHA-256 fingerprint — the out-of-band value the phone's
+        // install prompt is compared against (same string the desktop card shows).
+        caSha256: httpsFilter.caSha256,
+        error: httpsFilter.error,
+      },
       feedServer: {
         port: PORT,
         requiresAuth: ENV_FEED_TOKEN ? true : lanAuthMode === 'required',
@@ -1657,6 +1696,80 @@ await loadPersistedState();
 await recomputeStats();
 // LAN auth posture resolves before the first accepted connection — never after.
 await initLanAuth();
+
+// ─── HTTPS-filter engine ────────────────────────────────────────────────────
+// Same engine the desktop hub runs (packages/https-filter), shipped bundled as
+// engine.mjs. Phones point a Wi-Fi proxy/PAC at :9294 or splice to it over
+// PROXY-v2; the read-only enrollment routes (/ca.pem, /ca.mobileconfig,
+// /proxy.pac) carry the CA. A failed start degrades honestly — the feed
+// server keeps running without it and /v1/status reports the error.
+const httpsFilter = {
+  enabled: HTTPS_FILTER_ENABLED,
+  running: false,
+  dataPort: HTTPS_DATA_PORT,
+  authRequired: HTTPS_DATA_TOKEN !== '',
+  caSha256: null,
+  error: null,
+};
+let filterProxyRunning = null;
+
+/** SHA-256 over the CA's DER, `AA:BB:…` — the same rendering the desktop and mobile fingerprint gates show. */
+function caFingerprint256(certPem) {
+  const m = /-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\r\n]+?)\s*-----END CERTIFICATE-----/.exec(certPem || '');
+  if (!m) return null;
+  return createHash('sha256')
+    .update(Buffer.from(m[1].replace(/\s+/g, ''), 'base64'))
+    .digest('hex')
+    .toUpperCase()
+    .match(/../g)
+    .join(':');
+}
+
+/** POST /v1/proxy/reload on the loopback control listener — fire-and-forget after each compile. */
+async function reloadFilterRules() {
+  if (!filterProxyRunning) return;
+  try {
+    // The engine's control plane gates every POST on Content-Type:
+    // application/json (same drive-by rule as this server) — a bare fetch 415s.
+    const res = await fetch(`${HTTPS_CONTROL_URL}/v1/proxy/reload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!res.ok) log('warning', `[Add-on Hub] filter reload answered ${res.status}`);
+  } catch (err) {
+    log('warning', '[Add-on Hub] filter reload failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+if (HTTPS_FILTER_ENABLED) {
+  try {
+    const { startFilterProxy } = await import('./engine.mjs');
+    filterProxyRunning = await startFilterProxy({
+      storeDir: join(DATA_DIR, 'https-filter'),
+      bindHost: '0.0.0.0',
+      dataPort: HTTPS_DATA_PORT,
+      controlPort: HTTPS_CONTROL_PORT,
+      rulesPath: join(DATA_DIR, 'engine-rules.txt'),
+      dataAuthToken: HTTPS_DATA_TOKEN || undefined,
+    });
+    httpsFilter.running = true;
+    httpsFilter.caSha256 = caFingerprint256(filterProxyRunning.authority.caCertPem);
+    log(
+      'info',
+      `[Blockingmachine Add-on] HTTPS filter on :${HTTPS_DATA_PORT} — ` +
+        `${HTTPS_DATA_TOKEN ? 'token required' : 'open-LAN (no token — set https_data_token to require one)'}`,
+    );
+  } catch (err) {
+    httpsFilter.error = err instanceof Error ? err.message : String(err);
+    log('error', '[Blockingmachine Add-on] HTTPS filter failed to start — feeds/API continue without it:', httpsFilter.error);
+  }
+}
+
+process.on('SIGTERM', () => {
+  void filterProxyRunning?.close().finally(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3_000).unref();
+});
 
 server.listen(PORT, '0.0.0.0', () => {
   log('info', `[Blockingmachine Add-on] Hub listening on http://0.0.0.0:${PORT}`);
