@@ -951,7 +951,7 @@ describe('flag-106 native toString spoofing', () => {
     expect(String(d?.set)).toBe('function set tc() { [native code] }');
     expect(String(page.window.__bm_sc)).toBe('function __bm_sc() { [native code] }');
     try {
-      page.window.tracker.enabled;
+      const _read = page.window.tracker.enabled;
     } catch {
       // abort token fires et() → installs onerror
     }
