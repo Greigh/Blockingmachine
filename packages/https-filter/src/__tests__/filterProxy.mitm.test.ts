@@ -713,6 +713,11 @@ describe('plain-HTTP absolute-form forwarding', () => {
       `GET / HTTP/1.1\r\nHost: 127.0.0.1:${proxy.port}\r\n\r\n`,
       `GET http://127.0.0.1:${proxy.port}/x HTTP/1.1\r\nHost: 127.0.0.1:${proxy.port}\r\n\r\n`,
       `GET / HTTP/1.1\r\nHost: localhost:${proxy.port}\r\n\r\n`,
+      // M1: shorthand spellings getaddrinfo resolves to the same loopback
+      // — the self-target guard must judge the canonical address.
+      `GET / HTTP/1.1\r\nHost: 127.1:${proxy.port}\r\n\r\n`,
+      `GET / HTTP/1.1\r\nHost: 0x7f000001:${proxy.port}\r\n\r\n`,
+      `GET / HTTP/1.1\r\nHost: 0177.0.0.1:${proxy.port}\r\n\r\n`,
     ]) {
       const before = proxy.stats();
       const sock = net.connect({ host: '127.0.0.1', port: proxy.port });

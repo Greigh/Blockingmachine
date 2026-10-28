@@ -372,11 +372,22 @@ describe("applySystemProxy", () => {
     const res = await applySystemProxy(MANUAL, { platformRunner: runner, ...WIN32 });
     expect(res.outcome).toBe("applied");
 
-    // The never-takes variant: writes "succeed" but the read still disagrees → throw.
-    const { runner: lying } = recordingRunner((_f, args) =>
+    // The never-takes variant (L5): writes "succeed" but the read still
+    // disagrees → 'apply-incomplete' carrying the prior snapshot, NOT a
+    // thrown error that orphaned the partial write — and the rollback plan
+    // for the recorded prior runs over it first.
+    const { runner: lying, calls: lyingCalls } = recordingRunner((_f, args) =>
       args[0] === "query" ? ok(win32Query({})) : ok("The operation completed successfully."),
     );
-    await expect(applySystemProxy(MANUAL, { platformRunner: lying, ...WIN32 })).rejects.toThrow(/did not take|unchanged/);
+    const incomplete = await applySystemProxy(MANUAL, { platformRunner: lying, ...WIN32 });
+    expect(incomplete.outcome).toBe("apply-incomplete");
+    expect(incomplete.prior).not.toBe("unsupported");
+    expect(incomplete.prior?.platform).toBe("win32");
+    // The rollback is the prior snapshot verbatim: every value was absent
+    // before → reg deletes for what the apply plan added.
+    const deletes = lyingCalls.filter((c) => c.args[0] === "delete").map((c) => c.args);
+    expect(deletes).toContainEqual(["delete", WIN32_KEY, "/v", "ProxyServer", "/f"]);
+    expect(deletes).toContainEqual(["delete", WIN32_KEY, "/v", "ProxyEnable", "/f"]);
   });
 });
 

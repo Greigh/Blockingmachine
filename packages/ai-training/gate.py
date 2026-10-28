@@ -173,7 +173,12 @@ def main() -> None:
     print(f"  [info] precision_at_recall_90 (allowlist-adjusted): "
           f"{p90_adjusted:.4f} over {int(keep_mask.sum())} rows "
           f"({n_decided} decided by allowlist)")
-    review_t = 0.65
+    # L11: use the review threshold the candidate actually ships — the
+    # hardcoded 0.65 would judge a model exported with a different cut-off
+    # at the wrong score. Load the export once; the artifact checks reuse it.
+    export_path = Path(args.export)
+    model = json.loads(export_path.read_text())
+    review_t = model.get("thresholds", {}).get("review", 0.65)
     flips, protected = [], 0
     for d in GOLDEN_BENIGN:
         if d.lower() in allow_set:
@@ -191,11 +196,9 @@ def main() -> None:
           (f": {flips[:5]}" if flips else ""), len(flips))
 
     # --- artifact ceremony ---
-    export_path = Path(args.export)
     size_kb = export_path.stat().st_size / 1024
     check("artifact_size", size_kb <= cfg["max_artifact_kb"],
           f"model.json {size_kb:.1f} KB (max {cfg['max_artifact_kb']})", round(size_kb, 1))
-    model = json.loads(export_path.read_text())
     fv = model.get("feature_version")
     from features import FEATURE_NAMES as N1
     try:

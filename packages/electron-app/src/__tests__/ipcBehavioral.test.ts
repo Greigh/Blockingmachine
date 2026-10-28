@@ -13,6 +13,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
+// M3: the REAL mobile QR decoder — the pairing payload is a wire contract,
+// so the electron handler's exact JSON is validated against what a phone
+// would parse, not a local re-implementation.
+import { decodePairingPayload } from '../../../mobile/src/api/pairing';
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -894,7 +898,19 @@ describe('IPC boundary — behavioral', () => {
       expect(payload.httpsCaPem).toBe(PEM);
       expect(payload.httpsCaSha256).toBe(FP);
       expect(payload.httpsToken).toBe(gen.token);
-      expect(payload.httpsDataPort).toBe(9294);
+      // M3 wire contract: the field the mobile decoder reads is `httpsPort`
+      // — the old `httpsDataPort` spelled a value no consumer ever picked up.
+      expect(payload.httpsPort).toBe(9294);
+      expect(payload.httpsDataPort).toBeUndefined();
+      // Feed the handler's exact JSON string through the real mobile
+      // decoder — the pairing QR is a wire contract, not a shape guess.
+      const decoded = decodePairingPayload(pairing.payload);
+      expect(decoded.httpsPort).toBe(9294);
+      // The decoder normalizes PEM whitespace for install — assert the
+      // certificate itself survives the wire, not byte-exact padding.
+      expect(decoded.httpsCaPem?.trim()).toBe(PEM.trim());
+      expect(decoded.httpsCaSha256).toBe(FP);
+      expect(decoded.httpsToken).toBe(gen.token);
       // The feed token stays its own credential — not conflated.
       expect(payload.token).toBeUndefined();
 
@@ -1782,7 +1798,10 @@ describe('httpsfilter:system-proxy-* IPC handlers (P7, flag 123)', () => {
       prior: stateOff,
       at: 1,
     });
-    sysProxyOps.readState.mockReset().mockResolvedValue(stateOff); // post-revert verify
+    sysProxyOps.readState
+      .mockReset()
+      .mockResolvedValueOnce(statePac)  // M4 pre-revert drift read — still ours
+      .mockResolvedValueOnce(stateOff); // post-revert verify — prior restored
     const res = await invoke('httpsfilter:system-proxy-revert', { elevate: true });
     expect(res.success).toBe(true);
     expect(res.outcome).toBe('reverted');
@@ -1791,5 +1810,70 @@ describe('httpsfilter:system-proxy-* IPC handlers (P7, flag 123)', () => {
     expect(shell).toContain(`'-setautoproxystate' 'Wi-Fi' 'off'`);
     expect(sysProxyOps.revert).not.toHaveBeenCalled();
     expect(capturedStoreRef.current!.get('httpsFilterSystemProxy')).toBeUndefined();
+  });
+
+  test('darwin elevate-revert on foreign drift is skipped-foreign — the admin batch never runs (M4)', async () => {
+    if (process.platform !== 'darwin') return;
+    capturedStoreRef.current!.set('httpsFilterSystemProxy', {
+      applied: pacConfig,
+      prior: stateOff,
+      at: 1,
+    });
+    // Live state is a foreign manual write — the old elevated path would
+    // have reverted `prior` straight over the user's settings.
+    sysProxyOps.readState.mockReset().mockResolvedValue({
+      platform: 'darwin',
+      services: [
+        {
+          name: 'Wi-Fi',
+          web: { enabled: true, server: '10.0.0.9', port: 3128 },
+          secure: { enabled: true, server: '10.0.0.9', port: 3128 },
+          auto: { enabled: false, url: '' },
+          bypass: ['*.local', '169.254/16'],
+        },
+      ],
+    });
+    const res = await invoke('httpsfilter:system-proxy-revert', { elevate: true });
+    expect(res.success).toBe(true);
+    expect(res.outcome).toBe('skipped-foreign');
+    expect(runShellAsAdminMock).not.toHaveBeenCalled();
+    // Our claim is released exactly like the non-elevated path — the user
+    // owns the drifted settings now; the record would never fire again.
+    expect(capturedStoreRef.current!.get('httpsFilterSystemProxy')).toBeUndefined();
+  });
+
+  test('darwin elevate-apply refuses on foreign drift — no in-batch revert under the user\'s edits (M4)', async () => {
+    if (process.platform !== 'darwin') return;
+    fetchSpy.mockImplementation(async (u) =>
+      String(u).includes('/v1/proxy/status')
+        ? engineRunning()
+        : new Response('not found', { status: 404 }),
+    );
+    capturedStoreRef.current!.set('httpsFilterSystemProxy', {
+      applied: manualConfig,
+      prior: stateOff,
+      at: 1,
+    });
+    // The OS state drifted away from what we wrote — the in-batch
+    // revert-of-old must NOT restore over the user's own edits, and the
+    // whole re-apply is refused like the non-elevated path.
+    sysProxyOps.readState.mockReset().mockResolvedValue({
+      platform: 'darwin',
+      services: [
+        {
+          name: 'Wi-Fi',
+          web: { enabled: true, server: '10.0.0.9', port: 3128 },
+          secure: { enabled: true, server: '10.0.0.9', port: 3128 },
+          auto: { enabled: false, url: '' },
+          bypass: ['*.local', '169.254/16'],
+        },
+      ],
+    });
+    const res = await invoke('httpsfilter:system-proxy-apply', 'pac', { elevate: true });
+    expect(res.success).toBe(false);
+    expect(res.outcome).toBe('skipped-foreign');
+    expect(runShellAsAdminMock).not.toHaveBeenCalled();
+    expect(sysProxyOps.apply).not.toHaveBeenCalled();
+    expect(capturedStoreRef.current!.get('httpsFilterSystemProxy')).toBeTruthy();
   });
 });

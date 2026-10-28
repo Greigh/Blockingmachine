@@ -88,7 +88,9 @@ def build_population(args, featurize, booster, block_t, review_t) -> list[dict]:
     # Population 1: every distinct domain the shadow log recorded.
     if args.log:
         for r in load_log(Path(args.log)):
-            d = r.get("domain")
+            # L10: store/compare the normalized lowercase spelling — raw log
+            # casing must not create duplicate review rows or label writes.
+            d = (r.get("domain") or "").strip().lower().rstrip(".")
             if not d or d in rows:
                 continue
             rows[d] = {
@@ -105,17 +107,18 @@ def build_population(args, featurize, booster, block_t, review_t) -> list[dict]:
     if args.fps:
         fps = json.loads(Path(args.fps).read_text())
         for rec in fps[: args.fps_limit]:
-            d = rec["domain"]
-            if d not in rows:
-                rows[d] = {
-                    "domain": d,
-                    "reference_decision": "allow",  # corpus negative
-                    "allowlisted": False,
-                    "at": "",
-                    "kind": "test_fp",
-                    "logged_learned": None,
-                    "logged_score": None,
-                }
+            d = (rec["domain"] or "").strip().lower().rstrip(".")
+            if not d or d in rows:
+                continue
+            rows[d] = {
+                "domain": d,
+                "reference_decision": "allow",  # corpus negative
+                "allowlisted": False,
+                "at": "",
+                "kind": "test_fp",
+                "logged_learned": None,
+                "logged_score": None,
+            }
 
     # Population 3: held-out negatives in the candidate's suspicion zone —
     # "is the model about to over-flag this benign domain?" is exactly the

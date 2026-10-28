@@ -14,7 +14,7 @@
  * because of the shadow scorer.
  */
 import { app } from 'electron';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import {
@@ -236,25 +236,42 @@ export function shadowScoreObservationFile(
     // No offset file — first pass, or a wiped sibling: start at the beginning.
   }
 
+  // Size and bytes must come from the same file state: statSync-then-readFileSync
+  // leaves a window where a rotation swaps the file between the two calls and the
+  // recorded offset points into the wrong stream. One descriptor, sized by fstat,
+  // read from `offset` — the file cannot be substituted mid-read.
   let size: number;
+  let text: string;
+  let fd: number;
   try {
-    size = statSync(observationsPath).size;
+    fd = openSync(observationsPath, 'r');
   } catch {
     return null; // no stream yet — the daemon may not be running or recording is off
   }
-  if (size < offset) offset = 0;
-  if (size === offset) {
-    return { evaluated: 0, disagreements: 0, logPath, modelVersion, bytesRead: 0, recordsRead: 0 };
-  }
-
-  let text: string;
   try {
-    // Byte offset, not char — the offset file stores statSync().size, and IDN labels
+    size = fstatSync(fd).size;
+    if (size < offset) offset = 0;
+    if (size === offset) {
+      return { evaluated: 0, disagreements: 0, logPath, modelVersion, bytesRead: 0, recordsRead: 0 };
+    }
+    // Byte offset, not char — the offset file stores fstatSync().size, and IDN labels
     // make a utf8-sliced char index drift left of the real position.
-    text = readFileSync(observationsPath).subarray(offset).toString('utf8');
+    const buf = Buffer.alloc(size - offset);
+    let got = 0;
+    while (got < buf.length) {
+      const n = readSync(fd, buf, got, buf.length - got, offset + got);
+      // A 0-byte read means the fd hit EOF — a rotation truncate landed
+      // between fstat and the read; taking a short read is honest, looping
+      // on 0 progress is a busy-spin.
+      if (n === 0) break;
+      got += n;
+    }
+    text = buf.toString('utf8', 0, got);
   } catch (err) {
     console.error('[Learned Shadow] observation read failed:', err);
     return null;
+  } finally {
+    closeSync(fd);
   }
 
   // First observation per domain wins this pass — the recorder's own dedup already

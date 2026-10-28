@@ -121,8 +121,15 @@ export interface SystemProxyOptions {
 }
 
 export interface SystemProxyApplyResult {
-  outcome: "applied" | "needs-admin" | "unsupported";
-  /** The snapshot to persist — present on 'applied' and 'needs-admin' (partial writes may exist). */
+  /**
+   * 'apply-incomplete' (consolidated-review L5): the write plan ran but the
+   * post-write state did not verify — partial writes may have landed. The
+   * prior snapshot was already rolled back over them best-effort and still
+   * rides the result so the caller can record or re-run the revert; a
+   * thrown error used to orphan both.
+   */
+  outcome: "applied" | "needs-admin" | "apply-incomplete" | "unsupported";
+  /** The snapshot to persist — present on 'applied', 'needs-admin' and 'apply-incomplete' (partial writes may exist). */
   prior?: SystemProxyState;
   message: string;
 }
@@ -780,9 +787,25 @@ export async function applySystemProxy(
   }
   const post = await readSystemProxyState({ platformRunner: run, platform });
   if (post !== "unsupported" && !stateMatchesConfig(post, config)) {
-    throw new Error(
-      "the system-proxy writes reported success but the settings did not take — the OS proxy state was left unchanged",
+    // Consolidated-review L5: a verify miss is not "the apply never
+    // happened" — an earlier plan step may have written, and the thrown
+    // error this replaced orphaned those writes AND the snapshot that could
+    // restore them. Roll `prior` back over whatever landed best-effort and
+    // return an honest outcome that still carries the snapshot, so the
+    // caller can record it or drive the revert again instead of inheriting
+    // an untracked partial write.
+    const rollback = await runPlan(planSystemProxyRevert(prior, platform), run).then(
+      (outcome) => outcome,
+      () => "failed" as const,
     );
+    return {
+      outcome: "apply-incomplete",
+      prior,
+      message:
+        rollback === "ok"
+          ? "The system-proxy writes ran but the OS state did not match afterwards — the previous settings were restored; try the toggle again."
+          : "The system-proxy writes ran but the OS state did not match afterwards, and restoring the previous settings also failed — check the system proxy settings by hand.",
+    };
   }
   return {
     outcome: "applied",

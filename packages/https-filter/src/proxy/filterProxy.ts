@@ -69,11 +69,15 @@
  *    403 for HTTP-shaped flows, an honest close on PROXY-v2. Off by
  *    default: a single-user LAN hub proxies to its own LAN legitimately.
  *
- * Flag 129 — `GET /ca.pem`: a read-only, unauthenticated route answering
- * `authority.caCertPem` — the LAN enrollment surface a phone fetches before
- * verifying the fingerprint out-of-band. It is deliberately NOT a control
- * surface (one static file; `/v1/proxy/*` stays loopback-only on :9293) and
- * exempt from every gate — an unenrolled device is the caller it exists for.
+ * Flag 129 — `GET /ca.pem` + `GET /v1/proxy/ca.pem` (consolidated-review
+ * M2): a read-only, unauthenticated route answering `authority.caCertPem`
+ * — the LAN enrollment surface a phone fetches before verifying the
+ * fingerprint out-of-band. Both spellings hit the same handler
+ * (`SELF_GET_CA_PATHS`): `/ca.pem` shipped first, the `/v1/proxy/`-prefixed
+ * spelling is the documented contract the mobile `fetchHubCa` builds. It
+ * is deliberately NOT a control surface (one static file; the control API
+ * stays loopback-only on :9293) and exempt from every gate — an
+ * unenrolled device is the caller it exists for.
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -109,6 +113,7 @@ import {
   type ProxyV2Target,
 } from './proxyProtocol.js';
 import { collectClientHello } from './sniPeek.js';
+import { SELF_GET_CA_PATHS } from './selfRoutes.js';
 import { terminateToHttp } from './terminate.js';
 
 export interface ProxyStats {
@@ -302,6 +307,10 @@ const PROXY_AUTH_REQUIRED =
   'Proxy-Authenticate: Basic realm="Blockingmachine"\r\n' +
   'Content-Length: 0\r\nConnection: close\r\n\r\n';
 
+// M2: re-exported so the engine's served CA-route set is pinnable against
+// the mobile `fetchHubCa` twin (see selfRoutes.ts).
+export { SELF_GET_CA_PATHS };
+
 function sanitizeHeaderValue(value: string): string {
   return value.replace(/[\r\n]/g, '');
 }
@@ -427,16 +436,112 @@ function expandV6(host: string): number[] | null {
 }
 
 /**
+ * One inet_aton component — the BSD spelling: `0x`/`0X` is hex, a leading
+ * `0` makes the rest octal (an 8 or 9 anywhere fails the WHOLE parse, like
+ * libc — never "decimal with a leading zero"), otherwise decimal. Null on
+ * anything outside that grammar.
+ */
+function parseAtonComponent(part: string): number | null {
+  if (part.startsWith('0x') || part.startsWith('0X')) {
+    const hex = part.slice(2);
+    return hex.length > 0 && /^[0-9a-fA-F]+$/.test(hex) ? parseInt(hex, 16) : null;
+  }
+  if (part.length > 1 && part.startsWith('0')) {
+    return /^[0-7]+$/.test(part) ? parseInt(part, 8) : null;
+  }
+  return /^[0-9]+$/.test(part) ? Number(part) : null;
+}
+
+/**
+ * The BSD inet_aton grammar `isIP` refuses but getaddrinfo accepts: 1–4
+ * dot-separated numeric components where the LAST widens over the bytes the
+ * earlier ones left (`127.1` → 127.0.0.1, `2130706433` → 127.0.0.1,
+ * `0x7f000001` → 127.0.0.1, `0177.0.0.1` → 127.0.0.1). Returns the canonical
+ * dotted quad, or null when the string is not an inet_aton literal at all —
+ * an ordinary hostname then, which is the caller's routing answer.
+ */
+function parseInetAton(host: string): string | null {
+  const parts = host.split('.');
+  if (parts.length > 4 || parts.some((p) => p === '')) {
+    return null;
+  }
+  const values: number[] = [];
+  for (const part of parts) {
+    const n = parseAtonComponent(part);
+    if (n === null) {
+      return null;
+    }
+    values.push(n);
+  }
+  // Non-final components are one byte each; the final spans the rest —
+  // 8 bits with four components, 32 with one.
+  let addr = 0;
+  for (let i = 0; i < values.length - 1; i++) {
+    if (values[i] > 0xff) {
+      return null;
+    }
+    addr = addr * 256 + values[i];
+  }
+  const lastBits = 8 * (5 - values.length);
+  if (values[values.length - 1] >= 2 ** lastBits) {
+    return null;
+  }
+  addr = addr * 2 ** lastBits + values[values.length - 1];
+  const octet = (shift: number): number => Math.floor(addr / 2 ** shift) % 256;
+  return `${octet(24)}.${octet(16)}.${octet(8)}.${octet(0)}`;
+}
+
+/**
+ * Canonicalize a client-supplied destination literal to the address
+ * getaddrinfo actually resolves (consolidated-review M1). `net.isIP` is the
+ * strict inet_pton reading, so `127.1`, `2130706433`, `0x7f000001`,
+ * `0177.0.0.1`, and v6-mapped hextets like `::ffff:7f00:1` all read as "not
+ * an IP" while net.connect dials them straight to loopback — the
+ * self-target and private-destination guards used to judge a different
+ * string than the socket connected. Guards and dials run this first so
+ * both sides see the same address; a string that is not an IP literal at
+ * all passes through untouched (a hostname stays the caller's routing
+ * answer). `::ffff:`-mapped v6 collapses to the embedded v4 — on the wire
+ * it IS that address.
+ */
+export function canonicalizeIpLiteral(host: string): string {
+  let h = host.trim().toLowerCase().replace(/\.+$/, '');
+  if (h.startsWith('[') && h.endsWith(']')) {
+    h = h.slice(1, -1);
+  }
+  const version = isIP(h);
+  if (version === 4) {
+    return h;
+  }
+  if (version === 6) {
+    const groups = expandV6(h);
+    if (groups !== null) {
+      if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
+        return `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
+      }
+      if (groups.every((g) => g === 0)) {
+        return '::';
+      }
+      if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) {
+        return '::1';
+      }
+    }
+    return h;
+  }
+  return parseInetAton(h) ?? h;
+}
+
+/**
  * The optional non-loopback-peer destination denylist (flag 127): the SSRF
  * surface a LAN-reachable proxy carries — loopback (the hub's own services),
  * RFC1918, link-local, CGNAT, ULA, `::`, multicast/reserved, `localhost`.
  * Literal destinations only; a hostname is the caller's routing answer.
  */
 function isPrivateDestinationHost(host: string): boolean {
-  let h = host.trim().toLowerCase().replace(/\.+$/, '');
-  if (h.startsWith('[') && h.endsWith(']')) {
-    h = h.slice(1, -1);
-  }
+  // M1: judge the address getaddrinfo resolves, not the spelling — `10.1`,
+  // `0x0a000001`, `::ffff:0a00:1` all land inside denied ranges while
+  // reading as "not an IP" to the strict parser.
+  const h = canonicalizeIpLiteral(host);
   if (h === 'localhost' || h.endsWith('.localhost')) {
     return true;
   }
@@ -707,10 +812,10 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     if (port !== boundDataPort && (controlPort === undefined || port !== controlPort)) {
       return false;
     }
-    let h = host.trim().toLowerCase().replace(/\.+$/, '');
-    if (h.startsWith('[') && h.endsWith(']')) {
-      h = h.slice(1, -1);
-    }
+    // M1: canonicalize FIRST — guard and dial must judge the same literal:
+    // `CONNECT 127.1:<port>` dials 127.0.0.1 through getaddrinfo whether or
+    // not isIP recognizes the spelling.
+    const h = canonicalizeIpLiteral(host);
     if (h === 'localhost' || h === bindHost.toLowerCase()) {
       return true;
     }
@@ -801,11 +906,15 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
    * closing destroys the other — no half-dead flow, no leaked fds.
    */
   function blindTunnel(client: net.Socket, dstHost: string, dstPort: number, head: Buffer): void {
+    // M1: the dial sees the same canonical literal the guards judged — a
+    // shorthand spelling (`127.1`, `0x7f000001`) resolves identically here
+    // and inside the checks, so no guard can be ducked by orthography.
+    const dialHost = canonicalizeIpLiteral(dstHost);
     // Backstop self-target refusal: every splice converges here, so the
     // guard holds even on paths that skip a verdict point (paused flows,
     // the headerless-splice sni:443 fallback). HTTP-shaped callers already
     // answered 400; at this level the honest move is just to close.
-    if (isSelfTarget(dstHost, dstPort)) {
+    if (isSelfTarget(dialHost, dstPort)) {
       client.destroy();
       return;
     }
@@ -814,7 +923,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // no 'data' listener and would be silently dropped — pausing buffers it
     // for the splice instead.
     client.pause();
-    const upstream = net.connect({ host: dstHost, port: dstPort });
+    const upstream = net.connect({ host: dialHost, port: dstPort });
     track(upstream);
     // Connect deadline, distinct from socket idle timeouts: the tunnel itself
     // may idle legitimately, but a dial that never answers is a parked fd.
@@ -866,7 +975,13 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // A terminated flow dials `upstream` per request — the same self-target
     // refusal a blind tunnel gets (the headerless-splice path derives
     // upstream as `sni:443`, which is this listener when dataPort is 443).
-    if (isSelfTarget(flow.upstream.host, flow.upstream.port)) {
+    // M1: the guarded host and the dialed host are the same canonical
+    // literal — `relayRequest` connects to what this check judged.
+    const upstream: UpstreamEndpoint = {
+      ...flow.upstream,
+      host: canonicalizeIpLiteral(flow.upstream.host),
+    };
+    if (isSelfTarget(upstream.host, upstream.port)) {
       flow.sock.destroy();
       return;
     }
@@ -956,7 +1071,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
           req.headers,
           verdict.transforms,
         );
-        relayRequest({ ...req, url: transformed.url, headers: transformed.headers }, res, flow.upstream, {
+        relayRequest({ ...req, url: transformed.url, headers: transformed.headers }, res, upstream, {
           upstreamCaCerts: opts.upstreamCaCerts,
           connectTimeoutMs: opts.upstreamConnectTimeoutMs,
           responseTimeoutMs: opts.upstreamResponseTimeoutMs,
@@ -1070,7 +1185,7 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // device / an OS PAC fetcher IS the caller these exist for. Static
     // files, never a control surface.
     const selfGet = parseSelfGetRequest(buf);
-    if (selfGet?.path === '/ca.pem') {
+    if (selfGet !== null && SELF_GET_CA_PATHS.includes(selfGet.path)) {
       const body = Buffer.from(authority.caCertPem, 'utf8');
       sock.end(
         'HTTP/1.1 200 OK\r\n' +
@@ -1084,10 +1199,23 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     if (selfGet?.path === '/proxy.pac') {
       // The authority the PAC emits is the one the client used to fetch it —
       // a LAN-hub PAC names the LAN address, a loopback fetch the loopback.
-      const body = Buffer.from(
-        buildPacFile(selfGet.authority ?? `${bindHost}:${boundDataPort}`),
-        'utf8',
-      );
+      // It is still client-supplied header bytes landing inside JavaScript
+      // the OS proxy evaluator runs, so it must parse as a clean
+      // host[:port] — anything else falls back to the bound listener
+      // (consolidated-review N13: no quoting/whitespace/injection games in
+      // FindProxyForURL's output).
+      const requested = selfGet.authority;
+      const requestedParts =
+        requested !== null ? splitHostPort(requested, boundDataPort) : null;
+      const authority =
+        requested !== null &&
+        requestedParts !== null &&
+        requestedParts.port >= 1 &&
+        requestedParts.port <= 65535 &&
+        /^[a-z0-9.:%_-]+$/i.test(requestedParts.host)
+          ? requested
+          : `${bindHost}:${boundDataPort}`;
+      const body = Buffer.from(buildPacFile(authority), 'utf8');
       sock.end(
         'HTTP/1.1 200 OK\r\n' +
           'Content-Type: application/x-ns-proxy-autoconfig\r\n' +
@@ -1120,6 +1248,10 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // spawning the next until fds run out, and a same-host web page can
     // drive it cross-origin (`fetch('http://127.0.0.1:9294/')` is a simple
     // request — no preflight, no origin wall on this listener).
+    // M1: canonicalize the parsed host once so the guard, the bypass check
+    // and the blind-tunnel dial all see the address getaddrinfo resolves —
+    // `Host: 0177.0.0.1:<port>` cannot dress loopback in shorthand.
+    parsed.host = canonicalizeIpLiteral(parsed.host);
     if (isSelfTarget(parsed.host, parsed.port)) {
       sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
       return;
@@ -1261,7 +1393,12 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       sock.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
       return;
     }
-    const { host, port } = target;
+    // M1: the CONNECT authority dials through getaddrinfo, which accepts
+    // the BSD shorthand `isIP` rejects — canonicalize once so the
+    // self-target refusal, the denylist, the literal-IP shortcut and the
+    // verdict all judge the same address the wire resolves.
+    const host = canonicalizeIpLiteral(target.host);
+    const port = target.port;
     // The same self-target refusal the plain-HTTP path has: a tunnel to our
     // own listener re-dispatches the spliced bytes and chains flows (the
     // CONNECT flavor is technically self-limiting — the inner flow would
@@ -1397,6 +1534,12 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // is a wire prefix any local process can write — so the self-target
     // refusal applies before the paused shortcut too. Raw TLS has no honest
     // 400 to send; the close is the answer.
+    // M1: the announced dstHost is canonicalized before every guard and dial
+    // — a helper spelling it `127.1` cannot smuggle loopback past the checks
+    // while getaddrinfo resolves it back.
+    if (target !== null) {
+      target.dstHost = canonicalizeIpLiteral(target.dstHost);
+    }
     if (target !== null && isSelfTarget(target.dstHost, target.dstPort)) {
       sock.destroy();
       return;
@@ -1445,7 +1588,15 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
       }
       const normalized = sni !== null ? normalizeSni(sni) : null;
       if (normalized !== null && isValidSni(normalized)) {
-        blindTunnel(sock, normalized, 443, peeked.head);
+        // N16: an SNI-derived destination is client-supplied too — the
+        // denylist applies to it the same way it did to the v2 dstHost, even
+        // while paused (a pause relaxes verdicts, never the SSRF guard).
+        if (denyPrivate && !peerLoopback && isPrivateDestinationHost(normalized)) {
+          stats.flowsBlocked++;
+          sock.destroy();
+        } else {
+          blindTunnel(sock, normalized, 443, peeked.head);
+        }
       } else {
         sock.destroy();
       }
@@ -1458,6 +1609,17 @@ export function startProxy(opts: StartProxyOptions): Promise<RunningProxy> {
     // absent SNI skips judgment entirely.
     if (sni !== null) {
       const normalized = normalizeSni(sni);
+      // N16: on the headerless-splice path the SNI IS the destination —
+      // terminateFlow dials `sni:443` — so the denylist must judge it the
+      // same way it judged the v2 dstHost above. When a v2 destination
+      // exists the SNI is only a leaf name: the dial target was already
+      // checked and a pinned/bypassed or private spelling changes nothing
+      // the socket connects to.
+      if (denyPrivate && !peerLoopback && target === null && isPrivateDestinationHost(normalized)) {
+        stats.flowsBlocked++;
+        sock.destroy();
+        return;
+      }
       if (policy.isPinned(normalized) || policy.isBypassed(normalized)) {
         if (target === null) {
           sock.destroy();

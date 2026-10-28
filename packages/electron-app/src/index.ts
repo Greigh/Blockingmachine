@@ -4966,7 +4966,9 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       // trusting a LAN fetch at all, `httpsToken` is the data-port
       // credential a token-gated engine demands (the sealed
       // `httpsFilterDataToken`, a different credential from `feedToken`),
-      // and `httpsDataPort` names the listener when the engine answers.
+      // and `httpsPort` names the listener when the engine answers — the
+      // decoder contract the mobile PairingPayload defines (M3: the QR used
+      // to emit `httpsDataPort`, which no decoder reads).
       const ca = await filterProxyManager.getCaInfo();
       const proxyStatus = await filterProxyManager.getStatus();
       const httpsToken = readSecret(store, safeStorage, 'httpsFilterDataToken').trim();
@@ -4990,7 +4992,7 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             ? { httpsCaPem: ca.certPem, httpsCaSha256: ca.sha256Fingerprint }
             : {}),
           ...(httpsToken ? { httpsToken } : {}),
-          ...(engineUp ? { httpsDataPort: proxyStatus.port } : {}),
+          ...(engineUp ? { httpsPort: proxyStatus.port } : {}),
         }),
       };
     });
@@ -5602,6 +5604,20 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             if (current === 'unsupported') {
               return { success: false, outcome: 'unsupported', message: 'System-proxy reads are not implemented on this platform.' };
             }
+            // Consolidated-review M4: the in-batch revert-of-old ran
+            // `existing.prior` back sight-unseen — under foreign drift that
+            // restores over the user's own edits, and applying would then
+            // clobber them too. Same contract the non-elevated path holds:
+            // current must still equal what we wrote, else the settings are
+            // the user's now and the whole re-apply is refused.
+            if (existing?.applied !== undefined && !stateMatchesConfig(current, existing.applied)) {
+              return {
+                success: false,
+                outcome: 'skipped-foreign',
+                message:
+                  'The OS proxy settings were changed since this app wrote them — left untouched (only settings this app wrote are ever reverted). Re-apply was not attempted.',
+              };
+            }
             const plan = [
               ...(existing?.prior ? planSystemProxyRevert(existing.prior, 'darwin') : []),
               ...planSystemProxyApply(config, 'darwin', current),
@@ -5701,6 +5717,28 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       }
       if (options?.elevate === true && process.platform === 'darwin') {
         try {
+          // Consolidated-review M4: the elevated revert used to plan the
+          // prior-restore without ever reading the live state — the
+          // foreign-drift contract revertSystemProxy enforces. Read first,
+          // compare against `record.applied`, and on drift release our
+          // claim exactly like the non-elevated 'skipped-foreign' path.
+          const current = await readSystemProxyState();
+          if (current === 'unsupported') {
+            return {
+              success: false,
+              outcome: 'unsupported',
+              message: 'System-proxy reads are not implemented on this platform.',
+            };
+          }
+          if (!stateMatchesConfig(current, record.applied)) {
+            store.delete('httpsFilterSystemProxy');
+            return {
+              success: true,
+              outcome: 'skipped-foreign',
+              message:
+                'The OS proxy settings were changed since this app wrote them — left untouched (only settings this app wrote are ever reverted).',
+            };
+          }
           const plan = planSystemProxyRevert(record.prior, 'darwin');
           const res = await runShellAsAdmin(sysProxyPlanShell(plan));
           if (!res.success) {

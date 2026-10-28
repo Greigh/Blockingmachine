@@ -102,7 +102,14 @@ def ingest_rows(db_path: Path, rows: list[tuple[str, int, str, float]]) -> None:
     the store before this existed: ABP `$`-modifier strings, SRV names,
     IP literals, malformed labels).
     """
-    kept = [r for r in rows if is_public_name(r[0])]
+    # Store the normalized form, not the raw casing (consolidated-review
+    # L10): `FOO.com.` and `foo.com` must collapse to one label row, and the
+    # serving side lowercases before lookup.
+    normalized = [
+        (r[0].strip().lower().rstrip("."), r[1], r[2], r[3])
+        for r in rows if r[0]
+    ]
+    kept = [r for r in normalized if is_public_name(r[0])]
     dropped = len(rows) - len(kept)
     if dropped:
         print(f"ingest_rows: dropped {dropped} non-public domain rows", file=sys.stderr)

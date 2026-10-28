@@ -400,7 +400,21 @@ describe('startProxy listeners', () => {
     // listener would splice the client's next bytes back into dispatch and
     // chain flows until fds run out. The refusal must outrank even the
     // no-verdict literal-IP path.
-    for (const target of [`127.0.0.1:${proxy.port}`, `localhost:${proxy.port}`]) {
+    // M1: getaddrinfo's BSD spellings resolve to the same loopback even
+    // though isIP rejects them — every shorthand below MUST refuse too:
+    // `127.1`/`127.0.1` (widened), `2130706433`/`0x7f000001`/`0177.0.0.1`
+    // (int/hex/octal) and `::ffff:`-mapped forms (hextet and dotted).
+    for (const target of [
+      `127.0.0.1:${proxy.port}`,
+      `localhost:${proxy.port}`,
+      `127.1:${proxy.port}`,
+      `127.0.1:${proxy.port}`,
+      `2130706433:${proxy.port}`,
+      `0x7f000001:${proxy.port}`,
+      `0177.0.0.1:${proxy.port}`,
+      `[::ffff:7f00:1]:${proxy.port}`,
+      `[::ffff:127.0.0.1]:${proxy.port}`,
+    ]) {
       const before = proxy.stats();
       const { sock, status } = await connectHandshake(target);
       expect(status).toBe('HTTP/1.1 400 Bad Request');

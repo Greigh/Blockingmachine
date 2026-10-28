@@ -27,6 +27,10 @@ import {
 } from '../filter/httpsCapture';
 import { sha256Hex } from '../filter/sha256';
 import { UserError } from '../errors';
+// M2 cross-package contract: the engine's served CA-route set — a leaf
+// module on purpose, so this pin works without dragging node:net into the
+// mobile jest env.
+import { SELF_GET_CA_PATHS } from '../../../https-filter/src/proxy/selfRoutes';
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn(async () => null),
@@ -167,6 +171,15 @@ describe('hostFromUrl', () => {
     expect(hostFromUrl('https://hub.example:8443/x')).toBe('hub.example');
     expect(hostFromUrl('http://[fd00::2]:9191')).toBe('fd00::2');
     expect(hostFromUrl('not a url')).toBeNull();
+  });
+});
+
+describe('hub CA route contract (M2)', () => {
+  it('the fetchHubCa route belongs to the engine’s served CA-route set', () => {
+    // fetchHubCa builds hubDataUrl(host, '/v1/proxy/ca.pem', port) — the path
+    // must stay one of the engine's served self-routes or enrollment breaks.
+    expect(SELF_GET_CA_PATHS).toContain('/v1/proxy/ca.pem');
+    expect(SELF_GET_CA_PATHS).toContain('/ca.pem');
   });
 });
 

@@ -83,6 +83,35 @@ function tcpEchoServer(): net.Server {
   });
 }
 
+/**
+ * A minimal well-formed ClientHello for `servername` — enough for the
+ * dispatch's TLS classification (0x16 0x03) and the SNI extension parse.
+ * Layout per RFC 5246; same shape the listeners suite builds.
+ */
+function buildClientHello(servername: string): Buffer {
+  const u16 = (n: number) => {
+    const b = Buffer.alloc(2);
+    b.writeUInt16BE(n);
+    return b;
+  };
+  const u24 = (n: number) => Buffer.from([(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff]);
+  const name = Buffer.from(servername, 'ascii');
+  const serverNameList = Buffer.concat([u16(1 + 2 + name.length), Buffer.from([0]), u16(name.length), name]);
+  const sniExt = Buffer.concat([u16(0), u16(serverNameList.length), serverNameList]);
+  const body = Buffer.concat([
+    Buffer.from([0x03, 0x03]), // client_version TLS 1.2
+    Buffer.alloc(32), // random — content irrelevant to the parser
+    Buffer.from([0]), // session_id length 0
+    u16(2),
+    Buffer.from([0x13, 0x01]), // TLS_AES_128_GCM_SHA256
+    Buffer.from([1, 0]), // compression_methods: [null]
+    u16(sniExt.length),
+    sniExt,
+  ]);
+  const handshake = Buffer.concat([Buffer.from([0x01]), u24(body.length), body]);
+  return Buffer.concat([Buffer.from([0x16, 0x03, 0x01]), u16(handshake.length), handshake]);
+}
+
 /** Read until the HTTP header terminator or the socket closes. */
 function readHttpHead(sock: net.Socket): Promise<string> {
   return new Promise((resolve) => {
@@ -407,6 +436,21 @@ describe('flag 127 — token-gated listener (non-loopback peers)', () => {
       expect(st).toBe('HTTP/1.1 403 Forbidden');
       s.destroy();
     }
+    // M1: BSD inet_aton spellings getaddrinfo resolves but isIP rejects —
+    // `10.1`→10.0.0.1, hex and octal quads, a widened 2-component form, a
+    // 32-bit integer, and v6-mapped hextets all land inside denied ranges.
+    for (const t of [
+      '10.1:443',
+      '0x0a000001:443',
+      '012.0.0.1:443',
+      '192.168.1:443',
+      '167772161:443',
+      '[::ffff:0a00:1]:443',
+    ]) {
+      const { sock: s, status: st } = await connectHandshake(t, `Bearer ${TOKEN}`);
+      expect(st).toBe('HTTP/1.1 403 Forbidden');
+      s.destroy();
+    }
     // A public IP is not a private destination → past the denylist (the
     // literal-IP path then tunnels — assert the 200, close).
     const { sock: s3, status: st3 } = await connectHandshake('93.184.216.34:1', `Bearer ${TOKEN}`);
@@ -438,6 +482,42 @@ describe('flag 127 — token-gated listener (non-loopback peers)', () => {
     await withTimeout(once(v2, 'close'), 5_000, 'denylisted v2 close');
     expect(proxy.stats().flowsBlocked).toBe(before.flowsBlocked + 1);
     v2.destroy();
+  });
+
+  test('N16: headerless splice naming a private SNI destination → closed (same rule as v2 dstHost)', async () => {
+    // A splice with no v2 header derives its destination from the ClientHello
+    // SNI and dials `sni:443` — under the denylist a LAN peer must not name a
+    // private TLS service and have the engine dial it. Needs a tokenless
+    // listener: under a token the headerless flow is refused at auth first.
+    const splice = await startProxy({
+      bindHost: '127.0.0.1',
+      dataPort: 0,
+      authority,
+      evaluator: createRequestEvaluator([]),
+      policy,
+      denyPrivateDestinations: true,
+      isLoopbackPeer: () => false, // LAN-side peer, same as the parent suite
+    });
+    try {
+      for (const sni of ['localhost', 'x.localhost']) {
+        const before = splice.stats();
+        const sock = await dial(splice.port, buildClientHello(sni));
+        await withTimeout(once(sock, 'close'), 5_000, `private SNI ${sni} close`);
+        expect(splice.stats().flowsBlocked).toBe(before.flowsBlocked + 1);
+      }
+      // A public SNI reaches the termination seam — the engine answers with
+      // live TLS bytes (handshake 0x16 or alert 0x15 on our synthetic
+      // hello), never the silent denylist close. flowsBlocked must not move.
+      const before = splice.stats();
+      const open = await dial(splice.port, buildClientHello('public-ok.example'));
+      const hs = await withTimeout(collectBytes(open, 1), 10_000, 'SNI-derived flow answer');
+      expect(hs.length).toBeGreaterThan(0);
+      expect([0x15, 0x16]).toContain(hs[0]);
+      expect(splice.stats().flowsBlocked).toBe(before.flowsBlocked);
+      open.destroy();
+    } finally {
+      await splice.close();
+    }
   });
 });
 
@@ -538,6 +618,22 @@ describe('flag 129 — GET /ca.pem on the data port', () => {
     const body = text.slice(text.indexOf('\r\n\r\n') + 4);
     expect(body).toBe(authority.caCertPem);
     expect(body).toContain('BEGIN CERTIFICATE');
+    sock.destroy();
+  });
+
+  test('GET /v1/proxy/ca.pem → 200 + the same PEM — the documented route fetchHubCa builds (M2)', async () => {
+    const sock = await dial(
+      proxy.port,
+      'GET /v1/proxy/ca.pem HTTP/1.1\r\nHost: x\r\n\r\n',
+    );
+    const reply = await withTimeout(collectBytes(sock, 1), 5_000, 'v1 ca.pem reply');
+    await withTimeout(once(sock, 'close'), 5_000, 'v1 ca.pem close');
+    const text = reply.toString('latin1');
+    const head = text.split('\r\n\r\n')[0];
+    expect(head.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
+    expect(head).toContain('Content-Type: application/x-pem-file');
+    const body = text.slice(text.indexOf('\r\n\r\n') + 4);
+    expect(body).toBe(authority.caCertPem);
     sock.destroy();
   });
 
