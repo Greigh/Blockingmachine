@@ -280,13 +280,13 @@ export class FilterProxyManager {
         const data = await res.json();
         const paused = data.paused === true || data.status === 'paused';
         const policyDegraded = data.policyDegraded === true;
-        // CA-drift check against the recorded last-trusted fingerprint — the
-        // launchd engine's CA (/Users/Shared storeDir) and the app engine's
-        // (userData storeDir) are different mints, so a swap of which engine
-        // answers shows up as a different sha256 on the same ports. The one-
-        // engine lifecycle gates normally prevent the swap; this is the
-        // defense-in-depth surface for it. No recorded trust → no baseline →
-        // the check stays inert.
+        // CA-drift check against the recorded last-trusted fingerprint —
+        // flag 100's install/uninstall CA handoff keeps the identity the
+        // same across the launchd↔app boundary now, so a sha256 swap on the
+        // same ports means something out-of-band really did re-mint (or a
+        // foreign engine squats the ports). The one-engine lifecycle gates
+        // normally prevent the swap; this is the defense-in-depth surface
+        // for it. No recorded trust → no baseline → the check stays inert.
         const trustedFp = this.trustedCaFingerprint?.();
         let caDrift = false;
         if (trustedFp) {

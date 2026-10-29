@@ -14,7 +14,7 @@
  * stale one and refreshes recency; the oldest entries evict past the cap.
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { isPublicHostname, normalizeHostname, sanitizeDomain, type BehavioralObservation } from '@blockingmachine/core';
 
 const MAX_ENTRIES = 20_000;
@@ -100,14 +100,25 @@ export function clearLiveObservations(): void {
  * records indexed; 0 when the file is absent, empty, or unreadable.
  */
 export function primeLiveObservations(filePath: string): number {
+  // One descriptor for the size check and the read — a statSync-then-read pair
+  // leaves a window where the file is rotated or truncated between calls.
+  let fd: number;
   try {
-    const size = statSync(filePath).size;
+    fd = openSync(filePath, 'r');
+  } catch {
+    return 0;
+  }
+  try {
+    const size = fstatSync(fd).size;
     if (size === 0) return 0;
     const offset = Math.max(0, size - PRIME_TAIL_BYTES);
     // Byte offset, not char — utf8 slicing can split a multibyte label. Skip the
     // head fragment by starting after its newline; a truncated tail record just
     // fails JSON.parse below and is skipped like any corrupt line.
-    let text = readFileSync(filePath).subarray(offset).toString('utf8');
+    const buf = Buffer.alloc(size - offset);
+    let got = 0;
+    while (got < buf.length) got += readSync(fd, buf, got, buf.length - got, offset + got);
+    let text = buf.toString('utf8');
     if (offset > 0) {
       const nl = text.indexOf('\n');
       if (nl === -1) return 0;
@@ -127,5 +138,7 @@ export function primeLiveObservations(filePath: string): number {
     return primed;
   } catch {
     return 0;
+  } finally {
+    closeSync(fd);
   }
 }

@@ -194,7 +194,7 @@ import { DaemonManager } from './daemonManager';
 import { FilterProxyManager } from './filterProxyManager';
 import { runShellAsAdmin } from './adminShell';
 import { TrayManager, type TraySharedState } from './trayManager';
-import { shadowReadiness, shadowScoreObservationFile, shadowScoreWatchdogDomains } from './learnedShadow';
+import { shadowReadiness, shadowScoreObservationFile, shadowScoreObservationRecords, shadowScoreWatchdogDomains } from './learnedShadow';
 import {
   clearHeatForDomain,
   emptyRadarHeatMap,
@@ -3328,6 +3328,139 @@ async function startFeedServer(port = 9191, storeRef: ElectronStore<StoreSchema>
           return;
         }
 
+        if (lowerPath === '/v1/sources' || lowerPath === '/api/sources') {
+          // The hub's blocklist subscriptions — what `/v1/compile` compiles from.
+          // Reads are config-shaped (not telemetry) but stay behind the same
+          // read gate for uniformity; writes mutate hub state so they take the
+          // mutation gate. Same store + sanitizer the IPC handlers use, so a
+          // phone-edited list compiles identically to a desktop-edited one.
+          if (req.method === 'GET') {
+            if (rejectUnauthorisedRead('Cross-origin sources forbidden')) return;
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ sources: store.get('filterSources') ?? [] }));
+            return;
+          }
+          if (rejectUnauthorisedMutation('Cross-origin sources forbidden')) return;
+          if (req.method !== 'PUT') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use PUT.' }));
+            return;
+          }
+          let sourcesBody = '';
+          req.on('data', (chunk) => {
+            sourcesBody += chunk;
+            if (sourcesBody.length > 1e6) req.destroy();
+          });
+          req.on('end', () => {
+            try {
+              const data = JSON.parse(sourcesBody || '{}') as { sources?: unknown };
+              const parsed = sanitizeFilterSources(data.sources);
+              if (!parsed.ok) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ success: false, error: parsed.error }));
+                return;
+              }
+              store.set('filterSources', parsed.value);
+              res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: true, count: parsed.value.length }));
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: false, error: 'Request body must be JSON' }));
+            }
+          });
+          return;
+        }
+
+        if (lowerPath === '/v1/custom-rules' || lowerPath === '/api/custom-rules') {
+          // The user's hand-written rules — merged into every compile, same as
+          // the desktop custom-rules pane. Mobile edit parity for hub users.
+          if (req.method === 'GET') {
+            if (rejectUnauthorisedRead('Cross-origin custom-rules forbidden')) return;
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ customRules: store.get('customRules') ?? '' }));
+            return;
+          }
+          if (rejectUnauthorisedMutation('Cross-origin custom-rules forbidden')) return;
+          if (req.method !== 'PUT') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use PUT.' }));
+            return;
+          }
+          let rulesBody = '';
+          req.on('data', (chunk) => {
+            rulesBody += chunk;
+            if (rulesBody.length > 1e6) req.destroy();
+          });
+          req.on('end', () => {
+            try {
+              const data = JSON.parse(rulesBody || '{}') as { customRules?: unknown };
+              const parsed = sanitizeCustomRulesText(
+                typeof data.customRules === 'string' ? data.customRules : '',
+              );
+              if (!parsed.ok) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ success: false, error: parsed.error }));
+                return;
+              }
+              store.set('customRules', parsed.value);
+              res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: true }));
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: false, error: 'Request body must be JSON' }));
+            }
+          });
+          return;
+        }
+
+        if (lowerPath === '/v1/shadow/observations' || lowerPath === '/api/shadow/observations') {
+          // Flag 43's remote intake: the mobile packet tunnel records every DNS
+          // query it answers and uploads the same DnsObservationRecord shape the
+          // daemon's JSONL recorder writes. Both streams land in the same
+          // accrual — disagreements and samples append to learned-shadow.jsonl,
+          // records index into the serving classifier's live-observation ledger.
+          // Mutation-class gate: it writes evidence + mutates the index.
+          if (rejectUnauthorisedMutation('Cross-origin shadow intake forbidden')) return;
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed. Use POST.' }));
+            return;
+          }
+          let obsBody = '';
+          req.on('data', (chunk) => {
+            obsBody += chunk;
+            if (obsBody.length > 1e6) req.destroy();
+          });
+          req.on('end', () => {
+            try {
+              const data = JSON.parse(obsBody || '{}') as { records?: unknown };
+              if (!Array.isArray(data.records) || data.records.length > 500) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ success: false, error: 'records must be an array of at most 500 observation records' }));
+                return;
+              }
+              // Fail-soft like the file tail: an unloaded model is a 200 with
+              // evaluated 0 — the phone's recorder keeps accruing locally
+              // either way, so a retry would only duplicate the backlog.
+              const result = shadowScoreObservationRecords(
+                data.records as Parameters<typeof shadowScoreObservationRecords>[0],
+                LEARNED_SHADOW_SAMPLE_RATE,
+              );
+              res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({
+                success: true,
+                accepted: data.records.length,
+                evaluated: result?.evaluated ?? 0,
+                disagreements: result?.disagreements ?? 0,
+              }));
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: false, error: 'Request body must be JSON' }));
+            }
+          });
+          return;
+        }
+
         if (lowerPath === '/v1/compile' || lowerPath === '/api/compile') {
           if (rejectUnauthorisedMutation('Cross-origin compilation forbidden')) return;
           if (req.method !== 'POST') {
@@ -6027,11 +6160,11 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
           return { ok: false as const, current: app.getVersion(), error: 'Release check returned no version' };
         }
         const updateAvailable = compareVersions(latest, app.getVersion()) > 0;
-        if (updateAvailable) {
+        if (updateAvailable && mainWindow && !mainWindow.isDestroyed()) {
           // The renderer badge listens for this event — without it the
           // sidebar dot could only appear if a push channel existed, and
           // none does on this manual check path.
-          mainWindow?.webContents.send('update-available', { latest, url: rel?.html_url });
+          mainWindow.webContents.send('update-available', { latest, url: rel?.html_url });
         }
         return {
           ok: true as const,

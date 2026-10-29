@@ -911,6 +911,158 @@ describe('IPC boundary — behavioral', () => {
     }
   });
 
+  test('Sources + custom rules: LAN editing rides the read/mutation gates and the store sanitizers', async () => {
+    const store = capturedStoreRef.current!;
+    const priorSources = store.get('filterSources');
+    const priorRules = store.get('customRules');
+    store.set('filterSources', [
+      { name: 'Seeded list', url: 'https://seed.example/list.txt', enabled: true, scope: 'dns' },
+    ]);
+    store.set('customRules', '||seeded.example^');
+    const gen = await invoke('generate-feed-token');
+    const started = await invoke('start-feed-server', 19204);
+    expect(started.isRunning).toBe(true);
+    const auth = { Authorization: `Bearer ${gen.token}` };
+    try {
+      // Foreign origins and unauthenticated reads are both out — a paired
+      // bearer reads back exactly what the store holds.
+      const foreign = await fetch('http://127.0.0.1:19204/v1/sources', {
+        headers: { Origin: 'https://attacker.example' },
+      });
+      expect(foreign.status).toBe(403);
+      const denied = await fetch('http://127.0.0.1:19204/v1/sources');
+      expect(denied.status).toBe(401);
+      const got = await fetch('http://127.0.0.1:19204/v1/sources', { headers: auth });
+      expect(got.status).toBe(200);
+      const body = await got.json();
+      expect(body.sources).toHaveLength(1);
+      expect(body.sources[0].scope).toBe('dns');
+
+      const deniedPut = await fetch('http://127.0.0.1:19204/v1/sources', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sources: [] }),
+      });
+      expect(deniedPut.status).toBe(401);
+      const invalid = await fetch('http://127.0.0.1:19204/v1/sources', {
+        method: 'PUT',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sources: 'not-an-array' }),
+      });
+      expect(invalid.status).toBe(400);
+      const wrongMethod = await fetch('http://127.0.0.1:19204/v1/sources', {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      expect(wrongMethod.status).toBe(405);
+      const put = await fetch('http://127.0.0.1:19204/v1/sources', {
+        method: 'PUT',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sources: [
+            { name: 'Phone-added', url: 'https://phone.example/l.txt', enabled: true },
+            { name: 'Toggled off', url: 'https://off.example/l.txt', enabled: false },
+          ],
+        }),
+      });
+      expect(put.status).toBe(200);
+      const stored = store.get('filterSources') as { name: string }[];
+      expect(stored).toHaveLength(2);
+      expect(stored[0].name).toBe('Phone-added');
+
+      const rulesDenied = await fetch('http://127.0.0.1:19204/v1/custom-rules');
+      expect(rulesDenied.status).toBe(401);
+      const rulesGot = await fetch('http://127.0.0.1:19204/v1/custom-rules', { headers: auth });
+      expect(rulesGot.status).toBe(200);
+      expect((await rulesGot.json()).customRules).toBe('||seeded.example^');
+      const rulesPut = await fetch('http://127.0.0.1:19204/v1/custom-rules', {
+        method: 'PUT',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customRules: '||phone.example^\n@@||allow.example^' }),
+      });
+      expect(rulesPut.status).toBe(200);
+      expect(store.get('customRules')).toBe('||phone.example^\n@@||allow.example^');
+      const rulesInvalid = await fetch('http://127.0.0.1:19204/v1/custom-rules', {
+        method: 'PUT',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: 'not json at all',
+      });
+      expect(rulesInvalid.status).toBe(400);
+    } finally {
+      await invoke('clear-feed-token');
+      store.set('feedToken', '');
+      store.set('filterSources', priorSources);
+      store.set('customRules', priorRules);
+      await invoke('stop-feed-server');
+    }
+  });
+
+  test('Flag-43 intake: /v1/shadow/observations is bearer-gated, shape-validated, and fail-soft without a model', async () => {
+    const gen = await invoke('generate-feed-token');
+    const started = await invoke('start-feed-server', 19204);
+    expect(started.isRunning).toBe(true);
+    const auth = { Authorization: `Bearer ${gen.token}` };
+    try {
+      // Foreign origins and unauthenticated posts are both out — the route
+      // writes evidence, so it rides the mutation gate.
+      const foreign = await fetch('http://127.0.0.1:19204/v1/shadow/observations', {
+        method: 'POST',
+        headers: { Origin: 'https://attacker.example', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: [] }),
+      });
+      expect(foreign.status).toBe(403);
+      const denied = await fetch('http://127.0.0.1:19204/v1/shadow/observations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: [] }),
+      });
+      expect(denied.status).toBe(401);
+      const wrongMethod = await fetch('http://127.0.0.1:19204/v1/shadow/observations', {
+        method: 'PUT',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      expect(wrongMethod.status).toBe(405);
+      const oversized = await fetch('http://127.0.0.1:19204/v1/shadow/observations', {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: Array.from({ length: 501 }, () => ({ domain: 'x.example.com' })) }),
+      });
+      expect(oversized.status).toBe(400);
+      const notArray = await fetch('http://127.0.0.1:19204/v1/shadow/observations', {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: 'nope' }),
+      });
+      expect(notArray.status).toBe(400);
+
+      // No candidate model is loaded in the suite — the route must still
+      // 200 with evaluated 0 rather than reject (the phone's buffer drains
+      // either way; a refusal would only duplicate the backlog).
+      const ok = await fetch('http://127.0.0.1:19204/v1/shadow/observations', {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          records: [
+            { domain: 'ads.example.com', verdict: 'blocked', rcode: 0, cname_depth: 0, ttl_min: 60, latency_ms: 4 },
+            { domain: 'ok.example.com', verdict: 'allowed', rcode: 0, cname_depth: 2, ttl_min: 300, latency_ms: 11 },
+          ],
+        }),
+      });
+      expect(ok.status).toBe(200);
+      const body = await ok.json();
+      expect(body.success).toBe(true);
+      expect(body.accepted).toBe(2);
+      expect(body.evaluated).toBe(0);
+      expect(body.disagreements).toBe(0);
+    } finally {
+      await invoke('clear-feed-token');
+      capturedStoreRef.current!.set('feedToken', '');
+      await invoke('stop-feed-server');
+    }
+  });
+
   test('Pairing: HTTPS capture material rides the QR — CA, fingerprint, and the flag-127 data token', async () => {
     // The pairing handler asks the real filterProxyManager for CA + status —
     // a fixture control server on :9293 answers so the fields land for real.

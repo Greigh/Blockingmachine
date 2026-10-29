@@ -274,35 +274,20 @@ export function shadowScoreObservationFile(
     closeSync(fd);
   }
 
-  // First observation per domain wins this pass — the recorder's own dedup already
-  // throttles, so a repeat inside one batch is residue, not signal.
-  const seen = new Map<string, { decision: LearnedDecision; obs: BehavioralObservation }>();
-  let recordsRead = 0;
+  const parsed: DnsObservationRecord[] = [];
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
-      const rec = JSON.parse(trimmed) as DnsObservationRecord;
-      // Skip names the serving index would reject anyway (mDNS chatter, reverse
-      // zones) — the recorder now drops them at write time, but records written
-      // before that still reach this tail.
-      if (typeof rec.domain !== 'string' || !isPublicHostname(rec.domain) || seen.has(rec.domain)) continue;
-      const obsRecord = observationFromDnsRecord(rec);
-      // Same record, second reader: the serving classifier's observation index.
-      indexLiveObservation(rec.domain, obsRecord);
-      seen.set(rec.domain, {
-        decision: rec.verdict === 'BLOCKED' ? 'block' : 'allow',
-        // Feed the v3 tail the observation that produced this record — a
-        // v1/v2 model ignores it; a v3 model scores what the resolver saw.
-        // dnsQueryCount is 1 by construction (deduped stream), nxdomainRate is
-        // the degenerate single-sample rate, and fanout_* stay absent → 0.
-        obs: obsRecord,
-      });
-      recordsRead++;
+      parsed.push(JSON.parse(trimmed) as DnsObservationRecord);
     } catch {
       // A torn final line lands whenever the daemon is mid-append at read time.
     }
   }
+  const seen = seenMapFromRecords(parsed);
+  // Deduped-domain count — the historical contract of this field (first
+  // record per domain wins), not raw parsed lines.
+  const recordsRead = seen.size;
 
   try {
     writeFileSync(offsetPath, String(size));
@@ -335,6 +320,78 @@ export function shadowScoreObservationFile(
     });
   }
   return { ...result, logPath, modelVersion, bytesRead: size - offset, recordsRead };
+}
+
+/**
+ * Build the per-domain decision/observation map a shadow comparison scores.
+ * Shared by the file tail and the LAN route feeding mobile tunnel records —
+ * same validation (public hostname), same index side-effect, same "first
+ * record per domain wins" dedup as the recorder's own throttling.
+ */
+function seenMapFromRecords(
+  records: DnsObservationRecord[],
+): Map<string, { decision: LearnedDecision; obs: BehavioralObservation }> {
+  const seen = new Map<string, { decision: LearnedDecision; obs: BehavioralObservation }>();
+  for (const rec of records) {
+    // Skip names the serving index would reject anyway (mDNS chatter, reverse
+    // zones) — the recorder drops them at write time, but remote clients and
+    // pre-filter records still reach this path.
+    if (typeof rec?.domain !== 'string' || !isPublicHostname(rec.domain) || seen.has(rec.domain)) continue;
+    const obsRecord = observationFromDnsRecord(rec);
+    // Same record, second reader: the serving classifier's observation index.
+    indexLiveObservation(rec.domain, obsRecord);
+    seen.set(rec.domain, {
+      decision: rec.verdict === 'BLOCKED' ? 'block' : 'allow',
+      // Feed the v3 tail the observation that produced this record — a
+      // v1/v2 model ignores it; a v3 model scores what the resolver saw.
+      // dnsQueryCount is 1 by construction (deduped stream), nxdomainRate is
+      // the degenerate single-sample rate, and fanout_* stay absent → 0.
+      obs: obsRecord,
+    });
+  }
+  return seen;
+}
+
+/**
+ * Shadow-score a batch of DNS observation records handed in directly — the
+ * `/v1/shadow/observations` route feeds the mobile packet tunnel's recorder
+ * into the same pipeline the daemon's JSONL tail uses. Null when the model
+ * or the log sink is unavailable (fail-soft, same as the file path).
+ */
+export function shadowScoreObservationRecords(
+  records: DnsObservationRecord[],
+  sampleRate: number,
+): ObservationShadowResult | null {
+  const clf = getLearnedClassifier();
+  if (!clf) return null;
+  const sink = openShadowAppender();
+  if (!sink) return null;
+  const { logPath, append } = sink;
+  const seen = seenMapFromRecords(records);
+  const result = runShadowComparison({
+    classifier: {
+      ...clf,
+      classify: (d) => clf.classify(d, seen.get(d)?.obs),
+    },
+    reference: (d) => seen.get(d)?.decision ?? 'allow',
+    domains: [...seen.keys()],
+    onDisagreement: append,
+    sampleRate,
+    onSample: (d) => append(d),
+    onError: (domain, err) => {
+      console.error(`[Learned Shadow] error on ${domain}:`, err);
+    },
+  });
+  if (result.evaluated > 0) {
+    append({
+      type: 'summary',
+      at: new Date().toISOString(),
+      evaluated: result.evaluated,
+      disagreements: result.disagreements,
+      modelVersion,
+    });
+  }
+  return { ...result, logPath, modelVersion, bytesRead: 0, recordsRead: seen.size };
 }
 
 /** Gate thresholds this readout measures against — the same numbers gate.py enforces. */

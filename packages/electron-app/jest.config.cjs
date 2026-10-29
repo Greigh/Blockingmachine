@@ -19,6 +19,9 @@ const shared = {
   extensionsToTreatAsEsm: ['.ts', '.tsx'],
   moduleNameMapper: {
     '^@blockingmachine/core$': '<rootDir>/../core/src/index.ts',
+    // Mobile sources imported by the pairing-shape tests use the package's
+    // subpath export; the specifier lands on src/utils/, not src/.
+    '^@blockingmachine/core/urlSafety$': '<rootDir>/../core/src/utils/urlSafety.ts',
     '^@/(.*)$': '<rootDir>/src/$1',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
