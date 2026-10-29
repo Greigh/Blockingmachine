@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { bodyLooksLikeFeed, pullFeeds, FEED_FILES } from '../feedSource.js';
+import { bodyLooksLikeFeed, pullFeeds, FEED_FILES, credentialAllowed } from '../feedSource.js';
 
 const SAMPLE_DNS = '# dns feed\n0.0.0.0 ads.example.com\n0.0.0.0 tracker.example.com\n';
 const SAMPLE_BROWSER = '||ads.example.com^\n@@||allowed.example.com^\n';
@@ -49,6 +49,29 @@ test('pullFeeds sends the source token as Bearer auth', async () => {
   for (const call of calls) {
     assert.equal(call.init.headers.Authorization, 'Bearer secret');
   }
+});
+
+test('pullFeeds withholds the token from a cleartext public source', async () => {
+  // The token is a LAN-scoped secret — a configured source that resolves
+  // outside the local network gets the request, but never the credential.
+  const dataDir = tmpDir();
+  const { impl, calls } = fakeFetch({ 'dns.txt': SAMPLE_DNS, 'browser.txt': SAMPLE_BROWSER });
+  await pullFeeds({ sourceUrl: 'http://feeds.example.com:9191/', token: 'secret', dataDir, fetchImpl: impl });
+  for (const call of calls) {
+    assert.equal(call.init.headers.Authorization, undefined);
+  }
+  assert.equal(credentialAllowed('https://feeds.example.com/x'), true);
+  assert.equal(credentialAllowed('http://hub.local:9191/x'), true);
+  assert.equal(credentialAllowed('http://8.8.8.8/x'), false);
+  // Spec pinned to core's isLocalNetworkHost: reserved-local names widen,
+  // unreachable/unspecified and public-mapped forms withhold.
+  assert.equal(credentialAllowed('http://printer.home.arpa/x'), true);
+  assert.equal(credentialAllowed('http://foo.localhost/x'), true);
+  assert.equal(credentialAllowed('http://2130706433/x'), true); // 127.0.0.1 via WHATWG canonicalization
+  assert.equal(credentialAllowed('http://134744072/x'), false); // 8.8.8.8
+  assert.equal(credentialAllowed('http://[::ffff:a00:5]/x'), true); // mapped 10.0.0.5
+  assert.equal(credentialAllowed('http://[::ffff:8.8.8.8]/x'), false);
+  assert.equal(credentialAllowed('http://[::]/x'), false); // unspecified is not a destination
 });
 
 test('a non-OK response reports an error and writes nothing', async () => {

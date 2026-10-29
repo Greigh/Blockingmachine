@@ -389,15 +389,26 @@ export async function fetchWithConditionalCache(
 
       // Security Guard: Block path traversal and access to sensitive system directories/credentials
       const normalized = path.normalize(filePath);
+      // The checks below are written in POSIX form, so the comparison path is
+      // separator- and case-folded: on Windows, path.normalize yields backslash
+      // drive paths (C:\Users\x\.ssh\…) that would otherwise sail past every
+      // '/.ssh/'-style test, and the filesystem itself is case-insensitive.
+      const matchForm = normalized.replace(/\\/g, '/').toLowerCase();
       const isSensitiveSystemPath =
-        normalized.startsWith('/etc/') ||
-        normalized === '/etc' ||
-        normalized.startsWith('/proc/') ||
-        normalized.startsWith('/sys/') ||
-        normalized.includes('/.ssh/') ||
-        normalized.endsWith('/.ssh') ||
-        normalized.includes('/.aws/') ||
-        normalized.endsWith('/.env');
+        matchForm.startsWith('/etc/') ||
+        matchForm === '/etc' ||
+        matchForm.startsWith('/proc/') ||
+        matchForm.startsWith('/sys/') ||
+        matchForm.includes('/.ssh/') ||
+        matchForm.endsWith('/.ssh') ||
+        matchForm.includes('/.aws/') ||
+        matchForm.endsWith('/.env') ||
+        // UNC shares and the Windows device namespaces (\\?\, \\.\pipe, \\.\PhysicalDrive)
+        // have no POSIX prefix equivalent — forward-slash folded they all carry '//'.
+        matchForm.includes('//') ||
+        // Windows system roots — the SAM/SECURITY hives and NTDS.dit live under the
+        // drive's Windows directory regardless of drive letter or casing.
+        /[a-z]:\/windows(\/|$)/.test(matchForm);
 
       if (isSensitiveSystemPath) {
         console.error(`❌ Access denied to restricted system path: ${url}`);

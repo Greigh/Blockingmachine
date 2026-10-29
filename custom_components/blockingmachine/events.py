@@ -23,6 +23,7 @@ coordinator remains the source of truth while the stream is down.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from typing import Any, Awaitable, Callable
@@ -67,10 +68,9 @@ class BlockingmachineEventStream:
         self._stop_event.set()
         if self._task is not None:
             self._task.cancel()
-            try:
+            # We raised the cancellation — awaiting the task re-raises it.
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
 
     async def _run(self) -> None:
         backoff = RECONNECT_MIN_S
@@ -83,10 +83,9 @@ class BlockingmachineEventStream:
                 raise
             except Exception as err:  # noqa: BLE001 — a dead socket must never kill the loop
                 _LOGGER.debug("Blockingmachine event stream interrupted: %s", err)
-            try:
+            # wait_for timing out means the stop event did not fire: sleep done.
+            with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
-            except asyncio.TimeoutError:
-                pass
             backoff = min(backoff * 2, RECONNECT_MAX_S)
 
     async def _consume_once(self) -> None:

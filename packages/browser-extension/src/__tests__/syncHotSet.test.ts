@@ -1,5 +1,5 @@
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
-import { SyncClient } from '../background/syncClient.js';
+import { SyncClient, feedRequestHeaders } from '../background/syncClient.js';
 
 /**
  * The hot-set half of a sync.
@@ -262,5 +262,91 @@ describe('SyncClient hot set', () => {
 
     expect(result.networkRules).toEqual([]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('feed token'));
+  });
+});
+
+describe('feedRequestHeaders — cleartext credential boundary', () => {
+  const TOKEN = 'feed-secret';
+  let warn: ReturnType<typeof jest.spyOn>;
+
+  beforeEach(() => {
+    warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warn.mockRestore();
+    delete (globalThis as any).fetch;
+  });
+
+  test('the token travels to HTTPS URLs regardless of the host', () => {
+    expect(feedRequestHeaders('https://feeds.example.com/browser.txt', TOKEN)).toEqual({
+      Authorization: `Bearer ${TOKEN}`,
+    });
+  });
+
+  test('the token travels to cleartext hosts that cannot leave the LAN', () => {
+    const local = [
+      'http://127.0.0.1:9191/browser.txt',
+      'http://10.0.0.5/feed',
+      'http://172.16.1.1/feed',
+      'http://172.31.255.254/feed',
+      'http://192.168.1.2/feed',
+      'http://169.254.1.1/feed',
+      'http://localhost:9292/feed',
+      'http://homeassistant.local:9779/dns.txt',
+      'http://hub.lan/feed',
+      'http://nas.internal/feed',
+      'http://router/feed',
+      'http://[::1]/feed',
+      'http://[fe80::1]/feed',
+      'http://[fd00::5]/feed',
+      'http://[::ffff:10.0.0.5]/feed',
+    ];
+    for (const url of local) {
+      expect(feedRequestHeaders(url, TOKEN)).toEqual({ Authorization: `Bearer ${TOKEN}` });
+    }
+  });
+
+  test('the token is withheld from cleartext public addresses, but the request still goes', () => {
+    const publicHosts = [
+      'http://feeds.example.com/browser.txt',
+      'http://8.8.8.8/feed',
+      'http://172.15.0.1/feed', // just outside RFC1918's 172.16/12
+      'http://192.167.0.1/feed', // just outside 192.168/16
+      'http://9.9.9.9/feed',
+    ];
+    for (const url of publicHosts) {
+      expect(feedRequestHeaders(url, TOKEN)).toEqual({});
+    }
+  });
+
+  test('no configured token produces no header anywhere', () => {
+    expect(feedRequestHeaders('http://8.8.8.8/feed', undefined)).toEqual({});
+    expect(feedRequestHeaders('http://127.0.0.1:9191/feed', undefined)).toEqual({});
+  });
+
+  test('a sync against a public cleartext feed withholds the token on the wire', async () => {
+    // The public host fails, so the candidate loop advances to the loopback
+    // fallbacks — which must still carry the credential the public host was denied.
+    const authByUrl = new Map<string, string | undefined>();
+    (globalThis as any).fetch = (jest.fn() as any).mockImplementation(async (url: string, init: any) => {
+      authByUrl.set(String(url), (init?.headers ?? {})['Authorization']);
+      return String(url).includes('example.com')
+        ? { ok: false, text: async () => '' }
+        : { ok: true, text: async () => FULL_BODY };
+    });
+
+    const client = new SyncClient('http://feeds.example.com/browser.txt');
+    client.setFeed('http://feeds.example.com/browser.txt', 'feed-secret');
+    await client.fetchCompiledRules();
+
+    for (const [url, auth] of authByUrl) {
+      if (url.includes('example.com')) {
+        expect(auth).toBeUndefined();
+      } else {
+        expect(auth).toBe('Bearer feed-secret');
+      }
+    }
+    expect(authByUrl.has('http://127.0.0.1:9191/adguardbrowser.txt')).toBe(true);
   });
 });

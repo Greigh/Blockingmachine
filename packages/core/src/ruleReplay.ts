@@ -72,7 +72,11 @@ export function hostOf(target: string): string | null {
  * and would make two identical requests look like two different ones.
  */
 function normalizeTraceUrl(target: string): string | null {
-  const value = target.trim().toLowerCase().replace(/#.*$/, '');
+  const lowered = target.trim().toLowerCase();
+  // indexOf+slice, not /#.*$/: a `.*` tail is the shape CodeQL's polynomial-ReDoS
+  // check flags, and the linear scan is what the regex would do anyway.
+  const hash = lowered.indexOf('#');
+  const value = hash === -1 ? lowered : lowered.slice(0, hash);
   return value.includes('/') ? value : null;
 }
 

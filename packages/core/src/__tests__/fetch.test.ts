@@ -143,6 +143,23 @@ describe("fetchWithConditionalCache", () => {
     expect(resEnv.content).toBeNull();
   });
 
+  test("rejects Windows-shaped sensitive paths on any platform", async () => {
+    // The denylist must not depend on the running OS's path separator — a
+    // Windows-typed path is sensitive regardless of where the string arrives.
+    for (const candidate of [
+      "C:\\Users\\victim\\.ssh\\id_rsa",
+      "D:\\Secrets\\client.env\\..\\.env",
+      "E:\\Windows\\System32\\config\\SAM",
+      "\\\\nas\\secrets\\credentials.txt",
+      "\\\\?\\C:\\Windows\\NTDS\\ntds.dit",
+      "\\\\.\\pipe\\secrets",
+    ]) {
+      const res = await fetchWithConditionalCache(candidate);
+      expect(res.status).toBe(403);
+      expect(res.content).toBeNull();
+    }
+  });
+
   test("calculates and verifies SHA-256 checksums correctly", async () => {
     // 1. Check valid hash matches
     const firstRes = await fetchWithConditionalCache(tempFilePath);

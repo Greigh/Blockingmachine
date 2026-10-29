@@ -20,6 +20,7 @@ from .const import (
 )
 from .coordinator import BlockingmachineDataUpdateCoordinator
 from .events import BlockingmachineEventStream
+from .lan import auth_headers
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     event_stream = BlockingmachineEventStream(
         base_url=coordinator.base_url,
         session=coordinator.session,
-        headers={"Authorization": f"Bearer {token}"} if token else {},
+        headers=auth_headers(host, token),
         on_event=_handle_sse_event,
     )
     event_stream.start()

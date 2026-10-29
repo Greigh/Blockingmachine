@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .lan import auth_headers
 from .const import (
     DOMAIN,
     CONF_HOST,
@@ -37,7 +38,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     token = (data.get(CONF_TOKEN) or "").strip() or None
     session = async_get_clientsession(hass)
     url = f"http://{host}:{port}/v1/status"
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    headers = auth_headers(host, token)
 
     try:
         async with session.get(url, headers=headers, timeout=ClientTimeout(total=5)) as response:

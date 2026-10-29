@@ -34,6 +34,60 @@ export function bodyLooksLikeFeed(body) {
 const MAX_FEED_BYTES = 32 * 1024 * 1024;
 
 /**
+ * Whether a cleartext URL's host is provably on the local network — loopback,
+ * RFC1918/ULA/link-local literals, or a name that cannot resolve off-LAN
+ * (`localhost`, single-label names, `.local`/`.lan`/`.internal`/`.localhost`/
+ * `.home.arpa` suffixes). The feed token is a LAN-scoped secret: it may travel
+ * over TLS or to these hosts, never cleartext to a public address.
+ *
+ * Mirrors `isLocalNetworkHost` in `packages/core/src/utils/urlSafety.ts` — this
+ * package's Docker context cannot reach the workspace, so the copy stays; keep
+ * the host lists and ranges in step with the canonical version.
+ */
+function isLocalFeedHost(url) {
+  try {
+    const parsed = new URL(url);
+    const raw = parsed.hostname.toLowerCase();
+    const host = raw.startsWith('[') ? raw.slice(1, -1) : raw;
+    if (
+      host === 'localhost' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local') ||
+      host.endsWith('.lan') ||
+      host.endsWith('.internal') ||
+      host.endsWith('.home.arpa')
+    ) {
+      return true;
+    }
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+      const [a, b] = host.split('.').map(Number);
+      return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+    }
+    if (host.includes(':')) {
+      if (host === '::1') return true;
+      if (/^fe[89ab]/.test(host) || /^f[cd]/.test(host)) return true;
+      const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host);
+      if (dotted) return isLocalFeedHost(`http://${dotted[1]}/`);
+      const hexMapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+      if (hexMapped) {
+        const hi = parseInt(hexMapped[1], 16);
+        const lo = parseInt(hexMapped[2], 16);
+        return isLocalFeedHost(`http://${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}/`);
+      }
+      return false;
+    }
+    return !host.includes('.');
+  } catch {
+    return false;
+  }
+}
+
+/** The token attaches only where the wire protects it: TLS, or a local host. */
+export function credentialAllowed(url) {
+  return url.startsWith('https:') || isLocalFeedHost(url);
+}
+
+/**
  * Reads a feed response with a hard byte ceiling. The LAN pull is plaintext by
  * design, so the channel is MITM-able — the bound is what stands between a
  * poisoned response and container memory. The stream is preferred so the cap
@@ -75,7 +129,9 @@ async function readFeedBody(res, maxBytes) {
  */
 async function pullOne({ sourceUrl, token, dataDir, fileName, fetchImpl, timeoutMs }) {
   const url = `${sourceUrl.replace(/\/+$/, '')}/${fileName}`;
-  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  // The request still goes without the credential — an open feed has no token
+  // to withhold, and a gated source answers the 401 that names the problem.
+  const headers = token && credentialAllowed(url) ? { Authorization: `Bearer ${token}` } : {};
   const res = await fetchImpl(url, {
     headers,
     signal: AbortSignal.timeout(timeoutMs),

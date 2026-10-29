@@ -1,3 +1,4 @@
+import { credentialAllowed } from '@blockingmachine/core/urlSafety';
 import { DEFAULT_FEED_URL } from '../shared/constants.js';
 
 export interface IngestedRules {
@@ -18,6 +19,26 @@ export interface IngestedRules {
 const FEED_TIMEOUT_MS = 5000;
 
 /**
+ * Feed tokens are LAN-scoped bearer secrets. They attach only where the wire
+ * is protected — TLS — or where cleartext cannot leave the local network.
+ * A cleartext public URL would hand the token (and with it the hub's mutation
+ * surface) to every on-path listener; the request still goes out — an open
+ * feed has no token to withhold — just without the credential.
+ */
+export function feedRequestHeaders(url: string, token?: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (!token) return headers;
+  if (credentialAllowed(url)) {
+    headers['Authorization'] = `Bearer ${token}`;
+  } else {
+    console.warn(
+      `[SyncClient] Withholding feed token for ${url} — a cleartext credential only travels to HTTPS or local-network hosts.`
+    );
+  }
+  return headers;
+}
+
+/**
  * Fetches one feed URL, or `null` if it is unreachable, slow, or not `ok`.
  *
  * The timeout is cleared in a `finally` rather than on the success path, because the interesting
@@ -34,8 +55,7 @@ async function fetchFeedText(url: string, token?: string): Promise<string | null
   const timeoutId = setTimeout(() => controller.abort(), FEED_TIMEOUT_MS);
 
   try {
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const headers = feedRequestHeaders(url, token);
     const response = await fetch(url, { headers, signal: controller.signal });
     if (response.status === 401 || response.status === 403) {
       console.warn(`[SyncClient] ${url} rejected the request (HTTP ${response.status}) — the server wants a feed token (Popup → Home Assistant → feed token).`);

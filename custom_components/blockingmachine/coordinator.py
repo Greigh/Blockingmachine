@@ -15,6 +15,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, DEFAULT_SCAN_INTERVAL
+from .lan import auth_headers
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,8 +39,9 @@ class BlockingmachineDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]
         # Both servers accept `Authorization: Bearer <token>` — the add-on requires it on
         # every endpoint once `feed_token` is set, and the desktop app requires it on
         # mutations once `feedToken` is set. An empty token sends no header, which keeps
-        # the documented open-LAN model unchanged.
-        self._headers = {"Authorization": f"Bearer {token}"} if token else {}
+        # the documented open-LAN model unchanged; the credential itself only travels
+        # to a provably-local host — the wire here is cleartext HTTP.
+        self._headers = auth_headers(host, token)
 
         super().__init__(
             hass,
