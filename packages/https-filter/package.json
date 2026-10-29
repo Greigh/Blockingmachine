@@ -1,6 +1,6 @@
 {
   "name": "@blockingmachine/https-filter",
-  "version": "1.0.1",
+  "version": "1.0.1-beta.2",
   "description": "Loopback HTTPS filtering engine — per-device CA, leaf forge, CONNECT/transparent proxy listeners, and request-transform pipeline for Blockingmachine.",
   "author": {
     "name": "Greigh Studios LLC",
@@ -21,7 +21,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@blockingmachine/core": "^1.0.1",
+    "@blockingmachine/core": "^1.0.1-beta.2",
     "node-forge": "file:../../vendor/node-forge"
   },
   "devDependencies": {
