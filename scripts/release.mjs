@@ -33,7 +33,7 @@
  */
 
 import { execFileSync } from 'child_process';
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, accessSync } from 'fs';
 import { resolve, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { lastValue, parseArgvOrExit } from './argv.mjs';
@@ -211,6 +211,18 @@ runExec('npm', ['run', 'lint'], 'Verifying ESLint compliance across all workspac
 
 if (!skipBuild) {
   runExec('npm', ['run', 'build'], 'Verifying monorepo clean compilation');
+}
+
+// The HA add-on ships vendored engine bundles built from workspace dist/ —
+// committed artifacts that silently stale behind https-filter/system-daemon
+// changes (beta.2 shipped one two commits old). Rebuild whenever dist/ is
+// present; a --skip-build resume reuses the same-session build output.
+try {
+  accessSync(resolve(ROOT_DIR, 'packages/https-filter/dist/index.js'));
+  runExec('node', ['scripts/build-addon-engine.mjs'], 'Rebuilding Home Assistant add-on engine bundles');
+} catch (err) {
+  if (err.code !== 'ENOENT') throw err;
+  console.warn('⚠️ packages/https-filter/dist missing — add-on engine bundles left as committed');
 }
 
 // 2. Synchronize Version across monorepo

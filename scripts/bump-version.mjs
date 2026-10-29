@@ -180,6 +180,38 @@ try {
   // no Expo manifest on this checkout
 }
 
+// The Home Assistant surfaces carry their own version fields outside the npm
+// workspace: the add-on's config.yaml is what the Supervisor displays and
+// update-checks against, and the integration's manifest.json version is what
+// HA/HACS reports. Both drifted to 1.0.0 through the beta line once already.
+const addonConfigPath = path.join(rootDir, 'packages', 'homeassistant-addon', 'config.yaml');
+try {
+  const addonConfig = fs.readFileSync(addonConfigPath, 'utf8');
+  const addonVersionRegex = /(version:\s*")[^"]*(")/;
+  if (addonVersionRegex.test(addonConfig)) {
+    fs.writeFileSync(addonConfigPath, addonConfig.replace(addonVersionRegex, `$1${targetVersion}$2`), 'utf8');
+    console.log(`✅ [packages/homeassistant-addon/config.yaml] version -> ${targetVersion}`);
+    updatedFiles.push('packages/homeassistant-addon/config.yaml');
+  }
+} catch {
+  // no add-on config on this checkout
+}
+
+// Canonical path is the repo-root custom_components/ — the conventional HACS
+// layout (packages/homeassistant-integration/custom_components is a symlink).
+const haManifestPath = path.join(rootDir, 'custom_components', 'blockingmachine', 'manifest.json');
+try {
+  const haManifest = JSON.parse(fs.readFileSync(haManifestPath, 'utf8'));
+  if (haManifest.version !== targetVersion) {
+    haManifest.version = targetVersion;
+    fs.writeFileSync(haManifestPath, JSON.stringify(haManifest, null, 2) + '\n', 'utf8');
+    console.log(`✅ [custom_components/blockingmachine/manifest.json] version -> ${targetVersion}`);
+    updatedFiles.push('custom_components/blockingmachine/manifest.json');
+  }
+} catch {
+  // no integration manifest on this checkout
+}
+
 // A generated android/ tree (gitignored) carries the version it was prebuilt
 // under — rewrite it in place when present so an APK built without a fresh
 // prebuild still reports the right versionName.

@@ -19019,6 +19019,7 @@ var ObservationRecorder = class {
 var DnsServer = class {
   socket;
   tcpServer = null;
+  tcpConns = /* @__PURE__ */ new Set();
   trie;
   forwarder;
   config;
@@ -19210,8 +19211,11 @@ var DnsServer = class {
   /** RFC 7766 framing — u16 length before each message; frames may arrive split or pipelined. */
   handleTcpConnection(conn) {
     let pending = Buffer.alloc(0);
+    this.tcpConns.add(conn);
+    conn.on("close", () => this.tcpConns.delete(conn));
     conn.on("data", (chunk) => {
-      pending = Buffer.concat([pending, chunk]);
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "latin1");
+      pending = Buffer.concat([pending, buf]);
       while (pending.length >= 2) {
         const len = pending.readUInt16BE(0);
         if (pending.length < 2 + len)
@@ -19234,7 +19238,9 @@ var DnsServer = class {
   stop() {
     return new Promise((resolve2) => {
       this.tcpServer?.close();
-      this.tcpServer?.closeAllConnections?.();
+      for (const conn of this.tcpConns)
+        conn.destroy();
+      this.tcpConns.clear();
       this.socket.close(() => resolve2());
     });
   }

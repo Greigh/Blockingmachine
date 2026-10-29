@@ -1,6 +1,6 @@
 name: "Blockingmachine"
 description: "AI-powered adblock compiler, segregated DNS/Browser feed server, and local network defense hub."
-version: "1.0.0"
+version: "1.0.1-beta.2"
 slug: "blockingmachine"
 url: "https://github.com/Greigh/Blockingmachine"
 init: false
