@@ -49,14 +49,26 @@ describe('the poll is the backstop, not the alternative', () => {
     expect(bodyOf('function persistMatchState')).toContain('MATCH_STATE_KEY');
   });
 
-  test('a live match is stamped before the first await, so a mid-flight poll sees it', () => {
+  test('a live match is stamped before it queues, so a mid-flight poll sees it', () => {
+    // Live events coalesce into a timed flush — the apply is deliberately deferred — so the
+    // synchronous stamp is the only thing a poll can dedupe against. It must precede the queue
+    // call in the listener body, or a poll landing inside the window counts the match a second
+    // time when the flush later applies it.
     const listenerAt = src.indexOf('onRuleMatchedDebug.addListener');
     expect(listenerAt).toBeGreaterThan(-1);
     const body = src.slice(listenerAt, src.indexOf('});', listenerAt));
     const stampAt = body.indexOf('recordLiveMatch');
-    const applyAt = body.indexOf('applyMatches');
+    const queueAt = body.indexOf('queueLiveMatch');
     expect(stampAt).toBeGreaterThan(-1);
-    expect(stampAt).toBeLessThan(applyAt);
+    expect(queueAt).toBeGreaterThan(stampAt);
+  });
+
+  test('the coalesced flush restores match state before applying — the restart-dedupe contract', () => {
+    const body = bodyOf('async function flushLiveMatches');
+    const ensureAt = body.indexOf('ensureMatchState');
+    const applyAt = body.indexOf('applyMatches');
+    expect(ensureAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(ensureAt);
   });
 });
 

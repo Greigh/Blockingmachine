@@ -8,31 +8,17 @@ import { sanitizeCosmeticSelectors } from '../shared/cosmeticRules.js';
 
 const STYLE_ELEMENT_ID = 'bm-cosmetic-shield';
 
-/**
- * Upper bound on how many elements a single rule may hide. A picker mistake or a
- * corrupted stored rule should never be able to blank a page, so anything
- * matching more than this is dropped rather than injected.
- */
-const MAX_MATCHES_PER_SELECTOR = 250;
-
-function matchCount(selector: string): number | undefined {
-  if (typeof document === 'undefined') return undefined;
-  try {
-    return document.querySelectorAll(selector).length;
-  } catch {
-    // An unparsable selector would throw here and count as 0 matches; report
-    // undefined so validation falls back to its structural checks only.
-    return undefined;
-  }
-}
-
 export function injectCosmeticStyles(selectors: string[]): void {
   if (!selectors || selectors.length === 0) return;
 
-  const validSelectors = sanitizeCosmeticSelectors(selectors, {
-    maxMatches: MAX_MATCHES_PER_SELECTOR,
-    matchCount,
-  });
+  // Sanitization is syntax-only here — no live-DOM matchCount probe. That
+  // probe costs one querySelectorAll per selector, and this runs on every
+  // frame of every page against lists that can carry thousands of selectors:
+  // the probe itself was the page slowdown. The match-count guard still gates
+  // exactly where a bad selector enters — ElementPicker.applyRule validates
+  // the picker's own live count before a rule is ever stored, so everything
+  // arriving here was either vetted then or came from the compiled list.
+  const validSelectors = sanitizeCosmeticSelectors(selectors);
   if (validSelectors.length === 0) return;
 
   const css = `

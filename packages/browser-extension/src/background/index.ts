@@ -508,6 +508,11 @@ async function applyCurrentRulesInner(): Promise<number> {
         onRuleSource: (source) => void saveRuleSource(source),
       },
     );
+    // Every dynamic-rules mutation on this worker funnels through this one
+    // call, so the epoch bump here is what makes the match-accounting index
+    // cache honest — a snapshot taken before this write can never be served
+    // to a resolver asking about rules installed after it.
+    dynamicRulesEpoch += 1;
     lastApplyError = null;
     return lastAppliedRuleCount;
   } catch (err) {
@@ -1174,8 +1179,23 @@ interface BrowserMatch {
   count?: number;
 }
 
-/** Snapshot of the dynamic rules, so a batch of matches resolves against one read. */
+/**
+ * Snapshot of the dynamic rules, so a batch of matches resolves against one read.
+ *
+ * The index is cached behind the epoch `applyCurrentRules` bumps after every
+ * install — the live-match path resolves one match per request, and rebuilding
+ * a whole-ruleset Map per blocked request was the worker's allocation churn on
+ * a large synced list. A snapshot only goes stale when this worker itself
+ * rewrote the rules, so serving the cached one can never mis-attribute a match
+ * to a rule that changed underneath it.
+ */
+let dynamicRulesEpoch = 0;
+let dynamicRulesCache: { epoch: number; index: DynamicRuleIndex } | null = null;
+
 async function snapshotDynamicRules(): Promise<DynamicRuleIndex> {
+  if (dynamicRulesCache && dynamicRulesCache.epoch === dynamicRulesEpoch) {
+    return dynamicRulesCache.index;
+  }
   const snapshot: DynamicRuleIndex = new Map();
   try {
     const rules = await chrome.declarativeNetRequest.getDynamicRules();
@@ -1192,6 +1212,7 @@ async function snapshotDynamicRules(): Promise<DynamicRuleIndex> {
   } catch {
     // Rule introspection is best-effort; the block count is what matters.
   }
+  dynamicRulesCache = { epoch: dynamicRulesEpoch, index: snapshot };
   return snapshot;
 }
 
@@ -1620,6 +1641,46 @@ async function reconcileRecentMatches(): Promise<void> {
 // URL attached. Delivery across a wake is lossy, so each live match is also logged here for the
 // poll to deduplicate against — what the live listener missed is exactly what the poll recovers,
 // and this log is what keeps the recovery from counting the live half again.
+// Live matches arrive one event per request; a page that blocks hundreds of
+// resources would otherwise run a full applyMatches round — ruleset snapshot,
+// serialized tab-telemetry commit, badge write — per request. Coalescing into
+// a short window turns a page-load burst into one apply while keeping the
+// badge at most ~150ms behind. Nothing is lost to a worker suspended
+// mid-window: the live log stamps each event synchronously below, so the
+// 2-minute poll's dedupe still recovers whatever never flushed.
+const LIVE_MATCH_FLUSH_MS = 150;
+const LIVE_MATCH_FLUSH_MAX = 200;
+const pendingLiveMatches: BrowserMatch[] = [];
+let liveMatchFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function flushLiveMatches(): Promise<void> {
+  if (liveMatchFlushTimer) {
+    clearTimeout(liveMatchFlushTimer);
+    liveMatchFlushTimer = null;
+  }
+  const batch = pendingLiveMatches.splice(0, pendingLiveMatches.length);
+  if (batch.length === 0) return;
+  try {
+    await ensureMatchState();
+    persistMatchState();
+    await applyMatches(batch);
+  } catch {
+    // Match accounting is best-effort; the next flush or the poll recovers.
+  }
+}
+
+function queueLiveMatch(match: BrowserMatch): void {
+  pendingLiveMatches.push(match);
+  if (pendingLiveMatches.length >= LIVE_MATCH_FLUSH_MAX) {
+    void flushLiveMatches();
+    return;
+  }
+  liveMatchFlushTimer ??= setTimeout(() => {
+    liveMatchFlushTimer = null;
+    void flushLiveMatches();
+  }, LIVE_MATCH_FLUSH_MS);
+}
+
 if (chrome.declarativeNetRequest?.onRuleMatchedDebug) {
   chrome.declarativeNetRequest.onRuleMatchedDebug.addListener((info) => {
     const tabId = info.request?.tabId ?? -1;
@@ -1642,14 +1703,13 @@ if (chrome.declarativeNetRequest?.onRuleMatchedDebug) {
       liveMatchKey(tabId, info.rule?.rulesetId, info.rule?.ruleId),
       Date.now(),
     );
-    void ensureMatchState()
-      .then(() => {
-        persistMatchState();
-        return applyMatches([
-          { tabId, url, host, ruleId: info.rule?.ruleId, rulesetId: info.rule?.rulesetId },
-        ]);
-      })
-      .catch(() => {});
+    queueLiveMatch({
+      tabId,
+      url,
+      host,
+      ruleId: info.rule?.ruleId,
+      rulesetId: info.rule?.rulesetId,
+    });
   });
 }
 
