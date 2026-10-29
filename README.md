@@ -62,6 +62,14 @@ Built from `packages/mobile` with `expo prebuild` + `./gradlew assembleRelease`.
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
+#### Uninstall (macOS)
+
+```bash
+sudo scripts/uninstall-macos.sh
+```
+
+Removes the app (every copy Spotlight can see), the loopback-DNS and packet-filter capture state, the launchd services and service account, the trusted HTTPS-filter CA from your keychain, and all `~/Library` state — a clean slate for a fresh install. Flags: `--dry-run` to preview, `--keep-documents` to keep `~/Documents/Blockingmachine` output, `--include-builds` to also remove builds inside a source checkout.
+
 ---
 
 ### Platform Feature Matrix
