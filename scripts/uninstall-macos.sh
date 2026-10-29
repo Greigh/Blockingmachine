@@ -83,7 +83,14 @@ run pkill -f "Blockingmachine.app/Contents" 2>/dev/null \
   && log "quit running Blockingmachine processes" \
   || log "no running Blockingmachine processes"
 
-# --- 2. restore DNS before the daemon that answered it disappears -----------
+# --- 2. restore DNS + proxy state before the services that answer disappear --
+# The P7 system-proxy layer writes -setautoproxyurl on every enabled service
+# (loopback proxy.pac) or -setwebproxy/-setsecurewebproxy at 127.0.0.1:9294 in
+# manual mode. Its ownership ledger lives in userData — which this script
+# deletes — so drift protection can never see it again; clearing it here is
+# the only removal path left. Only loopback PAC URLs and loopback manual
+# proxies on our engine ports are claimed — a foreign localhost proxy
+# (Charles/Proxyman/whatever) stays untouched.
 restored=0
 while IFS= read -r service; do
   [[ -n "$service" ]] || continue
@@ -92,8 +99,25 @@ while IFS= read -r service; do
       && { log "restored DHCP DNS on \"$service\""; restored=$((restored + 1)); } \
       || warn "could not restore DNS on \"$service\" — set it in System Settings > Network"
   fi
+  pac_url="$(networksetup -getautoproxyurl "$service" 2>/dev/null | sed -n 's/^URL: //p')"
+  if [[ "$pac_url" =~ ^https?://127\.0\.0\.1:[0-9]+/proxy\.pac$ ]]; then
+    run networksetup -setautoproxyurl "$service" "" &>/dev/null || true
+    run networksetup -setautoproxystate "$service" off \
+      && { log "removed PAC proxy on \"$service\" ($pac_url)"; restored=$((restored + 1)); } \
+      || warn "could not clear PAC on \"$service\""
+  fi
+  for kind in web secureweb socksfirewall; do
+    proxy_state="$(networksetup "-get${kind}proxy" "$service" 2>/dev/null || true)"
+    if printf '%s' "$proxy_state" | grep -qx "Enabled: Yes" \
+       && printf '%s' "$proxy_state" | grep -qx "Server: 127.0.0.1" \
+       && printf '%s' "$proxy_state" | grep -qx "Port: 9294"; then
+      run networksetup "-set${kind}proxystate" "$service" off \
+        && { log "removed ${kind} proxy on \"$service\""; restored=$((restored + 1)); } \
+        || warn "could not clear ${kind} proxy on \"$service\""
+    fi
+  done
 done < <(networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | sed 's/^[*] *//')
-[[ $restored -eq 0 ]] && log "no network service was bound to loopback DNS"
+[[ $restored -eq 0 ]] && log "no network service was bound to Blockingmachine DNS/proxy"
 
 # --- 3. capture leg: delegate, then sweep what it keeps ---------------------
 if [[ -x "$CAPTURE_UNINSTALLER" || -f "$CAPTURE_UNINSTALLER" ]]; then
