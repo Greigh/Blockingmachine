@@ -35,20 +35,39 @@ public class LocalTunnelModule: Module {
             let manager = try await Self.loadOrCreateManager()
             manager.isEnabled = enabled
             try await manager.saveToPreferences()
-            // After the consent-gated first save the in-memory manager is
-            // stale: it can drop isEnabled, and its connection throws
-            // NEVPNErrorDomain 1 (configurationInvalid) if started without a
-            // reload — the profile installs yet the enable reports failure.
-            // load → re-assert → save → load is the documented-correct
-            // sequence for a fresh configuration.
-            try await manager.loadFromPreferences()
-            if manager.isEnabled != enabled {
-                manager.isEnabled = enabled
-                try await manager.saveToPreferences()
-                try await manager.loadFromPreferences()
+            // The profile store is eventually consistent: right after the
+            // consent-gated first save, loadFromPreferences can still throw
+            // NEVPNErrorDomain 1 or read a stale isEnabled. Loop
+            // load → re-assert → save until the flag sticks (~2s budget) —
+            // the documented sequence for a fresh configuration.
+            var lastLoadError: Error?
+            for _ in 0..<10 {
+                do {
+                    try await manager.loadFromPreferences()
+                    if manager.isEnabled == enabled {
+                        lastLoadError = nil
+                        break
+                    }
+                    manager.isEnabled = enabled
+                    try await manager.saveToPreferences()
+                    lastLoadError = nil
+                } catch {
+                    lastLoadError = error
+                }
+                try await Task.sleep(nanoseconds: 200_000_000)
             }
+            if let lastLoadError { throw lastLoadError }
             if enabled {
-                try manager.connection.startVPNTunnel()
+                do {
+                    try manager.connection.startVPNTunnel()
+                } catch {
+                    // Same staleness on the connection object — reload once
+                    // and start again before surfacing the refusal.
+                    try await manager.loadFromPreferences()
+                    manager.isEnabled = true
+                    try await manager.saveToPreferences()
+                    try manager.connection.startVPNTunnel()
+                }
             } else {
                 manager.connection.stopVPNTunnel()
             }
