@@ -28,6 +28,7 @@ module.exports = function withTunnelTarget(config) {
       'IpPacket.swift',
       'TunnelProvider.swift',
       'ObservationLog.swift',
+      'TunnelStatus.swift',
       'DnsPacket.swift',
       'Blocklist.swift',
     ],

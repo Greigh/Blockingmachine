@@ -56,6 +56,7 @@ import {
   isIosTunnelSupported,
   setIosTunnelEnabled,
 } from '../../src/filter/iosTunnel';
+import { readTunnelStatus } from '../../src/filter/dnsProxy';
 import {
   readFeeds,
   saveFeeds,
@@ -465,9 +466,15 @@ function IosTunnelCard({ ready }: { ready: boolean }) {
     queryFn: getIosTunnelStatus,
     refetchInterval: 4000,
   });
+  const heartbeat = useQuery({
+    queryKey: ['iostunnel-heartbeat'],
+    queryFn: readTunnelStatus,
+    refetchInterval: 4000,
+  });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<FriendlyError | null>(null);
   const s = status.data;
+  const beat = heartbeat.data;
   const active = s?.enabled && s.connection === 'connected';
 
   const toggle = async () => {
@@ -523,6 +530,21 @@ function IosTunnelCard({ ready }: { ready: boolean }) {
       ) : null}
       {s?.enabled && s.connection !== 'connected' ? (
         <Text style={styles.meta}>Tunnel {s.connection}…</Text>
+      ) : null}
+      {beat?.state === 'unavailable' ? (
+        <Text style={styles.syncErrorDetail}>
+          Tunnel diagnostics: the shared app-group container is unreachable on this build — the extension cannot see the ruleset or report observations.
+        </Text>
+      ) : null}
+      {beat?.state === 'absent' && s?.enabled ? (
+        <Text style={styles.meta}>
+          Tunnel diagnostics: the extension hasn’t reported yet — look for the VPN icon, then browse.
+        </Text>
+      ) : null}
+      {beat?.state === 'ok' ? (
+        <Text style={styles.meta}>
+          Tunnel: {beat.report.rules} rules · {beat.report.packets} queries ({beat.report.blocked} blocked, {beat.report.relayed} relayed) · seen {relativeTime(beat.report.at)}
+        </Text>
       ) : null}
       {s?.enabled ? (
         <Text style={styles.meta}>

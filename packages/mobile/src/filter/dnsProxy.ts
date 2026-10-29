@@ -16,6 +16,7 @@ import { Platform } from 'react-native';
 interface LocalDnsProxyNative {
   publishRuleset(sourcePath: string): Promise<number>;
   drainObservations(): Promise<string>;
+  tunnelStatus(): Promise<string>;
 }
 
 let cached: LocalDnsProxyNative | null | undefined;
@@ -54,5 +55,56 @@ export async function drainTunnelObservations(): Promise<string> {
     return (await native()?.drainObservations()) ?? '';
   } catch {
     return '';
+  }
+}
+
+/** The extension's `tunnel-status.json` heartbeat, decoded for Settings. */
+export interface TunnelStatusReport {
+  at: string;
+  startedAt: string;
+  rules: number;
+  packets: number;
+  blocked: number;
+  relayed: number;
+}
+
+/**
+ * Read the appex's liveness heartbeat. 'unavailable' means the shared
+ * container itself is missing (a broken build, not a quiet tunnel); 'absent'
+ * means the extension has never reported; 'ok' carries the counters.
+ */
+export async function readTunnelStatus(): Promise<
+  { state: 'ok'; report: TunnelStatusReport } | { state: 'absent' | 'unavailable' }
+> {
+  if (Platform.OS !== 'ios') return { state: 'absent' };
+  let raw: string;
+  try {
+    raw = (await native()?.tunnelStatus()) ?? '';
+  } catch {
+    return { state: 'unavailable' };
+  }
+  if (!raw) return { state: 'absent' };
+  try {
+    const parsed = JSON.parse(raw) as {
+      at?: unknown;
+      started_at?: unknown;
+      rules?: unknown;
+      packets?: unknown;
+      blocked?: unknown;
+      relayed?: unknown;
+    };
+    return {
+      state: 'ok',
+      report: {
+        at: typeof parsed.at === 'string' ? parsed.at : '',
+        startedAt: typeof parsed.started_at === 'string' ? parsed.started_at : '',
+        rules: typeof parsed.rules === 'number' ? parsed.rules : 0,
+        packets: typeof parsed.packets === 'number' ? parsed.packets : 0,
+        blocked: typeof parsed.blocked === 'number' ? parsed.blocked : 0,
+        relayed: typeof parsed.relayed === 'number' ? parsed.relayed : 0,
+      },
+    };
+  } catch {
+    return { state: 'absent' };
   }
 }

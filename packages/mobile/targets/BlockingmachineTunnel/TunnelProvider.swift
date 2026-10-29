@@ -41,7 +41,7 @@ final class TunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(
         options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void
     ) {
-        blocklist.load(groupIdentifier: Self.appGroup)
+        TunnelStatus.rulesLoaded(blocklist.load(groupIdentifier: Self.appGroup))
         if let proto = protocolConfiguration as? NETunnelProviderProtocol,
            let conf = proto.providerConfiguration,
            let host = conf["upstreamDns"] as? String {
@@ -107,7 +107,7 @@ final class TunnelProvider: NEPacketTunnelProvider {
         // minute, per inbound packet burst rather than per datagram.
         guard Date().timeIntervalSince(lastRulesLoad) > 60 else { return }
         lastRulesLoad = Date()
-        blocklist.load(groupIdentifier: Self.appGroup)
+        TunnelStatus.rulesLoaded(blocklist.load(groupIdentifier: Self.appGroup))
     }
 
     private func handle(_ packet: Data, family: Int32) {
@@ -117,13 +117,16 @@ final class TunnelProvider: NEPacketTunnelProvider {
               udp.dstPort == 53
         else { return } // nothing else routes here — drop honestly
 
+        TunnelStatus.packet()
         if let local = localAnswer(for: udp.payload) {
+            TunnelStatus.answeredBlocked()
             packetFlow.writePackets(
                 [IpPacket.udpReply(to: ip, udp: udp, payload: local)],
                 withProtocols: [NSNumber(value: ip.family)]
             )
             return
         }
+        TunnelStatus.answeredRelayed()
         relay(ip: ip, udp: udp)
     }
 

@@ -67,5 +67,21 @@ public class LocalDnsProxyModule: Module {
             }
             return body
         }
+
+        // The extension's `tunnel-status.json` heartbeat verbatim, "" when it
+        // has never reported. A nil group container is a real defect — throw
+        // so Settings can say so instead of looking identical to "VPN off".
+        AsyncFunction("tunnelStatus") { () async throws -> String in
+            guard let container = FileManager.default
+                .containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup)
+            else {
+                throw NSError(
+                    domain: "LocalDnsProxy", code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "App group container unavailable"]
+                )
+            }
+            let url = container.appendingPathComponent("tunnel-status.json")
+            return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        }
     }
 }
