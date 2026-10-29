@@ -53,6 +53,7 @@
       "expo-secure-store",
       "./plugins/withCleartextTraffic",
       "./plugins/withIosDeploymentTargetClamp",
+      "./plugins/withHermesDsym",
       "./plugins/withTunnelTarget",
       "./plugins/withReleaseSigning",
       [
