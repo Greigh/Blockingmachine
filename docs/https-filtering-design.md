@@ -16,7 +16,7 @@ Non-negotiables carried over from the repo's posture: 100% local processing, no 
 | Windows | WinDivert redirector (vendored signed driver) | `certutil -addstore Root` / `Import-Certificate` (admin) | Full MITM |
 | Linux | nftables/iptables REDIRECT or TPROXY (CAP_NET_ADMIN) | `update-ca-certificates` / `trust anchor` (root) | Full MITM |
 | Android | `VpnService` tun (already built — `VpnFilterService`) + TCP reassembly | User CA store; API 24+ apps ignore it unless opted in | SNI + CONNECT filtering everywhere; full MITM only for cert-honoring apps |
-| iOS | `NEDNSProxyProvider` (exists, entitlement pending — flag 89) | Apple exposes no TLS-intercept API | DNS + content-blocking only. AdGuard has the same ceiling. |
+| iOS | `NEPacketTunnelProvider` DNS filtering (shipped — `BlockingmachineTunnel`) | Apple exposes no TLS-intercept API | DNS + content-blocking only. AdGuard has the same ceiling. |
 
 Three hard walls apply everywhere and are design inputs, not bugs: **certificate pinning** (apps that pin refuse forged certs — detected on handshake abort → auto-bypass), **QUIC/HTTP3** (UDP 443 is invisible to TCP capture — suppressed so traffic falls back to TCP), and **ECH** (Encrypted ClientHello hides SNI — detected → passthrough unless a DNS-derived verdict already exists).
 
@@ -114,7 +114,7 @@ Same `/v1/*` vocabulary on its own port (`:9293`, next to daemon `:9292`): `GET 
 - **Windows** — vendored signed WinDivert driver + a small redirector helper (the repo's one non-TS component, `native/windivert-redirect/`, built in CI): diverts outbound TCP/443|80 to the loopback listener, stamps PROXY headers. `certutil`/`Import-Certificate` for the CA.
 - **Linux** — nftables `tproxy`/`redirect` table + a tiny original-dst helper speaking the same PROXY v2 contract (CAP_NET_ADMIN via the existing systemd generator, `AmbientCapabilities`). 
 - **Android** — shipped (P4): `VpnFilterService` gained the userspace TCP core (`modules/local-vpn/.../tcp/` — `Packet`/`TcpSession`/`TcpDispatcher`) that reassembles TCP :80/:443 flows out of the tun fd and splices each onto a `protect()`ed socket to the LAN hub's data listener (`<hub>:9294`, PROXY-v2 carrying the app's source and the packet's original destination — the phone is byte-dumb, the hub engine owns every verdict). UDP/443 is drop-counted so QUIC falls back into the TCP path; `PacProxyService` CONNECT path stays. MITM for cert-honoring apps only (§2); everything else gets SNI verdicts — already better than today.
-- **iOS** — explicitly out of scope (§2); the NEDNSProxy entitlement work (flag 89) continues on the DNS path only.
+- **iOS** — explicitly out of scope (§2); on-device filtering ships DNS-only through the `BlockingmachineTunnel` packet-tunnel appex (flag 89's `NEDNSProxyProvider` path was removed — supervised/MDM-only per TN3134).
 
 ### 5.9 UI surfaces
 

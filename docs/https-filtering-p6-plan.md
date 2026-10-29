@@ -124,7 +124,7 @@ app traffic ──► tun fd ──► readLoop
 
 ## Sequencing + non-goals
 
-T1 (runtime embed — the gate everything waits on) → T2 (engine port) ∥ T3 seams once the unix-socket contract is pinned → T4 (CA) → T5 (rules) → T6 (UX) → T7 (docs/flags). Each lands separately reviewed. Non-goals: iOS anything (the entitlement wall stands; the `NEDNSProxyProvider` extension is the iOS story), a Hermes/bridge engine (rejected above), a Kotlin engine port (recorded escape only), per-app verdicts beyond flag 128's existing bypass, QUIC granularity (flag 122 stands), ECH beyond the spec's recorded passthrough, HTTP/3, explicit-proxy mode on the phone (splice covers transparent; CONNECT stays a desktop client surface), pin-ledger sync, and any change to the desktop engine's shipped postures.
+T1 (runtime embed — the gate everything waits on) → T2 (engine port) ∥ T3 seams once the unix-socket contract is pinned → T4 (CA) → T5 (rules) → T6 (UX) → T7 (docs/flags). Each lands separately reviewed. Non-goals: iOS anything (the platform exposes no TLS-intercept API; the `BlockingmachineTunnel` packet-tunnel appex is the iOS story — flag 89's `NEDNSProxyProvider` was removed as supervised/MDM-only per TN3134), a Hermes/bridge engine (rejected above), a Kotlin engine port (recorded escape only), per-app verdicts beyond flag 128's existing bypass, QUIC granularity (flag 122 stands), ECH beyond the spec's recorded passthrough, HTTP/3, explicit-proxy mode on the phone (splice covers transparent; CONNECT stays a desktop client surface), pin-ledger sync, and any change to the desktop engine's shipped postures.
 
 ## Risks
 

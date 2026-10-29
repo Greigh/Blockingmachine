@@ -1,6 +1,6 @@
 # Mobile App Design — `packages/mobile`
 
-**Status:** Phase 1 (remote-control companion) approved 2026-10-05, branch `feat/mobile-app`. **Approach:** A — Expo dev-client + expo-router + TanStack Query.
+**Status:** Phase 1 (remote-control companion) shipped in **beta** — approved 2026-10-05, branch `feat/mobile-app`; Android APK on the Forgejo registry, iOS via dev-client only (no App Store/TestFlight artifact yet). **Approach:** A — Expo dev-client + expo-router + TanStack Query.
 
 ## Goal
 
@@ -107,6 +107,8 @@ Three cooperating layers let the phone filter without the hub:
 
 The **Check tab** prefers the hub verdict and falls back to the on-device ruleset on `ApiError.kind === 'unreachable'` (or when no server is configured); the **Dashboard** shows standalone mode when a ruleset exists without a server; **Settings** gained the Standalone filter card (sync/status/clear) and the On-device filter card (VPN consent/start/stop, proxy start/stop, live counters).
 
+**Local DNS service** (`src/filter/localDns.ts`, both platforms): a UDP DNS responder modeled on `system-daemon`'s `DnsServer` + `DohForwarder` — `react-native-udp` transport, `dns-packet` wire codec, the JS matcher for verdicts. Blocked A/AAAA queries sinkhole to `0.0.0.0`/`::`, other blocked types answer NXDOMAIN; allowed queries forward to a DoH upstream (default Quad9) with the daemon's timeout/in-flight/body bounds and SERVFAIL-on-failure behavior; the upstream URL is validated by `@blockingmachine/core/urlSafety` (`isSafeLanEndpointUrl`, a dedicated pure subpath export — the core barrel cannot bundle in Metro). Default port is 15353 since iOS owns 5353 via mDNSResponder. The service only lives while the app is foreground — it filters *other* devices that point their DNS at the phone's LAN address, or this phone via a manual Wi-Fi DNS entry; it does not make the phone a system resolver.
+
 Hard-won platform details:
 
 - `VpnService.prepare()`'s intent **must** be launched via `startActivityForResult` — `ConfirmDialog` resolves the caller through `getCallingPackage()`, which a bare `startActivity` leaves null, so the dialog self-finishes instantly (opens "visible" then dies ~seconds later). `OnActivityResult` emits `onVpnConsentResult`; JS awaits the event and auto-starts the VPN on grant — one tap, no dead end.
@@ -115,4 +117,4 @@ Hard-won platform details:
 - `packages/mobile/.gitignore` anchors `/android/` to the package root so `modules/*/android/` (real source) is tracked while prebuild output stays ignored.
 - Emulator driving quirks: `input` events run as uid 2000 — taps that land while the app isn't frontmost hit the launcher and can open unrelated apps (this AVD's Shortcake widget kept stealing taps); uiautomator dumps report off-screen-but-rendered RN nodes with real bounds, so a "present" node isn't necessarily visible.
 
-iOS remains Phase-2-blocked: equivalent filtering needs the Network Extension entitlement (Apple approval) — the JS matcher and ruleset layers are platform-shared, only the packet interception is Android-only.
+**iOS packet-tunnel extension** (`targets/BlockingmachineTunnel/` + `plugins/withTunnelTarget.js`): an `NEPacketTunnelProvider` app extension — the consumer-viable device-wide path. The tunnel advertises an on-tunnel DNS resolver, so the system routes every DNS query through the appex: `TunnelProvider.swift` answers blocked names locally (A/AAAA sinkhole `0.0.0.0`/`::`) against the `Blocklist`-loaded `ruleset_native.txt` and relays the rest upstream. `packet-tunnel-provider` is a standard Network Extensions capability — no Apple grant, TestFlight-shippable (the "local VPN" route AdGuard/DNSCloak use). Canonical sources live in `targets/` because `expo prebuild --clean` wipes `ios/` — the plugin copies them in and performs the pbxproj surgery (target, sources, PlugIns embed, entitlements) so the extension survives regeneration. The `LocalDnsProxy` Expo module (name retained from the removed dns-proxy target) is the app-group bridge — `publishRuleset` mirrors the native ruleset into the shared container on every rewrite and `drainObservations` pulls the appex's shadow-observation stream back out for hub upload. The earlier `NEDNSProxyProvider` extension (`targets/BlockingmachineDNSProxy`, `plugins/withDnsProxyTarget.js`, Settings' Device-wide DNS card) was **removed — flag 89**: iOS only runs `dns-proxy` providers on supervised/MDM devices (TN3134), so the target and its UI were dead code for the consumer audience.

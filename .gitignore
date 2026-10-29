@@ -127,6 +127,7 @@ QWEN.md
 .opencode/
 .github/copilot-instructions.md
 llms.txt
+AI-RUNBOOK.md
 
 # Scratch the Unbound reachability rig builds inside the repo (the VM can only
 # bind-mount from here); the rig removes it on exit, an interrupted run leaves it.
