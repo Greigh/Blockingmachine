@@ -24,12 +24,10 @@
 #   ./scripts/ios-testflight.sh --build +1         # bump build number, then archive
 #   ./scripts/ios-testflight.sh --prebuild         # re-run expo prebuild first
 #
-# The dns-proxy NE extension (targets/BlockingmachineDNSProxy) is stripped from
-# TestFlight builds: iOS only runs DNS-proxy app extensions on supervised/MDM
-# devices (TN3134), so the appex would be dead code for consumer testers
-# (docs/known-issues.md flag 89). --prebuild runs with BM_IOS_DNSPROXY=0 so the
-# .appex and its entitlements never enter the archive. Device-wide filtering
-# for general users ships via the BlockingmachineTunnel packet-tunnel appex.
+# Device-wide filtering ships via the BlockingmachineTunnel packet-tunnel
+# appex — the dns-proxy extension was removed entirely (flag 89: iOS only runs
+# NEDNSProxyProvider on supervised/MDM devices, TN3134, so it was dead code
+# for consumer testers).
 
 set -euo pipefail
 
@@ -135,7 +133,7 @@ if [[ -n "$build_arg" ]]; then
 fi
 
 if $do_prebuild; then
-  echo "→ expo prebuild --platform ios --clean (dns-proxy extension stripped: supervised/MDM-only on iOS — flag 89)"
+  echo "→ expo prebuild --platform ios --clean"
   # LC_ALL: CocoaPods 1.17 under Ruby 4 dies on unicode_normalize ASCII-8BIT
   # without a UTF-8 locale (hit once on this box already). --build feeds the
   # versionCode derivation — app.config.js computes ios.buildNumber from
@@ -143,13 +141,13 @@ if $do_prebuild; then
   # The conditional var must ride through `env`: bash decides prefix
   # assignments before expansion, so an expanded ${next:+VAR=…} word would
   # become argv[0] ("command not found") — as an env operand it works.
-  (cd "$MOBILE" && env -u ELECTRON_RUN_AS_NODE CI=1 LC_ALL=en_US.UTF-8 BM_IOS_DNSPROXY=0 ${next:+BM_ANDROID_VERSION_CODE=$next} npx expo prebuild --platform ios --clean)
+  (cd "$MOBILE" && env -u ELECTRON_RUN_AS_NODE CI=1 LC_ALL=en_US.UTF-8 ${next:+BM_ANDROID_VERSION_CODE=$next} npx expo prebuild --platform ios --clean)
 fi
 
 if [[ ! -d "$WORKSPACE" ]]; then
   echo "❌ $WORKSPACE not found." >&2
   echo "   Generate it first:" >&2
-  echo "     cd packages/mobile && CI=1 BM_IOS_DNSPROXY=0 npx expo prebuild --platform ios" >&2
+  echo "     cd packages/mobile && CI=1 npx expo prebuild --platform ios" >&2
   echo "     cd ios && pod install   # needs LC_ALL=en_US.UTF-8 on this box (Ruby 4 + CocoaPods 1.17 bug)" >&2
   exit 1
 fi

@@ -55,36 +55,75 @@ function resolveInNm(rel) {
   return path.join(pkgDir(pkgName), rest);
 }
 
+// Read-modify-write through a single descriptor — the target cannot be swapped
+// or truncated between the read and the write, the same guarantee
+// patch-image-size.cjs takes with openSync('r+'). transform returns the new
+// content, or null to leave the file untouched. Replaces every
+// existsSync→readFileSync→writeFileSync triple, which is the TOCTOU shape
+// CodeQL's js/file-system-race flags.
+function rewriteFileInPlace(filePath, transform) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r+');
+  } catch {
+    return false; // absent or unreadable — same skip the existsSync guard gave
+  }
+  try {
+    const source = fs.readFileSync(fd, 'utf8');
+    const next = transform(source);
+    if (next === null || next === source) return false;
+    fs.ftruncateSync(fd, 0);
+    fs.writeSync(fd, next, 0, 'utf8');
+    return true;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Create-if-absent without an existsSync pre-check — `wx` makes the check-and-
+// create atomic. EEXIST means the file is already there, which is the skip.
+function writeIfAbsent(filePath, content) {
+  try {
+    fs.writeFileSync(filePath, content, { flag: 'wx' });
+    return true;
+  } catch (err) {
+    if (err && err.code === 'EEXIST') return false;
+    throw err;
+  }
+}
+
 const polyfillShim = path.join(nm, 'react-native/rn-get-polyfills.js');
-if (fs.existsSync(path.join(nm, 'react-native/package.json')) && !fs.existsSync(polyfillShim)) {
-  fs.writeFileSync(
+if (
+  fs.existsSync(path.join(nm, 'react-native/package.json')) &&
+  writeIfAbsent(
     polyfillShim,
     "// Patched in by scripts/patch-react-native-rn087.cjs — RN 0.87 moved this entry point.\n" +
       "module.exports = require('@react-native/js-polyfills');\n",
-  );
+  )
+) {
   console.log('patched react-native: wrote rn-get-polyfills.js shim');
 }
 
 const registryPkg = path.join(nm, '@react-native/assets-registry');
-if (!fs.existsSync(registryPkg)) {
-  fs.mkdirSync(registryPkg, { recursive: true });
-  fs.writeFileSync(
-    path.join(registryPkg, 'package.json'),
-    JSON.stringify(
-      { name: '@react-native/assets-registry', version: '0.0.0', main: 'registry.js' },
-      null,
-      2,
-    ) + '\n',
-  );
-  fs.writeFileSync(
-    path.join(registryPkg, 'registry.js'),
-    "// Patched in by scripts/patch-react-native-rn087.cjs — RN 0.87 hosts the registry at\n" +
-      "// react-native/src/private/assets/AssetRegistry. The deep path matters: the\n" +
-      "// package-exports alias ('react-native/asset-registry') bundles as a *second*\n" +
-      "// module record under Metro, which split the registry into two arrays and\n" +
-      "// broke Asset.fromModule with 'Cannot read property uri of null'.\n" +
-      "module.exports = require('react-native/src/private/assets/AssetRegistry');\n",
-  );
+fs.mkdirSync(registryPkg, { recursive: true });
+const registryPkgWrote = writeIfAbsent(
+  path.join(registryPkg, 'package.json'),
+  JSON.stringify(
+    { name: '@react-native/assets-registry', version: '0.0.0', main: 'registry.js' },
+    null,
+    2,
+  ) + '\n',
+);
+const registryJsWrote = writeIfAbsent(
+  path.join(registryPkg, 'registry.js'),
+  "// Patched in by scripts/patch-react-native-rn087.cjs — RN 0.87 hosts the registry at\n" +
+    "// react-native/src/private/assets/AssetRegistry. The deep path matters: the\n" +
+    "// package-exports alias ('react-native/asset-registry') bundles as a *second*\n" +
+    "// module record under Metro, which split the registry into two arrays and\n" +
+    "// broke Asset.fromModule with 'Cannot read property uri of null'.\n" +
+    "module.exports = require('react-native/src/private/assets/AssetRegistry');\n",
+);
+if (registryPkgWrote || registryJsWrote) {
   console.log('patched react-native: wrote @react-native/assets-registry stub package');
 }
 
@@ -97,33 +136,35 @@ if (!fs.existsSync(registryPkg)) {
 // every expo-font/vector-icons load red-boxed. Back BOTH stores with one
 // globalThis singleton so the module records converge regardless.
 const ASSET_REGISTRY_FILE = resolveInNm('react-native/src/private/assets/AssetRegistry.js');
-if (fs.existsSync(ASSET_REGISTRY_FILE)) {
-  const source = fs.readFileSync(ASSET_REGISTRY_FILE, 'utf8');
-  if (source.includes('const assets: Array<PackagerAsset> = [];')) {
-    const patched = source.replace(
-      'const assets: Array<PackagerAsset> = [];',
-      "// Patched in by scripts/patch-react-native-rn087.cjs — global singleton because\n" +
-        '// @expo/cli virtual-polyfills the registry under a separate module record.\n' +
-        'const assets: Array<PackagerAsset> = (globalThis.__bmAssetRegistry ||= []);',
-    );
-    fs.writeFileSync(ASSET_REGISTRY_FILE, patched);
-    console.log('patched react-native AssetRegistry: singleton asset array');
-  }
+if (
+  rewriteFileInPlace(ASSET_REGISTRY_FILE, (source) =>
+    source.includes('const assets: Array<PackagerAsset> = [];')
+      ? source.replace(
+          'const assets: Array<PackagerAsset> = [];',
+          "// Patched in by scripts/patch-react-native-rn087.cjs — global singleton because\n" +
+            '// @expo/cli virtual-polyfills the registry under a separate module record.\n' +
+            'const assets: Array<PackagerAsset> = (globalThis.__bmAssetRegistry ||= []);',
+        )
+      : null,
+  )
+) {
+  console.log('patched react-native AssetRegistry: singleton asset array');
 }
 const EXPO_CLI_MMP = resolveInNm('@expo/cli/build/src/start/server/metro/withMetroMultiPlatform.js');
-if (fs.existsSync(EXPO_CLI_MMP)) {
-  const source = fs.readFileSync(EXPO_CLI_MMP, 'utf8');
-  const needle =
-    'const ASSET_REGISTRY_SRC = `const assets=[];module.exports={registerAsset:s=>assets.push(s),getAssetByID:s=>assets[s-1]};`;';
-  if (source.includes(needle)) {
-    const patched = source.replace(
-      needle,
-      'const ASSET_REGISTRY_SRC = `const assets=globalThis.__bmAssetRegistry||(globalThis.__bmAssetRegistry=[]);' +
-        "module.exports={registerAsset:s=>assets.push(s),getAssetByID:s=>assets[s-1]};`; // singleton shared with react-native/src/private/assets/AssetRegistry — patched by scripts/patch-react-native-rn087.cjs",
-    );
-    fs.writeFileSync(EXPO_CLI_MMP, patched);
-    console.log('patched @expo/cli asset-registry polyfill: singleton asset array');
-  }
+const MMP_NEEDLE =
+  'const ASSET_REGISTRY_SRC = `const assets=[];module.exports={registerAsset:s=>assets.push(s),getAssetByID:s=>assets[s-1]};`;';
+if (
+  rewriteFileInPlace(EXPO_CLI_MMP, (source) =>
+    source.includes(MMP_NEEDLE)
+      ? source.replace(
+          MMP_NEEDLE,
+          'const ASSET_REGISTRY_SRC = `const assets=globalThis.__bmAssetRegistry||(globalThis.__bmAssetRegistry=[]);' +
+            "module.exports={registerAsset:s=>assets.push(s),getAssetByID:s=>assets[s-1]};`; // singleton shared with react-native/src/private/assets/AssetRegistry — patched by scripts/patch-react-native-rn087.cjs",
+        )
+      : null,
+  )
+) {
+  console.log('patched @expo/cli asset-registry polyfill: singleton asset array');
 }
 
 // Every expo-* package ships a tsconfig.json extending "expo-module-scripts/tsconfig.base",
@@ -131,34 +172,34 @@ if (fs.existsSync(EXPO_CLI_MMP)) {
 // it's opened. A minimal stub satisfies the resolution; nothing actually compiles through
 // it (the workspace tsconfig excludes node_modules entirely).
 const emsPkg = path.join(nm, 'expo-module-scripts');
-if (!fs.existsSync(path.join(emsPkg, 'tsconfig.base.json'))) {
-  fs.mkdirSync(emsPkg, { recursive: true });
-  fs.writeFileSync(
-    path.join(emsPkg, 'package.json'),
-    JSON.stringify(
-      { name: 'expo-module-scripts', version: '0.0.0', private: true },
-      null,
-      2,
-    ) + '\n',
-  );
-  fs.writeFileSync(
-    path.join(emsPkg, 'tsconfig.base.json'),
-    JSON.stringify(
-      {
-        // Patched in by scripts/patch-react-native-rn087.cjs — IDE-only stub.
-        compilerOptions: {
-          strict: true,
-          jsx: 'react-native',
-          module: 'esnext',
-          target: 'esnext',
-          moduleResolution: 'bundler',
-          skipLibCheck: true,
-        },
+fs.mkdirSync(emsPkg, { recursive: true });
+const emsPkgWrote = writeIfAbsent(
+  path.join(emsPkg, 'package.json'),
+  JSON.stringify(
+    { name: 'expo-module-scripts', version: '0.0.0', private: true },
+    null,
+    2,
+  ) + '\n',
+);
+const emsBaseWrote = writeIfAbsent(
+  path.join(emsPkg, 'tsconfig.base.json'),
+  JSON.stringify(
+    {
+      // Patched in by scripts/patch-react-native-rn087.cjs — IDE-only stub.
+      compilerOptions: {
+        strict: true,
+        jsx: 'react-native',
+        module: 'esnext',
+        target: 'esnext',
+        moduleResolution: 'bundler',
+        skipLibCheck: true,
       },
-      null,
-      2,
-    ) + '\n',
-  );
+    },
+    null,
+    2,
+  ) + '\n',
+);
+if (emsPkgWrote || emsBaseWrote) {
   console.log('patched node_modules: wrote expo-module-scripts tsconfig.base stub');
 }
 
@@ -183,10 +224,11 @@ const KOTLIN_METADATA_TARGETS = [
 ];
 for (const rel of KOTLIN_METADATA_TARGETS) {
   const ktsPath = resolveInNm(rel);
-  if (!fs.existsSync(ktsPath)) continue;
-  const kts = fs.readFileSync(ktsPath, 'utf8');
-  if (!kts.includes('-Xskip-metadata-version-check')) {
-    fs.writeFileSync(ktsPath, kts + SKIP_CHECK_BLOCK);
+  if (
+    rewriteFileInPlace(ktsPath, (kts) =>
+      kts.includes('-Xskip-metadata-version-check') ? null : kts + SKIP_CHECK_BLOCK,
+    )
+  ) {
     console.log(`patched ${rel}: added -Xskip-metadata-version-check to allprojects`);
   }
 }
@@ -218,9 +260,6 @@ const KOTLIN_APPLY_OR_STRIP_RE =
   /^(\s*)(?:apply plugin:\s*["'](?:org\.jetbrains\.kotlin\.)?kotlin-android["']|plugins\.apply\("(?:org\.jetbrains\.kotlin\.)?kotlin-android"\)|apply\(plugin = "org\.jetbrains\.kotlin\.android"\)|\/\/ kotlin-android apply (?:removed|gated) by scripts\/patch-react-native-rn087\.cjs[^\n]*)\s*$/gm;
 for (const rel of KOTLIN_ANDROID_APPLY_SITES) {
   const filePath = resolveInNm(rel);
-  if (!fs.existsSync(filePath)) continue;
-  const source = fs.readFileSync(filePath, 'utf8');
-  if (source.includes('apply gated by scripts/patch-react-native-rn087.cjs')) continue;
   const isKts = rel.endsWith('.kts') || rel.endsWith('.kt');
   const gated = isKts
     ? '$1// kotlin-android apply gated by scripts/patch-react-native-rn087.cjs — AGP 9 built-in Kotlin registers `kotlin` itself\n' +
@@ -231,9 +270,13 @@ for (const rel of KOTLIN_ANDROID_APPLY_SITES) {
       "$1if (!((project.findProperty('android.builtInKotlin') ?: 'true') as String).toBoolean()) {\n" +
       "$1    apply plugin: 'org.jetbrains.kotlin.android'\n" +
       '$1}';
-  const patched = source.replace(KOTLIN_APPLY_OR_STRIP_RE, gated);
-  if (patched !== source) {
-    fs.writeFileSync(filePath, patched);
+  if (
+    rewriteFileInPlace(filePath, (source) => {
+      if (source.includes('apply gated by scripts/patch-react-native-rn087.cjs')) return null;
+      const patched = source.replace(KOTLIN_APPLY_OR_STRIP_RE, gated);
+      return patched === source ? null : patched;
+    })
+  ) {
     console.log(`patched ${rel}: gated kotlin-android application on builtInKotlin`);
   }
 }
@@ -246,22 +289,23 @@ const KGP_EXTENSION_CONFIG_RE =
   /if \(project != rootProject\) \{\s*\n\s*extensions\.configure<org\.jetbrains\.kotlin\.gradle\.dsl\.KotlinAndroidProjectExtension> \{\s*\n\s*compilerOptions \{\s*\n\s*jvmTarget = JvmTarget\.fromTarget\("([^"]+)"\)\s*\n\s*\}\s*\n\s*\}\s*\n\}/g;
 for (const rel of ['react-native-reanimated/android/build.gradle.kts', 'react-native-worklets/android/build.gradle.kts']) {
   const filePath = resolveInNm(rel);
-  if (!fs.existsSync(filePath)) continue;
-  const source = fs.readFileSync(filePath, 'utf8');
-  const patched = source.replace(
-    KGP_EXTENSION_CONFIG_RE,
-    '// KGP-extension configure gated by scripts/patch-react-native-rn087.cjs — the\n' +
-      '// extension only exists when kotlin-android applied (builtInKotlin=false).\n' +
-      'if (project != rootProject && (findProperty("android.builtInKotlin") as? String)?.toBoolean() == false) {\n' +
-      '    extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension> {\n' +
-      '        compilerOptions {\n' +
-      '            jvmTarget = JvmTarget.fromTarget("$1")\n' +
-      '        }\n' +
-      '    }\n' +
-      '}',
-  );
-  if (patched !== source) {
-    fs.writeFileSync(filePath, patched);
+  if (
+    rewriteFileInPlace(filePath, (source) => {
+      const patched = source.replace(
+        KGP_EXTENSION_CONFIG_RE,
+        '// KGP-extension configure gated by scripts/patch-react-native-rn087.cjs — the\n' +
+          '// extension only exists when kotlin-android applied (builtInKotlin=false).\n' +
+          'if (project != rootProject && (findProperty("android.builtInKotlin") as? String)?.toBoolean() == false) {\n' +
+          '    extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension> {\n' +
+          '        compilerOptions {\n' +
+          '            jvmTarget = JvmTarget.fromTarget("$1")\n' +
+          '        }\n' +
+          '    }\n' +
+          '}',
+      );
+      return patched === source ? null : patched;
+    })
+  ) {
     console.log(`patched ${rel}: gated KotlinAndroidProjectExtension configure on builtInKotlin`);
   }
 }
@@ -367,18 +411,20 @@ const AGP9_SOURCE_PATCHES = [
 ];
 for (const { file, replacements, skipIf } of AGP9_SOURCE_PATCHES) {
   const filePath = resolveInNm(file);
-  if (!fs.existsSync(filePath)) continue;
-  let source = fs.readFileSync(filePath, 'utf8');
-  if (skipIf && source.includes(skipIf)) continue;
-  let touched = false;
-  for (const [from, to] of replacements) {
-    if (source.includes(from)) {
-      source = source.split(from).join(to);
-      touched = true;
-    }
-  }
-  if (touched) {
-    fs.writeFileSync(filePath, source);
+  if (
+    rewriteFileInPlace(filePath, (source) => {
+      if (skipIf && source.includes(skipIf)) return null;
+      let next = source;
+      let touched = false;
+      for (const [from, to] of replacements) {
+        if (next.includes(from)) {
+          next = next.split(from).join(to);
+          touched = true;
+        }
+      }
+      return touched ? next : null;
+    })
+  ) {
     console.log(`patched ${file}: AGP 9 DSL type swaps`);
   }
 }
@@ -411,28 +457,30 @@ function* iterModuleBuildGradles(rootDir = nm, depth = 0) {
 }
 for (const pkgDir of iterModuleBuildGradles()) {
   const filePath = path.join(pkgDir, 'android/build.gradle');
-  if (!fs.existsSync(filePath)) continue;
-  let source = fs.readFileSync(filePath, 'utf8');
-  let touched = false;
-  if (REMOVED_DSL_LINE.test(source)) {
-    source = source
-      .split('\n')
-      .filter((line) => !REMOVED_DSL_LINE.test(line))
-      .join('\n');
-    touched = true;
-  }
-  // A stripped `versionName "x"` line leaves `${versionName}` interpolations
-  // dangling; every expo module sets a project-level `version` with the same value.
-  if (source.includes('${versionName}')) {
-    source = source.split('${versionName}').join('${version}');
-    touched = true;
-  }
-  if (source.includes('buildConfigField') && !/buildConfig\s+true|buildConfig\s*=\s*true/.test(source)) {
-    source = source.replace(/^(\s*)android\s*\{/m, '$1android {\n$1  buildFeatures {\n$1    buildConfig true\n$1  }\n');
-    touched = true;
-  }
-  if (touched) {
-    fs.writeFileSync(filePath, source);
+  if (
+    rewriteFileInPlace(filePath, (source) => {
+      let next = source;
+      let touched = false;
+      if (REMOVED_DSL_LINE.test(next)) {
+        next = next
+          .split('\n')
+          .filter((line) => !REMOVED_DSL_LINE.test(line))
+          .join('\n');
+        touched = true;
+      }
+      // A stripped `versionName "x"` line leaves `${versionName}` interpolations
+      // dangling; every expo module sets a project-level `version` with the same value.
+      if (next.includes('${versionName}')) {
+        next = next.split('${versionName}').join('${version}');
+        touched = true;
+      }
+      if (next.includes('buildConfigField') && !/buildConfig\s+true|buildConfig\s*=\s*true/.test(next)) {
+        next = next.replace(/^(\s*)android\s*\{/m, '$1android {\n$1  buildFeatures {\n$1    buildConfig true\n$1  }\n');
+        touched = true;
+      }
+      return touched ? next : null;
+    })
+  ) {
     console.log(`patched ${path.relative(nm, filePath)}: AGP 9 library-DSL cleanup`);
   }
 }
@@ -461,16 +509,16 @@ const GRADLE_PROPERTIES_APPENDS = [
     'android.disallowKotlinSourceSets',
   ],
 ];
-if (fs.existsSync(APP_GRADLE_PROPERTIES)) {
-  let source = fs.readFileSync(APP_GRADLE_PROPERTIES, 'utf8');
+rewriteFileInPlace(APP_GRADLE_PROPERTIES, (source) => {
+  let next = source;
   for (const [block, marker] of GRADLE_PROPERTIES_APPENDS) {
-    if (!source.includes(marker)) {
-      source = source.trimEnd() + '\n\n' + block;
+    if (!next.includes(marker)) {
+      next = next.trimEnd() + '\n\n' + block;
       console.log(`patched packages/mobile/android/gradle.properties: ${marker}`);
     }
   }
-  fs.writeFileSync(APP_GRADLE_PROPERTIES, source);
-}
+  return next === source ? null : next;
+});
 
 // The gated apply line shared by the app-module injections below and
 // plugins/withReleaseSigning.js — under AGP 9 built-in Kotlin the AGP builtin
@@ -483,16 +531,16 @@ const APP_GATED_KOTLIN =
 // RN 0.87's AGP 9.2.1 requires Gradle >=9.4.1 but expo-prebuild generates the wrapper
 // pinning 9.3.1 — bump the distributionUrl so a fresh `prebuild --clean` dir still works.
 const WRAPPER_PROPS = path.resolve(__dirname, '../packages/mobile/android/gradle/wrapper/gradle-wrapper.properties');
-if (fs.existsSync(WRAPPER_PROPS)) {
-  const source = fs.readFileSync(WRAPPER_PROPS, 'utf8');
-  const patched = source.replace(
-    /distributionUrl=.*gradle-9\.(0|1|2|3)(?:\.\d+)?-/,
-    'distributionUrl=https\\://services.gradle.org/distributions/gradle-9.4.1-',
-  );
-  if (patched !== source) {
-    fs.writeFileSync(WRAPPER_PROPS, patched);
-    console.log('patched gradle-wrapper.properties: distributionUrl -> gradle-9.4.1');
-  }
+if (
+  rewriteFileInPlace(WRAPPER_PROPS, (source) => {
+    const patched = source.replace(
+      /distributionUrl=.*gradle-9\.(0|1|2|3)(?:\.\d+)?-/,
+      'distributionUrl=https\\://services.gradle.org/distributions/gradle-9.4.1-',
+    );
+    return patched === source ? null : patched;
+  })
+) {
+  console.log('patched gradle-wrapper.properties: distributionUrl -> gradle-9.4.1');
 }
 
 // The prebuild-generated app build needs kotlin-android when built-in Kotlin is
@@ -501,27 +549,27 @@ if (fs.existsSync(WRAPPER_PROPS)) {
 // when absent, and upgrade any bare/stripped apply to it. Mirrors the identical
 // logic in plugins/withReleaseSigning.js, which owns this file at prebuild time.
 const APP_BUILD_GRADLE = path.resolve(__dirname, '../packages/mobile/android/app/build.gradle');
-if (fs.existsSync(APP_BUILD_GRADLE)) {
-  const source = fs.readFileSync(APP_BUILD_GRADLE, 'utf8');
-  let patched = source.replace(
-    /getDefaultProguardFile\(["']proguard-android\.txt["']\)/,
-    'getDefaultProguardFile("proguard-android-optimize.txt") // AGP 9 dropped the non-optimizing default',
-  );
-  if (!/kotlin-android|org\.jetbrains\.kotlin\.android/.test(patched)) {
-    patched = patched.replace(
-      /apply plugin: "com\.facebook\.react"\s*\n/,
-      `apply plugin: "com.facebook.react"\n\n${APP_GATED_KOTLIN}\n`,
+if (
+  rewriteFileInPlace(APP_BUILD_GRADLE, (source) => {
+    let patched = source.replace(
+      /getDefaultProguardFile\(["']proguard-android\.txt["']\)/,
+      'getDefaultProguardFile("proguard-android-optimize.txt") // AGP 9 dropped the non-optimizing default',
     );
-  } else {
-    patched = patched.replace(
-      /^(\s*)apply plugin:\s*["']org\.jetbrains\.kotlin\.android["']\s*$/gm,
-      `$1${APP_GATED_KOTLIN}`,
-    );
-  }
-  if (patched !== source) {
-    fs.writeFileSync(APP_BUILD_GRADLE, patched);
-    console.log('patched packages/mobile/android/app/build.gradle: gated kotlin-android / proguard default');
-  }
+    if (!/kotlin-android|org\.jetbrains\.kotlin\.android/.test(patched)) {
+      patched = patched.replace(
+        /apply plugin: "com\.facebook\.react"\s*\n/,
+        `apply plugin: "com.facebook.react"\n\n${APP_GATED_KOTLIN}\n`,
+      );
+    } else {
+      patched = patched.replace(
+        /^(\s*)apply plugin:\s*["']org\.jetbrains\.kotlin\.android["']\s*$/gm,
+        `$1${APP_GATED_KOTLIN}`,
+      );
+    }
+    return patched === source ? null : patched;
+  })
+) {
+  console.log('patched packages/mobile/android/app/build.gradle: gated kotlin-android / proguard default');
 }
 
 // Sixth break, on the iOS side: RN 0.87 dropped the bridge-era members
@@ -540,7 +588,8 @@ if (fs.existsSync(APP_BUILD_GRADLE)) {
 // implements it.
 const EXPO_FACTORY_SWIFT = 'expo/ios/AppDelegates/ExpoReactNativeFactory.swift';
 const expoFactoryPath = resolveInNm(EXPO_FACTORY_SWIFT);
-if (fs.existsSync(expoFactoryPath)) {
+if (
+  rewriteFileInPlace(expoFactoryPath, (source) => {
   const OLD_FACTORY_CONFIG = `    let configuration = RCTRootViewFactoryConfiguration(
       bundleURLBlock: bundleUrlBlock,
       newArchEnabled: weakDelegate.newArchEnabled()
@@ -611,12 +660,14 @@ if (fs.existsSync(expoFactoryPath)) {
       }
     }
 `;
-  let source = fs.readFileSync(expoFactoryPath, 'utf8');
   if (source.includes(OLD_FACTORY_CONFIG)) {
-    source = source.replace(OLD_FACTORY_CONFIG, NEW_FACTORY_CONFIG);
-    fs.writeFileSync(expoFactoryPath, source);
-    console.log('patched expo: ExpoReactNativeFactory.swift createRCTRootViewFactory for RN 0.87');
-  } else if (!source.includes('Patched by scripts/patch-react-native-rn087.cjs')) {
+    return source.replace(OLD_FACTORY_CONFIG, NEW_FACTORY_CONFIG);
+  }
+  if (!source.includes('Patched by scripts/patch-react-native-rn087.cjs')) {
     console.warn('patch-react-native-rn087: ExpoReactNativeFactory.swift shape changed — manual review needed');
   }
+  return null;
+  })
+) {
+  console.log('patched expo: ExpoReactNativeFactory.swift createRCTRootViewFactory for RN 0.87');
 }
