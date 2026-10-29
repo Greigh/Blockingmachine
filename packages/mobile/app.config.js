@@ -18,6 +18,13 @@ module.exports = () => {
   return {
     expo: {
       ...expo,
+      // CFBundleShortVersionString admits ≤3 dot-separated integers — a semver
+      // prerelease like "1.0.1-beta.2" fails ASC validation. The beta stream
+      // differentiates builds via CFBundleVersion, so the marketing string
+      // emits the base triple and prerelease builds attach to the release's
+      // own TestFlight version. The full semver still drives versionCode
+      // derivation above and lives in the monorepo tag.
+      version: expo.version.split('-')[0],
       android: {
         ...expo.android,
         versionCode: buildNumber,
