@@ -39,7 +39,7 @@ enum TunnelStatus {
     static func answeredBlocked() { bump { blocked += 1 } }
     static func answeredRelayed() { bump { relayed += 1 } }
 
-    private static func bump(_ increment: () -> Void) {
+    private static func bump(_ increment: @escaping () -> Void) {
         queue.async {
             increment()
             flush()
