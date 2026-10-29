@@ -523,6 +523,44 @@ boot_or_fresh "$PROXY_PLIST" com.blockingmachine.proxy
 boot_or_fresh "$NATLOOK_PLIST" com.blockingmachine.natlook
 log "bootstrapped com.blockingmachine.proxy (as $SERVICE_USER) and com.blockingmachine.natlook"
 
+# --- engine health before the anchor: launchctl print proves REGISTRATION,
+# not health — a crash-looping engine prints fine. The real check is the
+# engine's own control answer, polled with the same bounded-patience loop the
+# rehearsal script uses (the engine mints its CA on first boot — RSA keygen
+# can take several seconds). This poll must complete BEFORE the anchor so the
+# trust gate below has a CA to evaluate.
+engine_up=0
+for _ in $(seq 1 30); do
+  if curl -sf --max-time 2 "http://127.0.0.1:${CONTROL_PORT}/v1/proxy/status" >/dev/null 2>&1; then
+    engine_up=1
+    break
+  fi
+  sleep 1
+done
+[[ "$engine_up" -eq 1 ]] || die "com.blockingmachine.proxy never answered /v1/proxy/status on :${CONTROL_PORT} — the service is bootstrapped but the engine is not healthy; check ${LOG_DIR}/https-filter.err"
+
+# --- CA trust gate (the app's 'needs-ca-trust' contract, on the sudo path):
+# an anchor redirecting tcp:{80,443} into an engine whose CA this machine
+# doesn't trust is a total TLS outage — every handshake lands on a cert no
+# client accepts. Verify BEFORE the redirect exists. The check evaluates the
+# store copy itself: adoption (flag 100) makes it byte-identical to the app
+# CA when both exist, and a service-minted CA is the cert clients actually
+# see either way. ca.pem is a public certificate — staged readable for the
+# console user's verify-cert; the key never leaves 0600.
+[[ -f "$STORE_DIR/ca.pem" ]] || die "service engine answered but $STORE_DIR/ca.pem is absent — cannot verify trust; refusing to arm capture"
+CA_CHECK="$(mktemp /tmp/bm-ca-verify.XXXXXX)"
+cp "$STORE_DIR/ca.pem" "$CA_CHECK"
+ca_trusted=0
+if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" ]]; then
+  chown "$CONSOLE_USER" "$CA_CHECK"
+  sudo -u "$CONSOLE_USER" security verify-cert -c "$CA_CHECK" >/dev/null 2>&1 && ca_trusted=1
+else
+  security verify-cert -c "$CA_CHECK" >/dev/null 2>&1 && ca_trusted=1
+fi
+rm -f "$CA_CHECK"
+[[ "$ca_trusted" -eq 1 ]] || die "the filter CA is not trusted on this machine yet — arming capture would break every TLS connection. Trust it first (app → HTTPS filter → Trust CA when adoption carried your app CA, or 'sudo security add-trusted-cert -d -r trustRoot -k <login.keychain> $STORE_DIR/ca.pem' for a service-minted one), then re-run this installer. The anchor was never loaded."
+log "CA trust verified — arming capture"
+
 # --- arm the anchor through the installed shared sequence ---
 # (records the pre-enable status + token ledger in the state file, loads
 # the anchor, -E's iff pf is currently disabled — the helper's startup
@@ -535,19 +573,6 @@ if ! pfctl -a "$ANCHOR_NAME" -s rules 2>/dev/null | grep -q 'rdr pass on lo0'; t
   die "anchor loaded but rdr rules not visible — pf state inconsistent; run scripts/uninstall-macos-capture.sh"
 fi
 launchctl print "system/com.blockingmachine.natlook" >/dev/null 2>&1 || die "natlook service not running after bootstrap"
-# launchctl print proves REGISTRATION, not health — a crash-looping engine
-# prints fine. The real check is the engine's own control answer, polled
-# with the same bounded-patience loop the rehearsal script uses (the engine
-# mints its CA on first boot — RSA keygen can take several seconds).
-engine_up=0
-for _ in $(seq 1 30); do
-  if curl -sf --max-time 2 "http://127.0.0.1:${CONTROL_PORT}/v1/proxy/status" >/dev/null 2>&1; then
-    engine_up=1
-    break
-  fi
-  sleep 1
-done
-[[ "$engine_up" -eq 1 ]] || die "com.blockingmachine.proxy never answered /v1/proxy/status on :${CONTROL_PORT} — the service is bootstrapped but the engine is not healthy; check ${LOG_DIR}/https-filter.err"
 
 log "capture installed: tcp:{80,443} → 127.0.0.1:${HELPER_PORT} (helper) → 127.0.0.1:${ENGINE_PORT} (engine)"
 log "verify: curl --cacert <ca.pem from http://127.0.0.1:${CONTROL_PORT}/v1/proxy/ca> https://example.com/"

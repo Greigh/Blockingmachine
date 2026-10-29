@@ -651,6 +651,11 @@ describe('HttpsFilterCard — system-proxy row (P7, flag 123)', () => {
 
   function sysProxyBridge(statusReply: unknown, overrides: Record<string, unknown> = {}) {
     return installBridge({
+      // System-proxy arming is gated on a trusted CA — the row's tests run
+      // post-trust unless a test overrides this.
+      getHttpsFilterCaTrust: jest.fn(() =>
+        Promise.resolve({ success: true, state: 'trusted', message: 'trusted' }),
+      ),
       getHttpsFilterSystemProxyStatus: jest.fn(() => Promise.resolve(statusReply)),
       applyHttpsFilterSystemProxy: jest.fn(() =>
         Promise.resolve({ success: true, outcome: 'applied', message: 'applied' }),
@@ -799,5 +804,21 @@ describe('HttpsFilterCard — system-proxy row (P7, flag 123)', () => {
       await Promise.resolve();
     });
     expect((screen.getByRole('button', { name: 'Enable' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('an untrusted CA disables Enable — interception would break every TLS handshake', async () => {
+    sysProxyBridge(sysOff, {
+      getHttpsFilterCaTrust: jest.fn(() =>
+        Promise.resolve({ success: true, state: 'installed-untrusted', message: 'not trusted' }),
+      ),
+    });
+    render(<HttpsFilterCard />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const enable = screen.getByRole('button', { name: 'Enable' }) as HTMLButtonElement;
+    expect(enable.disabled).toBe(true);
+    expect(enable.title).toContain('Trust the CA first');
   });
 });

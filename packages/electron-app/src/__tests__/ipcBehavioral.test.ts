@@ -1866,12 +1866,40 @@ describe('httpsfilter:system-proxy-* IPC handlers (P7, flag 123)', () => {
     expect(sysProxyOps.apply).not.toHaveBeenCalled();
   });
 
+  // Serves a live engine + its CA identity so the trust gate is exercised for
+  // real; tests pin the mocked trustStatus answer per case.
+  const SYS_PROXY_CA = {
+    certPem: '-----BEGIN CERTIFICATE-----\nSTUB\n-----END CERTIFICATE-----\n',
+    sha256Fingerprint: 'AA:BB:CC',
+    notAfter: 'Jan  1 00:00:00 2036 GMT',
+    keyWrapped: true,
+  };
+  const liveEngineWithCa = () => {
+    fetchSpy.mockImplementation(async (u) => {
+      const url = String(u);
+      if (url.includes('/v1/proxy/status')) return engineRunning();
+      if (url.includes('/v1/proxy/ca'))
+        return new Response(JSON.stringify(SYS_PROXY_CA), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      return new Response('not found', { status: 404 });
+    });
+    caTrustOps.trustStatus.mockResolvedValue('trusted');
+  };
+
+  test('apply refuses while the CA is untrusted — MITM would break every TLS handshake', async () => {
+    liveEngineWithCa();
+    caTrustOps.trustStatus.mockResolvedValue('absent');
+    const res = await invoke('httpsfilter:system-proxy-apply', 'pac');
+    expect(res.success).toBe(false);
+    expect(res.outcome).toBe('needs-ca-trust');
+    expect(caTrustOps.trustStatus).toHaveBeenCalledWith(SYS_PROXY_CA.certPem);
+    expect(sysProxyOps.apply).not.toHaveBeenCalled();
+  });
+
   test('apply(pac) snapshots the pre-write state into the ownership record', async () => {
-    fetchSpy.mockImplementation(async (u) =>
-      String(u).includes('/v1/proxy/status')
-        ? engineRunning()
-        : new Response('not found', { status: 404 }),
-    );
+    liveEngineWithCa();
     sysProxyOps.apply.mockResolvedValue({ outcome: 'applied', prior: stateOff, message: 'applied' });
     const res = await invoke('httpsfilter:system-proxy-apply', 'pac');
     expect(res.success).toBe(true);
@@ -1884,11 +1912,7 @@ describe('httpsfilter:system-proxy-* IPC handlers (P7, flag 123)', () => {
   });
 
   test('apply(manual) writes the loopback authority from the live engine port', async () => {
-    fetchSpy.mockImplementation(async (u) =>
-      String(u).includes('/v1/proxy/status')
-        ? engineRunning()
-        : new Response('not found', { status: 404 }),
-    );
+    liveEngineWithCa();
     sysProxyOps.apply.mockResolvedValue({ outcome: 'applied', prior: stateOff, message: 'applied' });
     const res = await invoke('httpsfilter:system-proxy-apply', 'manual');
     expect(res.success).toBe(true);
@@ -1898,11 +1922,7 @@ describe('httpsfilter:system-proxy-* IPC handlers (P7, flag 123)', () => {
   });
 
   test('a needs-admin apply answer travels to the renderer untouched', async () => {
-    fetchSpy.mockImplementation(async (u) =>
-      String(u).includes('/v1/proxy/status')
-        ? engineRunning()
-        : new Response('not found', { status: 404 }),
-    );
+    liveEngineWithCa();
     sysProxyOps.apply.mockResolvedValue({
       outcome: 'needs-admin',
       message: 'The authorization was denied.',
@@ -1985,11 +2005,7 @@ describe('httpsfilter:system-proxy-* IPC handlers (P7, flag 123)', () => {
 
   test('darwin elevate-apply runs one admin batch (revert-of-old + apply) then stores the TRUE prior', async () => {
     if (process.platform !== 'darwin') return; // the elevate branch is darwin-gated
-    fetchSpy.mockImplementation(async (u) =>
-      String(u).includes('/v1/proxy/status')
-        ? engineRunning()
-        : new Response('not found', { status: 404 }),
-    );
+    liveEngineWithCa();
     // An existing MANUAL record — the true prior is its own prior, not the
     // currently-live state the batch is about to overwrite.
     const oldManual = { mode: 'manual', host: '127.0.0.1', port: 9294 };
@@ -2084,11 +2100,7 @@ describe('httpsfilter:system-proxy-* IPC handlers (P7, flag 123)', () => {
 
   test('darwin elevate-apply refuses on foreign drift — no in-batch revert under the user\'s edits (M4)', async () => {
     if (process.platform !== 'darwin') return;
-    fetchSpy.mockImplementation(async (u) =>
-      String(u).includes('/v1/proxy/status')
-        ? engineRunning()
-        : new Response('not found', { status: 404 }),
-    );
+    liveEngineWithCa();
     capturedStoreRef.current!.set('httpsFilterSystemProxy', {
       applied: manualConfig,
       prior: stateOff,

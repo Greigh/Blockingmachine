@@ -831,11 +831,13 @@ export const HttpsFilterCard: React.FC = () => {
               <button
                 type="button"
                 className="deploy-btn"
-                disabled={busy || !engineAlive || !window.electron?.applyHttpsFilterSystemProxy}
+                disabled={busy || !engineAlive || trustState !== 'trusted' || !window.electron?.applyHttpsFilterSystemProxy}
                 title={
-                  engineAlive
-                    ? 'Choose how the OS should route proxy-aware apps through the filter.'
-                    : 'Start the engine first — the OS proxy must not point at a dead port.'
+                  !engineAlive
+                    ? 'Start the engine first — the OS proxy must not point at a dead port.'
+                    : trustState !== 'trusted'
+                      ? 'Trust the CA first — interception with an untrusted CA breaks every secure connection.'
+                      : 'Choose how the OS should route proxy-aware apps through the filter.'
                 }
                 onClick={() => setSysProxyConsent(true)}
               >

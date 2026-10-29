@@ -5783,6 +5783,22 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
             message: 'Start the HTTPS filter engine first — the OS proxy must not point at a dead port.',
           };
         }
+        // MITM against an untrusted CA is the same class of outage as a
+        // proxy aimed at a dead port — every TLS handshake lands on a
+        // certificate no client accepts. The arm is gated on verified trust;
+        // the CA-trust row above this control is where that happens.
+        const ca = await filterProxyManager.getCaInfo();
+        const caState = ca
+          ? await caTrustStatus(ca.certPem).catch(() => 'error')
+          : 'unavailable';
+        if (caState !== 'trusted') {
+          return {
+            success: false,
+            outcome: 'needs-ca-trust',
+            message:
+              'The filter CA is not trusted on this machine yet — HTTPS interception would break every secure connection. Trust the CA first, then enable the system proxy.',
+          };
+        }
         const dataPort = engine.port || 9294;
         const config: SystemProxyConfig =
           mode === 'manual'
