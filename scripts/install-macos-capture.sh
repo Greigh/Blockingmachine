@@ -314,16 +314,24 @@ render_natlook_plist() {
         <key>Listeners</key>
         <array>
             <dict>
-                <key>SockNodeName</key><string>127.0.0.1</string>
-                <key>SockServiceName</key><string>${HELPER_PORT}</string>
-                <key>SockType</key><string>stream</string>
-                <key>SockFamily</key><string>IPv4</string>
+                <key>SockNodeName</key>
+                <string>127.0.0.1</string>
+                <key>SockServiceName</key>
+                <string>${HELPER_PORT}</string>
+                <key>SockType</key>
+                <string>stream</string>
+                <key>SockFamily</key>
+                <string>IPv4</string>
             </dict>
             <dict>
-                <key>SockNodeName</key><string>::1</string>
-                <key>SockServiceName</key><string>${HELPER_PORT}</string>
-                <key>SockType</key><string>stream</string>
-                <key>SockFamily</key><string>IPv6</string>
+                <key>SockNodeName</key>
+                <string>::1</string>
+                <key>SockServiceName</key>
+                <string>${HELPER_PORT}</string>
+                <key>SockType</key>
+                <string>stream</string>
+                <key>SockFamily</key>
+                <string>IPv6</string>
             </dict>
         </array>
     </dict>
