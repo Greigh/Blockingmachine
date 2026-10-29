@@ -2,6 +2,8 @@
 
 iOS/Android companion for the Blockingmachine `/v1/*` surface — the remote control for the desktop hub's feed server and the Home Assistant add-on. Blocking stays on the server; the phone reads status, toggles protection, checks domains, triggers compiles, and watches telemetry.
 
+> **Beta** — the app is in beta: everything below works today, but the UI and platform coverage are still evolving. There is no App Store or TestFlight artifact yet; iOS runs through the Expo dev-client build, and the signed Android APK ships on the Forgejo registry. Report issues on the main repo.
+
 Design: [`docs/mobile-app-design.md`](../../docs/mobile-app-design.md)
 
 ## What it talks to
@@ -71,4 +73,4 @@ Use `-storetype JKS` explicitly — keytool's PKCS12 default cannot hold a disti
 
 ## Phase 2 (built — on-device filtering shipped)
 
-On-device filtering (Android `VpnService` tun + PAC proxy, `modules/local-vpn`) shipped and was exercised on the emulator; physical-device VPN verification stays open under flag 73. iOS `NEDNSProxyProvider` remains unbuilt.
+On-device filtering shipped on three paths: Android `VpnService` tun + PAC proxy (`modules/local-vpn`, device-wide, exercised on the emulator — physical-device verification open under flag 73), a cross-platform local DNS responder (`src/filter/localDns.ts`) that answers UDP queries on `:15353` against the synced ruleset and forwards clean traffic over DoH — the mobile counterpart of the desktop managed daemon — and the iOS `BlockingmachineTunnel` packet-tunnel app extension (`targets/BlockingmachineTunnel` + `plugins/withTunnelTarget.js`), an `NEPacketTunnelProvider` that advertises an on-tunnel DNS resolver so the system sends it every DNS query — the standard Network Extensions capability, no Apple grant needed, shipping to TestFlight today. The earlier `NEDNSProxyProvider` extension was removed (flag 89): Apple only runs `dns-proxy` providers on supervised/MDM devices (TN3134), so it was dead code for the consumer audience; `modules/local-dns-proxy` survives as the app-group bridge (ruleset publishing + shadow-observation draining) between the app and the tunnel.

@@ -19,6 +19,35 @@ export function Card(props: { children: React.ReactNode; style?: object }) {
   return <View style={[styles.card, props.style]}>{props.children}</View>;
 }
 
+/**
+ * Card grid — wraps each child in a `100/columns`% cell inside a wrapping row.
+ * Falsy children (conditional cards) are dropped so a hidden card never leaves
+ * an empty cell. Pass arrays, not fragments, for conditional groups: React does
+ * not flatten a Fragment into the children map, so a `<>` child would land the
+ * whole group inside one cell.
+ */
+export function Grid(props: {
+  columns: 1 | 2;
+  children: React.ReactNode;
+  gap?: number;
+}) {
+  if (props.columns === 1) return <>{props.children}</>;
+  const gap = props.gap ?? spacing.sm;
+  const cellWidth = `${100 / props.columns}%` as DimensionValue;
+  // toArray already drops null/undefined/booleans, so a conditional card that
+  // isn't rendering leaves no empty cell behind.
+  const cells = React.Children.toArray(props.children);
+  return (
+    <View style={[styles.gridRow, { marginHorizontal: -gap / 2 }]}>
+      {cells.map((child, i) => (
+        <View key={i} style={{ width: cellWidth, paddingHorizontal: gap / 2 }}>
+          {child}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 /** Card header — leading accent icon + bold label. `style` overrides the bottom gap. */
 export function SectionTitle(props: {
   icon: keyof typeof Ionicons.glyphMap;
@@ -75,18 +104,15 @@ export function ActionButton(props: {
           colors={[colors.accent, colors.accentDim]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          style={styles.buttonGradient}
-        >
-          {props.loading ? (
-            <ActivityIndicator color={colors.text} />
-          ) : (
-            <Text style={styles.buttonText}>{props.label}</Text>
-          )}
-        </LinearGradient>
-      ) : props.loading ? (
+          style={StyleSheet.absoluteFill}
+        />
+      ) : null}
+      {props.loading ? (
         <ActivityIndicator color={colors.text} />
       ) : (
-        <Text style={styles.buttonText}>{props.label}</Text>
+        <Text style={styles.buttonText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+          {props.label}
+        </Text>
       )}
     </Pressable>
   );
@@ -196,16 +222,6 @@ const styles = StyleSheet.create({
     borderTopColor: glass.borderTop,
     borderWidth: 1,
   },
-  buttonGradient: {
-    alignItems: 'center',
-    bottom: 0,
-    justifyContent: 'center',
-    left: 0,
-    paddingHorizontal: spacing.md,
-    position: 'absolute',
-    right: 0,
-    top: 0,
-  },
   buttonDisabled: { opacity: 0.5 },
   buttonPressed: { opacity: 0.75 },
   buttonText: { color: colors.text, fontSize: 15, fontWeight: '600' },
@@ -225,6 +241,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.08)',
     borderRadius: 6,
   },
+  gridRow: { flexDirection: 'row', flexWrap: 'wrap' },
   errorBody: { flex: 1 },
   errorDetail: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
   errorRetry: { color: colors.info, fontWeight: '600', marginLeft: spacing.md },

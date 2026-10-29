@@ -33,7 +33,7 @@ import { useServers } from '../src/state/servers';
 import { ActionButton, Card, Pill } from '../src/components/ui';
 import { describeError, type FriendlyError } from '../src/errors';
 import { GlassBackdrop } from '../src/components/GlassBackdrop';
-import { colors, glass, spacing } from '../src/theme';
+import { colors, glass, layout, spacing } from '../src/theme';
 
 type Mode = 'pick' | 'manual' | 'qr' | 'discover';
 
@@ -223,7 +223,15 @@ export default function AddServerScreen() {
       <GlassBackdrop />
       <ScrollView
         style={styles.scroll}
-      contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
+      contentContainerStyle={[
+        styles.content,
+        {
+          paddingBottom: spacing.xl + insets.bottom,
+          // Foldable edge strips (Duo cover) clip content drawn under them.
+          paddingLeft: spacing.md + insets.left,
+          paddingRight: spacing.md + insets.right,
+        },
+      ]}
       keyboardShouldPersistTaps="handled"
       automaticallyAdjustKeyboardInsets
     >
@@ -464,7 +472,13 @@ export default function AddServerScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
-  content: { padding: spacing.md, paddingBottom: spacing.xl },
+  content: {
+    alignSelf: 'center',
+    maxWidth: layout.contentMaxWidth,
+    padding: spacing.md,
+    paddingBottom: spacing.xl,
+    width: '100%',
+  },
   sectionTitle: {
     color: colors.text,
     fontSize: 16,
@@ -498,7 +512,13 @@ const styles = StyleSheet.create({
   },
   buttonRow: { flexDirection: 'row', gap: spacing.sm },
   buttonFlex: { flex: 1 },
-  cameraWrap: { borderRadius: 12, overflow: 'hidden' },
+  cameraWrap: {
+    alignSelf: 'center',
+    borderRadius: 12,
+    maxWidth: layout.cameraMaxWidth,
+    overflow: 'hidden',
+    width: '100%',
+  },
   camera: { aspectRatio: 1, width: '100%' },
   foundRow: {
     alignItems: 'center',

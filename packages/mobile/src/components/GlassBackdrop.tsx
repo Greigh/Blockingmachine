@@ -56,7 +56,7 @@ export function GlassBackdrop() {
       <GlowOrb color={colors.glowViolet} style={{ top: '30%', right: -50 }} />
       <GlowOrb color={colors.glowTeal} style={{ bottom: -70, left: -20 }} />
       <LinearGradient
-        colors={['rgba(7,10,20,0.05)', 'rgba(7,10,20,0.38)']}
+        colors={['rgba(7,10,20,0.30)', 'rgba(7,10,20,0.62)']}
         style={StyleSheet.absoluteFill}
       />
     </View>

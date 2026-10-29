@@ -5,14 +5,20 @@
  * HA integration: authorised on a trusted LAN, bearer-gated when `feedToken` is set.
  */
 
+import { credentialAllowed } from './credentialScope';
 import type {
   CheckResult,
   CompileResult,
   ControlResult,
+  HubCustomRulesResult,
+  HubFilterSource,
+  HubSourcesResult,
   ProtectionState,
   ProtectionToggleResult,
   ProxyPinRemoveResult,
   ProxyPinsResult,
+  ShadowObservationRecord,
+  ShadowObservationResult,
   StatusPayload,
   TelemetryPayload,
 } from './types';
@@ -100,7 +106,13 @@ export class BlockingmachineClient {
     const timer = setTimeout(() => controller.abort(), budget);
     try {
       const headers: Record<string, string> = { Accept: 'application/json' };
-      if (this.token) headers.Authorization = `Bearer ${this.token}`;
+      // The token is a LAN-scoped bearer secret — it travels only over TLS or
+      // to a host that provably cannot leave the local network. A cleartext
+      // public base URL gets the request without the credential, so an open
+      // feed still works and a gated one answers the honest 401.
+      if (this.token && credentialAllowed(this.baseUrl)) {
+        headers.Authorization = `Bearer ${this.token}`;
+      }
       if (init.body !== undefined) headers['Content-Type'] = 'application/json';
 
       const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -214,5 +226,39 @@ export class BlockingmachineClient {
       body: { host },
     });
   }
-}
 
+  /** Hub-side blocklist subscriptions — what `/v1/compile` compiles from.
+   *  PUT takes the same sanitizer the desktop save-sources IPC applies. */
+  getSources(): Promise<HubSourcesResult> {
+    return this.request<HubSourcesResult>('/v1/sources');
+  }
+
+  saveSources(sources: HubFilterSource[]): Promise<HubSourcesResult> {
+    return this.request<HubSourcesResult>('/v1/sources', {
+      method: 'PUT',
+      body: { sources },
+    });
+  }
+
+  getCustomRules(): Promise<HubCustomRulesResult> {
+    return this.request<HubCustomRulesResult>('/v1/custom-rules');
+  }
+
+  saveCustomRules(customRules: string): Promise<HubCustomRulesResult> {
+    return this.request<HubCustomRulesResult>('/v1/custom-rules', {
+      method: 'PUT',
+      body: { customRules },
+    });
+  }
+
+  /** Upload a batch of packet-tunnel DNS observations for the learned-model
+   *  shadow scorer — flag 43's mobile intake into learned-shadow.jsonl. */
+  postShadowObservations(
+    records: ShadowObservationRecord[],
+  ): Promise<ShadowObservationResult> {
+    return this.request<ShadowObservationResult>('/v1/shadow/observations', {
+      method: 'POST',
+      body: { records },
+    });
+  }
+}

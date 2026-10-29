@@ -1,7 +1,7 @@
 {
   "name": "local-dns-proxy",
   "version": "0.1.0",
-  "description": "iOS NEDNSProxyManager bridge + app-group ruleset publishing for the Blockingmachine DNS proxy extension",
+  "description": "iOS app-group bridge — ruleset publishing and shadow-observation draining between the app and the BlockingmachineTunnel extension",
   "license": "UNLICENSED",
   "private": true,
   "author": "Greigh Studios LLC",

@@ -193,3 +193,49 @@ export interface ProxyPinRemoveResult {
   message?: string;
   error?: string;
 }
+
+/** A hub blocklist subscription — mirrors `FilterSource` in core/src/sources.ts.
+ *  Optional fields ride through untouched: the sanitizer preserves them and the
+ *  mobile editor only mutates `enabled`, never drops metadata. */
+export interface HubFilterSource {
+  name: string;
+  url: string;
+  enabled: boolean;
+  scope?: 'dns' | 'browser' | 'hybrid';
+  category?: string;
+  description?: string;
+  recommendedFor?: string;
+}
+
+export interface HubSourcesResult {
+  success?: boolean;
+  sources?: HubFilterSource[];
+  count?: number;
+  error?: string;
+}
+
+export interface HubCustomRulesResult {
+  success?: boolean;
+  customRules?: string;
+  error?: string;
+}
+
+/** One DNS observation — the record shape the daemon's recorder and the iOS
+ *  packet tunnel both write (`dns-observations.jsonl`, flag 43). */
+export interface ShadowObservationRecord {
+  domain?: string;
+  verdict?: string;
+  rcode?: number | null;
+  cname_depth?: number;
+  cname_foreign?: boolean;
+  ttl_min?: number;
+  latency_ms?: number;
+}
+
+export interface ShadowObservationResult {
+  success?: boolean;
+  accepted?: number;
+  evaluated?: number;
+  disagreements?: number;
+  error?: string;
+}

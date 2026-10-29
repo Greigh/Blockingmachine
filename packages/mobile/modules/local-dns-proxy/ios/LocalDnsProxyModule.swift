@@ -1,50 +1,18 @@
 import ExpoModulesCore
-import NetworkExtension
 
-/// Bridge to `NEDNSProxyManager` — installs/enables the Blockingmachine DNS
-/// proxy extension system-wide, and publishes the synced native ruleset into
-/// the app-group container the extension reads. The extension itself is plain
-/// Swift + NetworkExtension; only the control surface lives here.
+/// Bridge to the shared app-group container — what survives of the original
+/// `NEDNSProxyManager` module after flag 89's removal: the dns-proxy provider
+/// was deleted because Apple only runs it on supervised/MDM devices (TN3134),
+/// while the file channel it created still feeds the packet-tunnel extension.
+/// `publishRuleset` lands `ruleset_native.txt` where the appex reads it;
+/// `drainObservations` pulls the tunnel's shadow-observation stream back out.
 public class LocalDnsProxyModule: Module {
 
-    private static let extensionBundleId = "com.greighstudios.blockingmachine.dnsproxy"
     private static let appGroup = "group.com.greighstudios.blockingmachine"
     private static let sharedRulesetName = "ruleset_native.txt"
 
     public func definition() -> ModuleDefinition {
         Name("LocalDnsProxy")
-
-        // {installed, enabled} — the extension is considered installed once the
-        // manager's saved providerProtocol points at its bundle id.
-        AsyncFunction("getStatus") { () async throws -> [String: Any] in
-            // Without Apple's dns-proxy grant loadFromPreferences errors out —
-            // degrade to "not installed" rather than rejecting so the card
-            // still renders (the enable attempt surfaces the real error).
-            try? await Self.loadManager()
-            let proto = NEDNSProxyManager.shared().providerProtocol
-            return [
-                "installed": proto?.providerBundleIdentifier == Self.extensionBundleId,
-                "enabled": NEDNSProxyManager.shared().isEnabled,
-            ]
-        }
-
-        // Configure (or re-use) the manager pointing at the appex, set the
-        // enabled flag and persist — first save surfaces the OS permission flow.
-        AsyncFunction("setEnabled") { (enabled: Bool) async throws in
-            try await Self.loadManager()
-            let manager = NEDNSProxyManager.shared()
-            if manager.providerProtocol?.providerBundleIdentifier != Self.extensionBundleId {
-                let proto = NEDNSProxyProviderProtocol()
-                proto.providerBundleIdentifier = Self.extensionBundleId
-                // Provider reads this via startProxy(options:) — keeps the
-                // upstream resolver configurable without touching appex code.
-                proto.providerConfiguration = ["upstreamDns": "9.9.9.9", "upstreamPort": 53]
-                manager.providerProtocol = proto
-            }
-            manager.localizedDescription = "Blockingmachine DNS"
-            manager.isEnabled = enabled
-            try await manager.saveToPreferences()
-        }
 
         // Copy a document-directory file into the app group so the extension
         // can read it. Returns the shared-container byte count written.
@@ -72,23 +40,32 @@ public class LocalDnsProxyModule: Module {
             try FileManager.default.copyItem(at: src, to: dst)
             return Int((try FileManager.default.attributesOfItem(atPath: dst.path)[.size] as? NSNumber)?.intValue ?? 0)
         }
-    }
 
-    private static func loadManager() async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            NEDNSProxyManager.shared().loadFromPreferences { error in
-                if let error { cont.resume(throwing: error) } else { cont.resume() }
+        // Read-and-clear the tunnel extension's shadow-observation stream
+        // (`dns-observations.jsonl` + its single rotated generation). Returns
+        // the drained body; "" when nothing is pending. A record appended
+        // between read and clear is lost — the log is statistical evidence,
+        // not a ledger, and the alternative (file-locking the appex) is worse.
+        AsyncFunction("drainObservations") { () async throws -> String in
+            guard let container = FileManager.default
+                .containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup)
+            else { return "" }
+            var body = ""
+            for name in ["dns-observations.jsonl.1", "dns-observations.jsonl"] {
+                let url = container.appendingPathComponent(name)
+                guard FileManager.default.fileExists(atPath: url.path),
+                      let text = try? String(contentsOf: url, encoding: .utf8)
+                else { continue }
+                body += text
             }
-        }
-    }
-}
-
-private extension NEDNSProxyManager {
-    func saveToPreferences() async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            saveToPreferences { error in
-                if let error { cont.resume(throwing: error) } else { cont.resume() }
+            if !body.isEmpty {
+                try? FileManager.default.removeItem(
+                    at: container.appendingPathComponent("dns-observations.jsonl.1"))
+                try? "".write(
+                    to: container.appendingPathComponent("dns-observations.jsonl"),
+                    atomically: true, encoding: .utf8)
             }
+            return body
         }
     }
 }

@@ -1,14 +1,16 @@
 // @ts-check
 /**
  * Wires the `NEPacketTunnelProvider` app extension into the iOS project —
- * the on-device filtering VPN. Unlike `withDnsProxyTarget`'s `dns-proxy`
- * value, `packet-tunnel-provider` is part of the standard Network Extensions
- * capability every paid App ID carries: no Apple grant, TestFlight-shippable
- * today (the same "local VPN" route AdGuard/DNSCloak use).
+ * the on-device filtering VPN. `packet-tunnel-provider` is part of the
+ * standard Network Extensions capability every paid App ID carries: no Apple
+ * grant, TestFlight-shippable today (the same "local VPN" route
+ * AdGuard/DNSCloak use). It is also the only consumer-viable iOS provider —
+ * `dns-proxy` needs a supervised/MDM device (TN3134), which is why flag 89's
+ * `BlockingmachineDNSProxy` target was removed rather than shipped.
  *
- * Canonical sources live in `targets/BlockingmachineTunnel/`; the matcher +
- * DNS wire helpers (`DnsPacket.swift`, `Blocklist.swift`) are shared with the
- * dns-proxy target and copied in by `plugins/lib/extensionTarget.js`.
+ * Canonical sources live in `targets/BlockingmachineTunnel/` — the tunnel
+ * compiles the shared DNS wire helpers (`DnsPacket.swift`, `Blocklist.swift`)
+ * as its own now that it is the only extension target.
  * BM_IOS_TUNNEL=0 strips the extension + its entitlements if a build ever
  * needs to omit it.
  */
@@ -22,14 +24,12 @@ module.exports = function withTunnelTarget(config) {
     extBundleId: 'com.greighstudios.blockingmachine.tunnel',
     appGroup: 'group.com.greighstudios.blockingmachine',
     entitlement: 'packet-tunnel-provider',
-    swiftFiles: ['IpPacket.swift', 'TunnelProvider.swift'],
-    // The DNS payload parser + suffix matcher stay canonical on the
-    // dns-proxy target; this target compiles the same files.
-    extraSrcDirs: [
-      {
-        dir: 'BlockingmachineDNSProxy',
-        files: ['DnsPacket.swift', 'Blocklist.swift'],
-      },
+    swiftFiles: [
+      'IpPacket.swift',
+      'TunnelProvider.swift',
+      'ObservationLog.swift',
+      'DnsPacket.swift',
+      'Blocklist.swift',
     ],
   });
 };

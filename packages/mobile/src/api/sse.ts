@@ -8,6 +8,8 @@
  * events. `subscribeEvents` wraps it with reconnect/backoff for app use.
  */
 
+import { credentialAllowed } from './credentialScope';
+
 export interface SseEvent {
   event: string;
   data: string;
@@ -124,7 +126,10 @@ export function subscribeEvents(
     const parser = createSseParser(handlers.onEvent);
     try {
       const headers: Record<string, string> = { Accept: 'text/event-stream' };
-      if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
+      // Same credential scope as the REST client — TLS or provably-local only.
+      if (opts.token && credentialAllowed(baseUrl)) {
+        headers.Authorization = `Bearer ${opts.token}`;
+      }
       const res = await fetchImpl(`${baseUrl}/v1/events`, {
         headers,
         signal: abort.signal,

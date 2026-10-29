@@ -14,11 +14,12 @@ import { useClient } from '../../src/api/useClient';
 import { useServerEvents } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
 import { useFilter } from '../../src/state/filter';
-import { ActionButton, Card, ErrorBanner, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
+import { ActionButton, Card, ErrorBanner, Grid, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { formatTimestamp, formatUptime, relativeTime } from '../../src/format';
+import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
 import { haptics } from '../../src/haptics';
-import { chrome, colors, spacing } from '../../src/theme';
+import { chrome, colors, layout, spacing } from '../../src/theme';
 
 // The hub stamps lastCompile with toLocaleString() (unparseable on Hermes) while
 // the add-on carries lastCompileMs — prefer the epoch, fall back to the raw
@@ -37,6 +38,8 @@ function formatLastCompile(data?: { lastCompile: string | null; lastCompileMs?: 
 export default function DashboardScreen() {
   const client = useClient();
   const insets = useSafeAreaInsets();
+  const tier = useWidthTier();
+  const gridCols = gridColumnsFor(tier);
   const { connected, alert, dismissAlert } = useServerEvents();
   const { activeServer, markOk } = useServers();
   const filter = useFilter();
@@ -137,7 +140,7 @@ export default function DashboardScreen() {
       <GlassBackdrop />
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
+        contentContainerStyle={[styles.content, { maxWidth: tier === 'regular' ? layout.contentMaxWidthWide : layout.contentMaxWidth, paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + (tier === 'compact' && !hasEdgeUtilityStrip(insets.right) ? chrome.tabBarClearance : 0) }]}
       keyboardShouldPersistTaps="handled"
       automaticallyAdjustKeyboardInsets
       refreshControl={
@@ -197,28 +200,26 @@ export default function DashboardScreen() {
         </Text>
       ) : null}
 
-      {status.isLoading && !data ? (
-        <>
-          <Card>
-            <Skeleton width="42%" height={20} />
-            <Skeleton height={16} style={{ marginTop: spacing.sm }} />
-            <Skeleton height={16} width="70%" style={{ marginTop: spacing.sm }} />
-          </Card>
-          <Card>
-            <Skeleton width="30%" height={20} />
-            <View style={[styles.statRow, { marginTop: spacing.sm }]}>
-              {[0, 1, 2, 3].map((i) => (
-                <View key={i} style={styles.stat}>
-                  <Skeleton width="75%" height={20} />
-                  <Skeleton width="55%" height={12} style={{ marginTop: spacing.xs }} />
-                </View>
-              ))}
-            </View>
-          </Card>
-        </>
-      ) : (
-        <>
-      <Card>
+      <Grid columns={gridCols}>
+      {status.isLoading && !data ? [
+        <Card key="sk1">
+          <Skeleton width="42%" height={20} />
+          <Skeleton height={16} style={{ marginTop: spacing.sm }} />
+          <Skeleton height={16} width="70%" style={{ marginTop: spacing.sm }} />
+        </Card>,
+        <Card key="sk2">
+          <Skeleton width="30%" height={20} />
+          <View style={[styles.statRow, { marginTop: spacing.sm }]}>
+            {[0, 1, 2, 3].map((i) => (
+              <View key={i} style={styles.stat}>
+                <Skeleton width="75%" height={20} />
+                <Skeleton width="55%" height={12} style={{ marginTop: spacing.xs }} />
+              </View>
+            ))}
+          </View>
+        </Card>,
+      ] : [
+      <Card key="protection">
         <View style={styles.rowBetween}>
           <SectionTitle icon="shield-checkmark-outline" label="Protection" />
           <Switch
@@ -287,28 +288,28 @@ export default function DashboardScreen() {
               : describeActionError('Couldn\u2019t change protection', protection.error).title}
           </Text>
         ) : null}
-      </Card>
+      </Card>,
 
-      <Card>
+      <Card key="rules">
         <SectionTitle icon="layers-outline" label="Rules" />
         <View style={styles.statRow}>
           <View style={styles.stat}>
             <Text style={styles.statValue}>{data?.rules?.total?.toLocaleString() ?? '—'}</Text>
-            <Text style={styles.statLabel}>total</Text>
+            <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={1} style={styles.statLabel}>total</Text>
           </View>
           <View style={styles.stat}>
             <Text style={styles.statValue}>{data?.rules?.dns?.toLocaleString() ?? '—'}</Text>
-            <Text style={styles.statLabel}>dns</Text>
+            <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={1} style={styles.statLabel}>dns</Text>
           </View>
           <View style={styles.stat}>
             <Text style={styles.statValue}>{data?.rules?.browser?.toLocaleString() ?? '—'}</Text>
-            <Text style={styles.statLabel}>browser</Text>
+            <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={1} style={styles.statLabel}>browser</Text>
           </View>
           <View style={styles.stat}>
             <Text style={[styles.statValue, { color: colors.warn }]}>
               {data?.rules?.quarantinedThreats?.toLocaleString() ?? '—'}
             </Text>
-            <Text style={styles.statLabel}>quarantined</Text>
+            <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={1} style={styles.statLabel}>quarantined</Text>
           </View>
         </View>
         <Text style={styles.metaLine}>Last compile: {formatLastCompile(data)}</Text>
@@ -318,9 +319,8 @@ export default function DashboardScreen() {
             ? ` · ${data.activeSseClients} live client${data.activeSseClients === 1 ? '' : 's'}`
             : ''}
         </Text>
-      </Card>
-        </>
-      )}
+      </Card>,
+      ]}
 
       <Card>
         <SectionTitle icon="flash-outline" label="Actions" />
@@ -402,6 +402,7 @@ export default function DashboardScreen() {
           ) : null}
         </Card>
       ) : null}
+      </Grid>
       </ScrollView>
     </View>
   );
@@ -410,7 +411,13 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
-  content: { padding: spacing.md, paddingBottom: spacing.xl },
+  content: {
+    alignSelf: 'center',
+    maxWidth: layout.contentMaxWidth,
+    padding: spacing.md,
+    paddingBottom: spacing.xl,
+    width: '100%',
+  },
   headerRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -427,7 +434,12 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   emptyTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
-  emptyText: { color: colors.textMuted, fontSize: 14, textAlign: 'center' },
+  emptyText: {
+    color: colors.textMuted,
+    fontSize: 14,
+    maxWidth: layout.emptyTextMaxWidth,
+    textAlign: 'center',
+  },
   rowBetween: {
     alignItems: 'center',
     flexDirection: 'row',

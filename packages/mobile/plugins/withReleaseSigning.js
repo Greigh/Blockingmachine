@@ -54,7 +54,7 @@ if (bmReleaseSigningReady) {
 }
 gradle.taskGraph.whenReady { graph ->
     if (!bmReleaseSigningReady && graph.allTasks.any { it.name ==~ /(assemble|bundle|package|install|publish)[A-Za-z]*Release[A-Za-z]*/ }) {
-        throw new GradleException("Blockingmachine release builds REQUIRE the release keystore — debug signing is never silently used. " +
+        throw new org.gradle.api.GradleException("Blockingmachine release builds REQUIRE the release keystore — debug signing is never silently used. " +
             "Set BM_RELEASE_STORE_FILE, BM_RELEASE_KEY_ALIAS, BM_RELEASE_STORE_PASSWORD and BM_RELEASE_KEY_PASSWORD " +
             "as environment variables or gradle.properties entries; see packages/mobile/README.md for keystore creation and backup.")
     }

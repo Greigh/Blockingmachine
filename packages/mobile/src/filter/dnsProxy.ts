@@ -1,26 +1,21 @@
 /**
- * JS surface for the iOS system-DNS proxy (`modules/local-dns-proxy` +
- * `ios/BlockingmachineDNSProxy`). `NEDNSProxyProvider` gives the extension every
- * cleartext system DNS flow — device-wide filtering without a VPN tunnel.
+ * JS surface for the app-group bridge module (`modules/local-dns-proxy`).
+ * The name survives the flag-89 removal — `NEDNSProxyProvider` was deleted
+ * because Apple only runs it on supervised/MDM devices (TN3134) — but the
+ * module's real job was always the shared-container channel:
+ * `publishRuleset` lands `ruleset_native.txt` where the packet-tunnel
+ * extension reads it, and `drainObservations` pulls the appex's
+ * shadow-observation stream back out for upload to the hub.
  *
  * Every call degrades gracefully: on Android (or a dev client built without
  * the pod) the module is absent and these become honest no-ops/false answers.
  */
 
 import { Platform } from 'react-native';
-import { UserError } from '../errors';
-
-export interface DnsProxyStatus {
-  /** The manager's saved config points at our extension bundle id. */
-  installed: boolean;
-  /** The saved `isEnabled` flag — the OS prompt gates the first `true`. */
-  enabled: boolean;
-}
 
 interface LocalDnsProxyNative {
-  getStatus(): Promise<DnsProxyStatus>;
-  setEnabled(enabled: boolean): Promise<void>;
   publishRuleset(sourcePath: string): Promise<number>;
+  drainObservations(): Promise<string>;
 }
 
 let cached: LocalDnsProxyNative | null | undefined;
@@ -37,29 +32,6 @@ function native(): LocalDnsProxyNative | null {
   return cached;
 }
 
-export function isDnsProxySupported(): boolean {
-  return Platform.OS === 'ios' && native() !== null;
-}
-
-export async function getDnsProxyStatus(): Promise<DnsProxyStatus> {
-  return (await native()?.getStatus()) ?? { installed: false, enabled: false };
-}
-
-export async function setDnsProxyEnabled(enabled: boolean): Promise<void> {
-  const m = native();
-  if (!m) throw new Error('LocalDnsProxy native module is unavailable on this platform');
-  try {
-    await m.setEnabled(enabled);
-  } catch (e) {
-    // saveToPreferences failures surface as bare NEError strings ("IPC
-    // failed") — the useful context is what that means for this feature.
-    const detail = e instanceof Error ? ` (${e.message})` : '';
-    throw new UserError(
-      `The system refused the DNS proxy configuration${detail} — Apple's DNS proxy provider only runs on supervised or MDM-managed devices; use "On-device filtering VPN" instead. Also doesn't run in the Simulator.`,
-    );
-  }
-}
-
 /** Mirrors `ruleset_native.txt` into the app-group container the extension reads. */
 export async function publishDnsProxyRuleset(sourcePath: string): Promise<void> {
   if (Platform.OS !== 'ios') return;
@@ -68,5 +40,19 @@ export async function publishDnsProxyRuleset(sourcePath: string): Promise<void> 
   } catch {
     // No app-group entitlement (unsigned/sim builds) — filtering just won't
     // see rules; not worth failing a ruleset sync over.
+  }
+}
+
+/**
+ * Read-and-clear the packet tunnel's shadow-observation stream from the app
+ * group — the JSONL `DnsObservationRecord`s the extension appended while
+ * answering queries. "" when the module, the group, or the stream is absent.
+ */
+export async function drainTunnelObservations(): Promise<string> {
+  if (Platform.OS !== 'ios') return '';
+  try {
+    return (await native()?.drainObservations()) ?? '';
+  } catch {
+    return '';
   }
 }

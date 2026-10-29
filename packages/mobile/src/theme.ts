@@ -1,8 +1,9 @@
 /**
  * Dark palette matching the desktop app's hub aesthetic — shield-green accents
  * over a deep aurora backdrop. `glass` holds the translucent surface tokens:
- * fills read through the backdrop's glow orbs, `borderTop` is the hairline
- * highlight that makes a surface read as glass rather than flat translucency.
+ * fills are dark frosted panels that let the backdrop's glow orbs bleed through
+ * faintly, `borderTop` is the hairline highlight that makes a surface read as
+ * glass rather than flat translucency.
  */
 export const colors = {
   bg: '#070a14',
@@ -22,9 +23,10 @@ export const colors = {
 } as const;
 
 export const glass = {
-  /** Card/sheet fill — reads through the backdrop orbs. */
-  surface: 'rgba(255,255,255,0.06)',
-  surfaceStrong: 'rgba(255,255,255,0.10)',
+  /** Card/sheet fill — dark frosted panel; the backdrop orbs still bleed
+   * through faintly but never compete with the text on top. */
+  surface: 'rgba(13,17,23,0.60)',
+  surfaceStrong: 'rgba(13,17,23,0.75)',
   /** All-edge hairline. */
   border: 'rgba(255,255,255,0.10)',
   /** Top-edge highlight — the glass tell. */
@@ -46,4 +48,28 @@ export const chrome = {
   /** Floating glass tab bar metrics — screens add `clearance` to bottom padding. */
   tabBarHeight: 64,
   tabBarClearance: 96,
+} as const;
+
+/**
+ * Wide-canvas limits — iPad and the unfolded iPhone Duo present a canvas far
+ * wider than a phone line-length should ever span. Content columns cap at
+ * contentMaxWidth and center; the floating tab bar and the QR camera cap at
+ * their own widths so neither stretches edge-to-edge. Pure style constants —
+ * the caps engage automatically on rotation and Split View resizes.
+ */
+export const layout = {
+  /** Max width of a screen's scrollable content column. */
+  contentMaxWidth: 720,
+  /** Wider content column once the regular sidebar is on screen. */
+  contentMaxWidthWide: 960,
+  /** Max width of the floating glass tab bar. */
+  tabBarMaxWidth: 540,
+  /** Max width of the QR camera preview on the add-server sheet. */
+  cameraMaxWidth: 480,
+  /** Max width of centered empty-state copy. */
+  emptyTextMaxWidth: 440,
+  /** Icon-only rail on the medium (Duo-unfolded) tier. */
+  navRailWidth: 76,
+  /** Labeled sidebar on the regular (iPad) tier. */
+  navSidebarWidth: 216,
 } as const;

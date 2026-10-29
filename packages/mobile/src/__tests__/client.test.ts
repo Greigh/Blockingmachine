@@ -163,4 +163,48 @@ describe('BlockingmachineClient', () => {
     );
     await expect(client.getStatus()).rejects.toMatchObject({ kind: 'unreachable' });
   });
+
+  it('reads the hub source list from /v1/sources', async () => {
+    const impl = jest.fn().mockResolvedValue(
+      jsonResponse(200, {
+        sources: [
+          { name: 'AdGuard DNS', url: 'https://a.example/15.txt', enabled: true, scope: 'dns' },
+        ],
+      }),
+    );
+    const res = await clientWith(impl, 'secret').getSources();
+    expect(impl.mock.calls[0][0]).toBe('http://192.168.1.10:9191/v1/sources');
+    expect(impl.mock.calls[0][1].method).toBe('GET');
+    expect(res.sources?.[0].scope).toBe('dns');
+  });
+
+  it('PUTs the full source array to /v1/sources', async () => {
+    const impl = jest.fn().mockResolvedValue(jsonResponse(200, { success: true, count: 2 }));
+    const sources = [
+      { name: 'A', url: 'https://a.example/l.txt', enabled: true },
+      { name: 'B', url: 'https://b.example/l.txt', enabled: false },
+    ];
+    const res = await clientWith(impl, 'secret').saveSources(sources);
+    const [url, init] = impl.mock.calls[0];
+    expect(url).toBe('http://192.168.1.10:9191/v1/sources');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body as string)).toEqual({ sources });
+    expect(res.success).toBe(true);
+  });
+
+  it('reads and writes hub custom rules on /v1/custom-rules', async () => {
+    const impl = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { customRules: '||mine.example^' }))
+      .mockResolvedValueOnce(jsonResponse(200, { success: true }));
+    const client = clientWith(impl, 'secret');
+    expect((await client.getCustomRules()).customRules).toBe('||mine.example^');
+    await client.saveCustomRules('||mine.example^\n@@||ok.example^');
+    const [url, init] = impl.mock.calls[1];
+    expect(url).toBe('http://192.168.1.10:9191/v1/custom-rules');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body as string)).toEqual({
+      customRules: '||mine.example^\n@@||ok.example^',
+    });
+  });
 });

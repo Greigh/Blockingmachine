@@ -105,6 +105,36 @@ describe('ServerProvider', () => {
     expect(harness.secrets.data.has(`bm.token.${added!.id}`)).toBe(false);
   });
 
+  it('updates a server label and baseUrl, clearing stale lastOkAt on address change', async () => {
+    const harness = renderStore();
+    await waitFor(() => expect(harness.state.hydrated).toBe(true));
+    let added;
+    await act(async () => {
+      added = await harness.state.addServer(
+        { baseUrl: 'http://h:9191', label: 'a', origin: 'manual' },
+        'tok',
+      );
+    });
+    await act(async () => {
+      await harness.state.markOk(added!.id);
+    });
+    expect(harness.state.servers[0].lastOkAt).toBeTruthy();
+    await act(async () => {
+      await harness.state.updateServer(added!.id, {
+        label: 'renamed',
+        baseUrl: 'http://h:9292',
+      });
+    });
+    const updated = harness.state.servers[0];
+    expect(updated.label).toBe('renamed');
+    expect(updated.baseUrl).toBe('http://h:9292');
+    expect(updated.lastOkAt).toBeUndefined();
+    // The stable id keeps the token and the active selection.
+    expect(updated.id).toBe(added!.id);
+    expect(harness.secrets.data.get(`bm.token.${added!.id}`)).toBe('tok');
+    expect(harness.state.activeServer?.id).toBe(added!.id);
+  });
+
   it('switches active server and persists the selection', async () => {
     const harness = renderStore();
     await waitFor(() => expect(harness.state.hydrated).toBe(true));

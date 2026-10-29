@@ -42,6 +42,57 @@ enum DnsPacket {
         return Query(headerQuestion: data.subdata(in: 0..<end), queryType: qtype, flags: flags)
     }
 
+    /// What the observation recorder needs from an upstream *response*:
+    /// the header RCODE, the answer chain's CNAME depth, and the minimum TTL
+    /// across answer RRs. Nil when the message is too short to read — the
+    /// caller just records the query without upstream fields.
+    static func responseSummary(_ data: Data) -> (rcode: Int, cnameDepth: Int, ttlMin: Int)? {
+        guard data.count >= 12 else { return nil }
+        let rcode = Int(data[3] & 0x0f)
+        let qdcount = (Int(data[4]) << 8) | Int(data[5])
+        let ancount = (Int(data[6]) << 8) | Int(data[7])
+
+        var offset = 12
+        // Skip the question section — same QNAME walk as `parse`.
+        for _ in 0..<qdcount {
+            guard let end = skipName(data, offset), end + 4 <= data.count else { return nil }
+            offset = end + 4
+        }
+
+        var cnames = 0
+        var ttlMin: Int?
+        for _ in 0..<ancount {
+            // RR name: labels or one compression pointer.
+            guard let nameEnd = skipName(data, offset), nameEnd + 10 <= data.count else { return nil }
+            let rtype = (UInt16(data[nameEnd]) << 8) | UInt16(data[nameEnd + 1])
+            let ttl = (Int(data[nameEnd + 4]) << 24) | (Int(data[nameEnd + 5]) << 16)
+                | (Int(data[nameEnd + 6]) << 8) | Int(data[nameEnd + 7])
+            let rdlen = (Int(data[nameEnd + 8]) << 8) | Int(data[nameEnd + 9])
+            guard nameEnd + 10 + rdlen <= data.count else { return nil }
+            if rtype == 5 { cnames += 1 }
+            ttlMin = min(ttlMin ?? ttl, ttl)
+            offset = nameEnd + 10 + rdlen
+        }
+        return (rcode, cnames, ttlMin ?? 0)
+    }
+
+    /// Advance past a domain name — a label walk that ends at the root label
+    /// or at one compression pointer (0xC0), which always terminates the name.
+    private static func skipName(_ data: Data, _ start: Int) -> Int? {
+        var offset = start
+        while offset < data.count {
+            let length = Int(data[offset])
+            if length == 0 { return offset + 1 }
+            if length & 0xC0 == 0xC0 {
+                guard offset + 1 < data.count else { return nil }
+                return offset + 2
+            }
+            guard length <= 63 else { return nil }
+            offset += 1 + length
+        }
+        return nil
+    }
+
     /// Extract the dotted query name for the matcher (lowercased, no trailing dot).
     static func queryName(_ data: Data) -> String? {
         guard data.count >= 13 else { return nil }

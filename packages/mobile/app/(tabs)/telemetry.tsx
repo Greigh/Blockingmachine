@@ -11,11 +11,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useClient } from '../../src/api/useClient';
 import { useServerEvents, type ServerEventAlert } from '../../src/hooks/useEvents';
 import { useServers } from '../../src/state/servers';
-import { Card, ErrorBanner, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
+import { Card, ErrorBanner, Grid, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
 import { describeError } from '../../src/errors';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
+import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
 import { formatTimestamp, relativeTime } from '../../src/format';
-import { chrome, colors, glass, spacing } from '../../src/theme';
+import { chrome, colors, glass, layout, spacing } from '../../src/theme';
 
 const RISK_TONES: Record<string, 'bad' | 'warn' | 'info' | 'muted'> = {
   critical: 'bad',
@@ -46,6 +47,8 @@ function describeEvent(e: ServerEventAlert): string {
 export default function TelemetryScreen() {
   const client = useClient();
   const insets = useSafeAreaInsets();
+  const tier = useWidthTier();
+  const gridCols = gridColumnsFor(tier);
   const [refreshing, setRefreshing] = useState(false);
   const { activeServer } = useServers();
   const { alert, recent, dismissAlert } = useServerEvents();
@@ -93,7 +96,7 @@ export default function TelemetryScreen() {
       <GlassBackdrop />
       <ScrollView
         style={styles.scroll}
-      contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
+      contentContainerStyle={[styles.content, { maxWidth: tier === 'regular' ? layout.contentMaxWidthWide : layout.contentMaxWidth, paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + (tier === 'compact' && !hasEdgeUtilityStrip(insets.right) ? chrome.tabBarClearance : 0) }]}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -125,31 +128,30 @@ export default function TelemetryScreen() {
         </Card>
       ) : null}
 
-      {telemetry.isLoading && !data ? (
-        <>
-          <Card>
-            <Skeleton width="52%" height={20} />
-            {[0, 1, 2].map((i) => (
-              <View key={i} style={styles.threatRow}>
-                <View style={{ flex: 1 }}>
-                  <Skeleton width="60%" height={16} />
-                  <Skeleton width="80%" height={12} style={{ marginTop: spacing.xs }} />
-                </View>
-                <Skeleton width={52} height={24} />
+      <Grid columns={gridCols}>
+      {telemetry.isLoading && !data ? [
+        <Card key="sk1">
+          <Skeleton width="52%" height={20} />
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={styles.threatRow}>
+              <View style={{ flex: 1 }}>
+                <Skeleton width="60%" height={16} />
+                <Skeleton width="80%" height={12} style={{ marginTop: spacing.xs }} />
               </View>
-            ))}
-          </Card>
-          <Card>
-            <Skeleton width="44%" height={20} />
-            {[0, 1].map((i) => (
-              <View key={i} style={styles.historyRow}>
-                <Skeleton width="50%" height={14} />
-                <Skeleton width="70%" height={12} style={{ marginTop: spacing.xs }} />
-              </View>
-            ))}
-          </Card>
-        </>
-      ) : null}
+              <Skeleton width={52} height={24} />
+            </View>
+          ))}
+        </Card>,
+        <Card key="sk2">
+          <Skeleton width="44%" height={20} />
+          {[0, 1].map((i) => (
+            <View key={i} style={styles.historyRow}>
+              <Skeleton width="50%" height={14} />
+              <Skeleton width="70%" height={12} style={{ marginTop: spacing.xs }} />
+            </View>
+          ))}
+        </Card>,
+      ] : null}
 
       {recent.length > 0 ? (
         <Card>
@@ -228,6 +230,7 @@ export default function TelemetryScreen() {
           <Text style={styles.meta}>No telemetry reported yet.</Text>
         </Card>
       ) : null}
+      </Grid>
       </ScrollView>
     </View>
   );
@@ -236,7 +239,13 @@ export default function TelemetryScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
-  content: { padding: spacing.md, paddingBottom: spacing.xl },
+  content: {
+    alignSelf: 'center',
+    maxWidth: layout.contentMaxWidth,
+    padding: spacing.md,
+    paddingBottom: spacing.xl,
+    width: '100%',
+  },
   title: { color: colors.text, fontSize: 28, fontWeight: '800' },
   subtitle: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md, marginTop: 2 },
   threatRow: {

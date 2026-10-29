@@ -26,6 +26,9 @@ export interface SavedServer {
   origin: 'manual' | 'qr' | 'mdns';
   addedAt: string;
   lastOkAt?: string;
+  /** Local feed-URL overrides (e.g. hub advertises an unresolvable .local name —
+   *  the phone keeps the corrected address). Absent keys show the advertised URL. */
+  feedUrls?: Partial<Record<'dns' | 'browser' | 'aiThreats' | 'abpThreats', string>>;
 }
 
 export interface KeyValueStore {
@@ -53,6 +56,10 @@ export interface ServersState {
   activeToken: string;
   addServer: (server: Omit<SavedServer, 'id' | 'addedAt'>, token?: string) => Promise<SavedServer>;
   removeServer: (id: string) => Promise<void>;
+  updateServer: (
+    id: string,
+    patch: { label?: string; baseUrl?: string; feedUrls?: SavedServer['feedUrls'] },
+  ) => Promise<void>;
   setActive: (id: string | null) => Promise<void>;
   setToken: (id: string, token: string) => Promise<void>;
   markOk: (id: string) => Promise<void>;
@@ -166,6 +173,31 @@ export function ServerProvider(props: {
     [persistServers, secrets, setActive],
   );
 
+  const updateServer = useCallback(
+    async (
+      id: string,
+      patch: { label?: string; baseUrl?: string; feedUrls?: SavedServer['feedUrls'] },
+    ) => {
+      const next = serversRef.current.map((s) => {
+        if (s.id !== id) return s;
+        const updated = { ...s, ...patch };
+        // A new address invalidates the "seen" time recorded for the old one.
+        if (patch.baseUrl && patch.baseUrl !== s.baseUrl) delete updated.lastOkAt;
+        if (patch.feedUrls) {
+          const merged = { ...s.feedUrls, ...patch.feedUrls };
+          for (const k of Object.keys(merged) as (keyof typeof merged)[]) {
+            if (!merged[k]) delete merged[k];
+          }
+          if (Object.keys(merged).length === 0) delete updated.feedUrls;
+          else updated.feedUrls = merged;
+        }
+        return updated;
+      });
+      await persistServers(next);
+    },
+    [persistServers],
+  );
+
   const setToken = useCallback(
     async (id: string, token: string) => {
       if (token) await secrets.setItemAsync(tokenKey(id), token);
@@ -198,11 +230,12 @@ export function ServerProvider(props: {
       activeToken,
       addServer,
       removeServer,
+      updateServer,
       setActive,
       setToken,
       markOk,
     }),
-    [hydrated, servers, activeServerId, activeToken, addServer, removeServer, setActive, setToken, markOk],
+    [hydrated, servers, activeServerId, activeToken, addServer, removeServer, updateServer, setActive, setToken, markOk],
   );
 
   return <ServersContext.Provider value={value}>{props.children}</ServersContext.Provider>;

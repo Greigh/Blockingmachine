@@ -53,7 +53,6 @@
       "expo-secure-store",
       "./plugins/withCleartextTraffic",
       "./plugins/withIosDeploymentTargetClamp",
-      "./plugins/withDnsProxyTarget",
       "./plugins/withTunnelTarget",
       "./plugins/withReleaseSigning",
       [

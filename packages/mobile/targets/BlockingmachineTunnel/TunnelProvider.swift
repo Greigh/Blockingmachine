@@ -134,7 +134,11 @@ final class TunnelProvider: NEPacketTunnelProvider {
               let name = DnsPacket.queryName(datagram),
               blocklist.isBlocked(name)
         else { return nil }
-        return (query.queryType == 1 || query.queryType == 28)
+        let sinkholed = query.queryType == 1 || query.queryType == 28
+        // Shadow-recorder intake: the filter's own verdict plus the rcode the
+        // client will see — sinkhole answers NOERROR, others NXDOMAIN.
+        ObservationLog.record(domain: name, verdict: "BLOCKED", rcode: sinkholed ? 0 : 3)
+        return sinkholed
             ? DnsPacket.sinkhole(for: query)
             : DnsPacket.nxdomain(for: query)
     }
@@ -152,10 +156,25 @@ final class TunnelProvider: NEPacketTunnelProvider {
             c.start(queue: .global())
             conn = c
         }
+        // ALLOWED is the filter's verdict — the upstream rcode (including
+        // NXDOMAIN) is what the model learns the name resolves to.
+        let name = DnsPacket.queryName(udp.payload)
+        let sentAt = Date()
         conn.send(content: udp.payload, completion: .contentProcessed { [weak self] sendError in
             guard sendError == nil else { return }
             conn.receiveMessage { content, _, _, _ in
                 guard let self, let content, !content.isEmpty else { return }
+                if let name {
+                    let s = DnsPacket.responseSummary(content)
+                    ObservationLog.record(
+                        domain: name,
+                        verdict: "ALLOWED",
+                        rcode: s?.rcode,
+                        cnameDepth: s?.cnameDepth,
+                        ttlMin: s?.ttlMin,
+                        latencyMs: Int(Date().timeIntervalSince(sentAt) * 1000)
+                    )
+                }
                 self.packetFlow.writePackets(
                     [IpPacket.udpReply(to: ip, udp: udp, payload: content)],
                     withProtocols: [NSNumber(value: ip.family)]

@@ -14,11 +14,12 @@ import { describeActionError, UserError } from '../../src/errors';
 import { useClient } from '../../src/api/useClient';
 import { useFilter } from '../../src/state/filter';
 import type { CheckResult } from '../../src/api/types';
-import { ActionButton, Card, Pill, SectionTitle } from '../../src/components/ui';
+import { ActionButton, Card, Grid, Pill, SectionTitle } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
 import { relativeTime } from '../../src/format';
+import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
 import { haptics } from '../../src/haptics';
-import { chrome, colors, glass, spacing } from '../../src/theme';
+import { chrome, colors, glass, layout, spacing } from '../../src/theme';
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
 
@@ -32,6 +33,8 @@ export default function CheckScreen() {
   const client = useClient();
   const filter = useFilter();
   const insets = useSafeAreaInsets();
+  const tier = useWidthTier();
+  const gridCols = gridColumnsFor(tier);
   const [domain, setDomain] = useState('');
   // Session-scoped scratchpad — deduped by domain, newest first, capped at 10.
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -86,7 +89,7 @@ export default function CheckScreen() {
       <GlassBackdrop />
       <ScrollView
         style={styles.scroll}
-      contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + chrome.tabBarClearance }]}
+      contentContainerStyle={[styles.content, { maxWidth: tier === 'regular' ? layout.contentMaxWidthWide : layout.contentMaxWidth, paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + (tier === 'compact' && !hasEdgeUtilityStrip(insets.right) ? chrome.tabBarClearance : 0) }]}
       keyboardShouldPersistTaps="handled"
     >
       <Text style={styles.title}>Check a domain</Text>
@@ -94,6 +97,7 @@ export default function CheckScreen() {
         Ask the server whether a domain is covered by the compiled rules.
       </Text>
 
+      <Grid columns={gridCols}>
       <Card>
         <TextInput
           style={styles.input}
@@ -209,6 +213,7 @@ export default function CheckScreen() {
           </Text>
         </Card>
       ) : null}
+      </Grid>
       </ScrollView>
     </View>
   );
@@ -217,7 +222,13 @@ export default function CheckScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
-  content: { padding: spacing.md, paddingBottom: spacing.xl },
+  content: {
+    alignSelf: 'center',
+    maxWidth: layout.contentMaxWidth,
+    padding: spacing.md,
+    paddingBottom: spacing.xl,
+    width: '100%',
+  },
   title: { color: colors.text, fontSize: 28, fontWeight: '800' },
   subtitle: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md, marginTop: 2 },
   input: {
@@ -279,7 +290,9 @@ const styles = StyleSheet.create({
   errorText: { color: colors.danger, fontSize: 13 },
   historyRow: {
     alignItems: 'center',
-    backgroundColor: glass.surface,
+    // Opaque — the swipeable row is a lid sliding over the delete action;
+    // a translucent fill lets the red panel bleed through at rest.
+    backgroundColor: colors.card,
     borderTopColor: glass.border,
     borderTopWidth: 1,
     flexDirection: 'row',

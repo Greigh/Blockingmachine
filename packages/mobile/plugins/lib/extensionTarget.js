@@ -1,7 +1,7 @@
 // @ts-check
 /**
- * Generic app-extension wiring shared by `withDnsProxyTarget` and
- * `withTunnelTarget`. An extension is a real second binary (.appex embedded
+ * Generic app-extension wiring used by `withTunnelTarget` (and any future
+ * extension target). An extension is a real second binary (.appex embedded
  * in PlugIns); canonical sources live in `targets/<name>/` so
  * `expo prebuild --clean` can regenerate `ios/`. The helper copies them in
  * and performs the pbxproj surgery by hand (PBXFileReference/PBXBuildFile,
