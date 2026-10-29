@@ -35,6 +35,18 @@ public class LocalTunnelModule: Module {
             let manager = try await Self.loadOrCreateManager()
             manager.isEnabled = enabled
             try await manager.saveToPreferences()
+            // After the consent-gated first save the in-memory manager is
+            // stale: it can drop isEnabled, and its connection throws
+            // NEVPNErrorDomain 1 (configurationInvalid) if started without a
+            // reload — the profile installs yet the enable reports failure.
+            // load → re-assert → save → load is the documented-correct
+            // sequence for a fresh configuration.
+            try await manager.loadFromPreferences()
+            if manager.isEnabled != enabled {
+                manager.isEnabled = enabled
+                try await manager.saveToPreferences()
+                try await manager.loadFromPreferences()
+            }
             if enabled {
                 try manager.connection.startVPNTunnel()
             } else {

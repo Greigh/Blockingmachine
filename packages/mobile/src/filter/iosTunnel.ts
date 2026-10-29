@@ -69,11 +69,12 @@ export async function setIosTunnelEnabled(enabled: boolean): Promise<void> {
   try {
     await m.setEnabled(enabled);
   } catch (e) {
-    // saveToPreferences failures surface as bare NEError strings — name the
-    // consent + profile context the failure actually means.
+    // NEError strings arrive bare — the common honest causes are consent
+    // declined at the "Add VPN Configuration" prompt, the profile deleted in
+    // Settings, or a Simulator run (Network Extension needs a device).
     const detail = e instanceof Error ? ` (${e.message})` : '';
     throw new UserError(
-      `The system refused the VPN configuration${detail} — the first enable asks for "Add VPN Configuration" consent, and the filter needs a device (not the Simulator).`,
+      `The system refused the VPN configuration${detail} — grant the "Add VPN Configuration" consent if prompted; the filter needs a device, not the Simulator.`,
     );
   }
 }

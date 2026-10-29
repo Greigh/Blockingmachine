@@ -73,9 +73,12 @@ export default function TelemetryScreen() {
       : [],
   );
 
+  // queryFn must survive a null client: refetch() (pull-to-refresh, the
+  // banner's retry) ignores `enabled` and runs the fetcher regardless, so a
+  // bare `client!` turns the no-server empty state into a null-deref error.
   const telemetry = useQuery({
     queryKey: ['telemetry', baseUrl],
-    queryFn: () => client!.getTelemetry(),
+    queryFn: () => (client ? client.getTelemetry() : Promise.resolve(null)),
     enabled: !!client,
     refetchInterval: 30_000,
   });
@@ -83,6 +86,7 @@ export default function TelemetryScreen() {
   const data = telemetry.data;
 
   const onRefresh = async () => {
+    if (!client) return;
     setRefreshing(true);
     try {
       await telemetry.refetch();
