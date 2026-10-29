@@ -279,6 +279,18 @@ export class CertAuthority {
   }
 
   /**
+   * The CA pair as PEM text — the admin handoff artifact for flag 100's
+   * engine-boundary adoption: written by `--export-ca` under the
+   * store-owning account (whose keystore alone unwraps `ca.key.enc`), moved
+   * into the receiving store by the installer/uninstaller, and re-wrapped
+   * under the receiver's own backend on the next `open`. This is a private-
+   * key egress — treat every caller as trusted-CA authority.
+   */
+  exportCaPairPem(): { certPem: string; keyPem: string } {
+    return { certPem: this.caPem, keyPem: forge.pki.privateKeyToPem(this.caKey) };
+  }
+
+  /**
    * Whether the on-disk CA key is the `ca.key.enc` envelope (AES-256-GCM
    * under an OS-stored secret) rather than `ca.key.pem` plaintext — spec
    * §5.1's encryption-at-rest signal, surfaced on `GET /v1/proxy/ca`.

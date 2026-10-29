@@ -124,6 +124,26 @@ for f in "$NATLOOK_PLIST" "$PROXY_PLIST" "$ANCHOR_FILE" "$STATE_FILE" "$APP_SUPP
 done
 rmdir "$APP_SUPPORT_DIR" 2>/dev/null || true
 
-# --- 6. kept state, reported ---
+# --- 6. CA handoff (flag 100): pass the service CA into the console user's
+# app-engine store when that store has none — the trusted identity the
+# launchd engine minted keeps answering once the user-context engine takes
+# over, instead of a fresh mint the system has never seen. The service store
+# is pinned BM_KEYWRAP=off so the pair is a plain copy; the receiving engine
+# re-wraps under the user's own keystore on first open. Only when the user
+# store lacks ca.pem — an established app-engine CA is never overwritten.
+STORE_DIR="/Users/Shared/Blockingmachine/https-filter"
+CONSOLE_USER="${SUDO_USER:-$(stat -f %Su /dev/console 2>/dev/null || true)}"
+if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" && -f "$STORE_DIR/ca.pem" && -f "$STORE_DIR/ca.key.pem" ]]; then
+  USER_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+  USER_STORE="$USER_HOME/Library/Application Support/Blockingmachine/https-filter"
+  if [[ -n "$USER_HOME" && ! -f "$USER_STORE/ca.pem" ]]; then
+    install -d -o "$CONSOLE_USER" -g staff -m 0700 "$USER_STORE"
+    install -o "$CONSOLE_USER" -g staff -m 0600 "$STORE_DIR/ca.pem" "$USER_STORE/ca.pem"
+    install -o "$CONSOLE_USER" -g staff -m 0600 "$STORE_DIR/ca.key.pem" "$USER_STORE/ca.key.pem"
+    log "handed service CA to $CONSOLE_USER's app-engine store — trust carries across the boundary (flag 100)"
+  fi
+fi
+
+# --- 7. kept state, reported ---
 log "kept: _blockingmachine account, /Users/Shared/Blockingmachine/https-filter, /Library/Logs/Blockingmachine"
 log "capture removed — traffic now flows direct (pf fail-open by construction)"

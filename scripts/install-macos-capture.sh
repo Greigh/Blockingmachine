@@ -74,11 +74,13 @@
 #     stop arriving, traffic flows direct. A real flush vetoes same-
 #     process re-arm (a flapping engine must not oscillate rules); a
 #     helper restart or an installer re-run is what restores capture.
-#   * HELPER death is fail-CLOSED: rdr points at :9295 whether or not a
-#     listener exists — a hard-killed helper leaves live rdr → RST on
-#     :9295 → dead web until launchd KeepAlive restarts it (or uninstall,
-#     or reboot — there is no watchdog for the watcher; KeepAlive is the
-#     recovery path).
+#   * HELPER death is fail-DEGRADED, not closed: the plist's Sockets
+#     dict hands the :9295 listeners to launchd, so a hard-killed helper
+#     leaves a live kernel socket — redirected flows handshake into the
+#     accept backlog and the KeepAlive respawn drains them (connect
+#     stall for the restart window, no RSTs). A job that never restarts
+#     (bootout/uninstall) drops the listener with it; the uninstaller
+#     flushes the anchor in the same pass.
 #   * REBOOT drops the anchor: pf's rules and enable state are per-boot —
 #     after restart both daemons come up via KeepAlive over a silently
 #     inert capture. The helper re-arms at startup when the state file
@@ -159,7 +161,15 @@ EOF
 port_preflight() {
   command -v lsof >/dev/null 2>&1 || { log "lsof unavailable — port preflight skipped"; return 0; }
   local occupied
-  occupied="$(lsof -nP -iTCP:${CONTROL_PORT} -iTCP:${ENGINE_PORT} -iTCP:${HELPER_PORT} -sTCP:LISTEN 2>/dev/null || true)"
+  # With socket activation (Sockets.Listeners in the natlook plist) launchd
+  # — not the helper — holds :9295 while the job is loaded, so a re-install
+  # sees launchd's own listener here. Exclude :9295 when the job is loaded;
+  # an unloaded job cannot hold the socket, so :9295 stays checked then.
+  if launchctl print "system/com.blockingmachine.natlook" >/dev/null 2>&1; then
+    occupied="$(lsof -nP -iTCP:${CONTROL_PORT} -iTCP:${ENGINE_PORT} -sTCP:LISTEN 2>/dev/null || true)"
+  else
+    occupied="$(lsof -nP -iTCP:${CONTROL_PORT} -iTCP:${ENGINE_PORT} -iTCP:${HELPER_PORT} -sTCP:LISTEN 2>/dev/null || true)"
+  fi
   if [[ -n "$occupied" ]]; then
     printf '%s\n' "$occupied" >&2
     die "an engine already listens on :${CONTROL_PORT}/:${ENGINE_PORT} — stop it before installing capture"
@@ -299,6 +309,24 @@ render_natlook_plist() {
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>Sockets</key>
+    <dict>
+        <key>Listeners</key>
+        <array>
+            <dict>
+                <key>SockNodeName</key><string>127.0.0.1</string>
+                <key>SockServiceName</key><string>${HELPER_PORT}</string>
+                <key>SockType</key><string>stream</string>
+                <key>SockFamily</key><string>IPv4</string>
+            </dict>
+            <dict>
+                <key>SockNodeName</key><string>::1</string>
+                <key>SockServiceName</key><string>${HELPER_PORT}</string>
+                <key>SockType</key><string>stream</string>
+                <key>SockFamily</key><string>IPv6</string>
+            </dict>
+        </array>
+    </dict>
     <key>StandardOutPath</key>
     <string>${LOG_DIR}/natlook-helper.log</string>
     <key>StandardErrorPath</key>
@@ -428,6 +456,34 @@ fi
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$STORE_DIR"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0755 "$LOG_DIR"
 install -d -o root -g wheel -m 0755 "$APP_SUPPORT_DIR"
+
+# --- CA handoff (flag 100): adopt the invoking user's app-engine CA into a
+# FRESH service store so installing capture doesn't mint a second CA identity
+# under an already-trusted root. Only when the service store has no ca.pem —
+# an established service CA is never overwritten — and only when the user's
+# app store has one. The export runs under the USER'S account: its keystore
+# is the only thing that can unwrap a ca.key.enc envelope. The receiving
+# engine re-wraps under its own backend on first open (BM_KEYWRAP=off here
+# pins plaintext), and certAuthority's orphan rules keep the PEM inert.
+CONSOLE_USER="${SUDO_USER:-$(stat -f %Su /dev/console 2>/dev/null || true)}"
+USER_STORE=""
+if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" ]]; then
+  USER_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+  [[ -n "$USER_HOME" ]] && USER_STORE="$USER_HOME/Library/Application Support/Blockingmachine/https-filter"
+fi
+if [[ -n "$USER_STORE" && ! -f "$STORE_DIR/ca.pem" && -f "$USER_STORE/ca.pem" ]]; then
+  CA_STAGE="$(mktemp -d /tmp/bm-ca-adopt.XXXXXX)"
+  chown "$CONSOLE_USER" "$CA_STAGE"
+  if sudo -u "$CONSOLE_USER" env BM_STORE_DIR="$USER_STORE" "$ENGINE_RUNNER" "$BUNDLE_PATH" --export-ca "$CA_STAGE" >/dev/null 2>&1 \
+     && [[ -f "$CA_STAGE/ca.pem" && -f "$CA_STAGE/ca.key.pem" ]]; then
+    install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 "$CA_STAGE/ca.pem" "$STORE_DIR/ca.pem"
+    install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 "$CA_STAGE/ca.key.pem" "$STORE_DIR/ca.key.pem"
+    log "adopted $CONSOLE_USER's app-engine CA into $STORE_DIR — existing trust carries across the boundary (flag 100)"
+  else
+    log "CA adoption skipped — export produced no pair; the service engine mints fresh (drift detection will flag a CA swap)"
+  fi
+  rm -rf "$CA_STAGE"
+fi
 
 # --- helper binary + the shared anchor-arm script it re-arms through ---
 install -o root -g wheel -m 0755 "$HELPER_SRC" "$HELPER_DST"

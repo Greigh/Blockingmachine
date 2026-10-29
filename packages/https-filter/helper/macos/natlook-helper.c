@@ -27,10 +27,12 @@
  * hits the real network. A 10 s grace window after start keeps a slow
  * engine boot from reading as a failure. The failure postures are
  * deliberately asymmetric (also documented in install-macos-capture.sh):
- * ENGINE death is fail-open (the anchor flush above); HELPER death is
- * fail-CLOSED — a hard-killed helper leaves live rdr rules pointing at a
- * dead listener (RSTs on :9295, dead web) until launchd KeepAlive
- * restarts it or the operator uninstalls. There is no watchdog for the
+ * ENGINE death is fail-open (the anchor flush above); HELPER death no
+ * longer RSTs flows — the plist declares :9295 under `Sockets.Listeners`,
+ * so launchd owns the kernel listeners across process deaths: redirected
+ * flows handshake into the accept backlog and the KeepAlive respawn
+ * drains them (connect stall, not dead web — flag 102). bind_listener
+ * stays for standalone/selftest runs. There is no watchdog for the
  * watcher; KeepAlive is the recovery path.
  *
  * Reboot re-arm: pf's rules AND enable state die at boot while the
@@ -90,6 +92,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <launch.h>
 
 #include "../common/splice.h"
 
@@ -337,6 +341,60 @@ static void on_sigchld(int sig) {
   }
 }
 
+/* launchd socket activation: when the plist declares `Sockets.Listeners`,
+ * launchd — not this process — owns the :9295 listeners, so a hard kill
+ * leaves the kernel sockets alive: redirected flows complete the handshake
+ * into the accept backlog and the KeepAlive respawn drains them instead of
+ * RSTing (helper death degrades to a connect stall, not dead web — flag
+ * 102). Returns -1 when not launched with that socket declared (standalone
+ * and --selftest runs fall back to bind_listener); on success *v4 gets the
+ * AF_INET fd and *v6 the AF_INET6 fd, each normalised to O_NONBLOCK for
+ * the drain-until-EAGAIN acceptor contract — activation fds arrive in
+ * launchd's mode, which is blocking. */
+static int activated_listeners(int *v4, int *v6) {
+  int *fds = NULL;
+  size_t n = 0;
+  if (launch_activate_socket("Listeners", &fds, &n) != 0 || fds == NULL)
+    return -1;
+  int got4 = -1, got6 = -1;
+  for (size_t i = 0; i < n; i++) {
+    struct sockaddr_storage ss;
+    socklen_t slen = sizeof(ss);
+    if (fds[i] < 0 ||
+        getsockname(fds[i], (struct sockaddr *)&ss, &slen) != 0) {
+      if (fds[i] >= 0)
+        close(fds[i]);
+      continue;
+    }
+    if (ss.ss_family == AF_INET && got4 < 0)
+      got4 = fds[i];
+    else if (ss.ss_family == AF_INET6 && got6 < 0)
+      got6 = fds[i];
+    else
+      close(fds[i]); /* dup or unrecognised — ours to close, launchd keeps its own */
+  }
+  free(fds);
+  if (got4 < 0 || got6 < 0) {
+    if (got4 >= 0)
+      close(got4);
+    if (got6 >= 0)
+      close(got6);
+    return -1;
+  }
+  int fl4 = fcntl(got4, F_GETFL, 0);
+  int fl6 = fcntl(got6, F_GETFL, 0);
+  if (fl4 < 0 || fl6 < 0 ||
+      fcntl(got4, F_SETFL, fl4 | O_NONBLOCK) != 0 ||
+      fcntl(got6, F_SETFL, fl6 | O_NONBLOCK) != 0) {
+    close(got4);
+    close(got6);
+    return -1;
+  }
+  *v4 = got4;
+  *v6 = got6;
+  return 0;
+}
+
 static int bind_listener(const struct sockaddr *sa, socklen_t slen) {
   int fd = socket(sa->sa_family, SOCK_STREAM, 0);
   if (fd < 0)
@@ -379,11 +437,16 @@ static int acceptor_loop(uint16_t helper_port, const char *engine_host,
   sin4.sin_len = sizeof(sin4);
   sin4.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   sin4.sin_port = htons(helper_port);
-  int l4 = bind_listener((const struct sockaddr *)&sin4, sizeof(sin4));
-  if (l4 < 0) {
-    bm_logf("fatal: cannot bind 127.0.0.1:%u errno=%d", (unsigned)helper_port,
-            errno);
-    return 1;
+  int l4 = -1, l6 = -1;
+  const bool activated = activated_listeners(&l4, &l6) == 0;
+  if (!activated) {
+    int b4 = bind_listener((const struct sockaddr *)&sin4, sizeof(sin4));
+    if (b4 < 0) {
+      bm_logf("fatal: cannot bind 127.0.0.1:%u errno=%d", (unsigned)helper_port,
+              errno);
+      return 1;
+    }
+    l4 = b4;
   }
 
   struct sockaddr_in6 sin6;
@@ -392,16 +455,19 @@ static int acceptor_loop(uint16_t helper_port, const char *engine_host,
   sin6.sin6_len = sizeof(sin6);
   sin6.sin6_addr = in6addr_loopback;
   sin6.sin6_port = htons(helper_port);
-  int l6 = bind_listener((const struct sockaddr *)&sin6, sizeof(sin6));
-  if (l6 < 0) {
-    /* The anchor's inet6 rdr sends [::1] flows at this port whether or
-     * not we listen — a warn-only posture would leave v6 clients RST'd
-     * while v4 worked: asymmetric breakage. Die so launchd KeepAlive
-     * retries and the failure surfaces loudly. */
-    bm_logf("fatal: cannot bind [::1]:%u errno=%d — v6 capture leg required",
-            (unsigned)helper_port, errno);
-    close(l4);
-    return 1;
+  if (!activated) {
+    int b6 = bind_listener((const struct sockaddr *)&sin6, sizeof(sin6));
+    if (b6 < 0) {
+      /* The anchor's inet6 rdr sends [::1] flows at this port whether or
+       * not we listen — a warn-only posture would leave v6 clients RST'd
+       * while v4 worked: asymmetric breakage. Die so launchd KeepAlive
+       * retries and the failure surfaces loudly. */
+      bm_logf("fatal: cannot bind [::1]:%u errno=%d — v6 capture leg required",
+              (unsigned)helper_port, errno);
+      close(l4);
+      return 1;
+    }
+    l6 = b6;
   }
 
   struct sigaction sa;
@@ -427,8 +493,10 @@ static int acceptor_loop(uint16_t helper_port, const char *engine_host,
   bm_watchdog_init(&g_wd, engine_host, engine_port);
   g_wd.on_alive = on_engine_alive;
   g_wd.on_dead = on_engine_dead;
-  bm_logf("listening on 127.0.0.1:%u + [::1] — engine %s:%u",
-          (unsigned)helper_port, engine_host, (unsigned)engine_port);
+  bm_logf("listening on 127.0.0.1:%u + [::1] %s— engine %s:%u",
+          (unsigned)helper_port,
+          activated ? "(launchd-held sockets) " : "",
+          engine_host, (unsigned)engine_port);
 
   /* Post-reboot re-arm (see the header block): arm the one-shot pending
    * flag when capture is administratively enabled but pf has no rules —

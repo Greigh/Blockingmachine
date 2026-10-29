@@ -79,7 +79,11 @@
  * exits 1; only a config refusal (missing BM_STORE_DIR) exits 2.
  */
 
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import {
+  CertAuthority,
   isLoopbackBindHost,
   startFilterProxy,
   type FilterProxyConfig,
@@ -356,9 +360,60 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   });
 }
 
+/**
+ * `--export-ca <dir>` — flag 100's CA handoff across the launchd/app engine
+ * boundary. Opens BM_STORE_DIR as the current account (whose keystore alone
+ * unwraps a `ca.key.enc` envelope — this is why the install/uninstall
+ * scripts invoke it via `sudo -u <store owner>`) and writes a plaintext
+ * `ca.pem` + `ca.key.pem` pair into <dir>, mode 0600. The receiving store
+ * re-wraps under its own backend on the next `CertAuthority.open`, so the
+ * same CA identity keeps answering whichever engine posture runs — no
+ * re-trust prompt across the boundary. Refuses to overwrite an existing
+ * pair in <dir>: adoption is additive, never clobbering.
+ */
+export async function exportCaPair(destDir: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const parsed = configFromEnv(env);
+  if (!parsed.ok) {
+    stderrLine(`fatal: ${parsed.error}`);
+    process.exit(2);
+  }
+  const certDest = join(destDir, 'ca.pem');
+  const keyDest = join(destDir, 'ca.key.pem');
+  if (existsSync(certDest) || existsSync(keyDest)) {
+    stderrLine(`fatal: ${destDir} already holds a CA pair — refusing to overwrite`);
+    process.exit(2);
+  }
+  const authority = await CertAuthority.open({
+    storeDir: parsed.config.storeDir,
+    ...(parsed.config.keyWrapBackend === null ? { keyWrapBackend: null } : {}),
+  });
+  const { certPem, keyPem } = authority.exportCaPairPem();
+  await mkdir(destDir, { recursive: true, mode: 0o700 });
+  await writeFile(certDest, certPem, { mode: 0o600 });
+  await writeFile(keyDest, keyPem, { mode: 0o600 });
+  await chmod(certDest, 0o600);
+  await chmod(keyDest, 0o600);
+  stderrLine(`exported CA pair to ${destDir}`);
+}
+
 // Auto-start only when spawned — a jest/ts-node import of this module must not
 // boot an engine beside the suite. Mirrors the system-daemon's argv guard: the
 // bare dist entry and the `filterProxy.cjs` webpack bundle both self-start.
+// `--export-ca` is the one argv the engine reads: a handoff op that exits
+// instead of binding.
 if (process.argv[1]?.endsWith('main.js') || process.argv[1]?.endsWith('filterProxy.cjs')) {
-  void main();
+  const exportIdx = process.argv.indexOf('--export-ca');
+  if (exportIdx !== -1) {
+    const dest = process.argv[exportIdx + 1];
+    if (!dest) {
+      stderrLine('fatal: --export-ca needs a destination directory');
+      process.exit(2);
+    }
+    exportCaPair(dest).catch((err) => {
+      stderrLine(`fatal: export failed: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    });
+  } else {
+    void main();
+  }
 }

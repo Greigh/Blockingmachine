@@ -35,4 +35,18 @@ if ! command -v clang >/dev/null 2>&1; then
 fi
 
 clang -std=c11 -O2 -Wall -Wextra -Werror -o "$OUT" "$SRC" "$CORE"
+
+# Flag 124's darwin leg: sign the helper with the app's Developer ID when the
+# release environment supplies one (`APPLE_SIGNING_IDENTITY`, same convention
+# `electron-osx-sign` reads). A launchd-installed daemon never hits the
+# user-facing Gatekeeper prompt — the signature is for identity/integrity and
+# for a future stapled-notarization path, not prompt avoidance. Local dev
+# builds fall back to adhoc (`-`), which is what an unsigned binary already was.
+IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
+if [[ "$IDENTITY" != "-" ]]; then
+  codesign --sign "$IDENTITY" --options runtime --force "$OUT"
+  echo "signed $OUT with '$IDENTITY'" >&2
+else
+  codesign --sign - --force "$OUT"
+fi
 echo "built $OUT" >&2

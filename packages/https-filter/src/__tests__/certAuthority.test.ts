@@ -63,6 +63,26 @@ describe('CertAuthority.open', () => {
     const second = await CertAuthority.open({ storeDir, keyWrapBackend: null });
     expect(second.caCertPem).toBe(first.caCertPem);
   });
+
+  test('exportCaPairPem seeds a second store with the same CA identity (flag 100 handoff)', async () => {
+    const src = await CertAuthority.open({ storeDir, keyWrapBackend: null });
+    const { certPem, keyPem } = src.exportCaPairPem();
+    expect(certPem).toBe(src.caCertPem);
+    expect(keyPem).toContain('BEGIN RSA PRIVATE KEY');
+
+    const dest = await mkdtemp(join(tmpdir(), 'bm-ca-adopt-'));
+    try {
+      // What the installer's adoption leg lands in the receiving store —
+      // open must adopt the pair verbatim (re-wrap aside, the identity is
+      // what carries).
+      await writeFile(join(dest, 'ca.pem'), certPem, { mode: 0o600 });
+      await writeFile(join(dest, 'ca.key.pem'), keyPem, { mode: 0o600 });
+      const adopted = await CertAuthority.open({ storeDir: dest, keyWrapBackend: null });
+      expect(adopted.caCertPem).toBe(src.caCertPem);
+    } finally {
+      await rm(dest, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('forgeLeaf', () => {
