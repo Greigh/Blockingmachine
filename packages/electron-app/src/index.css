@@ -1234,6 +1234,67 @@ input:checked + .mac-slider:before {
   gap: 18px;
 }
 
+/* Home: compile hero beside the schedule card — collapses to one column
+   under ~900px where the sidebar's remaining width makes two columns tight. */
+.home-compile-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+@media (max-width: 900px) {
+  .home-compile-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hero-stat-line {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  color: var(--secondary-color);
+}
+
+.hero-history {
+  margin-top: 10px;
+}
+
+/* The reach strip: chips carry status as text, never colour alone. */
+.network-reach-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  background: var(--card-bg);
+}
+
+.reach-chip {
+  font-size: 0.78rem;
+  color: var(--secondary-color);
+  padding: 4px 10px;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.reach-open-btn {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--primary-color);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+
+.reach-open-btn:hover {
+  text-decoration: underline;
+}
+
 .setting-card {
   background: var(--card-bg);
   border: 1px solid var(--card-border);

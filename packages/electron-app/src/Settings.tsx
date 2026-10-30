@@ -89,10 +89,6 @@ const Settings: React.FC<SettingsProps> = ({
   const [additionalFormats, setAdditionalFormats] = useState<FilterFormat[]>([]);
 
   // Automation & Webhook state
-  const [autoSchedule, setAutoSchedule] = useState<'disabled' | '12h' | '24h' | 'weekly'>('disabled');
-  const [webhookUrl, setWebhookUrl] = useState('');
-  const [webhookMessage, setWebhookMessage] = useState('');
-  const [isSavingWebhook, setIsSavingWebhook] = useState(false);
 
   const [autoStartFeedServer, setAutoStartFeedServer] = useState(false);
   const [launchOnStartup, setLaunchOnStartup] = useState(false);
@@ -154,13 +150,6 @@ const Settings: React.FC<SettingsProps> = ({
     };
 
     // Load automation schedule & webhook
-    window.electron.getAutoSchedule().then((schedule) => {
-      if (isMounted) setAutoSchedule(schedule || 'disabled');
-    }).catch(console.error);
-
-    window.electron.getWebhookUrl().then((url) => {
-      if (isMounted) setWebhookUrl(url || '');
-    }).catch(console.error);
 
     if (window.electron?.getAutoStartFeedServer) {
       window.electron.getAutoStartFeedServer().then((val) => {
@@ -281,29 +270,6 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const handleScheduleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = e.target.value as 'disabled' | '12h' | '24h' | 'weekly';
-    setAutoSchedule(val);
-    try {
-      await window.electron.setAutoSchedule(val);
-    } catch (err) {
-      console.error('Failed to update auto schedule:', err);
-    }
-  };
-
-  const handleSaveWebhook = async () => {
-    setIsSavingWebhook(true);
-    try {
-      await window.electron.setWebhookUrl(webhookUrl);
-      setWebhookMessage('Webhook endpoint URL saved successfully.');
-      safeSetTimeout(() => setWebhookMessage(''), 3000);
-    } catch (err) {
-      console.error('Failed to save webhook URL:', err);
-      setWebhookMessage('Failed to save webhook URL.');
-    } finally {
-      setIsSavingWebhook(false);
-    }
-  };
 
   const handlePathChange = async () => {
     setIsSavingPath(true);
@@ -363,7 +329,6 @@ const Settings: React.FC<SettingsProps> = ({
         <a href="#settings-appearance">Appearance</a>
         <a href="#settings-export">Export Format</a>
         <a href="#settings-location">Save Location</a>
-        <a href="#settings-automation">Automation</a>
         <a href="#settings-startup">Startup & Services</a>
         <a href="#about-community">About & Updates</a>
         <a href="#settings-tour">Tour</a>
@@ -615,67 +580,6 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
         </div>
-
-        {/* Automation & Background Scheduling */}
-        <div className="setting-card" id="settings-automation">
-          <div className="setting-card-header">
-            <h2>
-              <span className="setting-icon-svg">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </span>
-              Automation & Scheduling
-            </h2>
-            <span className="setting-badge secondary">Background Tasks</span>
-          </div>
-          <p>Keep your network blocklists up-to-date automatically</p>
-
-          <div className="setting-control-group">
-            <label htmlFor="autoSchedule" className="setting-label">Automatic Compilation Schedule</label>
-            <div className="select-container">
-              <select
-                id="autoSchedule"
-                className="setting-select"
-                value={autoSchedule}
-                onChange={handleScheduleChange}
-              >
-                <option value="disabled">Disabled (Manual Compilation Only)</option>
-                <option value="12h">Every 12 Hours</option>
-                <option value="24h">Daily (Every 24 Hours)</option>
-                <option value="weekly">Weekly</option>
-              </select>
-            </div>
-            <p className="setting-help-text">
-              When enabled, Blockingmachine fetches and compiles your enabled feeds in the background and delivers a native desktop notification upon completion.
-            </p>
-          </div>
-
-          <div className="setting-control-group" style={{ marginTop: '16px' }}>
-            <label className="setting-label">Post-Compilation Webhook Endpoint (Optional)</label>
-            <div className="path-input-container">
-              <input
-                type="text"
-                className="path-input"
-                placeholder="https://pi.hole/admin/api.php?action=restart or webhook URL"
-                value={webhookUrl}
-                onChange={(e) => setWebhookUrl(e.target.value)}
-              />
-              <button
-                className="browse-button"
-                onClick={handleSaveWebhook}
-                disabled={isSavingWebhook}
-              >
-                {isSavingWebhook ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-            {webhookMessage && <p className="setting-message success" role="status">{webhookMessage}</p>}
-            <p className="setting-help-text">
-              Sends an HTTP POST payload with compilation statistics whenever blocklists are updated, allowing Pi-hole, AdGuard Home, or DNS servers to reload automatically.
-            </p>
-          </div>
-        </div>
-
         {/* Startup & Background Services Card */}
         <div className="setting-card" id="settings-startup">
           <div className="setting-card-header">

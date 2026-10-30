@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Settings from './Settings';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
-import { DashboardView } from './views/DashboardView';
+import { HomeView } from './views/HomeView';
 import { SourcesView } from './views/SourcesView';
 import { ModulesView } from './views/ModulesView';
 import { BulkImportView } from './views/BulkImportView';
@@ -10,6 +10,7 @@ import { CustomRulesView } from './views/CustomRulesView';
 import { RuleInspectorView } from './views/RuleInspectorView';
 import { RuleBrowserView } from './views/RuleBrowserView';
 import { DistributeView } from './views/DistributeView';
+import { viewNameForRoute } from './routes';
 import { AIRadarView } from './views/AIRadarView';
 import { OnboardingModal, type OnboardingConfig } from './views/OnboardingModal';
 import { PRESET_BUNDLES } from './views/PresetsModal';
@@ -48,7 +49,7 @@ function App() {
     }
   });
   const [autoTriggerCompile, setAutoTriggerCompile] = useState<boolean>(false);
-  // Bumped on every 'trigger-compile' IPC and cleared when DashboardView consumes it —
+  // Bumped on every 'trigger-compile' IPC and cleared when HomeView consumes it —
   // a pending trigger survives view switches but a consumed one cannot re-fire on remount.
   const [compileNonce, setCompileNonce] = useState<number>(0);
   const [inspectorInitialDomain, setInspectorInitialDomain] = useState<string>('');
@@ -436,12 +437,15 @@ function App() {
             )}
 
             {currentView === 'process' && (
-              <DashboardView
+              <HomeView
                 savePath={savePath}
                 autoTriggerCompile={autoTriggerCompile}
                 compileNonce={compileNonce}
                 onCompileConsumed={() => setCompileNonce(0)}
-                onNavigate={(view) => setCurrentView(view)}
+                navigate={(route) => {
+                  const view = viewNameForRoute(route);
+                  if (view) setCurrentView(view);
+                }}
               />
             )}
             {currentView === 'sources' && (

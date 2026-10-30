@@ -285,6 +285,7 @@ contextBridge.exposeInMainWorld('electron', {
   // Local System DNS Daemon Integration
   getDaemonStatus: () => ipcRenderer.invoke('daemon:get-status'),
   getLiveServices: () => ipcRenderer.invoke('get-live-services'),
+  getDeployRefreshReports: () => ipcRenderer.invoke('get-deploy-refresh-reports'),
   startDaemonProcess: () => ipcRenderer.invoke('daemon:start'),
   stopDaemonProcess: () => ipcRenderer.invoke('daemon:stop'),
   reloadDaemonRules: () => ipcRenderer.invoke('daemon:reload'),

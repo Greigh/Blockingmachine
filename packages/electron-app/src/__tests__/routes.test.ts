@@ -15,6 +15,7 @@ import {
   isSectionId,
   routeForViewName,
   sectionById,
+  viewNameForRoute,
 } from '../routes';
 
 describe('SECTIONS registry', () => {
@@ -117,5 +118,28 @@ describe('route primitives', () => {
     for (const section of SECTIONS) {
       expect(sectionById(section.id)).toBe(section);
     }
+  });
+});
+
+describe('viewNameForRoute', () => {
+  it.each([
+    [{ section: 'home', tab: null }, 'process'],
+    [{ section: 'rules', tab: 'feeds' }, 'sources'],
+    [{ section: 'rules', tab: 'modules' }, 'modules'],
+    [{ section: 'rules', tab: 'custom' }, 'custom'],
+    [{ section: 'rules', tab: 'output' }, 'browser'],
+    [{ section: 'discover', tab: 'radar' }, 'ai-radar'],
+    [{ section: 'discover', tab: 'inspect' }, 'inspector'],
+    [{ section: 'distribute', tab: null }, 'deploy'],
+    [{ section: 'settings', tab: null }, 'settings'],
+  ] as const)('route %j maps to canonical view name %j', (route, name) => {
+    expect(viewNameForRoute(route)).toBe(name);
+    // The canonical name resolves back to the same route — a true inverse.
+    expect(routeForViewName(name)).toEqual(route);
+  });
+
+  it('returns null for unknown tab combinations', () => {
+    expect(viewNameForRoute({ section: 'distribute', tab: 'pihole' })).toBeNull();
+    expect(viewNameForRoute({ section: 'home', tab: 'anything' })).toBeNull();
   });
 });

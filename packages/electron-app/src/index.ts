@@ -5271,6 +5271,8 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
       autoSchedule: (store.get('autoSchedule') as string) || 'disabled',
     }));
 
+    ipcMain.handle('get-deploy-refresh-reports', async () => store.get('deployRefreshReports') ?? {});
+
     ipcMain.handle('daemon:start', async () => {
       return await daemonManager.start(daemonFeedFilePaths(store));
     });

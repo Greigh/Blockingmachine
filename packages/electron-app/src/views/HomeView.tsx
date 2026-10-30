@@ -16,24 +16,37 @@ import type { ProcessingResult, FilterSource, CompilationSnapshot, FeedServerSta
 import { BrandLogo } from '../components/BrandLogo';
 import { ProtectionCard } from '../components/ProtectionCard';
 import { HttpsFilterCard } from '../components/HttpsFilterCard';
+import { ScheduleCard } from '../components/ScheduleCard';
+import { NetworkReachStrip } from '../components/NetworkReachStrip';
+import { NATIVE_DEFENSE_MODULES } from './ModulesView';
+import { routeForViewName, type AppRoute } from '../routes';
 
-interface DashboardViewProps {
+interface HomeViewProps {
   savePath: string;
   autoTriggerCompile?: boolean;
   /** Non-zero while a 'trigger-compile' IPC is pending consumption. */
   compileNonce?: number;
   /** Clears the pending trigger so a view remount cannot re-fire it. */
   onCompileConsumed?: () => void;
-  onNavigate?: (view: string) => void;
+  navigate: (route: AppRoute) => void;
 }
 
-export const DashboardView: React.FC<DashboardViewProps> = ({
+const cleanModuleName = (name: string): string =>
+  name.replace(/^Blockingmachine\s+/i, '').replace(/\s*\[Beta\]/i, '').trim();
+
+export const HomeView: React.FC<HomeViewProps> = ({
   savePath,
   autoTriggerCompile,
   compileNonce,
   onCompileConsumed,
-  onNavigate,
+  navigate,
 }) => {
+  // Children that predate the route registry still speak legacy view names;
+  // translate at the boundary rather than rewire them all.
+  const onNavigate = (view: string) => {
+    const route = routeForViewName(view);
+    if (route) navigate(route);
+  };
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<ProcessingResult | null>(null);
@@ -53,11 +66,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [dashboardStats, setDashboardStats] = useState<{
     enabledSources: number;
     totalSources: number;
+    enabledModules: number;
     customRulesCount: number;
     lastProcessedTime: string | null;
   }>({
     enabledSources: 0,
     totalSources: 0,
+    enabledModules: 0,
     customRulesCount: 0,
     lastProcessedTime: null,
   });
@@ -91,10 +106,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         } catch {}
       }
 
+      const enabledModules = NATIVE_DEFENSE_MODULES.filter((mod) => {
+        const cleanName = cleanModuleName(mod.name);
+        const match = sources.find((s: FilterSource) => s.url === mod.url || s.name === mod.name || s.name.includes(cleanName));
+        return match?.enabled;
+      }).length;
+
       if (isMountedRef.current) {
         setDashboardStats({
           enabledSources,
           totalSources: sources.length,
+          enabledModules,
           customRulesCount,
           lastProcessedTime: lastProcessTime,
         });
@@ -217,7 +239,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="dashboard-content-flow">
-      {/* Hero Action Card */}
+      {/* DNS Protection — is this Mac protected? The daemon control that used to live only in the tray. */}
+      <ProtectionCard onNavigate={onNavigate} />
+
+      {/* HTTPS Filtering — the MITM engine's lifecycle, CA trust and pin ledger (P1 Task 5) */}
+      <HttpsFilterCard />
+
+      {/* Compile + schedule — the lists' freshness and the cadence that keeps them current */}
+      <div className="home-compile-row">
       <div className="desktop-card hero-action-card">
         <div className="hero-content-wrapper">
           <div className="hero-text-col">
@@ -255,6 +284,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <h2 className="hero-heading">Compile & Export Filter Lists</h2>
             <p className="hero-subtext">
               Fetches enabled filter feeds concurrently, parses Adblock & DNS rules, executes deduplication, and compiles clean outputs.
+            </p>
+
+            <p className="hero-stat-line">
+              {dashboardStats.enabledSources}/{dashboardStats.totalSources} feeds enabled
+              {' · '}{dashboardStats.enabledModules} modules on
+              {' · '}{dashboardStats.customRulesCount} custom rules
+              {ruleDeltaText ? ` · ${ruleDeltaText}` : ''}
             </p>
 
             <div className="hero-meta-strip">
@@ -324,96 +360,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span>{error}</span>
           </div>
         )}
-      </div>
 
-      {/* DNS Protection — the daemon control that used to live only in the tray */}
-      <ProtectionCard onNavigate={onNavigate} />
-
-      {/* HTTPS Filtering — the MITM engine's lifecycle, CA trust and pin ledger (P1 Task 5) */}
-      <HttpsFilterCard />
-
-      {/* Snapshot Summary Cards (Pre-run overview) */}
-      <div className="overview-stats-grid">
-        <div className="desktop-card summary-card">
-          <div className="summary-icon-wrap icon-shield">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-            </svg>
-          </div>
-          <div className="summary-data-col">
-            <span className="summary-num">{dashboardStats.enabledSources}/{dashboardStats.totalSources}</span>
-            <span className="summary-label">Active Sources</span>
-          </div>
-        </div>
-
-        <div className="desktop-card summary-card">
-          <div className="summary-icon-wrap icon-pencil">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-            </svg>
-          </div>
-          <div className="summary-data-col">
-            <span className="summary-num">{dashboardStats.customRulesCount}</span>
-            <span className="summary-label">Custom Rules</span>
-          </div>
-        </div>
-
-        <div className="desktop-card summary-card">
-          <div className="summary-icon-wrap icon-clock">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-          </div>
-          <div className="summary-data-col">
-            <span className="summary-num">{dashboardStats.lastProcessedTime ? dashboardStats.lastProcessedTime.split(',')[0] : 'Never'}</span>
-            <span className="summary-label">Last Compilation</span>
-          </div>
-          {history.length > 1 && (
-            <details className="delta-history">
-              <summary>Recent compiles</summary>
-              <ul className="delta-history-list">
-                {history.slice(0, 5).map((snap, i) => (
-                  <li key={snap.timestamp ?? i} className="delta-history-row">
-                    <span className="delta-history-date">{snap.timestamp}</span>
-                    <span className="delta-history-counts">
-                      {snap.uniqueRuleCount?.toLocaleString()} rules
-                      {typeof snap.duplicatesRemoved === 'number' && snap.duplicatesRemoved > 0
-                        ? ` · ${snap.duplicatesRemoved.toLocaleString()} dupes`
-                        : ''}
-                      {Array.isArray(snap.exportFormats) && snap.exportFormats.length > 0
-                        ? ` · ${snap.exportFormats.join(' + ')}`
-                        : ''}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-        </div>
-
-        {ruleDeltaText && (
-          <div className={`desktop-card summary-card delta-card ${isPositiveDelta ? 'pos' : 'neg'}`}>
-            <div className="summary-icon-wrap">
-              {isPositiveDelta ? (
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
-                  <polyline points="17 6 23 6 23 12" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#38bdf8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="23 18 13.5 8.5 8.5 13.5 1 6" />
-                  <polyline points="17 18 23 18 23 12" />
-                </svg>
-              )}
-            </div>
-            <div className="summary-data-col">
-              <span className="summary-num delta-num">{isPositiveDelta ? 'Expanding' : 'Optimized'}</span>
-              <span className="summary-label" title={ruleDeltaText}>{ruleDeltaText}</span>
-            </div>
-          </div>
+        {/* Recent compiles — the history that used to ride on the Last Compilation stat card */}
+        {history.length > 1 && (
+          <details className="delta-history hero-history">
+            <summary>Recent compiles</summary>
+            <ul className="delta-history-list">
+              {history.slice(0, 5).map((snap, i) => (
+                <li key={snap.timestamp ?? i} className="delta-history-row">
+                  <span className="delta-history-date">{snap.timestamp}</span>
+                  <span className="delta-history-counts">
+                    {snap.uniqueRuleCount?.toLocaleString()} rules
+                    {typeof snap.duplicatesRemoved === 'number' && snap.duplicatesRemoved > 0
+                      ? ` · ${snap.duplicatesRemoved.toLocaleString()} dupes`
+                      : ''}
+                    {Array.isArray(snap.exportFormats) && snap.exportFormats.length > 0
+                      ? ` · ${snap.exportFormats.join(' + ')}`
+                      : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
       </div>
+
+      <ScheduleCard />
+      </div>
+
+      {/* Is it reaching the devices? Freshness per live target. */}
+      <NetworkReachStrip onOpenDistribute={() => navigate({ section: 'distribute', tab: null })} />
 
       {/* 3-Step Newcomer & Core Workflow Guide */}
       <div className="desktop-card workflow-guide-card">
@@ -555,7 +531,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               className="primary-button deploy-next-btn"
               onClick={() => onNavigate?.('deploy')}
             >
-              <span>Open Deploy Hub (⌘8)</span>
+              <span>Open Distribute (⌘4)</span>
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
               </svg>

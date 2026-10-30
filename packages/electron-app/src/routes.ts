@@ -180,3 +180,26 @@ const LEGACY_VIEW_ROUTES: Readonly<Record<string, AppRoute>> = Object.freeze({
 export function routeForViewName(name: string): AppRoute | null {
   return LEGACY_VIEW_ROUTES[name] ?? null;
 }
+
+/**
+ * The canonical legacy view name for a route — the inverse of
+ * LEGACY_VIEW_ROUTES, except the deep-link aliases (bulkImport collapses to
+ * 'sources', the canonical feeds name). Route-shaped callers that still need
+ * the old string vocabulary (the pre-rewire App shell) translate back through
+ * here; unknown combinations return null.
+ */
+const CANONICAL_VIEW_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  home: 'process',
+  'rules:feeds': 'sources',
+  'rules:modules': 'modules',
+  'rules:custom': 'custom',
+  'rules:output': 'browser',
+  'discover:radar': 'ai-radar',
+  'discover:inspect': 'inspector',
+  distribute: 'deploy',
+  settings: 'settings',
+});
+
+export function viewNameForRoute(route: AppRoute): string | null {
+  return CANONICAL_VIEW_NAMES[route.tab ? `${route.section}:${route.tab}` : route.section] ?? null;
+}
