@@ -10,8 +10,6 @@ import {
   type AccentColorOption,
 } from './theme';
 
-export { ACCENT_PALETTE, applyAccentColor, type AccentColorOption };
-
 interface SettingsProps {
   currentTheme: ThemeType;
   onThemeChange: (theme: ThemeType) => void;

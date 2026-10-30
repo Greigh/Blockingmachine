@@ -143,3 +143,12 @@ describe('viewNameForRoute', () => {
     expect(viewNameForRoute({ section: 'home', tab: 'anything' })).toBeNull();
   });
 });
+
+describe('shortcut hints', () => {
+  it('pin to sidebar position — the keymap indexes SECTIONS by order', () => {
+    SECTIONS.slice(0, -1).forEach((s, i) => {
+      expect(s.shortcut).toBe(`⌘${i + 1}`);
+    });
+    expect(SECTIONS[SECTIONS.length - 1].shortcut).toBe('⌘,');
+  });
+});

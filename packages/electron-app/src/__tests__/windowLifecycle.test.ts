@@ -36,6 +36,26 @@ describe('mainWindow lifecycle', () => {
     expect(menu).toContain("sendToWindow('navigate-view'");
   });
 
+  test('the View menu binds the four section accelerators — nothing else may hold a ⌘ digit', () => {
+    const start = main.indexOf("label: 'View'");
+    const menu = main.slice(start, main.indexOf("label: 'Window'", start));
+    // Menu accelerators are matched natively before the renderer sees a keydown:
+    // these pairs ARE the section keymap on the shipping platform, so the sidebar's
+    // ⌘1–⌘4 hints and the registry order must agree with them exactly.
+    const items = [...menu.matchAll(/label: '([^']+)',\s*accelerator: 'Cmd\+(\d)',[\s\S]*?navigate-view', '([^']+)'/g)]
+      .map((m) => ({ label: m[1], key: m[2], view: m[3] }));
+    expect(items).toEqual([
+      { label: 'Home', key: '1', view: 'process' },
+      { label: 'Rules', key: '2', view: 'sources' },
+      { label: 'Discover', key: '3', view: 'ai-radar' },
+      { label: 'Distribute', key: '4', view: 'deploy' },
+    ]);
+    // The retired per-view digits must not come back — a re-added ⌘5..⌘9 would
+    // silently eat the renderer keymap again.
+    const digits = [...menu.matchAll(/accelerator: 'Cmd\+(\d)'/g)].map((m) => m[1]);
+    expect(digits).toEqual(['1', '2', '3', '4']);
+  });
+
   test('every remaining direct send is destroyed-guarded (broadcasts, not commands)', () => {
     const lines = main.split('\n');
     const offenderLines: number[] = [];

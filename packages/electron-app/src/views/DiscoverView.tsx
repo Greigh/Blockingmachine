@@ -17,8 +17,6 @@ import type { LiveRadarSession } from '../types/';
 
 interface DiscoverViewProps {
   initialTab?: string;
-  /** Domain a deep link wants the inspector opened on. */
-  inspectorDomain?: string;
   liveRadarSession?: LiveRadarSession | null;
   onTriggerCompile: () => void;
   navigate: (route: AppRoute) => void;
@@ -30,7 +28,6 @@ const TABS = sectionById('discover').tabs;
 
 export const DiscoverView: React.FC<DiscoverViewProps> = ({
   initialTab,
-  inspectorDomain,
   liveRadarSession,
   onTriggerCompile,
   navigate,
@@ -40,23 +37,27 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
   const valid = (id: string | undefined) =>
     TABS.some((t) => t.id === id) ? id! : TABS[0].id;
   const [tab, setTab] = useState<string>(() => valid(initialTab));
-  const [domain, setDomain] = useState<string | undefined>(inspectorDomain);
+  const [domain, setDomain] = useState<string | undefined>();
 
   // Re-drive the host when a deep link arrives while it is already mounted
   // (the app shell can re-render with a new route.tab rather than remounting).
   useEffect(() => {
     if (initialTab) setTab(valid(initialTab));
   }, [initialTab]);
-  useEffect(() => {
-    if (inspectorDomain) setDomain(inspectorDomain);
-  }, [inspectorDomain]);
+
+  // Tab clicks switch the panel AND keep the shell's route.tab in sync —
+  // the header title and tab-* scroll classes are route-derived.
+  const select = (id: string) => {
+    setTab(id);
+    navigate({ section: 'discover', tab: id });
+  };
 
   return (
     <div className="section-host">
       <SectionTabs
         tabs={TABS}
         activeId={tab}
-        onSelect={setTab}
+        onSelect={select}
         ariaLabel="Discover sections"
       />
       <div role="tabpanel" id={panelId(tab)} aria-labelledby={tabId(tab)}>
@@ -67,9 +68,9 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
             onNavigateDeploy={() => navigate({ section: 'distribute', tab: null })}
             onNavigateInspector={(d) => {
               if (d) setDomain(d);
-              setTab('inspect');
+              select('inspect');
             }}
-            onNavigateSettings={() => setTab('engine')}
+            onNavigateSettings={() => select('engine')}
             setError={setError}
             setSuccessMessage={setSuccessMessage}
           />

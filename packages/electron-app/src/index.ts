@@ -415,66 +415,63 @@ const template: Electron.MenuItemConstructorOptions[] = [
     label: 'View',
     submenu: [
       {
-        label: 'Filter Processor',
+        label: 'Home',
         accelerator: 'Cmd+1',
         click: () => {
           void sendToWindow('navigate-view', 'process');
         },
       },
       {
-        label: 'Filter Sources',
+        label: 'Rules',
         accelerator: 'Cmd+2',
         click: () => {
           void sendToWindow('navigate-view', 'sources');
         },
       },
       {
-        label: 'Defense Modules',
+        label: 'Discover',
         accelerator: 'Cmd+3',
+        click: () => {
+          void sendToWindow('navigate-view', 'ai-radar');
+        },
+      },
+      {
+        label: 'Distribute',
+        accelerator: 'Cmd+4',
+        click: () => {
+          void sendToWindow('navigate-view', 'deploy');
+        },
+      },
+      { type: 'separator' as const },
+      // Sub-screen deep links — menu-reachable, but ⌘ is section-level now.
+      {
+        label: 'Defense Modules',
         click: () => {
           void sendToWindow('navigate-view', 'modules');
         },
       },
       {
         label: 'Custom Rules',
-        accelerator: 'Cmd+4',
         click: () => {
           void sendToWindow('navigate-view', 'custom');
         },
       },
       {
-        label: 'Rule & AI Inspector',
-        accelerator: 'Cmd+5',
-        click: () => {
-          void sendToWindow('navigate-view', 'inspector');
-        },
-      },
-      {
         label: 'Rule Browser',
-        accelerator: 'Cmd+6',
         click: () => {
           void sendToWindow('navigate-view', 'browser');
         },
       },
       {
+        label: 'Rule & AI Inspector',
+        click: () => {
+          void sendToWindow('navigate-view', 'inspector');
+        },
+      },
+      {
         label: 'Bulk Import',
-        accelerator: 'Cmd+7',
         click: () => {
           void sendToWindow('navigate-view', 'bulkImport');
-        },
-      },
-      {
-        label: 'Deploy & Sync',
-        accelerator: 'Cmd+8',
-        click: () => {
-          void sendToWindow('navigate-view', 'deploy');
-        },
-      },
-      {
-        label: 'AI Radar Hub',
-        accelerator: 'Cmd+9',
-        click: () => {
-          void sendToWindow('navigate-view', 'ai-radar');
         },
       },
       { type: 'separator' as const },

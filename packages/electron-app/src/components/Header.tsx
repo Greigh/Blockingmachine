@@ -9,16 +9,6 @@ interface HeaderProps {
   onOpenNav?: () => void;
 }
 
-const SECTION_META: Record<string, { desc: string }> = {
-  home: { desc: 'Protection status, list freshness, and the compile that keeps them current' },
-  rules: { desc: 'Filter feeds, defense modules, custom rules, and compiled output' },
-  discover: { desc: 'AI radar, engine configuration, and the rule inspector' },
-  distribute: { desc: 'Push compiled blocklists to sinks and share them over the LAN' },
-  settings: { desc: 'Appearance, export format, save location, startup, and about' },
-};
-
-const BETA_TABS = new Set(['rules:modules', 'discover:radar']);
-
 export const Header: React.FC<HeaderProps> = ({
   route,
   savePath,
@@ -29,8 +19,7 @@ export const Header: React.FC<HeaderProps> = ({
   const section = sectionById(route.section);
   const tab = section.tabs.find((t) => t.id === route.tab);
   const title = tab?.label ?? section.label;
-  const isBeta = BETA_TABS.has(`${route.section}:${route.tab}`);
-  const desc = SECTION_META[route.section]?.desc ?? '';
+  const isBeta = Boolean(tab?.beta);
 
   return (
     <header className="main-header">
@@ -61,7 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
           {title}
           {isBeta && <span className="header-title-beta-badge">Beta</span>}
         </h1>
-        <span className="view-subtitle">{desc}</span>
+        <span className="view-subtitle">{section.desc}</span>
       </div>
       <div className="header-right">
         {savePath && (

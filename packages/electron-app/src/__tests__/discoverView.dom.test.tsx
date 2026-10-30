@@ -81,10 +81,9 @@ describe('DiscoverView', () => {
     expect(screen.getByRole('tab', { name: 'Inspect' }).getAttribute('aria-selected')).toBe('true');
   });
 
-  it('honours initialTab + inspectorDomain for IPC deep links into inspect', () => {
-    renderHost({ initialTab: 'inspect', inspectorDomain: 'seeded.example' });
+  it('honours initialTab for an IPC deep link into inspect', () => {
+    renderHost({ initialTab: 'inspect' });
     expect(screen.getByText('INSPECTOR-VIEW')).toBeTruthy();
-    expect(captured.inspector?.initialDomain).toBe('seeded.example');
   });
 
   it('routes the inspector’s custom-rules affordance to rules › custom', () => {

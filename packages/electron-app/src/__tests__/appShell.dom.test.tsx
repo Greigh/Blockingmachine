@@ -12,7 +12,10 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 const captured: Record<string, Record<string, unknown> | undefined> = {};
 
 jest.unstable_mockModule('../views/HomeView', () => ({
-  HomeView: () => 'HOME-VIEW',
+  HomeView: (props: Record<string, unknown>) => {
+    captured.home = props;
+    return 'HOME-VIEW';
+  },
 }));
 jest.unstable_mockModule('../views/RulesView', () => ({
   RulesView: (props: Record<string, unknown>) => {
@@ -106,7 +109,12 @@ describe('App shell', () => {
     await renderApp();
     const nav = screen.getByRole('navigation', { name: 'Primary' });
     const items = within(nav).getAllByRole('button');
-    expect(items.map((b) => b.textContent?.replace(/⌘.,?|⌘\d|1\/2|LIVE|Beta|●/g, '').trim())).toEqual([
+    // The label span's first child is the section name; badge/LIVE/shortcut
+    // are sibling elements and cannot leak in.
+    expect(
+      items.map((b) => b.querySelector('.sidebar-label')?.firstChild?.textContent?.trim()),
+    ).toEqual(['Home', 'Rules', 'Discover', 'Distribute', 'Settings']);
+    expect(items.map((b) => b.getAttribute('aria-label'))).toEqual([
       'Home',
       'Rules',
       'Discover',
@@ -158,10 +166,12 @@ describe('App shell', () => {
   it('trigger-compile returns to Home with a fresh nonce', async () => {
     bridge();
     await renderApp();
+    const before = captured.home?.compileNonce as number;
     act(() => ipcHandlers['navigate-view']('settings'));
     expect(screen.getByText('SETTINGS-VIEW')).toBeTruthy();
     act(() => ipcHandlers['trigger-compile']());
     expect(screen.getByText('HOME-VIEW')).toBeTruthy();
+    expect(captured.home?.compileNonce as number).toBeGreaterThan(before);
   });
 
   it('open-settings lands on the Settings section', async () => {

@@ -265,19 +265,6 @@ body {
   gap: 2px;
 }
 
-.sidebar-section-label {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--secondary-color);
-  padding: 14px 10px 4px 10px;
-}
-
-.sidebar-section-label:first-child {
-  padding-top: 4px;
-}
-
 .sidebar-nav-item {
   display: flex;
   align-items: center;
@@ -12970,16 +12957,6 @@ summary:focus-visible {
   }
   .sidebar-nav {
     padding: 8px 6px 12px;
-  }
-  .sidebar-section-label {
-    font-size: 0;
-    padding: 10px 8px 0;
-    margin-bottom: 4px;
-    border-top: 1px solid var(--border-color);
-  }
-  .sidebar-section-label:first-child {
-    border-top: none;
-    padding-top: 4px;
   }
   .sidebar-nav-item {
     flex-direction: column;

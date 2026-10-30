@@ -84,13 +84,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               key={section.id}
               className={`sidebar-nav-item ${active ? 'active' : ''}`}
               aria-current={active ? 'page' : undefined}
+              aria-label={section.label}
               onClick={() => onSelectSection(section.id)}
               title={`${section.label} (${section.shortcut.replace('⌘', 'Cmd+')})`}
             >
               <span className="sidebar-icon" aria-hidden="true">
                 {section.icon}
               </span>
-              <span className="sidebar-label">
+              <span className="sidebar-label" aria-hidden="true">
                 {section.label}
                 {section.id === 'discover' && isRadarScanning && (
                   <span className="sidebar-radar-live-pill" title="Live background scanning active">
@@ -99,7 +100,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </span>
                 )}
               </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }} aria-hidden="true">
                 {section.id === 'rules' && (
                   <span className="sidebar-badge">
                     {enabledSourcesCount}/{totalSourcesCount}

@@ -48,8 +48,8 @@ function App() {
   // a pending trigger survives view switches but a consumed one cannot re-fire on remount.
   const [compileNonce, setCompileNonce] = useState<number>(0);
   // The 'bulkImport' deep link wants Rules › feeds opened in bulk mode — a
-  // mode inside SourcesView, not a tab in the registry.
-  const [feedsInitialTab, setFeedsInitialTab] = useState<'list' | 'bulk'>('list');
+  // one-shot armed value, consumed and cleared by RulesView like compileNonce.
+  const [feedsInitialTab, setFeedsInitialTab] = useState<'bulk' | null>(null);
   const [liveRadarSession, setLiveRadarSession] = useState<LiveRadarSession | null>(null);
   // Drawer-mode sidebar (≤460px effective width): opened via the header menu
   // button, dismissed by item selection, backdrop click, or Escape.
@@ -59,13 +59,17 @@ function App() {
     setRoute(r);
     setNavOpen(false);
     // One-shot deep-link residue: only the 'bulkImport' wire name re-arms it.
-    setFeedsInitialTab('list');
+    setFeedsInitialTab(null);
   }, []);
 
   const selectSection = useCallback(
     (id: SectionId) => navigate({ section: id, tab: null }),
     [navigate],
   );
+  // Stable drawer callbacks — a fresh arrow each render would re-run
+  // useDialogFocus and yank focus out of the open drawer on any App update.
+  const closeNav = useCallback(() => setNavOpen(false), []);
+  const openNav = useCallback(() => setNavOpen(true), []);
 
   useEffect(() => {
     if (window.electron?.getLiveRadarSession) {
@@ -88,7 +92,7 @@ function App() {
     if (window.electron?.getSavePath) {
       window.electron.getSavePath().then(setSavePath);
     }
-  }, [route]);
+  }, [route.section]);
 
   const memoizedApplyTheme = useCallback(applyTheme, []);
 
@@ -391,7 +395,7 @@ function App() {
           handleExternalLink={handleExternalLink}
           isRadarScanning={Boolean(liveRadarSession?.active)}
           navOpen={navOpen}
-          onCloseNav={() => setNavOpen(false)}
+          onCloseNav={closeNav}
         />
 
         {/* Main Workspace Pane */}
@@ -401,7 +405,7 @@ function App() {
             savePath={savePath}
             handleRevealOutputFolder={handleRevealOutputFolder}
             navOpen={navOpen}
-            onOpenNav={() => setNavOpen(true)}
+            onOpenNav={openNav}
           />
 
           <div className={`main-content-scroll section-${route.section}${route.tab ? ` tab-${route.tab}` : ''}`}>
@@ -436,6 +440,7 @@ function App() {
               <RulesView
                 initialTab={route.tab ?? undefined}
                 feedsInitialTab={feedsInitialTab}
+                onFeedsInitialTabConsumed={() => setFeedsInitialTab(null)}
                 sources={sources}
                 saveSources={saveSources}
                 onTriggerCompile={() => {

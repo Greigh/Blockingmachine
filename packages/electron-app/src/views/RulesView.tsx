@@ -19,8 +19,13 @@ import type { FilterSource } from '../types';
 
 interface RulesViewProps {
   initialTab?: string;
-  /** Deep link into SourcesView's own list/bulk mode (legacy 'bulkImport' route). */
-  feedsInitialTab?: 'list' | 'bulk';
+  /**
+   * One-shot deep link into SourcesView's bulk mode (the legacy 'bulkImport'
+   * route). Armed only when 'bulk' — SourcesView flips to it, then the host
+   * reports it consumed so a remount cannot resurrect it.
+   */
+  feedsInitialTab?: 'bulk' | null;
+  onFeedsInitialTabConsumed?: () => void;
   sources: FilterSource[];
   saveSources: (
     updatedSources: FilterSource[],
@@ -37,6 +42,7 @@ const TABS = sectionById('rules').tabs;
 export const RulesView: React.FC<RulesViewProps> = ({
   initialTab,
   feedsInitialTab,
+  onFeedsInitialTabConsumed,
   sources,
   saveSources,
   onTriggerCompile,
@@ -53,12 +59,24 @@ export const RulesView: React.FC<RulesViewProps> = ({
     if (initialTab) setTab(valid(initialTab));
   }, [initialTab]);
 
+  // Tab clicks switch the panel AND keep the shell's route.tab in sync —
+  // the header title and tab-* scroll classes are route-derived.
+  const select = (id: string) => {
+    setTab(id);
+    navigate({ section: 'rules', tab: id });
+  };
+
+  // The bulk deep link is one-shot: SourcesView armed it, now disarm.
+  useEffect(() => {
+    if (feedsInitialTab === 'bulk') onFeedsInitialTabConsumed?.();
+  }, [feedsInitialTab, onFeedsInitialTabConsumed]);
+
   return (
     <div className="section-host">
       <SectionTabs
         tabs={TABS}
         activeId={tab}
-        onSelect={setTab}
+        onSelect={select}
         ariaLabel="Rules sections"
       />
       <div role="tabpanel" id={panelId(tab)} aria-labelledby={tabId(tab)}>
@@ -68,7 +86,7 @@ export const RulesView: React.FC<RulesViewProps> = ({
             saveSources={saveSources}
             setError={setError}
             setSuccessMessage={setSuccessMessage}
-            initialTab={feedsInitialTab}
+            initialTab={feedsInitialTab ?? undefined}
             onNavigate={(view) => {
               const route = routeForViewName(view);
               if (route) navigate(route);
