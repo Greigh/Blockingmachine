@@ -265,19 +265,6 @@ body {
   gap: 2px;
 }
 
-.sidebar-section-label {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--secondary-color);
-  padding: 14px 10px 4px 10px;
-}
-
-.sidebar-section-label:first-child {
-  padding-top: 4px;
-}
-
 .sidebar-nav-item {
   display: flex;
   align-items: center;
@@ -653,7 +640,7 @@ body {
   scroll-behavior: smooth;
 }
 
-.main-content-scroll.view-ai-radar {
+.main-content-scroll.tab-radar {
   /* Page-level scroll like every other view — the previous fit-to-viewport
      variant (overflow:hidden + bounded flex children) repeatedly clipped
      content below the fold with no way to reach it. */
@@ -1225,6 +1212,74 @@ input:checked + .mac-slider:before {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+/* The Distribute › Network pane reuses the settings card vocabulary. */
+.network-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Home: compile hero beside the schedule card — collapses to one column
+   under ~900px where the sidebar's remaining width makes two columns tight. */
+.home-compile-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+@media (max-width: 900px) {
+  .home-compile-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hero-stat-line {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  color: var(--secondary-color);
+}
+
+.hero-history {
+  margin-top: 10px;
+}
+
+/* The reach strip: chips carry status as text, never colour alone. */
+.network-reach-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  background: var(--card-bg);
+}
+
+.reach-chip {
+  font-size: 0.78rem;
+  color: var(--secondary-color);
+  padding: 4px 10px;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.reach-open-btn {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--primary-color);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+
+.reach-open-btn:hover {
+  text-decoration: underline;
 }
 
 .setting-card {
@@ -2246,16 +2301,6 @@ input:checked + .mac-slider:before {
   border: 1px solid var(--border-color);
   border-radius: 4px;
   color: var(--heading-color);
-}
-
-/* ==========================================================================
-   Compilation Delta Card
-   ========================================================================== */
-.delta-card.pos .delta-num {
-  color: var(--primary-color);
-}
-.delta-card.neg .delta-num {
-  color: var(--success-color);
 }
 
 /* ==========================================================================
@@ -3470,69 +3515,6 @@ input:checked + .mac-slider:before {
 }
 
 /* --- Pre-Run Overview Stats Grid --- */
-.overview-stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
-}
-
-.summary-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  box-shadow: var(--card-shadow);
-  transition: transform 0.12s ease, border-color 0.12s ease;
-}
-
-.summary-card:hover {
-  border-color: color-mix(in srgb, var(--primary-color) 30%, transparent);
-  transform: translateY(-1px);
-}
-
-.summary-icon-wrap {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 19px;
-  background: color-mix(in srgb, var(--primary-color) 8%, transparent);
-  flex-shrink: 0;
-}
-
-.summary-icon-wrap.icon-shield {
-  background: color-mix(in srgb, var(--primary-color) 10%, transparent);
-}
-
-.summary-icon-wrap.icon-pencil {
-  background: color-mix(in srgb, var(--warning-color) 10%, transparent);
-}
-
-.summary-icon-wrap.icon-clock {
-  background: color-mix(in srgb, var(--tone-purple) 1%, transparent);
-}
-
-.summary-data-col {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.summary-num {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--heading-color);
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-}
-
 .summary-label {
   font-size: 12px;
   font-weight: 500;
@@ -3540,30 +3522,6 @@ input:checked + .mac-slider:before {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.delta-card .summary-label {
-  white-space: normal;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.delta-card.pos {
-  border-color: color-mix(in srgb, var(--success-color) 25%, transparent);
-}
-
-.delta-card.neg {
-  border-color: color-mix(in srgb, var(--primary-color) 25%, transparent);
-}
-
-.delta-card .delta-num {
-  color: var(--success-color);
-}
-
-.delta-card.neg .delta-num {
-  color: var(--primary-color);
 }
 
 /* --- Initial Ready State --- */
@@ -7504,73 +7462,6 @@ button.format-tile .format-target {
   line-height: 1.45;
   color: var(--secondary-color);
   margin: 0;
-}
-
-/* Platform Navigation Tabs (macOS Segmented Control) */
-.deploy-platform-tabs {
-  display: flex;
-  /* Nine platform tabs no longer fit one row at the window's narrower widths, and the labels are
-     `nowrap`. Wrapping keeps every tab readable instead of letting them squash into ellipses. */
-  flex-wrap: wrap;
-  /* The panes are taller than the window, and the strip used to scroll away with them — leaving a
-     deep pane like Unbound with no way to switch target and no visible answer to "which tab am I
-     on". Sticky keeps the whole control at the top of the scrollport; the background below is the
-     card's own opaque one, so the content slides under it cleanly. */
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  background: var(--control-bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 4px;
-  gap: 4px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.platform-tab-btn {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 8px 10px;
-  border-radius: 7px;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--secondary-color);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
-  user-select: none;
-}
-
-.platform-tab-btn:hover {
-  background: rgba(127, 127, 127, 0.08);
-  color: var(--heading-color);
-}
-
-.platform-tab-btn.active {
-  background: var(--control-bg-color);
-  color: var(--primary-color);
-  border-color: rgba(0, 0, 0, 0.08);
-  font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12), 0 0 1px rgba(0, 0, 0, 0.15);
-}
-
-.platform-tab-icon {
-  font-size: 14px;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-}
-
-.platform-tab-label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Platform Instructions Guide */
@@ -12923,43 +12814,6 @@ summary:focus-visible {
   font: inherit;
 }
 
-/* Settings section index — sticky jump-nav for the long Preferences page.
-   Wraps to balanced rows (items stretch evenly) rather than hiding entries
-   behind a horizontal scroll — every section must stay visible. */
-.settings-index {
-  position: sticky;
-  top: -1px;
-  z-index: 40;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 10px 12px;
-  margin: -6px 0 4px;
-  background: color-mix(in srgb, var(--background-color) 82%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--card-border);
-  border-radius: 12px;
-}
-.settings-index a {
-  flex: 1 1 auto;
-  min-width: fit-content;
-  text-align: center;
-  white-space: nowrap;
-  font-size: 11.5px;
-  font-weight: 600;
-  padding: 5px 10px;
-  border-radius: 999px;
-  color: var(--secondary-color);
-  text-decoration: none;
-  border: 1px solid transparent;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-}
-.settings-index a:hover {
-  color: var(--primary-color);
-  border-color: var(--primary-color);
-  background: color-mix(in srgb, var(--primary-color) 8%, transparent);
-}
 .main-content-scroll {
   scroll-behavior: smooth;
 }
@@ -12967,9 +12821,6 @@ summary:focus-visible {
   scroll-margin-top: 70px;
 }
 
-.summary-card:has(.delta-history) {
-  flex-wrap: wrap;
-}
 .delta-history {
   flex-basis: 100%;
   margin-top: 6px;
@@ -13069,16 +12920,6 @@ summary:focus-visible {
   }
   .sidebar-nav {
     padding: 8px 6px 12px;
-  }
-  .sidebar-section-label {
-    font-size: 0;
-    padding: 10px 8px 0;
-    margin-bottom: 4px;
-    border-top: 1px solid var(--border-color);
-  }
-  .sidebar-section-label:first-child {
-    border-top: none;
-    padding-top: 4px;
   }
   .sidebar-nav-item {
     flex-direction: column;
@@ -13299,7 +13140,6 @@ summary:focus-visible {
 .dark-theme .syntax-pill.active-total,
 .dark-theme .deploy-format-pill,
 .dark-theme .deploy-server-toggle-btn,
-.dark-theme .platform-tab-btn.active,
 .dark-theme .deploy-pane-status-pill.primary,
 .dark-theme .deploy-tool-btn.primary {
   color: color-mix(in srgb, var(--primary-color) 62%, #ffffff);
@@ -13315,4 +13155,208 @@ summary:focus-visible {
   overflow: visible;
   text-overflow: unset;
   word-break: break-word;
+}
+
+/* ==========================================================================
+   Shell sub-navigation — SectionTabs (top tab bar) + InnerNav (grouped list)
+   ========================================================================== */
+
+.section-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 18px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.section-tab {
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--secondary-color);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.section-tab:hover {
+  color: var(--heading-color);
+  background: var(--control-bg-color);
+}
+
+.section-tab.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-text);
+  border-color: color-mix(in srgb, var(--primary-color) 35%, transparent);
+  font-weight: 600;
+}
+
+.inner-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.inner-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inner-nav-group-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-text);
+  padding: 0 10px 5px;
+}
+
+.inner-nav-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-color);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 450;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.inner-nav-item:hover {
+  background-color: var(--sidebar-hover-bg);
+}
+
+.inner-nav-item.active {
+  background-color: var(--sidebar-active-bg);
+  color: var(--sidebar-active-text);
+  font-weight: 600;
+}
+
+.inner-nav-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.inner-nav-dot.live {
+  background-color: var(--success-color);
+  box-shadow: 0 0 5px var(--success-color);
+}
+
+.inner-nav-dot.idle {
+  background-color: var(--secondary-color);
+  opacity: 0.5;
+}
+
+.inner-nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+  opacity: 0.85;
+}
+
+.inner-nav-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Screen-reader-only text — visible clip, audible content (the status dot's
+   live/idle signal carries no colour-independent cue otherwise). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Section hosts — the tab bar plus the mounted sub-view beneath it. The host
+   is a plain column so the tab strip stays put while the view scrolls. */
+.section-host {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.section-host > [role="tabpanel"] {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The AI engine card was lifted out of Settings' grid — the pane re-centres
+   it at the same readable width the settings container used. */
+.ai-engine-pane {
+  max-width: 860px;
+}
+
+/* Distribute — the inner-nav rail beside the pane, collapsing to a picker at
+   the 460px drawer-mode width (the same breakpoint the sidebar uses). */
+.distribute-body {
+  display: flex;
+  gap: 18px;
+  min-height: 0;
+  flex: 1;
+}
+
+.distribute-body .inner-nav {
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.distribute-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.inner-nav-select {
+  display: none;
+}
+
+@media (max-width: 460px) {
+  .distribute-body {
+    flex-direction: column;
+  }
+
+  .distribute-body .inner-nav {
+    display: none;
+  }
+
+  .inner-nav-select {
+    display: block;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--control-border-color);
+    border-radius: 8px;
+    background: var(--control-bg-color);
+    color: var(--text-color);
+    font-size: 13px;
+    flex-shrink: 0;
+  }
 }

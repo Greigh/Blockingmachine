@@ -1,14 +1,13 @@
 /**
- * The direct-mode warning, shared between Settings and the Deploy Hub's AdGuard Home pane.
+ * The direct-mode warning in the AdGuard Home deploy pane.
  *
  * The warning exists because direct mode fails quietly in two ways — an address that is really
  * Home Assistant's web frontend (port 8123, or an HA UI path), or a Nabu Casa cloud URL, which
- * only proxies HA itself. The banner used to live only in Settings, so the pane offered the same
- * URL field without it; the markup is now one component both render, and the component computes
- * the warning itself so the two surfaces cannot disagree about when it shows.
+ * only proxies HA itself. The banner used to live in Settings as well as the pane; the Settings
+ * sinkhole card has since been removed, leaving the pane as the warning's only home.
  *
- * The sharing is pinned at the source level: `Settings.tsx` and `AdGuardHomePane.tsx` must each
- * render `<AdGuardDirectWarning`, and neither may re-inline the amber banner — a copied div would
+ * The contract is pinned at the source level: `AdGuardHomePane.tsx` must render
+ * `<AdGuardDirectWarning`, and nothing may re-inline the amber banner — a copied div would
  * render the same and drift silently.
  */
 
@@ -44,20 +43,13 @@ describe('the shared direct-mode warning banner', () => {
 
   it('is the only place the amber banner lives', () => {
     const root = fileURLToPath(new URL('../..', import.meta.url));
-    const settings = readFileSync(join(root, 'src/Settings.tsx'), 'utf8');
     const pane = readFileSync(join(root, 'src/deploy/panes/AdGuardHomePane.tsx'), 'utf8');
-    for (const [name, source] of [
-      ['Settings.tsx', settings],
-      ['AdGuardHomePane.tsx', pane],
-    ]) {
-      if (!source.includes('<AdGuardDirectWarning')) {
-        throw new Error(`${name} does not render the shared component`);
-      }
+    if (!pane.includes('<AdGuardDirectWarning')) {
+      throw new Error('AdGuardHomePane.tsx does not render the shared component');
     }
     // The banner's signature inline style — if it appears outside the component, the markup has
     // been duplicated and can drift.
     const signature = 'rgba(245, 158, 11, 0.15)';
-    expect(settings).not.toContain(signature);
     expect(pane).not.toContain(signature);
     const component = readFileSync(join(root, 'src/components/AdGuardDirectWarning.tsx'), 'utf8');
     expect(component).toContain(signature);

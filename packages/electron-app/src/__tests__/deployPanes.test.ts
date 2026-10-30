@@ -26,7 +26,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DEPLOY_TARGETS } from '../deploy/deployTargets';
+import { DEPLOY_TARGETS, deployTargetsByGroup } from '../deploy/deployTargets';
 import { pickPaneProps } from '../deploy/panes/paneProps';
 import type { HubPaneProps } from '../deploy/panes/paneProps';
 import { bindHomeAssistantUrl, bindIncludeLine, bindNamedConfZoneLine, bindZoneFileName } from '../bindDeploy';
@@ -38,7 +38,7 @@ import {
   privoxyHomeAssistantUrl,
   privoxyReloadCommand,
 } from '../privoxyDeploy';
-import { DeployHubView } from '../views/DeployHubView';
+import { DistributeView } from '../views/DistributeView';
 
 /**
  * The Hub reads `window.electron` while rendering its header, to decide whether it can offer
@@ -387,13 +387,13 @@ describe('deploy panes render from props alone', () => {
 });
 
 describe('the Hub', () => {
-  it('renders every tab in the registry order, and the default pane below them', () => {
-    const markup = renderToStaticMarkup(createElement(DeployHubView, { savePath: SAVE_PATH }));
+  it('renders every target in the inner-nav group order, and the default pane below', () => {
+    const markup = renderToStaticMarkup(createElement(DistributeView, { savePath: SAVE_PATH }));
 
     let previous = -1;
-    for (const target of DEPLOY_TARGETS) {
+    for (const target of deployTargetsByGroup().flatMap((g) => g.targets)) {
       const at = markup.indexOf(`>${escapeHtml(target.label)}</span>`);
-      // -1 would mean a tab rendered without its label, and comparing positions would still pass,
+      // -1 would mean a row rendered without its label, and comparing positions would still pass,
       // so both are asserted: the label exists, and it is after the one before it.
       expect(at).toBeGreaterThan(-1);
       expect(at).toBeGreaterThan(previous);
@@ -407,7 +407,7 @@ describe('the Hub', () => {
   });
 
   it('shows the compiled artifact, and the server state it actually has', () => {
-    const markup = renderToStaticMarkup(createElement(DeployHubView, { savePath: SAVE_PATH }));
+    const markup = renderToStaticMarkup(createElement(DistributeView, { savePath: SAVE_PATH }));
     expect(markup).toContain(SAVE_PATH);
     // `renderToStaticMarkup` runs no effects, so the Hub has not asked the main process whether the
     // feed server is up. The header must therefore read as offline and offer an address to fill in,
@@ -417,22 +417,22 @@ describe('the Hub', () => {
     expect(markup).toContain('Ready to Deploy');
   });
 
-  it('leaves the header markup to DeployHubHeader and keeps the tab strip itself', () => {
+  it('leaves the header markup to DeployHubHeader and keeps target navigation in the view', () => {
     const root = fileURLToPath(new URL('../..', import.meta.url));
-    const view = readFileSync(join(root, 'src/views/DeployHubView.tsx'), 'utf8');
+    const view = readFileSync(join(root, 'src/views/DistributeView.tsx'), 'utf8');
     // The view renders the header component; the top-bar markup itself must not live there any
     // more — a re-inlined copy would render identically and drift, the exact trap the panes' own
     // extraction was meant to close.
     if (!view.includes('<DeployHubHeader')) {
-      throw new Error('DeployHubView.tsx does not render <DeployHubHeader>');
+      throw new Error('DistributeView.tsx does not render <DeployHubHeader>');
     }
     if (view.includes('deploy-hub-top-bar')) {
-      throw new Error('DeployHubView.tsx still embeds the header markup inline');
+      throw new Error('DistributeView.tsx still embeds the header markup inline');
     }
-    // The strip, though, is the view's: a tab click is what drives `activeTab` and the select
-    // effect, so the buttons stay next to the state they set.
-    if (!view.includes('deploy-platform-tabs')) {
-      throw new Error('DeployHubView.tsx no longer owns the platform tab strip');
+    // The target navigation, though, is the view's: selecting a row drives `activeTab` and the
+    // select effect, so the rail stays next to the state it sets.
+    if (!view.includes('InnerNav')) {
+      throw new Error('DistributeView.tsx no longer owns the target navigation');
     }
   });
 });

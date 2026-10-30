@@ -241,6 +241,19 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
                   </button>
                 </div>
               </div>
+              <div className="deploy-field-group">
+                <label className="deploy-field-label">AdGuard Direct URL (query log and Radar)</label>
+                <input
+                  type="text"
+                  className="deploy-field-input"
+                  placeholder="https://homeassistant.local:8124"
+                  value={sinkholeConfig.adguardDirectUrl || ''}
+                  onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardDirectUrl: e.target.value })}
+                />
+                <p style={{ fontSize: 10.5, color: 'var(--secondary-color)', margin: '2px 0 0', lineHeight: 1.4 }}>
+                  Kept separate from the Home Assistant URL. Radar and the query log use this address with the AdGuard username and password.
+                </p>
+              </div>
               <div className="deploy-field-row">
                 <div className="deploy-field-group">
                   <label className="deploy-field-label">AdGuard Username</label>
@@ -295,6 +308,19 @@ export const AdGuardHomePane: React.FC<AdGuardHomePaneProps> = ({
                   value={sinkholeConfig.haWebhookUrl || ''}
                   onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, haWebhookUrl: e.target.value })}
                 />
+              </div>
+              <div className="deploy-field-group">
+                <label className="deploy-field-label">AdGuard Direct URL (query log and Radar)</label>
+                <input
+                  type="text"
+                  className="deploy-field-input"
+                  placeholder="https://homeassistant.local:8124"
+                  value={sinkholeConfig.adguardDirectUrl || ''}
+                  onChange={(e) => setSinkholeConfig({ ...sinkholeConfig, adguardDirectUrl: e.target.value })}
+                />
+                <p style={{ fontSize: 10.5, color: 'var(--secondary-color)', margin: '2px 0 0', lineHeight: 1.4 }}>
+                  Kept separate from the Home Assistant URL. Radar and the query log use this address with the AdGuard username and password.
+                </p>
               </div>
               <div className="deploy-field-row">
                 <div className="deploy-field-group">

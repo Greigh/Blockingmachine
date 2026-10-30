@@ -225,8 +225,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
       if (e.key === 'Enter' && currentStep < ONBOARDING_STEPS.length) {
         const target = e.target as HTMLElement | null;
-        // Do not intercept enter on buttons/inputs that have their own action
-        if (target && (target.tagName === 'BUTTON' || target.tagName === 'INPUT')) {
+        // Do not intercept enter on controls that have their own activation —
+        // buttons, inputs, links, selects, textareas.
+        if (target && ['BUTTON', 'INPUT', 'A', 'SELECT', 'TEXTAREA'].includes(target.tagName)) {
           return;
         }
         setCurrentStep((prev) => prev + 1);
@@ -459,7 +460,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                     <h4>Deploy and sync</h4>
                     <p>
                       Choose where the compiled list should go. Addresses, tokens, and reload-on-compile
-                      are entered in Deploy & Sync after the tour.
+                      are entered in Distribute after the tour.
                     </p>
                     <div className="onboarding-choice-grid">
                       {DEPLOY_SETUP_OPTIONS.map((option) => (
@@ -585,9 +586,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 </div>
                 <h2 className="onboarding-title">You're All Set!</h2>
                 <p className="onboarding-desc">
-                  Your workspace is ready. Compile a list, then open Deploy & Sync to connect
+                  Your workspace is ready. Compile a list, then open Distribute to connect
                   the sinkhole. AI Radar, Threat Quarantine, and the Unified Inspector stay in
-                  the sidebar — and Settings → Pair mobile app shows the QR that connects the
+                  the sidebar — and Distribute → LAN feed & pairing shows the QR that connects the
                   companion app to this hub.
                 </p>
               </div>

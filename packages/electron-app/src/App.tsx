@@ -2,15 +2,11 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Settings from './Settings';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
-import { DashboardView } from './views/DashboardView';
-import { SourcesView } from './views/SourcesView';
-import { ModulesView } from './views/ModulesView';
-import { BulkImportView } from './views/BulkImportView';
-import { CustomRulesView } from './views/CustomRulesView';
-import { RuleInspectorView } from './views/RuleInspectorView';
-import { RuleBrowserView } from './views/RuleBrowserView';
-import { DeployHubView } from './views/DeployHubView';
-import { AIRadarView } from './views/AIRadarView';
+import { HomeView } from './views/HomeView';
+import { RulesView } from './views/RulesView';
+import { DiscoverView } from './views/DiscoverView';
+import { DistributeView } from './views/DistributeView';
+import { DEFAULT_ROUTE, routeForViewName, SECTIONS, type AppRoute, type SectionId } from './routes';
 import { OnboardingModal, type OnboardingConfig } from './views/OnboardingModal';
 import { PRESET_BUNDLES } from './views/PresetsModal';
 import type { FilterSource, ThemeType, LiveRadarSession } from './types/';
@@ -31,7 +27,7 @@ const handleExternalLink = async (
 };
 
 function App() {
-  const [currentView, setCurrentView] = useState('process');
+  const [route, setRoute] = useState<AppRoute>(DEFAULT_ROUTE);
   const [selectedTheme, setSelectedTheme] = useState<ThemeType>('system');
   const [isThemeLoading, setIsThemeLoading] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -47,20 +43,36 @@ function App() {
       return false;
     }
   });
-  const [autoTriggerCompile, setAutoTriggerCompile] = useState<boolean>(false);
-  // Bumped on every 'trigger-compile' IPC and cleared when DashboardView consumes it —
-  // a pending trigger survives view switches but a consumed one cannot re-fire on remount.
+  // Bumped by every compile trigger (IPC, in-app buttons, onboarding) and cleared
+  // when HomeView consumes it — a pending trigger survives view switches but a
+  // consumed one cannot re-fire on remount. The one channel; no boolean parallel.
   const [compileNonce, setCompileNonce] = useState<number>(0);
-  const [inspectorInitialDomain, setInspectorInitialDomain] = useState<string>('');
+  // The 'bulkImport' deep link wants Rules › feeds opened in bulk mode — a
+  // one-shot armed value, consumed and cleared by RulesView like compileNonce.
+  const [feedsInitialTab, setFeedsInitialTab] = useState<'bulk' | null>(null);
   const [liveRadarSession, setLiveRadarSession] = useState<LiveRadarSession | null>(null);
   // Drawer-mode sidebar (≤460px effective width): opened via the header menu
   // button, dismissed by item selection, backdrop click, or Escape.
   const [navOpen, setNavOpen] = useState<boolean>(false);
 
-  const handleNavSelect = useCallback((view: string) => {
-    setCurrentView(view);
+  const navigate = useCallback((r: AppRoute) => {
+    setRoute(r);
     setNavOpen(false);
+    // One-shot deep-link residue: only the 'bulkImport' wire name re-arms it.
+    setFeedsInitialTab(null);
   }, []);
+
+  const selectSection = useCallback(
+    (id: SectionId) =>
+      // Re-clicking the active section keeps its tab — route.tab must track the
+      // panel on screen or the header title and tab-* classes would desync.
+      navigate({ section: id, tab: id === route.section ? route.tab : null }),
+    [navigate, route],
+  );
+  // Stable drawer callbacks — a fresh arrow each render would re-run
+  // useDialogFocus and yank focus out of the open drawer on any App update.
+  const closeNav = useCallback(() => setNavOpen(false), []);
+  const openNav = useCallback(() => setNavOpen(true), []);
 
   useEffect(() => {
     if (window.electron?.getLiveRadarSession) {
@@ -83,7 +95,7 @@ function App() {
     if (window.electron?.getSavePath) {
       window.electron.getSavePath().then(setSavePath);
     }
-  }, [currentView]);
+  }, [route.section]);
 
   const memoizedApplyTheme = useCallback(applyTheme, []);
 
@@ -246,9 +258,8 @@ function App() {
 
     // 5. Trigger initial compilation if requested
     if (config.shouldCompileImmediately) {
-      setCurrentView('process');
-      setAutoTriggerCompile(true);
-      setTimeout(() => setAutoTriggerCompile(false), 1500);
+      setCompileNonce((n) => n + 1);
+      navigate({ section: 'home', tab: null });
     }
   };
 
@@ -278,45 +289,27 @@ function App() {
     };
   }, []);
 
-  // Global Keyboard Shortcuts (Cmd+1..6, Cmd+,)
+  // Section-level keyboard map — the registry's own order and shortcut
+  // labels, so sidebar hints and keys can never drift apart.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isOnboardingOpen) return;
-      if (e.metaKey || e.ctrlKey) {
-        if (e.key === '1') {
-          e.preventDefault();
-          setCurrentView('process');
-        } else if (e.key === '2') {
-          e.preventDefault();
-          setCurrentView('sources');
-        } else if (e.key === '3') {
-          e.preventDefault();
-          setCurrentView('modules');
-        } else if (e.key === '4') {
-          e.preventDefault();
-          setCurrentView('custom');
-        } else if (e.key === '5') {
-          e.preventDefault();
-          setCurrentView('inspector');
-        } else if (e.key === '6') {
-          e.preventDefault();
-          setCurrentView('browser');
-        } else if (e.key === '7' || e.key === '9') {
-          e.preventDefault();
-          setCurrentView('ai-radar');
-        } else if (e.key === '8') {
-          e.preventDefault();
-          setCurrentView('deploy');
-        } else if (e.key === ',') {
-          e.preventDefault();
-          setCurrentView('settings');
-        }
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === ',') {
+        e.preventDefault();
+        navigate({ section: 'settings', tab: null });
+        return;
+      }
+      const n = Number(e.key);
+      if (Number.isInteger(n) && n >= 1 && n < SECTIONS.length) {
+        e.preventDefault();
+        navigate({ section: SECTIONS[n - 1].id, tab: null });
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOnboardingOpen]);
+  }, [isOnboardingOpen, navigate]);
 
   // Listen for native IPC open-settings, view navigation, and update notifications
   useEffect(() => {
@@ -328,20 +321,22 @@ function App() {
 
     if (window.electron?.onOpenSettings) {
       cleanupSettings = window.electron.onOpenSettings(() => {
-        setCurrentView('settings');
+        navigate({ section: 'settings', tab: null });
       });
     }
 
     if (window.electron?.onTriggerCompile) {
       cleanupCompile = window.electron.onTriggerCompile(() => {
         setCompileNonce((n) => n + 1);
-        setCurrentView('process');
+        navigate({ section: 'home', tab: null });
       });
     }
 
     if (window.electron?.onNavigateView) {
       cleanupNav = window.electron.onNavigateView((view: string) => {
-        setCurrentView(view);
+        const target = routeForViewName(view) ?? DEFAULT_ROUTE;
+        navigate(target);
+        if (view === 'bulkImport') setFeedsInitialTab('bulk');
       });
     }
 
@@ -368,7 +363,7 @@ function App() {
       cleanupNav?.();
       cleanupOnboarding?.();
     };
-  }, []);
+  }, [navigate]);
 
   const handleRevealOutputFolder = () => {
     if (savePath) {
@@ -394,29 +389,28 @@ function App() {
       >
         {/* Native macOS Sidebar */}
         <Sidebar
-          currentView={currentView}
-          setCurrentView={handleNavSelect}
+          activeSection={route.section}
+          onSelectSection={selectSection}
           enabledSourcesCount={sources.filter((s) => s.enabled).length}
           totalSourcesCount={sources.length}
           updateAvailable={updateAvailable}
           handleExternalLink={handleExternalLink}
-          onLaunchOnboarding={() => { setIsOnboardingOpen(true); setNavOpen(false); }}
           isRadarScanning={Boolean(liveRadarSession?.active)}
           navOpen={navOpen}
-          onCloseNav={() => setNavOpen(false)}
+          onCloseNav={closeNav}
         />
 
         {/* Main Workspace Pane */}
         <main className="app-main-pane">
           <Header
-            currentView={currentView}
+            route={route}
             savePath={savePath}
             handleRevealOutputFolder={handleRevealOutputFolder}
             navOpen={navOpen}
-            onOpenNav={() => setNavOpen(true)}
+            onOpenNav={openNav}
           />
 
-          <div className={`main-content-scroll view-${currentView}`}>
+          <div className={`main-content-scroll section-${route.section}${route.tab ? ` tab-${route.tab}` : ''}`}>
             {globalError && (
               <div className="dashboard-alert error-banner">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
@@ -435,84 +429,56 @@ function App() {
               </div>
             )}
 
-            {currentView === 'process' && (
-              <DashboardView
+            {route.section === 'home' && (
+              <HomeView
                 savePath={savePath}
-                autoTriggerCompile={autoTriggerCompile}
                 compileNonce={compileNonce}
                 onCompileConsumed={() => setCompileNonce(0)}
-                onNavigate={(view) => setCurrentView(view)}
+                navigate={navigate}
               />
             )}
-            {currentView === 'sources' && (
-              <SourcesView
-                sources={sources}
-                saveSources={saveSources}
-                setError={setGlobalError}
-                setSuccessMessage={setGlobalSuccessMessage}
-                onNavigate={(view) => setCurrentView(view)}
-              />
-            )}
-            {currentView === 'modules' && (
-              <ModulesView
+            {route.section === 'rules' && (
+              <RulesView
+                initialTab={route.tab ?? undefined}
+                feedsInitialTab={feedsInitialTab}
+                onFeedsInitialTabConsumed={() => setFeedsInitialTab(null)}
                 sources={sources}
                 saveSources={saveSources}
                 onTriggerCompile={() => {
-                  setAutoTriggerCompile(true);
-                  setCurrentView('process');
+                  setCompileNonce((n) => n + 1);
+                  navigate({ section: 'home', tab: null });
                 }}
-                onNavigateDeploy={() => setCurrentView('deploy')}
+                navigate={navigate}
                 setError={setGlobalError}
                 setSuccessMessage={setGlobalSuccessMessage}
               />
             )}
-            {currentView === 'bulkImport' && (
-              <BulkImportView
-                currentSources={sources}
-                saveSources={saveSources}
-                setError={setGlobalError}
-                setSuccessMessage={setGlobalSuccessMessage}
-              />
-            )}
-            {currentView === 'custom' && (
-              <CustomRulesView
-                setError={setGlobalError}
-                setSuccessMessage={setGlobalSuccessMessage}
-              />
-            )}
-            {currentView === 'inspector' && (
-              <RuleInspectorView
-                initialDomain={inspectorInitialDomain}
-                onNavigateCustomRules={() => setCurrentView('custom')}
-              />
-            )}
-            {currentView === 'browser' && (
-              <RuleBrowserView
-                onTriggerCompile={() => setCurrentView('process')}
-              />
-            )}
-            {currentView === 'deploy' && (
-              <DeployHubView
-                savePath={savePath}
-                onNavigateSettings={() => setCurrentView('settings')}
-                onTriggerCompile={() => setCurrentView('process')}
-              />
-            )}
-            {currentView === 'ai-radar' && (
-              <AIRadarView
+            {route.section === 'discover' && (
+              <DiscoverView
+                initialTab={route.tab ?? undefined}
                 liveRadarSession={liveRadarSession}
-                onTriggerCompile={() => setCurrentView('process')}
-                onNavigateDeploy={() => setCurrentView('deploy')}
-                onNavigateInspector={(domain) => {
-                  if (domain) setInspectorInitialDomain(domain);
-                  setCurrentView('inspector');
+                onTriggerCompile={() => {
+                  setCompileNonce((n) => n + 1);
+                  navigate({ section: 'home', tab: null });
                 }}
-                onNavigateSettings={() => setCurrentView('settings')}
+                navigate={navigate}
                 setError={setGlobalError}
                 setSuccessMessage={setGlobalSuccessMessage}
               />
             )}
-            {currentView === 'settings' && (
+            {route.section === 'distribute' && (
+              <DistributeView
+                savePath={savePath}
+                initialTarget={route.tab ?? undefined}
+                onNavigateSettings={() => navigate({ section: 'settings', tab: null })}
+                onTriggerCompile={() => {
+                  setCompileNonce((n) => n + 1);
+                  navigate({ section: 'home', tab: null });
+                }}
+                navigate={navigate}
+              />
+            )}
+            {route.section === 'settings' && (
               <Settings
                 currentTheme={selectedTheme}
                 onThemeChange={handleThemeChange}

@@ -868,6 +868,7 @@ export interface ElectronAPI {
   getDaemonStatus?: () => Promise<DaemonStatusInfo>;
   /** Aggregate live-services read for the dashboard strip. */
   getLiveServices?: () => Promise<LiveServicesStatus>;
+  getDeployRefreshReports?: () => Promise<Record<string, import('../deployRefresh').DeployRefreshReport>>;
   startDaemonProcess?: () => Promise<{ success: boolean; message: string }>;
   stopDaemonProcess?: () => Promise<{ success: boolean; message: string }>;
   reloadDaemonRules?: () => Promise<{ success: boolean; rulesLoaded: number; message: string }>;

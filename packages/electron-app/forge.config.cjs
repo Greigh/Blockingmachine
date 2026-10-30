@@ -37,7 +37,17 @@ const config = {
         });
       }
     ],
-    icon: './assets/Blockingmachine',
+    // .icns must be explicit — packager existence-checks the literal path and
+    // silently ships electron.icns when the extension is implied.
+    icon: './assets/Blockingmachine.icns',
+    extendInfo: {
+      CFBundleDisplayName: 'Blockingmachine',
+      // The feed server + _blockingmachine._tcp advert answer LAN clients —
+      // without these macOS shows the generic "Electron" prompt.
+      NSLocalNetworkUsageDescription:
+        'Blockingmachine filters DNS and HTTPS traffic on this Mac and answers devices on your local network.',
+      NSBonjourServices: ['_blockingmachine._tcp'],
+    },
     osxSign:
       process.platform === 'darwin'
         ? {

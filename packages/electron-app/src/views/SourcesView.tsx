@@ -12,7 +12,6 @@ interface SourcesViewProps {
   ) => Promise<void>;
   setError: (error: string | null) => void;
   setSuccessMessage: (message: string | null) => void;
-  onNavigate?: (view: string) => void;
   initialTab?: 'list' | 'bulk';
 }
 
@@ -21,7 +20,6 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
   saveSources,
   setError,
   setSuccessMessage: _setSuccessMessage,
-  onNavigate: _onNavigate,
   initialTab = 'list',
 }) => {
   const [activeTab, setActiveTab] = useState<'list' | 'bulk'>(initialTab);

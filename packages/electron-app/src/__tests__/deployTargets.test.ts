@@ -23,7 +23,7 @@ import {
 } from '../deploy/deployTargets';
 
 const appRoot = fileURLToPath(new URL('../../', import.meta.url));
-const hubSource = readFileSync(join(appRoot, 'src/views/DeployHubView.tsx'), 'utf8');
+const hubSource = readFileSync(join(appRoot, 'src/views/DistributeView.tsx'), 'utf8');
 const registrySource = readFileSync(join(appRoot, 'src/deploy/deployTargets.tsx'), 'utf8');
 const paneModules = readdirSync(join(appRoot, 'src/deploy/panes')).filter((name) =>
   name.endsWith('.tsx'),
@@ -110,13 +110,13 @@ describe('Deploy Hub target registry', () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it('is the one place a tab is defined: the Hub names no platform at all', () => {
-    // The strip compares `activeTab === target.id`, and the pane comes from the entry. Every
-    // comparison of the active tab has to be against the registry's own id — a second one, against a
-    // literal, is a platform reintroduced by hand beside the list that is supposed to own it.
-    const comparisons = hubSource.match(/activeTab ===/g) ?? [];
-    expect(comparisons.length).toBeGreaterThan(0);
-    expect(hubSource.match(/activeTab === target\.id/g) ?? []).toHaveLength(comparisons.length);
+  it('is the one place a tab is defined: the view names no platform at all', () => {
+    // The inner nav owns the `item.id === activeId` comparison now, so the view itself has no
+    // per-target `activeTab ===` arm left — the one literal it may compare is 'network', the
+    // view-owned row that has no registry entry. Any other literal is a platform reintroduced by
+    // hand beside the list that is supposed to own it.
+    const literalComparisons = hubSource.match(/activeTab === '[^']+'/g) ?? [];
+    expect(literalComparisons).toEqual(["activeTab === 'network'"]);
 
     // And there is no dispatch left to keep in step: no per-platform arm, and the pane comes from
     // the entry rather than from a branch on the id.

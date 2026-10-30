@@ -25,7 +25,7 @@ interface AIRadarViewProps {
   onTriggerCompile?: () => void;
   onNavigateDeploy?: () => void;
   onNavigateInspector?: (domain?: string) => void;
-  onNavigateSettings?: () => void;
+  onNavigateSettings: () => void;
   setError?: (msg: string | null) => void;
   setSuccessMessage?: (msg: string | null) => void;
 }
@@ -67,11 +67,6 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     ollamaModel: 'llama3.2',
     apiKey: '',
   });
-
-  // Settings modal state
-  const [isConfigOpen, setIsConfigOpen] = useState(false);
-  const [isTestingAi, setIsTestingAi] = useState(false);
-  const [aiTestResult, setAiTestResult] = useState<{ success: boolean; latencyMs?: number; message: string } | null>(null);
 
   // Tab 1: Sinkhole Scout State
   const [scoutService, setScoutService] = useState<'adguard' | 'pihole'>('adguard');
@@ -282,39 +277,6 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
     }
   }, [safeSetTimeout]);
 
-  // Save AI Config
-  const handleSaveConfig = async () => {
-    if (!window.electron?.setAiConfig) return;
-    try {
-      await window.electron.setAiConfig(aiConfig);
-      setIsConfigOpen(false);
-      setSuccessMessage?.('AI Radar provider settings saved.');
-    } catch (err: any) {
-      setError?.(`Failed to save settings: ${err?.message || err}`);
-    }
-  };
-
-  // Test AI Connection
-  const handleTestAiConnection = async () => {
-    if (!window.electron?.testAiConnection) return;
-    setIsTestingAi(true);
-    setAiTestResult(null);
-    try {
-      const res = await window.electron.testAiConnection(aiConfig);
-      if (isMountedRef.current) setAiTestResult(res);
-    } catch (err: any) {
-      if (isMountedRef.current) {
-        setAiTestResult({
-          success: false,
-          message: err?.message || 'Connection test failed',
-        });
-      }
-    } finally {
-      if (isMountedRef.current) setIsTestingAi(false);
-    }
-  };
-
-  // Toggle Watchdog
   const handleToggleWatchdog = async (enabled: boolean) => {
     const updated = { ...watchdogConfig, enabled };
     setWatchdogConfig(updated);
@@ -932,11 +894,7 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             </p>
           </div>
 
-          <div
-            className="ai-provider-pill"
-            onClick={() => (onNavigateSettings ? onNavigateSettings() : setIsConfigOpen(true))}
-            title="Configure AI Engine in Preferences"
-          >
+          <div className="ai-provider-pill">
             <span className="provider-status-dot" />
             <div className="provider-info-col">
               <span className="provider-label-small">Active Engine</span>
@@ -951,12 +909,8 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
             <button
               type="button"
               className="provider-settings-btn"
-              title="Configure AI Engine in Preferences"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (onNavigateSettings) onNavigateSettings();
-                else setIsConfigOpen(true);
-              }}
+              title="Configure in Discover › AI engine"
+              onClick={onNavigateSettings}
             >
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3" />
@@ -3059,235 +3013,6 @@ export const AIRadarView: React.FC<AIRadarViewProps> = ({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* PROVIDER CONFIGURATION MODAL */}
-      {/* ========================================================================= */}
-      {isConfigOpen && (
-        <div className="ai-modal-overlay" onClick={() => setIsConfigOpen(false)}>
-          <div className="ai-modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="ai-modal-header">
-              <div className="ai-modal-title-col">
-                <h4 className="ai-modal-title">
-                  <span>AI Radar Provider Configuration</span>
-                  <BetaBadge />
-                </h4>
-                <p className="ai-modal-desc">
-                  Select your discovery engine. Local Heuristics runs with 0 network calls; Ollama provides high-intelligence private local LLM analysis.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="ai-modal-close-btn"
-                onClick={() => setIsConfigOpen(false)}
-                aria-label="Close configuration"
-                title="Close"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="ai-modal-body">
-              <div className="provider-options-grid">
-                <button
-                  type="button"
-                  className={`provider-option-btn ${aiConfig.provider === 'mini-ai' ? 'active' : ''}`}
-                  onClick={() => setAiConfig({ ...aiConfig, provider: 'mini-ai' })}
-                  style={{ position: 'relative' }}
-                >
-                  <span style={{ position: 'absolute', top: 8, right: 8, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#10b981', color: '#fff', fontWeight: 700 }}>RECOMMENDED</span>
-                  <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="4" y="4" width="16" height="16" rx="2" />
-                      <rect x="9" y="9" width="6" height="6" />
-                      <line x1="9" y1="1" x2="9" y2="4" />
-                      <line x1="15" y1="1" x2="15" y2="4" />
-                      <line x1="9" y1="20" x2="9" y2="23" />
-                      <line x1="15" y1="20" x2="15" y2="23" />
-                      <line x1="20" y1="9" x2="23" y2="9" />
-                      <line x1="20" y1="14" x2="23" y2="14" />
-                      <line x1="1" y1="9" x2="4" y2="9" />
-                      <line x1="1" y1="14" x2="4" y2="14" />
-                    </svg>
-                    <span>Mini-AI Classifier (Built-in)</span>
-                  </span>
-                  <span className="opt-desc">Embedded 25-feature mathematical neural classifier. &lt;0.05ms speed, zero external dependencies, zero daemons.</span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`provider-option-btn ${aiConfig.provider === 'local-heuristics' ? 'active' : ''}`}
-                  onClick={() => setAiConfig({ ...aiConfig, provider: 'local-heuristics' })}
-                >
-                  <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-                    </svg>
-                    <span>Local Heuristics</span>
-                  </span>
-                  <span className="opt-desc">Shannon entropy, lexical token boundaries, and CNAME uncloaking. 0ms, zero external data sharing.</span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`provider-option-btn ${aiConfig.provider === 'ollama' ? 'active' : ''}`}
-                  onClick={() => setAiConfig({ ...aiConfig, provider: 'ollama' })}
-                >
-                  <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
-                      <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
-                      <line x1="6" y1="6" x2="6.01" y2="6" />
-                      <line x1="6" y1="18" x2="6.01" y2="18" />
-                    </svg>
-                    <span>Ollama Local LLM</span>
-                  </span>
-                  <span className="opt-desc">Air-gapped on-device neural network (e.g. llama3.2). Private and highly accurate.</span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`provider-option-btn ${aiConfig.provider === 'gemini' ? 'active' : ''}`}
-                  onClick={() => setAiConfig({ ...aiConfig, provider: 'gemini' })}
-                >
-                  <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                    </svg>
-                    <span>Google Gemini Flash</span>
-                  </span>
-                  <span className="opt-desc">Gemini 2.0 Flash reasoning for deep pattern extraction and evasion detection.</span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`provider-option-btn ${aiConfig.provider === 'openai' ? 'active' : ''}`}
-                  onClick={() => setAiConfig({ ...aiConfig, provider: 'openai' })}
-                >
-                  <span className="opt-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="2" y1="12" x2="22" y2="12" />
-                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-                    </svg>
-                    <span>OpenAI / Compatible</span>
-                  </span>
-                  <span className="opt-desc">OpenAI, Groq, or local OpenAI-compatible server.</span>
-                </button>
-              </div>
-
-              {/* Ollama options */}
-              {aiConfig.provider === 'ollama' && (
-                <div className="provider-sub-form">
-                  <div className="input-group">
-                    <label className="input-field-label">Ollama Host URL</label>
-                    <input
-                      type="text"
-                      className="text-input"
-                      value={aiConfig.ollamaUrl || 'http://127.0.0.1:11434'}
-                      onChange={(e) => setAiConfig({ ...aiConfig, ollamaUrl: e.target.value })}
-                      placeholder="http://127.0.0.1:11434"
-                    />
-                  </div>
-                  <div className="input-group">
-                    <label className="input-field-label">Model Name</label>
-                    <input
-                      type="text"
-                      className="text-input"
-                      value={aiConfig.ollamaModel || 'llama3.2'}
-                      onChange={(e) => setAiConfig({ ...aiConfig, ollamaModel: e.target.value })}
-                      placeholder="llama3.2"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Gemini options */}
-              {aiConfig.provider === 'gemini' && (
-                <div className="provider-sub-form">
-                  <div className="input-group">
-                    <label className="input-field-label">Google Gemini API Key</label>
-                    <input
-                      type="password"
-                      className="text-input"
-                      value={aiConfig.apiKey || ''}
-                      onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
-                      placeholder={aiConfig.apiKeySet ? `Configured ${aiConfig.apiKeyHint} — enter to replace` : 'AIzaSy...'}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* OpenAI options */}
-              {aiConfig.provider === 'openai' && (
-                <div className="provider-sub-form">
-                  <div className="input-group">
-                    <label className="input-field-label">API Endpoint URL</label>
-                    <input
-                      type="text"
-                      className="text-input"
-                      value={aiConfig.apiEndpoint || 'https://api.openai.com/v1'}
-                      onChange={(e) => setAiConfig({ ...aiConfig, apiEndpoint: e.target.value })}
-                      placeholder="https://api.openai.com/v1"
-                    />
-                  </div>
-                  <div className="input-group">
-                    <label className="input-field-label">API Key</label>
-                    <input
-                      type="password"
-                      className="text-input"
-                      value={aiConfig.apiKey || ''}
-                      onChange={(e) => setAiConfig({ ...aiConfig, apiKey: e.target.value })}
-                      placeholder={aiConfig.apiKeySet ? `Configured ${aiConfig.apiKeyHint} — enter to replace` : 'sk-...'}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Test Result Box */}
-              {aiTestResult && (
-                <div className={`ai-test-badge ${aiTestResult.success ? 'success' : 'error'}`}>
-                  <span>
-                    {aiTestResult.success ? (
-                      '✓'
-                    ) : (
-                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', marginRight: 4 }}>
-                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                        <line x1="12" y1="9" x2="12" y2="13" />
-                        <line x1="12" y1="17" x2="12.01" y2="17" />
-                      </svg>
-                    )}
-                  </span>
-                  <span>{aiTestResult.message} {aiTestResult.latencyMs ? `(${aiTestResult.latencyMs}ms)` : ''}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="ai-modal-footer">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={handleTestAiConnection}
-                disabled={isTestingAi}
-              >
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-                </svg>
-                <span>{isTestingAi ? 'Testing...' : 'Test Connection'}</span>
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={handleSaveConfig}
-              >
-                Save Settings
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {/* Shannon Entropy & Randomness Guide Modal */}
       <EntropyGuideModal
         isOpen={isEntropyModalOpen}

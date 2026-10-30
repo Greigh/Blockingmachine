@@ -402,7 +402,7 @@ describe('Electron App Core Utilities & IPC Logic', () => {
         'Unified Inspector',
         'AI Radar',
         'Threat Quarantine',
-        'Deploy & Sync',
+        'Distribute',
         'Mobile Companion',
         'One compile, many formats',
       ]);
