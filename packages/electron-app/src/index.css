@@ -13452,3 +13452,24 @@ summary:focus-visible {
   white-space: nowrap;
   border: 0;
 }
+
+/* Section hosts — the tab bar plus the mounted sub-view beneath it. The host
+   is a plain column so the tab strip stays put while the view scrolls. */
+.section-host {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.section-host > [role="tabpanel"] {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The AI engine card was lifted out of Settings' grid — the pane re-centres
+   it at the same readable width the settings container used. */
+.ai-engine-pane {
+  max-width: 860px;
+}
