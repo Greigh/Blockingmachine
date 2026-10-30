@@ -77,6 +77,9 @@ export function sanitizeCosmeticSelectors(
 ): string[] {
   if (!Array.isArray(selectors)) return [];
   const out: string[] = [];
+  // O(n) dedupe — the old `out.includes` was O(n²), which multiplied by a
+  // compiled list's thousands of selectors is a real per-frame cost.
+  const seen = new Set<string>();
   for (const candidate of selectors) {
     const result = validateCosmeticSelector(
       candidate,
@@ -85,7 +88,10 @@ export function sanitizeCosmeticSelectors(
     );
     if (!result.ok) continue;
     const selector = String(candidate).trim();
-    if (!out.includes(selector)) out.push(selector);
+    if (!seen.has(selector)) {
+      seen.add(selector);
+      out.push(selector);
+    }
   }
   return out;
 }

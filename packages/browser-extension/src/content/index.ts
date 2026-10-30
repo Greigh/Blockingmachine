@@ -45,20 +45,29 @@ function install(): void {
   const scanner = new ElementAiScanner();
   const picker = new ElementPicker({ scanner });
 
-  // Restore decisions the user made on earlier pages. The model is only as good as
-  // what it remembers, and a page-level classifier forgets on navigation.
-  void loadElementFeedback(scanner.getClassifier()).then((count) => {
-    if (count > 0) {
-      console.log(`[Blockingmachine] Element AI: ${count} learned decisions restored.`);
-    }
-  });
-
-  if (chrome.storage?.onChanged) {
-    chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName === 'local' && changes[STORAGE_KEY_ELEMENT_AI_FEEDBACK]) {
-        void loadElementFeedback(scanner.getClassifier());
+  // Restore decisions the user made on earlier pages — lazily, on the frame's
+  // first real classifier use. The blob is up to 2000 entries in storage; an
+  // iframe that never gets a scan or a verdict request used to pay that read
+  // anyway, once per frame per page. The change listener is installed on the
+  // same lazy boundary: a frame that never classified needs no re-loads.
+  let feedbackReady: Promise<number> | null = null;
+  function ensureFeedback(): Promise<number> {
+    if (!feedbackReady) {
+      feedbackReady = loadElementFeedback(scanner.getClassifier()).then((count) => {
+        if (count > 0) {
+          console.log(`[Blockingmachine] Element AI: ${count} learned decisions restored.`);
+        }
+        return count;
+      });
+      if (chrome.storage?.onChanged) {
+        chrome.storage.onChanged.addListener((changes, areaName) => {
+          if (areaName === 'local' && changes[STORAGE_KEY_ELEMENT_AI_FEEDBACK]) {
+            feedbackReady = loadElementFeedback(scanner.getClassifier());
+          }
+        });
       }
-    });
+    }
+    return feedbackReady;
   }
 
   // ─── Cosmetics ──────────────────────────────────────────────────────────────
@@ -200,7 +209,7 @@ function install(): void {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     switch (message?.type) {
       case 'START_ELEMENT_PICKER':
-        picker.start();
+        void ensureFeedback().then(() => picker.start());
         sendResponse({ success: true });
         return true;
 
@@ -220,47 +229,51 @@ function install(): void {
 
       case 'SCAN_PAGE_FOR_ADS': {
         // Report what the element AI would do on this page without touching it.
-        try {
-          const result = scanner.scan();
-          // The scan found real elements and the user asked to hear about them, so the
-          // same elements are captured on the way past — unlabelled, because nobody has
-          // ruled on them yet. See `elementHarvestCapture.ts` for why that is the only
-          // kind of record that can be taken without asking.
-          harvest(captureScannedElements(result.candidates, { host: location.hostname, now: Date.now() }));
-          sendResponse({
-            success: true,
-            scanned: result.scanned,
-            hideCount: result.hideCount,
-            suggestCount: result.suggestCount,
-            groups: result.groups.map((group) => ({
-              key: group.key,
-              selector: group.selector,
-              matches: group.matches,
-              elementClass: group.elementClass,
-              count: group.count,
-              confidence: group.confidence,
-              label: group.label,
-              reason: group.reason,
-            })),
-          });
-        } catch (err) {
-          sendResponse({ success: false, error: String(err) });
-        }
-        return false;
+        void ensureFeedback().then(() => {
+          try {
+            const result = scanner.scan();
+            // The scan found real elements and the user asked to hear about them, so the
+            // same elements are captured on the way past — unlabelled, because nobody has
+            // ruled on them yet. See `elementHarvestCapture.ts` for why that is the only
+            // kind of record that can be taken without asking.
+            harvest(captureScannedElements(result.candidates, { host: location.hostname, now: Date.now() }));
+            sendResponse({
+              success: true,
+              scanned: result.scanned,
+              hideCount: result.hideCount,
+              suggestCount: result.suggestCount,
+              groups: result.groups.map((group) => ({
+                key: group.key,
+                selector: group.selector,
+                matches: group.matches,
+                elementClass: group.elementClass,
+                count: group.count,
+                confidence: group.confidence,
+                label: group.label,
+                reason: group.reason,
+              })),
+            });
+          } catch (err) {
+            sendResponse({ success: false, error: String(err) });
+          }
+        });
+        return true;
       }
 
       case 'HIGHLIGHT_AI_CANDIDATES': {
-        picker.start();
+        void ensureFeedback().then(() => picker.start());
         sendResponse({ success: true });
         return false;
       }
 
       case 'BLOCK_AI_CANDIDATES': {
-        const requested = Array.isArray(message.payload?.selectors) ? message.payload.selectors : null;
-        const groups = requested
-          ? scanner.lastScan()?.groups.filter((group) => requested.includes(group.selector)) ?? []
-          : scanner.scan().groups;
-        void picker.blockAiGroups(groups).then((result) => sendResponse({ success: true, ...result }));
+        void ensureFeedback().then(() => {
+          const requested = Array.isArray(message.payload?.selectors) ? message.payload.selectors : null;
+          const groups = requested
+            ? scanner.lastScan()?.groups.filter((group) => requested.includes(group.selector)) ?? []
+            : scanner.scan().groups;
+          void picker.blockAiGroups(groups).then((result) => sendResponse({ success: true, ...result }));
+        });
         return true;
       }
 
@@ -271,20 +284,22 @@ function install(): void {
           return false;
         }
         const keep = message.payload?.action === 'keep';
-        // A decision is the one thing a person says about an element, so it is the one
-        // thing worth keeping: captured with the decision attached, it is the only route
-        // by which a harvested element ever gets a label.
-        harvest([
-          captureDecision(
-            element,
-            scanner.classifyElement(element, false),
-            keep ? 'keep' : 'hide',
-            { host: location.hostname, now: Date.now() },
-          ),
-        ]);
-        void (keep ? picker.keepElement(element) : picker.markElement(element, 'hide')).then((ok) =>
-          sendResponse({ success: ok }),
-        );
+        void ensureFeedback().then(() => {
+          // A decision is the one thing a person says about an element, so it is the one
+          // thing worth keeping: captured with the decision attached, it is the only route
+          // by which a harvested element ever gets a label.
+          harvest([
+            captureDecision(
+              element,
+              scanner.classifyElement(element, false),
+              keep ? 'keep' : 'hide',
+              { host: location.hostname, now: Date.now() },
+            ),
+          ]);
+          void (keep ? picker.keepElement(element) : picker.markElement(element, 'hide')).then((ok) =>
+            sendResponse({ success: ok }),
+          );
+        });
         return true;
       }
 
@@ -294,19 +309,21 @@ function install(): void {
           sendResponse({ success: false });
           return false;
         }
-        const prediction = scanner.classifyElement(element);
-        sendResponse({
-          success: true,
-          verdict: {
-            elementClass: prediction.elementClass,
-            action: prediction.action,
-            confidence: prediction.confidence,
-            corroboration: prediction.corroboration,
-            reasons: prediction.reasons,
-            elementsOnPage: scanner.lastScan()?.hideCount ?? 0,
-          },
+        void ensureFeedback().then(() => {
+          const prediction = scanner.classifyElement(element);
+          sendResponse({
+            success: true,
+            verdict: {
+              elementClass: prediction.elementClass,
+              action: prediction.action,
+              confidence: prediction.confidence,
+              corroboration: prediction.corroboration,
+              reasons: prediction.reasons,
+              elementsOnPage: scanner.lastScan()?.hideCount ?? 0,
+            },
+          });
         });
-        return false;
+        return true;
       }
 
       case 'BLOCK_CONTEXT_TARGET': {

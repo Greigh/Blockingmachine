@@ -1384,17 +1384,27 @@ async function applyMatches(
  * skipped: a site loading its own resources is not distribution. No tab, no edge — a
  * closed tab leaves no honest first party to attribute.
  */
+// First-party domains per tab, cached — the fanout edge path runs once per
+// match batch per tab and tabs.get per batch is a round-trip per page-load
+// burst. Invalidated by the same navigation/removal listeners that retire the
+// tab's telemetry, so a stale domain can never attribute edges to a site the
+// tab left.
+const tabFirstParties = new Map<number, string>();
+
 async function recordFanoutEdgesForTab(
   tabId: number,
   batch: Array<{ match: BrowserMatch; count: number }>,
 ): Promise<void> {
   if (!Number.isInteger(tabId) || tabId < 0) return;
-  let firstParty: string;
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    firstParty = registrableDomainOf(tab.url);
-  } catch {
-    return;
+  let firstParty = tabFirstParties.get(tabId);
+  if (firstParty === undefined) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      firstParty = registrableDomainOf(tab.url);
+      tabFirstParties.set(tabId, firstParty);
+    } catch {
+      return;
+    }
   }
   if (!firstParty) return;
   let tally = await getFanoutTally();
@@ -1717,11 +1727,13 @@ if (chrome.declarativeNetRequest?.onRuleMatchedDebug) {
 chrome.tabs.onRemoved.addListener((tabId) => {
   removeTabTelemetry(tabId);
   lastReconcileAt.delete(tabId);
+  tabFirstParties.delete(tabId);
 });
 
 // A fresh navigation starts a fresh ledger, so the badge reflects this page only.
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status !== 'loading') return;
+  tabFirstParties.delete(tabId);
   await removeTabTelemetry(tabId);
   await updateBadge(tabId, 0);
 });

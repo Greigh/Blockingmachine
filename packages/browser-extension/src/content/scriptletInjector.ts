@@ -78,35 +78,43 @@ export function applyMainWorldDefusers(): void {
 
     // 5. Generic bait element bypass
     // Traps getComputedStyle() on bait elements (#ad-detector, .ad-zone)
-    // and correctly overrides both direct property access and .getPropertyValue()
+    // and correctly overrides both direct property access and .getPropertyValue().
+    // This hook runs on EVERY getComputedStyle call in EVERY frame — page code
+    // can issue thousands per second — so the bail-out path is kept to plain
+    // property reads and string tests; classList is only touched when an
+    // 'ad'-prefixed token actually shows up in className.
     const origGetComputedStyle = win.getComputedStyle;
     if (origGetComputedStyle) {
       win.getComputedStyle = function (elt: Element, pseudoElt?: string | null) {
         const style = origGetComputedStyle.call(win, elt, pseudoElt);
-        if (style && elt && elt.nodeType === 1) {
-          const el = elt as HTMLElement;
-          const isBait =
-            el.id === 'ad-detector' ||
-            el.id === 'ad-banner' ||
-            (el.classList && (el.classList.contains('ad-zone') || el.classList.contains('adsbox')));
+        if (!style || !elt || elt.nodeType !== 1) return style;
 
-          if (isBait) {
-            return new Proxy(style, {
-              get(target, prop) {
-                if (prop === 'display') return 'block';
-                if (prop === 'visibility') return 'visible';
-                if (prop === 'getPropertyValue') {
-                  return (propName: string) => {
-                    if (propName === 'display') return 'block';
-                    if (propName === 'visibility') return 'visible';
-                    return target.getPropertyValue(propName);
-                  };
-                }
-                const val = (target as any)[prop];
-                return typeof val === 'function' ? val.bind(target) : val;
-              }
-            });
+        const el = elt as HTMLElement;
+        let isBait = el.id === 'ad-detector' || el.id === 'ad-banner';
+        if (!isBait) {
+          // SVG className is an SVGAnimatedString, not a string — gate on typeof.
+          const className = el.className;
+          if (typeof className === 'string' && className.indexOf('ad') !== -1 && el.classList) {
+            isBait = el.classList.contains('ad-zone') || el.classList.contains('adsbox');
           }
+        }
+
+        if (isBait) {
+          return new Proxy(style, {
+            get(target, prop) {
+              if (prop === 'display') return 'block';
+              if (prop === 'visibility') return 'visible';
+              if (prop === 'getPropertyValue') {
+                return (propName: string) => {
+                  if (propName === 'display') return 'block';
+                  if (propName === 'visibility') return 'visible';
+                  return target.getPropertyValue(propName);
+                };
+              }
+              const val = (target as any)[prop];
+              return typeof val === 'function' ? val.bind(target) : val;
+            }
+          });
         }
         return style;
       };
