@@ -54,10 +54,12 @@ packages/mobile/
   index.ts                 # expo-router entry
   app/
     _layout.tsx            # QueryClientProvider + ServerProvider + ServerEventsProvider + GestureHandlerRootView + Tabs
-    (tabs)/index.tsx       # Dashboard
+    (tabs)/index.tsx       # Home — hub protection + this-phone status
+    (tabs)/protect.tsx     # This-phone filtering (VPN/tunnel, ruleset, bypass, capture, local DNS)
     (tabs)/check.tsx       # Domain check (+ swipe-to-delete history)
+    (tabs)/rules.tsx       # Corpus — hub sources, custom rules, standalone feeds
     (tabs)/telemetry.tsx   # Threats + compile history + activity feed
-    (tabs)/settings.tsx    # Server list (swipe-to-delete), pairing, token
+    settings.tsx           # Pushed sheet (header gear): servers, token, feed URLs, pins, docs
     add-server.tsx         # Modal: manual / QR / discovered
   src/
     api/types.ts           # /v1 payload shapes (mirrored; shared-contract pkg is a later refactor)

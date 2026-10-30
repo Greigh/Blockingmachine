@@ -59,6 +59,16 @@ describe('SideNav registry contract', () => {
   });
 });
 
+describe('home this-phone row', () => {
+  const home = readSrc('app/(tabs)/index.tsx');
+
+  it('dashboard carries the on-device status card that opens Protect', () => {
+    expect(home).toContain('ThisPhoneCard');
+    expect(home).toContain("router.push('/protect')");
+    expect(home).toContain('label="This phone"');
+  });
+});
+
 describe('settings route relocation', () => {
   it('settings lives as a pushed route, not inside the tab group', () => {
     expect(fs.existsSync(path.join(pkgRoot, 'app', 'settings.tsx'))).toBe(true);

@@ -132,7 +132,7 @@ Code-level gaps the whole-branch review of the https-filter P0 engine (`packages
 
 ### 126. Apps targeting API 24+ ignore user CAs — hub MITM covers browsers and opted-in apps only (`android-cert-trust-ceiling`)
 
-- **Where:** `docs/https-filtering-design.md` §2 (the platform table) + §10; `packages/mobile/app/(tabs)/settings.tsx` HttpsCaptureCard copy.
+- **Where:** `docs/https-filtering-design.md` §2 (the platform table) + §10; `packages/mobile/app/(tabs)/protect.tsx` HttpsCaptureCard copy.
 - **What:** installing the hub CA into the device's user store does not make arbitrary apps trust it — since API 24 an app must opt into user CAs via `networkSecurityConfig`, so full-MITM content filtering on Android reaches browsers and opted-in apps only. SNI-level verdicts (peek → block/tunnel) cover every app regardless, which is why the shipped card says "hostname blocking for every app, content filtering where the CA is trusted".
 - **Why left:** a platform ceiling, not an engineering gap — unfixable without per-app packaging tricks the product does not do. Documented in the design and the card copy rather than promised.
 - **Fix shape:** none for the ceiling itself; keep every surface wording honest (the mobile card, this entry, and the design already agree). If a future per-app opt-in story ever exists (device-owner/enterprise profiles), it lands as its own feature.

@@ -23,6 +23,9 @@ import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hoo
 import { haptics } from '../../src/haptics';
 import { chrome, colors, layout, spacing } from '../../src/theme';
 import { SETTINGS_ROUTE } from '../../src/routes';
+import { LocalVpn, isLocalVpnSupported } from '../../src/filter/localVpn';
+import { getIosTunnelStatus, isIosTunnelSupported } from '../../src/filter/iosTunnel';
+import { localDnsStatus, subscribeLocalDns } from '../../src/filter/localDns';
 
 // The hub stamps lastCompile with toLocaleString() (unparseable on Hermes) while
 // the add-on carries lastCompileMs — prefer the epoch, fall back to the raw
@@ -36,6 +39,75 @@ function formatLastCompile(data?: { lastCompile: string | null; lastCompileMs?: 
     return new Date(data.lastCompileMs).toLocaleString();
   }
   return '—';
+}
+
+/**
+ * "This phone" status row — the on-device filtering surface at a glance:
+ * the platform filter (Android VPN/proxy or the iOS packet tunnel), the local
+ * DNS responder, and the synced standalone ruleset. The whole card opens the
+ * Protect tab, where the controls live.
+ */
+function ThisPhoneCard() {
+  const filter = useFilter();
+  const vpn = useQuery({
+    queryKey: ['local-vpn-status'],
+    queryFn: () => (isLocalVpnSupported() ? LocalVpn.status() : null),
+    refetchInterval: 5_000,
+  });
+  const tunnel = useQuery({
+    queryKey: ['ios-tunnel-status'],
+    queryFn: () => (isIosTunnelSupported() ? getIosTunnelStatus() : null),
+    refetchInterval: 5_000,
+  });
+  const [, bumpDns] = React.useState(0);
+  React.useEffect(() => subscribeLocalDns(() => bumpDns((n) => n + 1)), []);
+  const dns = localDnsStatus();
+
+  const vpnOn = vpn.data?.vpnRunning === true;
+  const proxyOn = vpn.data?.proxyRunning === true;
+  const tunnelOn = tunnel.data?.enabled === true;
+  const filtering = vpnOn || tunnelOn || filter.ready;
+  const metaBits = [
+    filter.meta ? `${filter.meta.ruleCount.toLocaleString()} rules synced` : null,
+    filter.localMeta
+      ? `+${filter.localMeta.ruleCount.toLocaleString()} from feeds`
+      : null,
+    dns.running ? `dns :${dns.port}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <Card>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Open Protect"
+        onPress={() => {
+          haptics.tap();
+          router.push('/protect');
+        }}
+        style={({ pressed }) => [pressed && { opacity: 0.85 }]}
+      >
+        <View style={styles.rowBetween}>
+          <SectionTitle icon="phone-portrait-outline" label="This phone" />
+          <View style={styles.rowBetween}>
+            {vpnOn ? <Pill label="vpn on" tone="ok" /> : null}
+            {proxyOn ? <Pill label="proxy on" tone="info" /> : null}
+            {tunnelOn ? <Pill label="tunnel on" tone="ok" /> : null}
+            {dns.running ? <Pill label="dns on" tone="info" /> : null}
+            <Pill
+              label={filtering ? 'filtering' : 'not filtering'}
+              tone={filtering ? 'ok' : 'muted'}
+            />
+            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+          </View>
+        </View>
+        <Text style={styles.metaLine}>
+          {metaBits || 'No on-device filtering — sync rules or start a filter on Protect.'}
+        </Text>
+      </Pressable>
+    </Card>
+  );
 }
 
 export default function DashboardScreen() {
@@ -333,6 +405,8 @@ export default function DashboardScreen() {
         </Text>
       </Card>,
       ]}
+
+      <ThisPhoneCard />
 
       <Card>
         <SectionTitle icon="flash-outline" label="Actions" />
