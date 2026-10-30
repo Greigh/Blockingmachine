@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import type { AppRoute } from '../routes';
 
 const captured: Record<string, Record<string, unknown>> = {};

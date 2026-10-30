@@ -7,7 +7,6 @@ import type {
 import {
   ACCENT_PALETTE,
   applyAccentColor,
-  type AccentColorOption,
 } from './theme';
 
 interface SettingsProps {
