@@ -4,7 +4,7 @@
  * moved out of the old Settings scroll unchanged; only their home changed.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ScrollView,
   Switch,
@@ -85,7 +85,7 @@ function FilterFeedsCard() {
         Blocklists the phone fetches and filters with on its own — no hub needed. Rules union with any synced hub set, and a feed that fails never takes the rest with it.
       </Text>
       {(feeds.data ?? []).map((f, i) => (
-        <View key={f.url} style={styles.rowBetween}>
+        <View key={`${f.url}#${i}`} style={styles.rowBetween}>
           <View style={{ flex: 1, marginRight: 8 }}>
             <Text style={styles.meta} numberOfLines={1}>{f.name}</Text>
             <Text style={styles.feedUrl} numberOfLines={1}>{f.url}</Text>
@@ -167,6 +167,14 @@ function HubSourcesCard() {
   const [result, setResult] = useState<string | null>(null);
   const [err, setErr] = useState<FriendlyError | null>(null);
   const { activeServer } = useServers();
+  // Drafts belong to the hub they were opened against — a switch mid-edit
+  // must not carry A's source list into B's "Save & recompile".
+  useEffect(() => {
+    setDraft(null);
+    setCustomDraft(null);
+    setNewName('');
+    setNewUrl('');
+  }, [activeServer?.id]);
   const sources = useQuery({
     queryKey: ['hub-sources', activeServer?.baseUrl ?? 'none'],
     queryFn: () => client!.getSources(),

@@ -6,7 +6,7 @@
  * service name so a household with both a hub and an add-on stays legible.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -200,8 +200,17 @@ export default function SettingsScreen() {
   const [editUrl, setEditUrl] = useState('');
   const [editErr, setEditErr] = useState<string | null>(null);
 
+  // A draft belongs to the server it was opened on — a token typed for A
+  // must never land on B when the active row is switched mid-edit.
+  useEffect(() => {
+    setTokenDraft(null);
+    setEditingFeed(null);
+    setEditingId(null);
+    setEditErr(null);
+  }, [activeServerId]);
+
   const status = useQuery({
-    queryKey: ['status', activeServer?.baseUrl ?? 'none'],
+    queryKey: ['status', activeServer?.baseUrl ?? 'none', activeToken],
     queryFn: () => client!.getStatus(),
     enabled: !!client,
   });
@@ -225,7 +234,7 @@ export default function SettingsScreen() {
   const confirmRemove = (id: string, label: string) => {
     Alert.alert('Remove this server?', `You\u2019ll need to add ${label} again to control it.`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: () => void removeServer(id) },
+      { text: 'Remove', style: 'destructive', onPress: () => void removeServer(id).catch(() => {}) },
     ]);
   };
 
@@ -327,7 +336,7 @@ export default function SettingsScreen() {
                 <Pressable
                   style={styles.serverRow}
                   android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
-                  onPress={() => void setActive(s.id)}
+                  onPress={() => void setActive(s.id).catch(() => {})}
                   accessibilityRole="button"
                 >
                   <View style={{ flex: 1 }}>

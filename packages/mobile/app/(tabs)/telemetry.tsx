@@ -57,14 +57,18 @@ export default function TelemetryScreen() {
 
   // Leaving the tab acknowledges the quarantine alert — clears the tab badge
   // and stops the "new" pills. The banner's ✕ is the other dismissal path.
-  const focused = usePathname() === '/telemetry';
+  const path = usePathname();
+  const focused = path === '/telemetry';
+  // Only a tab-to-tab navigation acknowledges the alert — a pushed modal
+  // (/settings, /add-server) sits on top of telemetry, it doesn't leave it.
+  const TAB_PATHS = new Set(['/', '/protect', '/check', '/rules', '/telemetry']);
   const wasFocused = useRef(false);
   useEffect(() => {
-    if (wasFocused.current && !focused && alert?.event === 'quarantine_added') {
+    if (wasFocused.current && !focused && TAB_PATHS.has(path) && alert?.event === 'quarantine_added') {
       dismissAlert();
     }
     wasFocused.current = focused;
-  }, [focused, alert, dismissAlert]);
+  }, [focused, path, alert, dismissAlert]);
 
   // Domains carried by the latest quarantine_added broadcast get a "new" pill
   // until the alert is dismissed — the screen the dashboard banner routes to.

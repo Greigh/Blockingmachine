@@ -123,13 +123,13 @@ export default function DashboardScreen() {
   const tier = useWidthTier();
   const gridCols = gridColumnsFor(tier);
   const { connected, alert, dismissAlert } = useServerEvents();
-  const { activeServer, markOk } = useServers();
+  const { activeServer, activeToken, markOk, hydrated } = useServers();
   const filter = useFilter();
   const queryClient = useQueryClient();
   const baseUrl = activeServer?.baseUrl ?? 'none';
 
   const status = useQuery({
-    queryKey: ['status', baseUrl],
+    queryKey: ['status', baseUrl, activeToken],
     queryFn: () => client!.getStatus(),
     enabled: !!client,
     refetchInterval: 15_000,
@@ -184,6 +184,7 @@ export default function DashboardScreen() {
     daemon.reset();
   }, [baseUrl]);
 
+  if (!hydrated) return null;
   if (!activeServer) {
     return (
       <View style={[styles.empty, { paddingTop: insets.top }]}>
@@ -266,6 +267,8 @@ export default function DashboardScreen() {
           // and the "new" pills on the telemetry rows. It clears via ✕, or when
           // the user leaves the telemetry tab (viewed = acknowledged).
           onPress={() => router.push('/(tabs)/telemetry')}
+          accessibilityRole="button"
+          accessibilityLabel="Review quarantined threats"
         >
           <Text style={styles.alertText}>
             {quarantineCount
@@ -317,6 +320,7 @@ export default function DashboardScreen() {
         <View style={styles.rowBetween}>
           <SectionTitle icon="shield-checkmark-outline" label="Protection" />
           <Switch
+            accessibilityLabel="Hub protection"
             value={Boolean(data?.protection?.enabled)}
             disabled={protection.isPending || daemonStopped}
             onValueChange={(v) => {

@@ -3,7 +3,7 @@
  * or matched host (add-on), whichever the server answered with.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useMutation } from '@tanstack/react-query';
@@ -41,6 +41,12 @@ export default function CheckScreen() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const trimmed = domain.trim().toLowerCase();
   const valid = DOMAIN_RE.test(trimmed) && trimmed.length <= 253;
+
+  // A verdict belongs to the hub that answered it — drop it when the
+  // active server (or its token, via client identity) changes.
+  useEffect(() => {
+    check.reset();
+  }, [client]);
 
   const check = useMutation({
     // Hub verdict when it's reachable — richer (verdict source, matched host).
@@ -92,6 +98,7 @@ export default function CheckScreen() {
         style={styles.scroll}
       contentContainerStyle={[styles.content, { maxWidth: tier === 'regular' ? layout.contentMaxWidthWide : layout.contentMaxWidth, paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + (tier === 'compact' && !hasEdgeUtilityStrip(insets.right) ? chrome.tabBarClearance : 0) }]}
       keyboardShouldPersistTaps="handled"
+      automaticallyAdjustKeyboardInsets
     >
       <ScreenHeader
         title="Check a domain"

@@ -199,11 +199,13 @@ function HttpsCaptureCard() {
   const s = capture.data;
   const running = !!s?.running;
 
+  const [savedPort, setSavedPort] = useState<number | null>(null);
   useEffect(() => {
     void loadHubHost().then((h) => {
       setSavedHub(h);
       if (h) setHub(h);
     });
+    void loadHubPort().then(setSavedPort);
   }, []);
 
   // The paired server is usually the capture hub — offer its host as the
@@ -323,7 +325,7 @@ function HttpsCaptureCard() {
       {running ? (
         <>
           <Text style={styles.meta}>
-            {`Hub ${savedHub ?? hub}:9294 · ${s!.flowsOpened.toLocaleString()} flows · ${s!.flowsClosed.toLocaleString()} closed · ${s!.quicDropped.toLocaleString()} QUIC dropped`}
+            {`Hub ${savedHub ?? hub}:${savedPort ?? HUB_DATA_PORT} · ${s!.flowsOpened.toLocaleString()} flows · ${s!.flowsClosed.toLocaleString()} closed · ${s!.quicDropped.toLocaleString()} QUIC dropped`}
           </Text>
           <Text style={styles.meta}>
             While capture runs: QUIC stays dropped so HTTPS uses TCP, other UDP relays through the tunnel — LAN broadcast/multicast (mDNS, SSDP) still pauses.
@@ -815,8 +817,9 @@ function PerAppBypassCard() {
       </View>
       <Pressable
         style={styles.docRow}
-        accessibilityRole="button"
+        accessibilityRole="checkbox"
         accessibilityLabel="Exclude this app from the tunnel"
+        accessibilityState={{ checked: selfExcluded }}
         onPress={toggleSelf}
       >
         <Ionicons

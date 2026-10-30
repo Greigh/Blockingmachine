@@ -82,8 +82,10 @@ export default function AddServerScreen() {
   useEffect(() => {
     if (mode !== 'discover' || !isDiscoveryAvailable()) return;
     const session = browseServers({
-      onFound: (s) =>
-        setFound((prev) => ({ ...prev, [`${s.host}:${s.port}`]: s })),
+      onFound: (s) => {
+        setDiscoverError(null);
+        setFound((prev) => ({ ...prev, [`${s.host}:${s.port}`]: s }));
+      },
       onRemove: (name) =>
         setFound((prev) =>
           Object.fromEntries(
@@ -282,6 +284,8 @@ export default function AddServerScreen() {
           <Pressable
             style={({ pressed }) => [styles.modeCard, pressed && styles.pressed]}
             android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
+            accessibilityRole="button"
+            accessibilityLabel="Enter address manually"
             onPress={() => setMode('manual')}
           >
             <Text style={styles.modeTitle}>Enter address</Text>
@@ -290,6 +294,8 @@ export default function AddServerScreen() {
           <Pressable
             style={({ pressed }) => [styles.modeCard, pressed && styles.pressed]}
             android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
+            accessibilityRole="button"
+            accessibilityLabel="Scan pairing QR code"
             onPress={() => {
               setMode('qr');
               if (!permission?.granted) void requestCamera();
@@ -303,6 +309,8 @@ export default function AddServerScreen() {
           <Pressable
             style={({ pressed }) => [styles.modeCard, pressed && styles.pressed]}
             android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
+            accessibilityRole="button"
+            accessibilityLabel="Find servers on the network"
             onPress={() => setMode('discover')}
           >
             <Text style={styles.modeTitle}>Find on network</Text>
