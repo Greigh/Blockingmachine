@@ -49,13 +49,14 @@ function formatLastCompile(data?: { lastCompile: string | null; lastCompileMs?: 
  */
 function ThisPhoneCard() {
   const filter = useFilter();
+  // Same cache keys as the Protect cards — both surfaces share one poller.
   const vpn = useQuery({
-    queryKey: ['local-vpn-status'],
+    queryKey: ['localvpn'],
     queryFn: () => (isLocalVpnSupported() ? LocalVpn.status() : null),
     refetchInterval: 5_000,
   });
   const tunnel = useQuery({
-    queryKey: ['ios-tunnel-status'],
+    queryKey: ['iostunnel'],
     queryFn: () => (isIosTunnelSupported() ? getIosTunnelStatus() : null),
     refetchInterval: 5_000,
   });
@@ -65,8 +66,11 @@ function ThisPhoneCard() {
 
   const vpnOn = vpn.data?.vpnRunning === true;
   const proxyOn = vpn.data?.proxyRunning === true;
-  const tunnelOn = tunnel.data?.enabled === true;
-  const filtering = vpnOn || tunnelOn || filter.ready;
+  // Honest scope, same convention as the tunnel card: enabled alone is not
+  // filtering — the OS reports the tunnel only once it connects.
+  const tunnelOn =
+    tunnel.data?.enabled === true && tunnel.data?.connection === 'connected';
+  const filtering = vpnOn || tunnelOn || dns.running;
   const metaBits = [
     filter.meta ? `${filter.meta.ruleCount.toLocaleString()} rules synced` : null,
     filter.localMeta
@@ -90,11 +94,14 @@ function ThisPhoneCard() {
       >
         <View style={styles.rowBetween}>
           <SectionTitle icon="phone-portrait-outline" label="This phone" />
-          <View style={styles.rowBetween}>
+          <View style={[styles.rowBetween, { gap: spacing.xs }]}>
             {vpnOn ? <Pill label="vpn on" tone="ok" /> : null}
             {proxyOn ? <Pill label="proxy on" tone="info" /> : null}
             {tunnelOn ? <Pill label="tunnel on" tone="ok" /> : null}
             {dns.running ? <Pill label="dns on" tone="info" /> : null}
+            {filter.ready && !filtering ? (
+              <Pill label="rules ready" tone="info" />
+            ) : null}
             <Pill
               label={filtering ? 'filtering' : 'not filtering'}
               tone={filtering ? 'ok' : 'muted'}
@@ -204,6 +211,9 @@ export default function DashboardScreen() {
         {filter.ready ? (
           <Pill label="on-device rules active" tone="ok" />
         ) : null}
+        <View style={styles.emptyPhoneCard}>
+          <ThisPhoneCard />
+        </View>
         <ActionButton label="Add server" onPress={() => router.push('/add-server')} />
       </View>
     );
@@ -520,6 +530,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   emptyGear: { position: 'absolute', right: spacing.lg, padding: spacing.xs },
+  emptyPhoneCard: { alignSelf: 'stretch', maxWidth: layout.contentMaxWidth },
   rowBetween: {
     alignItems: 'center',
     flexDirection: 'row',

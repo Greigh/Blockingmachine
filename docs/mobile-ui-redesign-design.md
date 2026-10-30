@@ -1,6 +1,6 @@
 # Mobile App UI Redesign — `packages/mobile`
 
-**Status:** proposed 2026-10-25. Companion to `electron-ui-design.md` — same product model, mobile-native shell.
+**Status:** implemented 2026-10-25. Companion to `electron-ui-design.md` — same product model, mobile-native shell.
 
 ## Problem
 

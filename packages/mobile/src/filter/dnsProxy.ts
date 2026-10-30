@@ -58,7 +58,7 @@ export async function drainTunnelObservations(): Promise<string> {
   }
 }
 
-/** The extension's `tunnel-status.json` heartbeat, decoded for Settings. */
+/** The extension's `tunnel-status.json` heartbeat, decoded for the tunnel card. */
 export interface TunnelStatusReport {
   at: string;
   startedAt: string;

@@ -53,7 +53,7 @@ const listeners = new Set<() => void>();
 
 const emit = () => listeners.forEach((l) => l());
 
-/** Re-render hook for the settings card — fires on every counter/state change. */
+/** Re-render hook for the Protect/Home cards — fires on every counter/state change. */
 export function subscribeLocalDns(fn: () => void): () => void {
   listeners.add(fn);
   return () => {

@@ -1,6 +1,8 @@
 /**
- * Settings: saved server list (add/select/remove), token editor for the active
- * server, and the feed URLs the server advertises. mDNS-derived servers show the
+ * Settings: the connection sheet — saved server list (add/select/remove),
+ * token editor for the active server, the feed URLs the server advertises, hub
+ * HTTPS pins, and doc links. Feature surfaces live on their own tabs (Protect,
+ * Rules); this is reached via the header gear. mDNS-derived servers show the
  * service name so a household with both a hub and an add-on stays legible.
  */
 
