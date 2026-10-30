@@ -587,7 +587,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 <p className="onboarding-desc">
                   Your workspace is ready. Compile a list, then open Deploy & Sync to connect
                   the sinkhole. AI Radar, Threat Quarantine, and the Unified Inspector stay in
-                  the sidebar — and Settings → Pair mobile app shows the QR that connects the
+                  the sidebar — and Distribute → LAN feed & pairing shows the QR that connects the
                   companion app to this hub.
                 </p>
               </div>

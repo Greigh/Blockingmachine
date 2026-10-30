@@ -16,7 +16,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import type { SinkholeConfig } from '../types/';
+import type { SinkholeConfig, SinkholeTestResult } from '../types/';
 
 export const NetworkPane: React.FC = () => {
   const [feedToken, setFeedToken] = useState('');
@@ -36,6 +36,8 @@ export const NetworkPane: React.FC = () => {
   // the arbitrary-webhook URL. Loaded/saved through the same get/set pair.
   const [customWebhookUrl, setCustomWebhookUrl] = useState('');
   const [customWebhookSaved, setCustomWebhookSaved] = useState<string | null>(null);
+  const [testingWebhook, setTestingWebhook] = useState(false);
+  const [webhookTestResult, setWebhookTestResult] = useState<SinkholeTestResult | null>(null);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
@@ -277,13 +279,35 @@ export const NetworkPane: React.FC = () => {
     if (!window.electron?.getSinkholeConfig || !window.electron?.setSinkholeConfig) return;
     try {
       const cfg = (await window.electron.getSinkholeConfig()) ?? {};
-      await window.electron.setSinkholeConfig({ ...cfg, customWebhookUrl } as SinkholeConfig);
+      const res = await window.electron.setSinkholeConfig({ ...cfg, customWebhookUrl } as SinkholeConfig);
+      if (res && typeof res === 'object' && 'success' in res && !(res as { success?: boolean }).success) {
+        throw new Error('save rejected');
+      }
       setCustomWebhookSaved('saved');
       safeSetTimeout(() => setCustomWebhookSaved(null), 3000);
     } catch (err) {
       setCustomWebhookSaved('error');
       safeSetTimeout(() => setCustomWebhookSaved(null), 4000);
       console.error('Failed to save webhook URL:', err);
+    }
+  };
+
+  const handleTestWebhook = async () => {
+    if (!window.electron?.testSinkholeConnection) return;
+    setTestingWebhook(true);
+    setWebhookTestResult(null);
+    try {
+      await handleSaveCustomWebhook();
+      const res = await window.electron.testSinkholeConnection('webhook');
+      setWebhookTestResult(res);
+    } catch (err: any) {
+      setWebhookTestResult({
+        service: 'webhook',
+        success: false,
+        message: err?.message || 'Connection test failed',
+      });
+    } finally {
+      setTestingWebhook(false);
     }
   };
 
@@ -337,6 +361,7 @@ export const NetworkPane: React.FC = () => {
               <input
                 type="password"
                 className="path-input"
+                aria-label="Feed token"
                 placeholder={feedTokenConfigured ? 'Token configured — enter a new one to replace' : 'Leave empty to keep origin-guarded'}
                 value={feedToken}
                 onChange={(e) => setFeedToken(e.target.value)}
@@ -388,6 +413,7 @@ export const NetworkPane: React.FC = () => {
               <input
                 type="password"
                 className="path-input"
+                aria-label="Data-port token"
                 placeholder={httpsDataTokenConfigured ? 'Token configured — enter a new one to replace, or Clear' : 'Leave empty to keep the listener open'}
                 value={httpsDataToken}
                 onChange={(e) => setHttpsDataToken(e.target.value)}
@@ -479,37 +505,58 @@ export const NetworkPane: React.FC = () => {
           </div>
         </div>
 
-        {/* Network Sinkholes & DNS Integration Card */}
-      <div className="setting-card">
-        <div className="setting-card-header">
-          <h2>Connection options</h2>
+        <div className="setting-card">
+          <div className="setting-card-header">
+            <h2>Connection options</h2>
+          </div>
+          <p>
+            The fields the old network card owned that no deploy pane renders. If you
+            pointed a sinkhole at a webhook URL other than Home Assistant's, it is
+            kept here — the deploy panes carry everything else.
+          </p>
+          <div className="field-group">
+            <label className="field-label" htmlFor="custom-webhook-url">Custom webhook URL</label>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                id="custom-webhook-url"
+                type="url"
+                className="path-input"
+                placeholder="https://example.com/hooks/blocklist"
+                value={customWebhookUrl}
+                onChange={(e) => setCustomWebhookUrl(e.target.value)}
+                style={{ flex: '1 1 220px', minWidth: 0 }}
+              />
+              <button type="button" className="browse-button secondary" onClick={() => void handleSaveCustomWebhook()}>
+                Save
+              </button>
+              <button
+                type="button"
+                className="browse-button secondary"
+                onClick={() => void handleTestWebhook()}
+                disabled={testingWebhook || !customWebhookUrl}
+              >
+                {testingWebhook ? 'Testing…' : 'Test webhook'}
+              </button>
+            </div>
+            <p className="field-hint">
+              A POST fires here each compile when set — anything that accepts a webhook can sit behind it.
+            </p>
+          </div>
+          {customWebhookSaved === 'saved' && (
+            <p className="setting-message success" role="status">Webhook URL saved.</p>
+          )}
+          {customWebhookSaved === 'error' && (
+            <p className="setting-message error" role="alert">Failed to save — check the hub log.</p>
+          )}
+          {webhookTestResult && (
+            <p
+              className={`setting-message ${webhookTestResult.success ? 'success' : 'error'}`}
+              role={webhookTestResult.success ? 'status' : 'alert'}
+            >
+              {webhookTestResult.message}
+            </p>
+          )}
         </div>
-        <p>
-          The fields the old network card owned that no deploy pane renders. If you
-          pointed a sinkhole at a webhook URL other than Home Assistant's, it is
-          kept here — the deploy panes carry everything else.
-        </p>
-        <label className="setting-field-label" htmlFor="custom-webhook-url">Custom webhook URL</label>
-        <div className="setting-field-row">
-          <input
-            id="custom-webhook-url"
-            type="url"
-            className="setting-field-input"
-            placeholder="https://example.com/hooks/blocklist"
-            value={customWebhookUrl}
-            onChange={(e) => setCustomWebhookUrl(e.target.value)}
-          />
-          <button type="button" className="browse-button secondary" onClick={() => void handleSaveCustomWebhook()}>
-            Save
-          </button>
-        </div>
-        {customWebhookSaved === 'saved' && (
-          <p className="setting-message success" role="status">Webhook URL saved.</p>
-        )}
-        {customWebhookSaved === 'error' && (
-          <p className="setting-message error" role="alert">Failed to save — check the hub log.</p>
-        )}
-      </div>
     </div>
   );
 };

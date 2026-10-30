@@ -371,6 +371,37 @@ export const DistributeView: React.FC<DistributeViewProps> = ({
     setShowInstallScripts((prev) => !prev);
   };
 
+  // Re-read the stored sinkhole config into local state. Called on mount and
+  // again whenever a deploy-target row is selected: the Network pane edits the
+  // same store key independently, so without the resync these handlers would
+  // write a stale copy back over the Network pane's save.
+  const refreshSinkholeConfig = () => {
+    if (!window.electron?.getSinkholeConfig) return;
+    window.electron.getSinkholeConfig().then((cfg) => {
+      if (isMountedRef.current && cfg) {
+        if (typeof cfg.encryptionAvailable === 'boolean') {
+          setSecretStorageAvailable(cfg.encryptionAvailable);
+        }
+        setSinkholeConfig({
+          ...cfg,
+          adguardMode: cfg.adguardMode || 'direct',
+          adguardDirectPort: normalizeAdguardDirectPort(cfg.adguardDirectPort),
+          allowInsecureLocalTls: Boolean(cfg.allowInsecureLocalTls),
+          adguardDirectUrl: cfg.adguardDirectUrl || '',
+          haToken: cfg.haToken || '',
+          haWebhookUrl: cfg.haWebhookUrl || '',
+          customWebhookUrl: cfg.customWebhookUrl || '',
+        });
+        if (cfg.customWebhookUrl) {
+          setCustomWebhookUrl(cfg.customWebhookUrl);
+        }
+        if (cfg.adguardMode === 'ha-api' || cfg.adguardHomeUrl?.includes('homeassistant')) {
+          setAdguardEnv('homeassistant');
+        }
+      }
+    }).catch(() => {});
+  };
+
   // Load configuration & server status on mount
   useEffect(() => {
     isMountedRef.current = true;
@@ -468,31 +499,7 @@ export const DistributeView: React.FC<DistributeViewProps> = ({
       });
     }
 
-    if (window.electron?.getSinkholeConfig) {
-      window.electron.getSinkholeConfig().then((cfg) => {
-        if (isMountedRef.current && cfg) {
-          if (typeof cfg.encryptionAvailable === 'boolean') {
-            setSecretStorageAvailable(cfg.encryptionAvailable);
-          }
-          setSinkholeConfig({
-            ...cfg,
-            adguardMode: cfg.adguardMode || 'direct',
-            adguardDirectPort: normalizeAdguardDirectPort(cfg.adguardDirectPort),
-            allowInsecureLocalTls: Boolean(cfg.allowInsecureLocalTls),
-            adguardDirectUrl: cfg.adguardDirectUrl || '',
-            haToken: cfg.haToken || '',
-            haWebhookUrl: cfg.haWebhookUrl || '',
-            customWebhookUrl: cfg.customWebhookUrl || '',
-          });
-          if (cfg.customWebhookUrl) {
-            setCustomWebhookUrl(cfg.customWebhookUrl);
-          }
-          if (cfg.adguardMode === 'ha-api' || cfg.adguardHomeUrl?.includes('homeassistant')) {
-            setAdguardEnv('homeassistant');
-          }
-        }
-      });
-    }
+    refreshSinkholeConfig();
 
     return () => {
       isMountedRef.current = false;
@@ -746,6 +753,7 @@ export const DistributeView: React.FC<DistributeViewProps> = ({
     }
     if (!isDeployTargetId(id)) return;
     setActiveTab(id);
+    refreshSinkholeConfig();
     const effect = deployTargetById(id)?.selectEffect;
     if (effect) SELECT_EFFECTS[effect]();
   };

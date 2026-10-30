@@ -99,9 +99,12 @@ describe('NetworkPane', () => {
 
 describe('orphan-field audit', () => {
   // Every sinkholeConfig/Settings field the deleted Network Sinkholes card
-  // rendered. Each must appear in a deploy pane (its real home) or in
-  // NetworkPane itself — nothing may drop on the floor.
-  const SINKHOLE_CARD_FIELDS = [
+  // rendered. Value fields must appear in a `value={`/`checked={` binding — a
+  // bare mention only proves the field is *written*, not edited (that's how
+  // adguardDirectUrl slipped the first audit: setSinkholeConfig positions, no
+  // input). Selector fields (adguardMode) render as pills, not value bindings,
+  // and pass on bare presence in a pane.
+  const SINKHOLE_CARD_VALUE_FIELDS = [
     'piholeUrl',
     'piholeApiKey',
     'adguardHomeUrl',
@@ -111,20 +114,34 @@ describe('orphan-field audit', () => {
     'haWebhookUrl',
     'adguardDirectPort',
     'adguardDirectUrl',
-    'syncOnCompile',
     'allowInsecureLocalTls',
     'customWebhookUrl',
   ];
+  const SINKHOLE_CARD_SELECTOR_FIELDS = ['adguardMode', 'syncOnCompile'];
+  const SINKHOLE_CARD_FIELDS = [...SINKHOLE_CARD_VALUE_FIELDS, ...SINKHOLE_CARD_SELECTOR_FIELDS];
 
   const paneSources = readdirSync(join(appRoot, 'src/deploy/panes'))
     .filter((name) => name.endsWith('.tsx'))
     .map((name) => readFileSync(join(appRoot, 'src/deploy/panes', name), 'utf8'));
   const networkPane = readFileSync(join(appRoot, 'src/views/NetworkPane.tsx'), 'utf8');
 
-  it.each(SINKHOLE_CARD_FIELDS)('%s has a home — a deploy pane or NetworkPane', (field) => {
-    const inPane = paneSources.some((src) => src.includes(field));
-    const inNetworkPane = networkPane.includes(field);
+  const hasRenderedBinding = (src: string, field: string) =>
+    src.includes(`value={...${field}`) ||
+    src.includes(`value={${field}`) ||
+    src.includes(`checked={...${field}`) ||
+    src.includes(`checked={${field}`) ||
+    // The dominant pane convention: sinkholeConfig.<field> inside a value/checked binding.
+    new RegExp(`(value|checked)=\\{[^}]*\\.${field}\\b`).test(src);
+
+  it.each(SINKHOLE_CARD_VALUE_FIELDS)('%s has a rendered editor — a pane binding or NetworkPane', (field) => {
+    const inPane = paneSources.some((src) => hasRenderedBinding(src, field));
+    const inNetworkPane = hasRenderedBinding(networkPane, field);
     expect(inPane || inNetworkPane).toBe(true);
+  });
+
+  it.each(SINKHOLE_CARD_SELECTOR_FIELDS)('%s is rendered as a control in a pane or NetworkPane', (field) => {
+    const inPane = paneSources.some((src) => src.includes(field));
+    expect(inPane || networkPane.includes(field)).toBe(true);
   });
 
   it('the settings file no longer renders any sinkhole-credential field', () => {

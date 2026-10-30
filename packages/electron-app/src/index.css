@@ -1227,6 +1227,13 @@ input:checked + .mac-slider:before {
   gap: 18px;
 }
 
+/* The Distribute › Network pane reuses the settings card vocabulary. */
+.network-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
 .setting-card {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
