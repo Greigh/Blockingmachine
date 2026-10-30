@@ -16,6 +16,7 @@ import { useServers } from '../../src/state/servers';
 import { useFilter } from '../../src/state/filter';
 import { ActionButton, Card, ErrorBanner, Grid, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
+import { ScreenHeader } from '../../src/components/ScreenHeader';
 import { formatTimestamp, formatUptime, relativeTime } from '../../src/format';
 import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
 import { haptics } from '../../src/haptics';
@@ -151,19 +152,16 @@ export default function DashboardScreen() {
         />
       }
     >
-      <View style={styles.headerRow}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>{data?.service ?? 'Blockingmachine'}</Text>
-          <Text style={styles.subtitle}>
-            {activeServer.label || activeServer.baseUrl}
-            {data?.version ? ` · v${data.version}` : ''}
-          </Text>
-        </View>
-        <Pill
-          label={connected ? 'live' : 'polling'}
-          tone={connected ? 'ok' : 'muted'}
-        />
-      </View>
+      <ScreenHeader
+        title={data?.service ?? 'Blockingmachine'}
+        subtitle={`${activeServer.label || activeServer.baseUrl}${data?.version ? ` · v${data.version}` : ''}`}
+        trailing={
+          <Pill
+            label={connected ? 'live' : 'polling'}
+            tone={connected ? 'ok' : 'muted'}
+          />
+        }
+      />
 
       {alert?.event === 'quarantine_added' ? (
         <Pressable

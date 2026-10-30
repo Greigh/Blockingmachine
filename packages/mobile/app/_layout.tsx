@@ -63,6 +63,10 @@ export default function RootLayout() {
               name="add-server"
               options={{ title: 'Add Server', presentation: 'modal' }}
             />
+            <Stack.Screen
+              name="settings"
+              options={{ title: 'Settings', presentation: 'modal' }}
+            />
           </Stack>
           </ThemeProvider>
         </ServerEventsProvider>

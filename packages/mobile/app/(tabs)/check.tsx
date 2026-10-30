@@ -16,6 +16,7 @@ import { useFilter } from '../../src/state/filter';
 import type { CheckResult } from '../../src/api/types';
 import { ActionButton, Card, Grid, Pill, SectionTitle } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
+import { ScreenHeader } from '../../src/components/ScreenHeader';
 import { relativeTime } from '../../src/format';
 import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
 import { haptics } from '../../src/haptics';
@@ -92,10 +93,10 @@ export default function CheckScreen() {
       contentContainerStyle={[styles.content, { maxWidth: tier === 'regular' ? layout.contentMaxWidthWide : layout.contentMaxWidth, paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + (tier === 'compact' && !hasEdgeUtilityStrip(insets.right) ? chrome.tabBarClearance : 0) }]}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.title}>Check a domain</Text>
-      <Text style={styles.subtitle}>
-        Ask the server whether a domain is covered by the compiled rules.
-      </Text>
+      <ScreenHeader
+        title="Check a domain"
+        subtitle="Ask the server whether a domain is covered by the compiled rules."
+      />
 
       <Grid columns={gridCols}>
       <Card>

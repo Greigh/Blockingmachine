@@ -10,6 +10,7 @@ import { SideNav } from '../../src/components/SideNav';
 import { useWidthTier, navDockSide, hasEdgeUtilityStrip } from '../../src/hooks/useWidthTier';
 import { useQuarantineBadge } from '../../src/hooks/useEvents';
 import { chrome, colors, glass, layout, spacing } from '../../src/theme';
+import { TABS } from '../../src/routes';
 
 const icon =
   (name: keyof typeof Ionicons.glyphMap) =>
@@ -176,27 +177,23 @@ export default function TabsLayout() {
         sceneStyle: { backgroundColor: 'transparent' },
       }}
     >
-      <Tabs.Screen
-        name="index"
-        options={{ title: 'Dashboard', tabBarIcon: icon('shield-half-outline') }}
-      />
-      <Tabs.Screen
-        name="check"
-        options={{ title: 'Check', tabBarIcon: icon('search-outline') }}
-      />
-      <Tabs.Screen
-        name="telemetry"
-        options={{
-          title: 'Telemetry',
-          tabBarIcon: icon('pulse-outline'),
-          tabBarBadge: quarantineBadge,
-          tabBarBadgeStyle: { backgroundColor: colors.warn, color: colors.bg },
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{ title: 'Settings', tabBarIcon: icon('settings-outline') }}
-      />
+      {TABS.map((tab) => (
+        <Tabs.Screen
+          key={tab.id}
+          name={tab.route}
+          options={{
+            title: tab.label,
+            tabBarIcon: icon(tab.icon),
+            // The quarantine badge is bound to the telemetry tab by registry id.
+            ...(tab.id === 'telemetry'
+              ? {
+                  tabBarBadge: quarantineBadge,
+                  tabBarBadgeStyle: { backgroundColor: colors.warn, color: colors.bg },
+                }
+              : null),
+          }}
+        />
+      ))}
         </Tabs>
       </View>
       {dockSide === 'trailing' ? sideNav : null}

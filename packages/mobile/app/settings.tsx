@@ -22,10 +22,10 @@ import * as Linking from 'expo-linking';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useClient } from '../../src/api/useClient';
-import { useServers, type SavedServer } from '../../src/state/servers';
-import { useFilter } from '../../src/state/filter';
-import { LocalVpn, isLocalVpnSupported } from '../../src/filter/localVpn';
+import { useClient } from '../src/api/useClient';
+import { useServers, type SavedServer } from '../src/state/servers';
+import { useFilter } from '../src/state/filter';
+import { LocalVpn, isLocalVpnSupported } from '../src/filter/localVpn';
 import {
   fetchHubCa,
   HUB_DATA_PORT,
@@ -41,35 +41,35 @@ import {
   saveHubHost,
   type HubCa,
   type PairedCa,
-} from '../../src/filter/httpsCapture';
+} from '../src/filter/httpsCapture';
 import {
   localDnsStatus,
   startLocalDns,
   stopLocalDns,
   subscribeLocalDns,
   type LocalDnsStatus,
-} from '../../src/filter/localDns';
-import { nativeRulesPath } from '../../src/filter/ruleset';
-import { parsePackageList, SELF_PACKAGE, toggledSelfList } from '../../src/filter/perAppBypass';
+} from '../src/filter/localDns';
+import { nativeRulesPath } from '../src/filter/ruleset';
+import { parsePackageList, SELF_PACKAGE, toggledSelfList } from '../src/filter/perAppBypass';
 import {
   getIosTunnelStatus,
   isIosTunnelSupported,
   setIosTunnelEnabled,
-} from '../../src/filter/iosTunnel';
-import { readTunnelStatus } from '../../src/filter/dnsProxy';
+} from '../src/filter/iosTunnel';
+import { readTunnelStatus } from '../src/filter/dnsProxy';
 import {
   readFeeds,
   saveFeeds,
   type FilterFeed,
-} from '../../src/filter/feeds';
-import type { HubFilterSource } from '../../src/api/types';
-import { ActionButton, Card, Grid, Pill, SectionTitle } from '../../src/components/ui';
-import { describeError, UserError, type FriendlyError } from '../../src/errors';
-import { GlassBackdrop } from '../../src/components/GlassBackdrop';
-import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
-import { relativeTime } from '../../src/format';
-import { haptics } from '../../src/haptics';
-import { chrome, colors, glass, layout, spacing } from '../../src/theme';
+} from '../src/filter/feeds';
+import type { HubFilterSource } from '../src/api/types';
+import { ActionButton, Card, Grid, Pill, SectionTitle } from '../src/components/ui';
+import { describeError, UserError, type FriendlyError } from '../src/errors';
+import { GlassBackdrop } from '../src/components/GlassBackdrop';
+import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../src/hooks/useWidthTier';
+import { relativeTime } from '../src/format';
+import { haptics } from '../src/haptics';
+import { chrome, colors, glass, layout, spacing } from '../src/theme';
 
 type FeedKey = keyof NonNullable<SavedServer['feedUrls']>;
 

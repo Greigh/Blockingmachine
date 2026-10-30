@@ -4,6 +4,12 @@
 // reanimated/worklets are stubbed — tests never run worklet code.
 import 'react-native-gesture-handler/jestSetup';
 
+// The icon font isn't in jest's asset registry — ScreenHeader (and any icon-
+// bearing component) would die in expo-font's loadFont. Glyphs are untested.
+jest.mock('@expo/vector-icons', () => ({
+  Ionicons: () => null,
+}));
+
 jest.mock('react-native-reanimated', () =>
   // `require` (not import) — the mock ships no type declarations, and jest
   // factories may not close over imported bindings anyway.

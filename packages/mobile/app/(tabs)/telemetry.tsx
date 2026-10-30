@@ -14,6 +14,7 @@ import { useServers } from '../../src/state/servers';
 import { Card, ErrorBanner, Grid, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
 import { describeError } from '../../src/errors';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
+import { ScreenHeader } from '../../src/components/ScreenHeader';
 import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
 import { formatTimestamp, relativeTime } from '../../src/format';
 import { chrome, colors, glass, layout, spacing } from '../../src/theme';
@@ -111,10 +112,10 @@ export default function TelemetryScreen() {
         />
       }
     >
-      <Text style={styles.title}>Telemetry</Text>
-      <Text style={styles.subtitle}>
-        Threat quarantine, compile history, and browser-reported counters.
-      </Text>
+      <ScreenHeader
+        title="Telemetry"
+        subtitle="Threat quarantine, compile history, and browser-reported counters."
+      />
 
       {telemetry.error ? (
         <ErrorBanner {...describeError(telemetry.error)} onRetry={() => void telemetry.refetch()} />
