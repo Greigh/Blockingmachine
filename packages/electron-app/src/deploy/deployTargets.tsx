@@ -4,7 +4,7 @@
  * The tab strip used to be nine hand-written `<button>` blocks: the label, the icon, the id and the
  * order all lived in JSX, so renaming a platform, reordering them, or rendering a tooltip meant
  * editing markup nine times, and nothing tied a tab to the pane behind it. The registry makes the
- * list data — id, label, summary, icon, order — and `DeployHubView` renders it. A new platform is
+ * list data — id, label, summary, icon, order — and `DistributeView` renders it. A new platform is
  * therefore one entry here plus one pane module.
  *
  * Each entry also names the pane that renders it. That is the coupling the file exists to hold: the
@@ -42,6 +42,18 @@ import type { DeployPaneRenderer, HubPaneProps } from './panes/paneProps';
  * the one function each id resolves to. A target with no effect simply omits it.
  */
 export type DeploySelectEffect = 'refresh-daemon-status';
+
+/**
+ * A live signal a target can report in the inner list's status dot, declared
+ * as data the same way `selectEffect` is: the registry names it, the view
+ * implements it. A target without one simply has no signal to report.
+ */
+export type DeployLiveSignal =
+  | 'sinkhole-pihole'
+  | 'sinkhole-adguard-home'
+  | 'sinkhole-home-assistant'
+  | 'daemon-running'
+  | 'extension-contact';
 
 /**
  * The inner-list group a target sits under in the Distribute section: the LAN
@@ -83,6 +95,8 @@ interface DeployTargetEntry {
   /** The pane this tab opens. Required, so a target cannot be added without something to render. */
   pane: DeployPaneRenderer;
   selectEffect?: DeploySelectEffect;
+  /** The live signal the inner list's status dot reads, when the target can report one. */
+  liveSignal?: DeployLiveSignal;
 }
 
 /** The icon frame every tab shares, so a new target only supplies its own paths. */
@@ -124,6 +138,7 @@ const TARGETS = [
     ),
     paneKeys: browserExtensionPaneKeys,
     pane: renderBrowserExtensionPane,
+    liveSignal: 'extension-contact',
   },
   {
     id: 'adguard-home',
@@ -133,6 +148,7 @@ const TARGETS = [
     icon: tabIcon(<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />),
     paneKeys: adGuardHomePaneKeys,
     pane: renderAdGuardHomePane,
+    liveSignal: 'sinkhole-adguard-home',
   },
   {
     id: 'pihole',
@@ -151,6 +167,7 @@ const TARGETS = [
     ),
     paneKeys: piholePaneKeys,
     pane: renderPiholePane,
+    liveSignal: 'sinkhole-pihole',
   },
   {
     id: 'home-assistant',
@@ -165,6 +182,7 @@ const TARGETS = [
     ),
     paneKeys: homeAssistantPaneKeys,
     pane: renderHomeAssistantPane,
+    liveSignal: 'sinkhole-home-assistant',
   },
   {
     id: 'system-daemon',
@@ -184,6 +202,7 @@ const TARGETS = [
     selectEffect: 'refresh-daemon-status',
     paneKeys: systemDaemonPaneKeys,
     pane: renderSystemDaemonPane,
+    liveSignal: 'daemon-running',
   },
   {
     id: 'adguard-desktop',
@@ -315,6 +334,8 @@ export interface DeployTargetSpec {
   pane: DeployPaneRenderer;
   /** Runs when the tab is selected, when the target needs live state to render. */
   selectEffect?: DeploySelectEffect;
+  /** The live signal the inner list's status dot reads, when the target can report one. */
+  liveSignal?: DeployLiveSignal;
 }
 
 /** The registry the UI reads, in tab order. */

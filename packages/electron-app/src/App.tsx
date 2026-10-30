@@ -9,7 +9,7 @@ import { BulkImportView } from './views/BulkImportView';
 import { CustomRulesView } from './views/CustomRulesView';
 import { RuleInspectorView } from './views/RuleInspectorView';
 import { RuleBrowserView } from './views/RuleBrowserView';
-import { DeployHubView } from './views/DeployHubView';
+import { DistributeView } from './views/DistributeView';
 import { AIRadarView } from './views/AIRadarView';
 import { OnboardingModal, type OnboardingConfig } from './views/OnboardingModal';
 import { PRESET_BUNDLES } from './views/PresetsModal';
@@ -492,7 +492,7 @@ function App() {
               />
             )}
             {currentView === 'deploy' && (
-              <DeployHubView
+              <DistributeView
                 savePath={savePath}
                 onNavigateSettings={() => setCurrentView('settings')}
                 onTriggerCompile={() => setCurrentView('process')}

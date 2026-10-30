@@ -5,6 +5,7 @@ import type {
   SinkholeTestResult,
   SinkholeConfig,
   DaemonStatusInfo,
+  LiveServicesStatus,
   UnboundResolverSettings,
 } from '../types/';
 import type { TierPlanResult } from '../components/ExtensionTierPlanCard';
@@ -23,10 +24,14 @@ import {
   DEFAULT_DEPLOY_TARGET_ID,
   DEPLOY_TARGETS,
   deployTargetById,
+  deployTargetsByGroup,
   isDeployTargetId,
   type DeployTargetId,
   type DeploySelectEffect,
+  type DeployLiveSignal,
 } from '../deploy/deployTargets';
+import { InnerNav } from '../components/InnerNav';
+import { NetworkPane } from './NetworkPane';
 import { pickPaneProps } from '../deploy/panes/paneProps';
 import type { HubPaneProps } from '../deploy/panes/paneProps';
 import { copyTextToClipboard } from '../clipboard';
@@ -48,17 +53,24 @@ import { copyTextToClipboard } from '../clipboard';
  * still there when the user comes back, which they would not be if each pane owned its own copy and
  * unmounted the moment another tab was chosen.
  */
-interface DeployHubViewProps {
+interface DistributeViewProps {
   savePath: string;
+  /** Deep link target — a deploy target id or 'network'. */
+  initialTarget?: string;
   onNavigateSettings?: () => void;
   onTriggerCompile?: () => void;
 }
 
-/** The registry owns the id union, so the tabs and the pane dispatch cannot drift apart. */
-type PlatformTab = DeployTargetId;
+/**
+ * The inner list's row ids: every registry target plus the 'network' row, which
+ * has no deploy pane and therefore no registry entry — it is appended by the
+ * view, per the registry's own contract.
+ */
+type DistributeItem = DeployTargetId | 'network';
 
-export const DeployHubView: React.FC<DeployHubViewProps> = ({
+export const DistributeView: React.FC<DistributeViewProps> = ({
   savePath,
+  initialTarget,
   onNavigateSettings,
   onTriggerCompile,
 }) => {
@@ -76,13 +88,25 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     return id;
   }, []);
 
-  const [activeTab, setActiveTab] = useState<PlatformTab>(DEFAULT_DEPLOY_TARGET_ID);
+  const [activeTab, setActiveTab] = useState<DistributeItem>(() =>
+    initialTarget === 'network' || isDeployTargetId(initialTarget)
+      ? (initialTarget as DistributeItem)
+      : DEFAULT_DEPLOY_TARGET_ID,
+  );
+
+  // Re-drive the selection when a deep link arrives while already mounted.
+  useEffect(() => {
+    if (initialTarget === 'network' || isDeployTargetId(initialTarget)) {
+      setActiveTab(initialTarget as DistributeItem);
+    }
+  }, [initialTarget]);
   const [exportFormat, setExportFormat] = useState<FilterFormat>('adguard');
   // Which of BIND's two blocking mechanisms the pane is writing a recipe for. Local to the pane
   // rather than a stored setting, because it chooses between two recipes rather than describing a
   // deployment \u2014 and the export format below is what actually has to match it.
   const [bindMechanism, setBindMechanism] = useState<BindMechanism>('rpz');
   const [serverStatus, setServerStatus] = useState<FeedServerStatus | null>(null);
+  const [liveServices, setLiveServices] = useState<LiveServicesStatus | null>(null);
   const [isServerLoading, setIsServerLoading] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [lastProcessTime, setLastProcessTime] = useState<string | null>(null);
@@ -362,6 +386,13 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
       window.electron.getFeedServerStatus().then((status) => {
         if (isMountedRef.current) setServerStatus(status);
       });
+    }
+
+    // The extension's last-contact reading — the browser row's live dot.
+    if (window.electron?.getLiveServices) {
+      window.electron.getLiveServices().then((services) => {
+        if (isMountedRef.current) setLiveServices(services);
+      }).catch(() => {});
     }
 
     if (window.electron?.getAutoStartFeedServer) {
@@ -698,10 +729,21 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     }
   };
 
-  /** Selects a tab, running whatever side effect the registry declares for it. */
+  /** Selects a row, running whatever side effect the registry declares for it. */
   const handleSelectTarget = (id: string) => {
-    // The tab strip only ever passes a registry id, but the same handler reaches the sibling
-    // index in the extension pane as a plain string — refuse rather than trust it.
+    // The inner list only ever passes a registry id or 'network', but the same handler reaches
+    // the sibling index in the extension pane as a plain string — refuse rather than trust it.
+    if (id === 'network') {
+      setActiveTab('network');
+      // The row is view-owned so the registry declares no selectEffect for it;
+      // refreshing the feed status here is the same courtesy the daemon row gets.
+      window.electron?.getFeedServerStatus?.()
+        .then((status) => {
+          if (isMountedRef.current) setServerStatus(status);
+        })
+        .catch(() => {});
+      return;
+    }
     if (!isDeployTargetId(id)) return;
     setActiveTab(id);
     const effect = deployTargetById(id)?.selectEffect;
@@ -905,10 +947,50 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
    *
    * The registry is the only place a platform is named, so this is the whole of the dispatch: look
    * the entry up by id, call the pane it carries. The fallback covers an id that somehow is not in
-   * the registry, which the tab strip cannot produce but a restored session could — and it answers
+   * the registry, which the inner list cannot produce but a restored session could — and it answers
    * with the first tab rather than a blank pane.
    */
   const activeTarget = deployTargetById(activeTab) ?? DEPLOY_TARGETS[0];
+
+  /**
+   * The implementations behind the registry's named live signals — same shape
+   * as SELECT_EFFECTS: declared on the entry, implemented here against the
+   * hub's state. The 'network' row's feed-server signal is view-owned, so it
+   * lives beside them rather than in the union.
+   */
+  const LIVE_SIGNALS: Record<DeployLiveSignal, () => boolean> = {
+    'sinkhole-pihole': () =>
+      Boolean(sinkholeConfig.piholeApiKeyConfigured || sinkholeConfig.piholeUrl),
+    'sinkhole-adguard-home': () =>
+      Boolean(sinkholeConfig.adguardHomePasswordConfigured || sinkholeConfig.adguardHomeUrl),
+    'sinkhole-home-assistant': () =>
+      Boolean(sinkholeConfig.haTokenConfigured || sinkholeConfig.haWebhookUrl),
+    'daemon-running': () => daemonStatus?.status === 'running',
+    'extension-contact': () => Boolean(liveServices?.extension?.lastContactAt),
+  };
+
+  const statusFor = (id: string): 'live' | 'idle' => {
+    const signal = deployTargetById(id)?.liveSignal;
+    const live = id === 'network' ? serverStatus?.isRunning : signal ? LIVE_SIGNALS[signal]() : false;
+    return live ? 'live' : 'idle';
+  };
+
+  const innerGroups = [
+    ...deployTargetsByGroup().map((group) => ({
+      label: group.label,
+      items: group.targets.map((target) => ({
+        id: target.id,
+        label: target.label,
+        icon: target.icon,
+        status: statusFor(target.id),
+      })),
+    })),
+    {
+      label: 'Network',
+      items: [{ id: 'network', label: 'LAN feed & pairing', status: statusFor('network') }],
+    },
+  ];
+
   return (
     <div className="deploy-hub-container">
       {/* 1. The header — artifact identity and the LAN feed server. Markup, not state: everything
@@ -932,26 +1014,43 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
       />
 
       {/* =========================================================================
-          2. PLATFORM NAVIGATION TABS
+          2. GROUPED INNER NAV — the twelve targets can't share a tab strip, so
+             the section picks its sub-screen in a rail instead: registry groups
+             plus the network row, status dot where a signal exists. At ≤460px
+             the rail collapses to the picker below (CSS swaps which renders).
          ========================================================================= */}
-      <div className="deploy-platform-tabs" role="tablist" aria-label="Deployment Platforms">
-        {DEPLOY_TARGETS.map((target) => (
-          <button
-            key={target.id}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === target.id}
-            title={target.summary}
-            className={`platform-tab-btn ${activeTab === target.id ? 'active' : ''}`}
-            onClick={() => handleSelectTarget(target.id)}
-          >
-            <span className="platform-tab-icon">{target.icon}</span>
-            <span className="platform-tab-label">{target.label}</span>
-          </button>
-        ))}
+      <div className="distribute-body">
+        <InnerNav
+          groups={innerGroups}
+          activeId={activeTab}
+          onSelect={handleSelectTarget}
+          ariaLabel="Deploy targets"
+        />
+        <select
+          className="inner-nav-select"
+          aria-label="Deploy targets"
+          value={activeTab}
+          onChange={(e) => handleSelectTarget(e.target.value)}
+        >
+          {innerGroups.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.items.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                  {item.status === 'live' ? ' — configured' : item.status === 'idle' ? ' — not set up' : ''}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        <div className="distribute-pane">
+          {activeTab === 'network' ? (
+            <NetworkPane />
+          ) : (
+            activeTarget.pane(pickPaneProps(paneProps, activeTarget.paneKeys))
+          )}
+        </div>
       </div>
-
-      {activeTarget.pane(pickPaneProps(paneProps, activeTarget.paneKeys))}
     </div>
   );
 };

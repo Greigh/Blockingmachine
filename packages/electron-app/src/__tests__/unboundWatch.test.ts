@@ -243,7 +243,7 @@ describe('unbound watch · the wiring', () => {
   const read = (relative: string) => readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
   const main = read('../index.ts');
   const preload = read('../preload.ts');
-  const view = read('../views/DeployHubView.tsx');
+  const view = read('../views/DistributeView.tsx');
 
   test('the check is scheduled at startup and stopped at quit', () => {
     // Started beside the other background timers rather than only when a pane is open, because a

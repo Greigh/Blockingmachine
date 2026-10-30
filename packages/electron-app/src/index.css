@@ -7506,73 +7506,6 @@ button.format-tile .format-target {
   margin: 0;
 }
 
-/* Platform Navigation Tabs (macOS Segmented Control) */
-.deploy-platform-tabs {
-  display: flex;
-  /* Nine platform tabs no longer fit one row at the window's narrower widths, and the labels are
-     `nowrap`. Wrapping keeps every tab readable instead of letting them squash into ellipses. */
-  flex-wrap: wrap;
-  /* The panes are taller than the window, and the strip used to scroll away with them — leaving a
-     deep pane like Unbound with no way to switch target and no visible answer to "which tab am I
-     on". Sticky keeps the whole control at the top of the scrollport; the background below is the
-     card's own opaque one, so the content slides under it cleanly. */
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  background: var(--control-bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 4px;
-  gap: 4px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.platform-tab-btn {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 8px 10px;
-  border-radius: 7px;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--secondary-color);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
-  user-select: none;
-}
-
-.platform-tab-btn:hover {
-  background: rgba(127, 127, 127, 0.08);
-  color: var(--heading-color);
-}
-
-.platform-tab-btn.active {
-  background: var(--control-bg-color);
-  color: var(--primary-color);
-  border-color: rgba(0, 0, 0, 0.08);
-  font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12), 0 0 1px rgba(0, 0, 0, 0.15);
-}
-
-.platform-tab-icon {
-  font-size: 14px;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-}
-
-.platform-tab-label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* Platform Instructions Guide */
 .deploy-guide-panel {
   display: flex;
@@ -13299,7 +13232,6 @@ summary:focus-visible {
 .dark-theme .syntax-pill.active-total,
 .dark-theme .deploy-format-pill,
 .dark-theme .deploy-server-toggle-btn,
-.dark-theme .platform-tab-btn.active,
 .dark-theme .deploy-pane-status-pill.primary,
 .dark-theme .deploy-tool-btn.primary {
   color: color-mix(in srgb, var(--primary-color) 62%, #ffffff);
@@ -13472,4 +13404,51 @@ summary:focus-visible {
    it at the same readable width the settings container used. */
 .ai-engine-pane {
   max-width: 860px;
+}
+
+/* Distribute — the inner-nav rail beside the pane, collapsing to a picker at
+   the 460px drawer-mode width (the same breakpoint the sidebar uses). */
+.distribute-body {
+  display: flex;
+  gap: 18px;
+  min-height: 0;
+  flex: 1;
+}
+
+.distribute-body .inner-nav {
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.distribute-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.inner-nav-select {
+  display: none;
+}
+
+@media (max-width: 460px) {
+  .distribute-body {
+    flex-direction: column;
+  }
+
+  .distribute-body .inner-nav {
+    display: none;
+  }
+
+  .inner-nav-select {
+    display: block;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--control-border-color);
+    border-radius: 8px;
+    background: var(--control-bg-color);
+    color: var(--text-color);
+    font-size: 13px;
+    flex-shrink: 0;
+  }
 }
