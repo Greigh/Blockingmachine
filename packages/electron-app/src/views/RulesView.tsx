@@ -51,7 +51,6 @@ export const RulesView: React.FC<RulesViewProps> = ({
   // Re-drive the host when a deep link arrives while it is already mounted.
   useEffect(() => {
     if (initialTab) setTab(valid(initialTab));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTab]);
 
   return (

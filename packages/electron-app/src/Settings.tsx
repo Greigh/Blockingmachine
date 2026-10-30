@@ -321,44 +321,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   return (
     <div className="settings-container">
-      <nav className="settings-index" aria-label="Settings sections">
-        <a href="#settings-appearance">Appearance</a>
-        <a href="#settings-export">Export Format</a>
-        <a href="#settings-location">Save Location</a>
-        <a href="#settings-startup">Startup & Services</a>
-        <a href="#about-community">About & Updates</a>
-        <a href="#settings-tour">Tour</a>
-      </nav>
       <div className="settings-grid">
-        {/* Onboarding & Guide Setting Card */}
-        <div className="setting-card" id="settings-tour">
-          <div className="setting-card-header">
-            <h2>
-              <span className="setting-icon-svg">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
-                </svg>
-              </span>
-              Welcome & Onboarding Tour
-            </h2>
-            <span className="setting-badge">Guide</span>
-          </div>
-          <p>
-            Replay the initial onboarding wizard to change your protection profile, starter feeds, and setup.
-          </p>
-          <div style={{ marginTop: '14px' }}>
-            <button
-              type="button"
-              className="primary-button"
-              onClick={onLaunchOnboarding}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
-            >
-              <span>Launch Onboarding Tour</span>
-              <span style={{ fontSize: '13px' }}>→</span>
-            </button>
-          </div>
-        </div>
-
         {/* Theme Setting */}
         <div className="setting-card" id="settings-appearance">
           <div className="setting-card-header">
@@ -690,6 +653,19 @@ const Settings: React.FC<SettingsProps> = ({
               <span className="update-check-status update-check-error" role="alert">Could not check: {updateCheck.message}</span>
             )}
           </div>
+
+          {onLaunchOnboarding && (
+            <div className="update-check-row">
+              <button
+                type="button"
+                className="browse-button secondary"
+                onClick={onLaunchOnboarding}
+              >
+                Replay welcome tour
+              </button>
+              <span className="update-check-status">Reopen the onboarding wizard to change your protection profile and starter feeds.</span>
+            </div>
+          )}
 
           <div className="about-links-grid">
             <a

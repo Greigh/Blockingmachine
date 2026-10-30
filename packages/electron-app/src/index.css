@@ -653,7 +653,7 @@ body {
   scroll-behavior: smooth;
 }
 
-.main-content-scroll.view-ai-radar {
+.main-content-scroll.tab-radar {
   /* Page-level scroll like every other view — the previous fit-to-viewport
      variant (overflow:hidden + bounded flex children) repeatedly clipped
      content below the fold with no way to reach it. */

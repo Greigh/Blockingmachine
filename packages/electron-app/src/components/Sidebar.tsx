@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrandLogo } from './BrandLogo';
 import { useDialogFocus } from './useDialogFocus';
+import { SECTIONS, type SectionId } from '../routes';
 
 interface SidebarProps {
-  currentView: string;
-  setCurrentView: (view: string) => void;
+  activeSection: SectionId;
+  onSelectSection: (id: SectionId) => void;
   enabledSourcesCount: number;
   totalSourcesCount: number;
   updateAvailable: boolean;
@@ -12,20 +13,18 @@ interface SidebarProps {
     e: React.MouseEvent<HTMLAnchorElement>,
     url: string
   ) => void;
-  onLaunchOnboarding?: () => void;
   isRadarScanning?: boolean;
   navOpen?: boolean;
   onCloseNav?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
-  currentView,
-  setCurrentView,
+  activeSection,
+  onSelectSection,
   enabledSourcesCount,
   totalSourcesCount,
   updateAvailable,
   handleExternalLink,
-  onLaunchOnboarding,
   isRadarScanning,
   navOpen,
   onCloseNav,
@@ -76,303 +75,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Sidebar Navigation Items */}
+      {/* Sidebar Navigation Items — the five sections, straight from the registry */}
       <nav className="sidebar-nav" id="app-sidebar-nav" aria-label="Primary">
-        {/* OVERVIEW */}
-        <div className="sidebar-section-label">Overview</div>
-        <button
-          className={`sidebar-nav-item ${currentView === 'process' ? 'active' : ''}`}
-          aria-current={currentView === 'process' ? 'page' : undefined}
-          onClick={() => setCurrentView('process')}
-          title="Dashboard & Filter Processor (Cmd+1)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
+        {SECTIONS.map((section) => {
+          const active = activeSection === section.id;
+          return (
+            <button
+              key={section.id}
+              className={`sidebar-nav-item ${active ? 'active' : ''}`}
+              aria-current={active ? 'page' : undefined}
+              onClick={() => onSelectSection(section.id)}
+              title={`${section.label} (${section.shortcut.replace('⌘', 'Cmd+')})`}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"
-              />
-            </svg>
-          </span>
-          <span className="sidebar-label">Dashboard</span>
-          <span className="sidebar-shortcut">⌘1</span>
-        </button>
-
-        {/* RULES & FEEDS */}
-        <div className="sidebar-section-label">Rules & Feeds</div>
-        <button
-          className={`sidebar-nav-item ${currentView === 'sources' ? 'active' : ''}`}
-          aria-current={currentView === 'sources' ? 'page' : undefined}
-          onClick={() => setCurrentView('sources')}
-          title="Filter Feeds & Subscriptions (Cmd+2)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"
-              />
-            </svg>
-          </span>
-          <span className="sidebar-label">Filter Sources</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span className="sidebar-badge">
-              {enabledSourcesCount}/{totalSourcesCount}
-            </span>
-            <span className="sidebar-shortcut">⌘2</span>
-          </div>
-        </button>
-
-        <button
-          className={`sidebar-nav-item ${currentView === 'modules' ? 'active' : ''}`}
-          aria-current={currentView === 'modules' ? 'page' : undefined}
-          onClick={() => setCurrentView('modules')}
-          title="Defense Modules (First-Party Curated Shields) (Cmd+3)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"
-              />
-            </svg>
-          </span>
-          <span className="sidebar-label">
-            Modules
-            <span className="sidebar-badge-inline">Beta</span>
-          </span>
-          <span className="sidebar-shortcut">⌘3</span>
-        </button>
-
-        <button
-          className={`sidebar-nav-item ${currentView === 'custom' ? 'active' : ''}`}
-          aria-current={currentView === 'custom' ? 'page' : undefined}
-          onClick={() => setCurrentView('custom')}
-          title="Custom Rules Editor (Cmd+4)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"
-              />
-            </svg>
-          </span>
-          <span className="sidebar-label">Custom Rules</span>
-          <span className="sidebar-shortcut">⌘4</span>
-        </button>
-
-        {/* TOOLS & AI */}
-        <div className="sidebar-section-label">Tools & AI</div>
-        <button
-          className={`sidebar-nav-item ${currentView === 'inspector' ? 'active' : ''}`}
-          aria-current={currentView === 'inspector' ? 'page' : undefined}
-          onClick={() => setCurrentView('inspector')}
-          title="Rule & AI Inspector (Cmd+5)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
-              />
-            </svg>
-          </span>
-          <span className="sidebar-label">Rule Inspector</span>
-          <span className="sidebar-shortcut">⌘5</span>
-        </button>
-
-        <button
-          className={`sidebar-nav-item ${currentView === 'browser' ? 'active' : ''}`}
-          aria-current={currentView === 'browser' ? 'page' : undefined}
-          onClick={() => setCurrentView('browser')}
-          title="Compiled Rules Browser (Cmd+6)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"
-              />
-            </svg>
-          </span>
-          <span className="sidebar-label">Rule Browser</span>
-          <span className="sidebar-shortcut">⌘6</span>
-        </button>
-
-        <button
-          className={`sidebar-nav-item ${currentView === 'ai-radar' ? 'active' : ''}`}
-          aria-current={currentView === 'ai-radar' ? 'page' : undefined}
-          onClick={() => setCurrentView('ai-radar')}
-          title="AI Ad & Tracker Discovery Radar [Beta] (Cmd+7)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <circle cx="12" cy="12" r="9" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3a9 9 0 019 9" />
-              <circle cx="12" cy="12" r="3" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 12l4-4" />
-            </svg>
-          </span>
-          <span className="sidebar-label">
-            AI Radar
-            {isRadarScanning ? (
-              <span className="sidebar-radar-live-pill" title="Live background scanning active">
-                <span className="live-radar-ping-dot" />
-                LIVE
+              <span className="sidebar-icon" aria-hidden="true">
+                {section.icon}
               </span>
-            ) : (
-              <span className="sidebar-badge-inline beta">Beta</span>
-            )}
-          </span>
-          <span className="sidebar-shortcut">⌘7</span>
-        </button>
-
-        {/* DISTRIBUTION */}
-        <div className="sidebar-section-label">Distribution</div>
-        <button
-          className={`sidebar-nav-item ${currentView === 'deploy' ? 'active' : ''}`}
-          aria-current={currentView === 'deploy' ? 'page' : undefined}
-          onClick={() => setCurrentView('deploy')}
-          title="Deploy & Sinkhole Sync (Cmd+8)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <rect x="2" y="3" width="20" height="6" rx="2" />
-              <rect x="2" y="15" width="20" height="6" rx="2" />
-              <path strokeLinecap="round" d="M6 6h.01M6 18h.01M12 9v6M8 12h8" />
-            </svg>
-          </span>
-          <span className="sidebar-label">Deploy & Sync</span>
-          <span className="sidebar-shortcut">⌘8</span>
-        </button>
-
-        {/* PREFERENCES */}
-        <div className="sidebar-section-label">Preferences</div>
-
-        <button
-          className={`sidebar-nav-item ${currentView === 'settings' ? 'active' : ''}`}
-          aria-current={currentView === 'settings' ? 'page' : undefined}
-          onClick={() => setCurrentView('settings')}
-          title="Settings (Cmd+,)"
-        >
-          <span className="sidebar-icon">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"
-              />
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-              />
-            </svg>
-          </span>
-          <span className="sidebar-label">Settings</span>
-          <span className="sidebar-shortcut">⌘,</span>
-          {updateAvailable && (
-            <span className="update-dot" title="Update Available">
-              ●
-            </span>
-          )}
-        </button>
-
-        {onLaunchOnboarding && (
-          <button
-            className="sidebar-nav-item"
-            onClick={onLaunchOnboarding}
-            title="Launch Welcome & Onboarding Tour"
-          >
-            <span className="sidebar-icon">
-              <svg
-                viewBox="0 0 24 24"
-                width="16"
-                height="16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"
-                />
-              </svg>
-            </span>
-            <span className="sidebar-label">Welcome Tour</span>
-          </button>
-        )}
+              <span className="sidebar-label">
+                {section.label}
+                {section.id === 'discover' && isRadarScanning && (
+                  <span className="sidebar-radar-live-pill" title="Live background scanning active">
+                    <span className="live-radar-ping-dot" />
+                    LIVE
+                  </span>
+                )}
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {section.id === 'rules' && (
+                  <span className="sidebar-badge">
+                    {enabledSourcesCount}/{totalSourcesCount}
+                  </span>
+                )}
+                <span className="sidebar-shortcut">{section.shortcut}</span>
+                {section.id === 'settings' && updateAvailable && (
+                  <span className="update-dot" title="Update Available">
+                    ●
+                  </span>
+                )}
+              </span>
+            </button>
+          );
+        })}
       </nav>
 
       {/* Native macOS Sidebar Footer */}

@@ -46,7 +46,6 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
   // (the app shell can re-render with a new route.tab rather than remounting).
   useEffect(() => {
     if (initialTab) setTab(valid(initialTab));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTab]);
   useEffect(() => {
     if (inspectorDomain) setDomain(inspectorDomain);
