@@ -23,8 +23,7 @@ import { routeForViewName, type AppRoute } from '../routes';
 
 interface HomeViewProps {
   savePath: string;
-  autoTriggerCompile?: boolean;
-  /** Non-zero while a 'trigger-compile' IPC is pending consumption. */
+  /** Non-zero while a compile trigger is pending consumption. */
   compileNonce?: number;
   /** Clears the pending trigger so a view remount cannot re-fire it. */
   onCompileConsumed?: () => void;
@@ -36,7 +35,6 @@ const cleanModuleName = (name: string): string =>
 
 export const HomeView: React.FC<HomeViewProps> = ({
   savePath,
-  autoTriggerCompile,
   compileNonce,
   onCompileConsumed,
   navigate,
@@ -177,17 +175,17 @@ export const HomeView: React.FC<HomeViewProps> = ({
     };
   }, []);
 
-  // `autoTriggerCompile` covers the mount-once onboarding/modules path; `compileNonce`
-  // covers every 'trigger-compile' IPC (menu Cmd+R, tray, LAN /v1/compile). Consumption
-  // is reported back to App — the pending flag must clear or a view remount would
-  // silently start a compile nobody asked for.
+  // `compileNonce` is the single trigger channel — 'trigger-compile' IPC (menu
+  // Cmd+R, tray, LAN /v1/compile), in-app compile buttons, and onboarding all
+  // bump it. Consumption is reported back to App — the pending flag must clear
+  // or a view remount would silently start a compile nobody asked for.
   useEffect(() => {
     const pending = (compileNonce ?? 0) > 0;
     if (pending) onCompileConsumed?.();
-    if ((autoTriggerCompile || pending) && !isLoading) {
+    if (pending && !isLoading) {
       handleRunProcess();
     }
-  }, [autoTriggerCompile, compileNonce]);
+  }, [compileNonce]);
 
   // Keyboard shortcut Cmd+R to compile
   useEffect(() => {

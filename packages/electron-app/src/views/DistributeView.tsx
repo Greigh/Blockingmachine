@@ -14,6 +14,7 @@ import type {
   UnboundReachabilitySnapshot,
 } from '../unboundReachability';
 import { separateAdguardUrls } from '../queryLogScout';
+import type { AppRoute } from '../routes';
 import {
   DEFAULT_ADGUARD_DIRECT_PORT,
   normalizeAdguardDirectPort,
@@ -59,6 +60,8 @@ interface DistributeViewProps {
   initialTarget?: string;
   onNavigateSettings?: () => void;
   onTriggerCompile?: () => void;
+  /** Keeps the shell's route.tab in sync with the selected row. */
+  navigate?: (route: AppRoute) => void;
 }
 
 /**
@@ -73,6 +76,7 @@ export const DistributeView: React.FC<DistributeViewProps> = ({
   initialTarget,
   onNavigateSettings,
   onTriggerCompile,
+  navigate,
 }) => {
   const isMountedRef = useRef(true);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -742,6 +746,7 @@ export const DistributeView: React.FC<DistributeViewProps> = ({
     // the sibling index in the extension pane as a plain string — refuse rather than trust it.
     if (id === 'network') {
       setActiveTab('network');
+      navigate?.({ section: 'distribute', tab: 'network' });
       // The row is view-owned so the registry declares no selectEffect for it;
       // refreshing the feed status here is the same courtesy the daemon row gets.
       window.electron?.getFeedServerStatus?.()
@@ -753,6 +758,7 @@ export const DistributeView: React.FC<DistributeViewProps> = ({
     }
     if (!isDeployTargetId(id)) return;
     setActiveTab(id);
+    navigate?.({ section: 'distribute', tab: id });
     refreshSinkholeConfig();
     const effect = deployTargetById(id)?.selectEffect;
     if (effect) SELECT_EFFECTS[effect]();

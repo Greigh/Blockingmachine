@@ -114,7 +114,8 @@ describe('App shell', () => {
     expect(
       items.map((b) => b.querySelector('.sidebar-label')?.firstChild?.textContent?.trim()),
     ).toEqual(['Home', 'Rules', 'Discover', 'Distribute', 'Settings']);
-    expect(items.map((b) => b.getAttribute('aria-label'))).toEqual([
+    // Accessible names carry the label plus live status ("Rules — 1 of 2 feeds").
+    expect(items.map((b) => b.getAttribute('aria-label')?.split(' — ')[0])).toEqual([
       'Home',
       'Rules',
       'Discover',

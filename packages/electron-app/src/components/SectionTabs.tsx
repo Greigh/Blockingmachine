@@ -5,7 +5,7 @@
  * this bar rather than a second sidebar column. It implements the real tablist
  * contract — role="tablist"/"tab", roving tabindex, arrow/Home/End movement —
  * so the bar reads and drives like the platform control it is, not a row of
- * buttons with a highlight. The host owns the panels: each tab's aria-controls
+ * buttons with a highlight. The host owns the panels: the active tab's aria-controls
  * names the id the host's panel must render (`section-tabpanel-<tabId>` — use
  * the exported `panelId()`/`tabId()` helpers, never a hand-built string), and
  * the host sets role="tabpanel" + aria-labelledby back onto the tab's id.
@@ -64,7 +64,9 @@ export const SectionTabs: React.FC<SectionTabsProps> = ({
             role="tab"
             id={tabId(tab.id)}
             aria-selected={active}
-            aria-controls={panelId(tab.id)}
+            // Only the active tab's panel is in the DOM — naming a missing id
+            // on inactive tabs would dangle.
+            aria-controls={active ? panelId(tab.id) : undefined}
             tabIndex={index === activeIndex ? 0 : -1}
             className={`section-tab${active ? ' active' : ''}`}
             onClick={() => onSelect(tab.id)}

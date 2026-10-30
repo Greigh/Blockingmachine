@@ -10,7 +10,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { SectionTabs, panelId, tabId } from '../components/SectionTabs';
-import { routeForViewName, sectionById, type AppRoute } from '../routes';
+import { sectionById, type AppRoute } from '../routes';
 import { SourcesView } from './SourcesView';
 import { ModulesView } from './ModulesView';
 import { CustomRulesView } from './CustomRulesView';
@@ -87,10 +87,6 @@ export const RulesView: React.FC<RulesViewProps> = ({
             setError={setError}
             setSuccessMessage={setSuccessMessage}
             initialTab={feedsInitialTab ?? undefined}
-            onNavigate={(view) => {
-              const route = routeForViewName(view);
-              if (route) navigate(route);
-            }}
           />
         )}
         {tab === 'modules' && (

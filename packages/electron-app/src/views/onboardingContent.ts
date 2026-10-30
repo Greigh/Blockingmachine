@@ -51,7 +51,7 @@ export const ONBOARDING_HIGHLIGHTS: OnboardingHighlight[] = [
   },
   {
     icon: 'deploy',
-    title: 'Deploy & Sync',
+    title: 'Distribute',
     body: 'Push a compiled list to Pi-hole, AdGuard Home, BIND, Unbound, dnsmasq, Privoxy, Shadowrocket, Home Assistant, a managed local DNS daemon, or a LAN feed — and reload after each compile.',
   },
   {
@@ -79,7 +79,7 @@ export const DEPLOY_SETUP_OPTIONS: DeploySetupOption[] = [
   {
     id: 'adguard',
     name: 'AdGuard Home',
-    detail: 'Direct API, Home Assistant, or a webhook. Primary file is adguard.txt. Add the address in Deploy & Sync.',
+    detail: 'Direct API, Home Assistant, or a webhook. Primary file is adguard.txt. Add the address in Distribute.',
     format: 'adguard',
   },
   {
@@ -97,7 +97,7 @@ export const DEPLOY_SETUP_OPTIONS: DeploySetupOption[] = [
   {
     id: 'later',
     name: 'Set up later',
-    detail: 'Skip sinkhole setup for now. Deploy & Sync stays in the sidebar when you have an address.',
+    detail: 'Skip sinkhole setup for now. Distribute stays in the sidebar when you have an address.',
     format: null,
   },
 ];

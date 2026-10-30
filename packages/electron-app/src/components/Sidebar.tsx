@@ -79,12 +79,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <nav className="sidebar-nav" id="app-sidebar-nav" aria-label="Primary">
         {SECTIONS.map((section) => {
           const active = activeSection === section.id;
+          // Status travels in the accessible name — the badge, LIVE pill, and
+          // update dot are aria-hidden decoration, not the only carrier.
+          const a11yLabel =
+            section.id === 'rules'
+              ? `${section.label} — ${enabledSourcesCount} of ${totalSourcesCount} feeds enabled`
+              : section.id === 'discover' && isRadarScanning
+                ? `${section.label} — radar scanning`
+                : section.id === 'settings' && updateAvailable
+                  ? `${section.label} — update available`
+                  : section.label;
           return (
             <button
               key={section.id}
               className={`sidebar-nav-item ${active ? 'active' : ''}`}
               aria-current={active ? 'page' : undefined}
-              aria-label={section.label}
+              aria-label={a11yLabel}
               onClick={() => onSelectSection(section.id)}
               title={`${section.label} (${section.shortcut.replace('⌘', 'Cmd+')})`}
             >

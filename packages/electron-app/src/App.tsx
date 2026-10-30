@@ -43,9 +43,9 @@ function App() {
       return false;
     }
   });
-  const [autoTriggerCompile, setAutoTriggerCompile] = useState<boolean>(false);
-  // Bumped on every 'trigger-compile' IPC and cleared when HomeView consumes it —
-  // a pending trigger survives view switches but a consumed one cannot re-fire on remount.
+  // Bumped by every compile trigger (IPC, in-app buttons, onboarding) and cleared
+  // when HomeView consumes it — a pending trigger survives view switches but a
+  // consumed one cannot re-fire on remount. The one channel; no boolean parallel.
   const [compileNonce, setCompileNonce] = useState<number>(0);
   // The 'bulkImport' deep link wants Rules › feeds opened in bulk mode — a
   // one-shot armed value, consumed and cleared by RulesView like compileNonce.
@@ -63,8 +63,11 @@ function App() {
   }, []);
 
   const selectSection = useCallback(
-    (id: SectionId) => navigate({ section: id, tab: null }),
-    [navigate],
+    (id: SectionId) =>
+      // Re-clicking the active section keeps its tab — route.tab must track the
+      // panel on screen or the header title and tab-* classes would desync.
+      navigate({ section: id, tab: id === route.section ? route.tab : null }),
+    [navigate, route],
   );
   // Stable drawer callbacks — a fresh arrow each render would re-run
   // useDialogFocus and yank focus out of the open drawer on any App update.
@@ -255,9 +258,8 @@ function App() {
 
     // 5. Trigger initial compilation if requested
     if (config.shouldCompileImmediately) {
+      setCompileNonce((n) => n + 1);
       navigate({ section: 'home', tab: null });
-      setAutoTriggerCompile(true);
-      setTimeout(() => setAutoTriggerCompile(false), 1500);
     }
   };
 
@@ -430,7 +432,6 @@ function App() {
             {route.section === 'home' && (
               <HomeView
                 savePath={savePath}
-                autoTriggerCompile={autoTriggerCompile}
                 compileNonce={compileNonce}
                 onCompileConsumed={() => setCompileNonce(0)}
                 navigate={navigate}
@@ -444,7 +445,7 @@ function App() {
                 sources={sources}
                 saveSources={saveSources}
                 onTriggerCompile={() => {
-                  setAutoTriggerCompile(true);
+                  setCompileNonce((n) => n + 1);
                   navigate({ section: 'home', tab: null });
                 }}
                 navigate={navigate}
@@ -457,7 +458,7 @@ function App() {
                 initialTab={route.tab ?? undefined}
                 liveRadarSession={liveRadarSession}
                 onTriggerCompile={() => {
-                  setAutoTriggerCompile(true);
+                  setCompileNonce((n) => n + 1);
                   navigate({ section: 'home', tab: null });
                 }}
                 navigate={navigate}
@@ -471,9 +472,10 @@ function App() {
                 initialTarget={route.tab ?? undefined}
                 onNavigateSettings={() => navigate({ section: 'settings', tab: null })}
                 onTriggerCompile={() => {
-                  setAutoTriggerCompile(true);
+                  setCompileNonce((n) => n + 1);
                   navigate({ section: 'home', tab: null });
                 }}
+                navigate={navigate}
               />
             )}
             {route.section === 'settings' && (
