@@ -60,6 +60,19 @@ contextBridge.exposeInMainWorld('electron', {
       release?: string;
       error?: string;
     }>,
+  /**
+   * Stages the bundled extension into the app's stable extension dir, copies
+   * the path to the clipboard, and opens the browser's load page. `opened`
+   * names which browser was launched, or null when none could be.
+   */
+  installBrowserExtension: (flavor?: 'chromium' | 'firefox') =>
+    ipcRenderer.invoke('install-browser-extension', flavor) as Promise<{
+      success: boolean;
+      path?: string;
+      flavor?: string;
+      opened?: string | null;
+      error?: string;
+    }>,
   setSavePath: (path: string) => ipcRenderer.invoke('set-save-path', path),
   selectSavePath: () => ipcRenderer.invoke('select-save-path') as Promise<string>,
   getExportFormat: () => ipcRenderer.invoke('get-export-format'),

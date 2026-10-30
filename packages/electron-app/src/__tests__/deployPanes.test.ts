@@ -180,6 +180,7 @@ function bundle(overrides: Partial<HubPaneProps> = {}): HubPaneProps {
     extensionBrowser: 'both',
     setExtensionBrowser: noop,
     handleDownloadExtension: noopAsync,
+    handleInstallExtension: noopAsync,
     siblingTargets: [],
     onSelectTarget: noop,
 

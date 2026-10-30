@@ -744,6 +744,44 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
   };
 
   /**
+   * The guided leg: stage the bundled build at the app's stable path, open the
+   * browser's own load page, and leave the path on the clipboard for the file
+   * picker's ⌘⇧G box. The browser keeps the last click — the same steps below
+   * still apply.
+   */
+  const handleInstallExtension = async (flavor: 'chromium' | 'firefox') => {
+    if (!window.electron?.installBrowserExtension) return;
+    setExtensionSaving(true);
+    setExtensionMessage(null);
+    try {
+      const res = await window.electron.installBrowserExtension(flavor);
+      if (res?.success && res.path) {
+        setExtensionSavedPath(res.path);
+        const opener = res.opened
+          ? `${res.opened} opened on the load page`
+          : 'Open the browser\'s extension page yourself';
+        const steps =
+          flavor === 'firefox'
+            ? 'Load Temporary Add-on → paste the path (⌘⇧G) → pick manifest.json'
+            : 'Developer mode → Load unpacked → paste the path (⌘⇧G)';
+        setExtensionMessage({
+          text: `Staged — the path is on your clipboard. ${opener} — steps: ${steps}.`,
+          type: 'success',
+        });
+      } else {
+        setExtensionMessage({
+          text: res?.error || 'The bundled extension could not be staged.',
+          type: 'error',
+        });
+      }
+    } catch (err) {
+      setExtensionMessage({ text: String(err), type: 'error' });
+    } finally {
+      setExtensionSaving(false);
+    }
+  };
+
+  /**
    * The pane bundle.
    *
    * One object, built every render, handed to whichever pane the registry points at. Panes take the
@@ -843,6 +881,7 @@ export const DeployHubView: React.FC<DeployHubViewProps> = ({
     extensionSavedPath,
     extensionMessage,
     handleDownloadExtension,
+    handleInstallExtension,
     // Every target but this pane's own — the pane's "everywhere else" index, narrowed here
     // because the pane cannot import the registry that imports it.
     siblingTargets: DEPLOY_TARGETS.filter((t) => t.id !== 'browser-extension').map(

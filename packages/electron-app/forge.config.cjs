@@ -23,7 +23,10 @@ const config = {
       // reason: the spawn target must be a real file, not an asar virtual path.
       unpack: "{**/node_modules/electron-store/**/*,**/.webpack/main/classifierWorker.cjs,**/.webpack/main/outputWorker.cjs,**/.webpack/main/systemDaemon.cjs,**/.webpack/main/filterProxy.cjs}"
     },
-    extraResource: ['./assets', './filters'],
+    // `../browser-extension/dist` ships the extension's built bundle inside
+    // the app (as `resources/dist`) so the guided install needs no download —
+    // it exists because package-all.mjs builds the extension before the app.
+    extraResource: ['./assets', './filters', '../browser-extension/dist'],
     afterPrune: [
       async ({ buildPath, electronVersion, arch }) => {
         await require('@electron/rebuild').rebuild({

@@ -29,6 +29,7 @@ export const browserExtensionPaneKeys = [
   'extensionSavedPath',
   'extensionMessage',
   'handleDownloadExtension',
+  'handleInstallExtension',
   'siblingTargets',
   'onSelectTarget',
   'handleCopy',
@@ -55,6 +56,7 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
   extensionSavedPath,
   extensionMessage,
   handleDownloadExtension,
+  handleInstallExtension,
   siblingTargets,
   onSelectTarget,
   handleCopy,
@@ -88,9 +90,12 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
         </div>
 
         <p style={{ fontSize: '12px', color: 'var(--secondary-color)', margin: 0 }}>
-          Pulled straight from the GitHub release that matches this app — the same packages the
-          publish workflow attaches — and unpacked as <code>blockingmachine-extension/</code>{' '}
-          for Chromium or <code>blockingmachine-extension-firefox/</code> for Firefox.
+          <strong>Install into browser</strong> stages the build this app already carries into its
+          own stable folder — <code>Application Support/Blockingmachine/extension/</code> — puts
+          the path on your clipboard and opens the browser&apos;s load page. The stable path keeps
+          the unpacked extension&apos;s ID — and its synced rules, pairing and decisions — the same
+          across app updates. <strong>Download release package</strong> pulls the GitHub release
+          zip to a folder you pick instead — for a build the app does not manage.
         </p>
 
         <div className="deploy-field-group" style={{ margin: '10px 0' }}>
@@ -111,10 +116,26 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
           <button
             type="button"
             className="deploy-copy-feed-btn"
+            onClick={() =>
+              void handleInstallExtension(extensionBrowser === 'firefox' ? 'firefox' : 'chromium')
+            }
+            disabled={extensionSaving || extensionBrowser === 'both'}
+            title={
+              extensionBrowser === 'both'
+                ? 'Pick one browser — guided install stages one at a time so the clipboard holds the right path.'
+                : 'Stages the bundled build at the app\'s stable extension path, opens the browser\'s load page, and copies the path for the file picker.'
+            }
+          >
+            {extensionSaving ? 'Staging…' : 'Install into browser →'}
+          </button>
+          <button
+            type="button"
+            className="deploy-copy-feed-btn"
             onClick={() => void handleDownloadExtension(extensionBrowser)}
             disabled={extensionSaving}
+            title="Downloads the release zip to a folder you pick instead — for a build the app does not manage."
           >
-            {extensionSaving ? 'Downloading…' : 'Download extension package…'}
+            {extensionSaving ? 'Downloading…' : 'Download release package…'}
           </button>
           {extensionSavedPath && (
             <button
@@ -172,9 +193,11 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
                 <h3>Chromium — Chrome, Edge, Brave, Arc</h3>
                 <p>
                   Open <code>chrome://extensions</code>, switch on{' '}
-                  <strong>Developer mode</strong>, choose{' '}
-                  <strong>Load unpacked</strong> and select the{' '}
-                  <code>blockingmachine-extension</code> folder the download wrote.
+                  <strong>Developer mode</strong>, choose <strong>Load unpacked</strong>, press{' '}
+                  <strong>⌘⇧G</strong> and paste — the staged folder&apos;s path is already on your
+                  clipboard (or select the <code>blockingmachine-extension</code> folder the
+                  download wrote). Re-installing over the same path keeps the extension&apos;s
+                  identity and stored rules.
                 </p>
               </div>
             </div>
@@ -186,10 +209,11 @@ export const BrowserExtensionPane: React.FC<BrowserExtensionPaneProps> = ({
                 <h3>Firefox</h3>
                 <p>
                   Open <code>about:debugging#/runtime/this-firefox</code>, choose{' '}
-                  <strong>Load Temporary Add-on…</strong> and select <code>manifest.json</code>{' '}
-                  inside the <code>blockingmachine-extension-firefox</code> folder. Temporary
-                  installs unload when the browser restarts — a permanent install needs a
-                  Mozilla-signed build.
+                  <strong>Load Temporary Add-on…</strong>, press <strong>⌘⇧G</strong>, paste the
+                  staged path and select <code>manifest.json</code> (or find{' '}
+                  <code>manifest.json</code> inside the <code>blockingmachine-extension-firefox</code>{' '}
+                  folder the download wrote). Temporary installs unload when the browser restarts —
+                  a permanent install needs a Mozilla-signed build.
                 </p>
               </div>
             </div>

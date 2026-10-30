@@ -705,6 +705,23 @@ export interface ElectronAPI {
     release?: string;
     error?: string;
   }>;
+  /**
+   * Stages the bundled extension into the app's stable extension dir, copies
+   * that path to the clipboard, and opens the browser's load page. The stable
+   * path is what keeps an unpacked install's extension ID — and its
+   * chrome.storage — stable across app updates. The browser keeps the last
+   * click (Developer mode → Load unpacked).
+   */
+  installBrowserExtension?: (flavor?: 'chromium' | 'firefox') => Promise<{
+    success: boolean;
+    /** The stable unpacked directory the browser should load. */
+    path?: string;
+    /** The flavor that was staged, as staged. */
+    flavor?: string;
+    /** The browser the load page opened in, or null when none could be. */
+    opened?: string | null;
+    error?: string;
+  }>;
   setSavePath: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>;
   selectSavePath: () => Promise<string>;
   runImportProcess: () => Promise<ProcessingResult>;

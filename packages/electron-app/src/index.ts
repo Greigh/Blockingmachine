@@ -2,6 +2,8 @@ import { join, dirname, isAbsolute, basename, resolve as pathResolve, sep } from
 import { createServer, Server as HttpServer, ServerResponse, type IncomingMessage } from 'http';
 import { networkInterfaces, tmpdir } from 'os';
 import { getServers as getDnsServers } from 'dns';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { createHash, randomBytes } from 'crypto';
 import {
   app,
@@ -6645,6 +6647,112 @@ function registerIPCHandlers(store: ElectronStore<StoreSchema>): void {
         integrityVerified: checksums ? integrityChecked : false,
         error: failures.length > 0 ? `Partial download — ${failures.join('; ')}` : undefined,
       };
+    });
+
+    /**
+     * Opens the browser's own load surface for an unpacked install. Silent
+     * install is exactly what Chrome and Firefox removed years ago — the app
+     * can get the user to the right page in the right browser, and no further.
+     */
+    const execFileAsync = promisify(execFile);
+    const openExtensionInstallPage = async (
+      flavor: 'chromium' | 'firefox',
+    ): Promise<string | null> => {
+      const attempts: ReadonlyArray<readonly [string, string]> =
+        flavor === 'firefox'
+          ? [['Firefox', 'about:debugging#/runtime/this-firefox']]
+          : [
+              ['Google Chrome', 'chrome://extensions'],
+              ['Microsoft Edge', 'chrome://extensions'],
+              ['Brave Browser', 'chrome://extensions'],
+              ['Arc', 'chrome://extensions'],
+            ];
+      if (process.platform === 'darwin') {
+        for (const [browser, url] of attempts) {
+          try {
+            await execFileAsync('open', ['-a', browser, url]);
+            return browser;
+          } catch {
+            // Not installed — the next candidate gets its turn.
+          }
+        }
+        // Default-browser fallback: when the default IS the target family the
+        // page still lands correctly, and when it is not the failure is the
+        // same one the pane's manual steps exist for.
+        try {
+          await execFileAsync('open', [attempts[0][1]]);
+          return 'the default browser';
+        } catch {
+          return null;
+        }
+      }
+      try {
+        await shell.openExternal(attempts[0][1]);
+        return 'the default browser';
+      } catch {
+        return null;
+      }
+    };
+
+    /**
+     * The guided install: stage the bundled build into the app's own stable
+     * directory, put that path on the clipboard, and open the browser's load
+     * page. The path never changes across app updates, which is what keeps an
+     * unpacked install's extension ID — and with it chrome.storage, pairing
+     * and per-site decisions — stable across re-installs. The browser keeps
+     * the last click (Developer mode → Load unpacked).
+     */
+    ipcMain.handle('install-browser-extension', async (_event, requested?: string) => {
+      const flavor: 'chromium' | 'firefox' = requested === 'firefox' ? 'firefox' : 'chromium';
+
+      // Packaged builds carry the webpack dist as `dist/` under resources
+      // (the packager preserves the source basename); dev runs resolve the
+      // workspace copy. `browser-extension` is accepted too in case the
+      // resource ever ships under a friendlier name.
+      const candidates = app.isPackaged
+        ? [join(process.resourcesPath, 'dist'), join(process.resourcesPath, 'browser-extension')]
+        : [pathResolve(app.getAppPath(), '../browser-extension/dist')];
+      const source = candidates.find((dir) => existsSync(join(dir, 'manifest.json')));
+      if (!source) {
+        return {
+          success: false,
+          error:
+            'No bundled extension build found — this app was packaged without the extension dist. ' +
+            'Build packages/browser-extension (npm run build), or use the release download below.',
+        };
+      }
+
+      const destination = join(app.getPath('userData'), 'extension', flavor);
+      const staging = `${destination}.staging-${process.pid}`;
+      try {
+        await fs.rm(staging, { recursive: true, force: true });
+        await fs.mkdir(staging, { recursive: true });
+        await fs.cp(source, staging, { recursive: true });
+        if (flavor === 'firefox') {
+          // The same gecko-id patch package-extension.mjs applies — a named
+          // temporary install needs the id about:debugging displays.
+          const manifestPath = join(staging, 'manifest.json');
+          const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+          manifest.browser_specific_settings = {
+            gecko: { id: 'blockingmachine@greighstudios.com', strict_min_version: '109.0' },
+          };
+          await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+        }
+        await fs.rm(destination, { recursive: true, force: true });
+        await fs.rename(staging, destination);
+      } catch (err) {
+        await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
+        return {
+          success: false,
+          error: `Could not stage the extension: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+
+      // The path rides the clipboard for the file picker's ⌘⇧G box — the one
+      // keystroke the flow cannot automate.
+      clipboard.writeText(destination);
+      const opened = await openExtensionInstallPage(flavor);
+      return { success: true, path: destination, flavor, opened };
     });
 
     ipcMain.handle('get-export-format', async () => {

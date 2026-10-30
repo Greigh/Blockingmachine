@@ -188,6 +188,8 @@ export interface HubPaneProps {
   extensionMessage: { text: string; type: 'success' | 'error' } | null;
   /** Downloads the release's extension package for the chosen browser, unpacked where the user picks. */
   handleDownloadExtension: (flavor: 'chromium' | 'firefox' | 'both') => Promise<void>;
+  /** Stages the bundled extension at the app's stable path and opens the browser's load page. */
+  handleInstallExtension: (flavor: 'chromium' | 'firefox') => Promise<void>;
   /**
    * The other deploy targets, so the extension pane can index the places the same protection
    * installs — a pane cannot import the registry (the registry imports it), so the Hub narrows

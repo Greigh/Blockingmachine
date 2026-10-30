@@ -62,7 +62,7 @@ function recorders(): {
     'handleStartDaemon', 'handleStopDaemon', 'handleToggleDaemonProtection',
     'handleReloadDaemon', 'handleSetSystemDns', 'handleRestoreSystemDns',
     'handleFlushCache', 'handleToggleInstallScripts', 'handleCheckUnboundReachability',
-    'handleSaveUnboundResolver', 'handleDownloadExtension',
+    'handleSaveUnboundResolver', 'handleDownloadExtension', 'handleInstallExtension',
   ]) handlers[name] = recordAsync(name);
   return { calls, record, handlers };
 }
@@ -181,6 +181,7 @@ function bundle(overrides: Partial<HubPaneProps> = {}): HubPaneProps {
     extensionBrowser: 'both',
     setExtensionBrowser: noop,
     handleDownloadExtension: noopAsync,
+    handleInstallExtension: noopAsync,
     siblingTargets: [],
     onSelectTarget: noop,
     ...overrides,
@@ -196,7 +197,13 @@ function bundle(overrides: Partial<HubPaneProps> = {}): HubPaneProps {
 type Expectation =
   | { readonly copiesRow: string }
   | { readonly copies: string }
-  | { readonly calls: string; readonly args?: readonly unknown[] };
+  | { readonly calls: string; readonly args?: readonly unknown[] }
+  /**
+   * Renders but must not be clickable — for state-dependent controls whose
+   * click would do the wrong thing (e.g. the extension's guided install when
+   * 'both' browsers are picked and the clipboard could carry either path).
+   */
+  | { readonly disabled: true };
 
 interface ButtonSpec {
   /** A substring of the button's text or of its `title` attribute. */
@@ -273,6 +280,12 @@ function verifyPane(spec: PaneSpec): void {
       used.add(button);
 
       const before = new Map([...calls].map(([k, v]) => [k, v.length]));
+      if ('disabled' in entry.expect) {
+        // A disabled control is asserted, not clicked — its presence still
+        // counts toward the rendered/spec parity below.
+        expect(button.disabled).toBe(true);
+        continue;
+      }
       act(() => button.click());
 
       if ('copiesRow' in entry.expect || 'copies' in entry.expect) {
@@ -632,10 +645,28 @@ const PANES: readonly PaneSpec[] = [
       ],
     },
     buttons: [
-      { label: 'Download extension package', expect: { calls: 'handleDownloadExtension' } },
+      // 'both' keeps the guided button disabled — a click could only stage one
+      // flavor while the clipboard pointed at the other.
+      { label: 'Install into browser', expect: { disabled: true } },
+      { label: 'Download release package', expect: { calls: 'handleDownloadExtension' } },
       // The sibling index links into the Hub's own tab switcher, not an IPC.
       { label: 'AdGuard Home', expect: { calls: 'onSelectTarget', args: ['adguard-home'] } },
       { label: 'Pi-hole', expect: { calls: 'onSelectTarget', args: ['pihole'] } },
+    ],
+  },
+  {
+    target: 'browser-extension',
+    when: 'chromium picked',
+    overrides: {
+      extensionBrowser: 'chromium',
+      siblingTargets: [],
+    },
+    buttons: [
+      {
+        label: 'Install into browser',
+        expect: { calls: 'handleInstallExtension', args: ['chromium'] },
+      },
+      { label: 'Download release package', expect: { calls: 'handleDownloadExtension' } },
     ],
   },
   {
@@ -646,7 +677,8 @@ const PANES: readonly PaneSpec[] = [
       siblingTargets: [],
     },
     buttons: [
-      { label: 'Download extension package', expect: { calls: 'handleDownloadExtension' } },
+      { label: 'Install into browser', expect: { disabled: true } },
+      { label: 'Download release package', expect: { calls: 'handleDownloadExtension' } },
       { label: 'Copy saved path', expect: { copies: '/tmp/dl/blockingmachine-extension' } },
     ],
   },
