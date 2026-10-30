@@ -2317,16 +2317,6 @@ input:checked + .mac-slider:before {
 }
 
 /* ==========================================================================
-   Compilation Delta Card
-   ========================================================================== */
-.delta-card.pos .delta-num {
-  color: var(--primary-color);
-}
-.delta-card.neg .delta-num {
-  color: var(--success-color);
-}
-
-/* ==========================================================================
    Rule Inspector View
    ========================================================================== */
 .inspector-view-container {
@@ -3538,69 +3528,6 @@ input:checked + .mac-slider:before {
 }
 
 /* --- Pre-Run Overview Stats Grid --- */
-.overview-stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
-}
-
-.summary-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  box-shadow: var(--card-shadow);
-  transition: transform 0.12s ease, border-color 0.12s ease;
-}
-
-.summary-card:hover {
-  border-color: color-mix(in srgb, var(--primary-color) 30%, transparent);
-  transform: translateY(-1px);
-}
-
-.summary-icon-wrap {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 19px;
-  background: color-mix(in srgb, var(--primary-color) 8%, transparent);
-  flex-shrink: 0;
-}
-
-.summary-icon-wrap.icon-shield {
-  background: color-mix(in srgb, var(--primary-color) 10%, transparent);
-}
-
-.summary-icon-wrap.icon-pencil {
-  background: color-mix(in srgb, var(--warning-color) 10%, transparent);
-}
-
-.summary-icon-wrap.icon-clock {
-  background: color-mix(in srgb, var(--tone-purple) 1%, transparent);
-}
-
-.summary-data-col {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.summary-num {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--heading-color);
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-}
-
 .summary-label {
   font-size: 12px;
   font-weight: 500;
@@ -3608,30 +3535,6 @@ input:checked + .mac-slider:before {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.delta-card .summary-label {
-  white-space: normal;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.delta-card.pos {
-  border-color: color-mix(in srgb, var(--success-color) 25%, transparent);
-}
-
-.delta-card.neg {
-  border-color: color-mix(in srgb, var(--primary-color) 25%, transparent);
-}
-
-.delta-card .delta-num {
-  color: var(--success-color);
-}
-
-.delta-card.neg .delta-num {
-  color: var(--primary-color);
 }
 
 /* --- Initial Ready State --- */
@@ -12968,9 +12871,6 @@ summary:focus-visible {
   scroll-margin-top: 70px;
 }
 
-.summary-card:has(.delta-history) {
-  flex-wrap: wrap;
-}
 .delta-history {
   flex-basis: 100%;
   margin-top: 6px;

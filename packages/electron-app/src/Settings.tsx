@@ -88,8 +88,6 @@ const Settings: React.FC<SettingsProps> = ({
   // Multi-format simultaneous export state
   const [additionalFormats, setAdditionalFormats] = useState<FilterFormat[]>([]);
 
-  // Automation & Webhook state
-
   const [autoStartFeedServer, setAutoStartFeedServer] = useState(false);
   const [launchOnStartup, setLaunchOnStartup] = useState(false);
   const [menuBarAgent, setMenuBarAgent] = useState(false);
@@ -148,8 +146,6 @@ const Settings: React.FC<SettingsProps> = ({
         if (isMounted) setIsLoadingPath(false);
       }
     };
-
-    // Load automation schedule & webhook
 
     if (window.electron?.getAutoStartFeedServer) {
       window.electron.getAutoStartFeedServer().then((val) => {

@@ -103,6 +103,22 @@ describe('HomeView', () => {
     expect(document.querySelector('.overview-stats-grid')).toBeNull();
   });
 
+  it('keeps the recent-compiles history and the rule delta inside the hero', async () => {
+    bridge({
+      getCompilationHistory: jest.fn(async () => [
+        { timestamp: 'Jan 2, 2026', uniqueRuleCount: 51000, duplicatesRemoved: 500, exportFormats: ['dnsmasq'] },
+        { timestamp: 'Jan 1, 2026', uniqueRuleCount: 50000 },
+      ]),
+    });
+    await act(async () => {
+      renderHome();
+    });
+    const hero = document.querySelector('.hero-action-card')!;
+    expect(hero.querySelector('.delta-history')).toBeTruthy();
+    expect(hero.textContent).toContain('Recent compiles');
+    expect(hero.textContent).toContain('+1,000 rules');
+  });
+
   it('forwards route-based navigation — legacy view names translate through the registry', async () => {
     bridge();
     const { navigate } = renderHome();

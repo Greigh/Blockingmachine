@@ -9,7 +9,7 @@
 
 import React, { useEffect, useState } from 'react';
 import type { FeedServerStatus, LiveServicesStatus, SinkholeConfig } from '../types';
-import type { DeployRefreshReport } from '../deployRefresh';
+import { deployRefreshFailing, type DeployRefreshReport } from '../deployRefresh';
 
 interface NetworkReachStripProps {
   onOpenDistribute: () => void;
@@ -28,6 +28,11 @@ const relativeTime = (iso: string): string => {
 
 const reportText = (report: DeployRefreshReport | undefined): string | null => {
   if (!report) return null;
+  // lastOkAt is never cleared, so a fresh failure hides behind stale success —
+  // the shared predicate answers "did anything fail after the last good fetch".
+  if (deployRefreshFailing(report)) {
+    return `refresh failed ${relativeTime(report.lastFailAt!)}`;
+  }
   if (report.lastOkAt) {
     return `synced ${relativeTime(report.lastOkAt)}${report.lastOkPeer ? ` · ${report.lastOkPeer}` : ''}`;
   }
@@ -61,7 +66,13 @@ export const NetworkReachStrip: React.FC<NetworkReachStripProps> = ({ onOpenDist
 
       const cfg = (sinkhole ?? {}) as SinkholeConfig;
       const svc = (live ?? {}) as Partial<LiveServicesStatus>;
-      const feed = svc.feed as FeedServerStatus | undefined;
+      // The aggregate read can fail as a unit (it awaits daemon status) — fall
+      // back to the dedicated endpoint before claiming the feed is down.
+      let feed = svc.feed as FeedServerStatus | undefined;
+      if (!feed && window.electron?.getFeedServerStatus) {
+        feed = (await window.electron.getFeedServerStatus().catch(() => null)) ?? undefined;
+      }
+      if (!isMounted) return;
       const rep = (reports ?? {}) as Record<string, DeployRefreshReport>;
       const next: Chip[] = [];
 
@@ -72,28 +83,23 @@ export const NetworkReachStrip: React.FC<NetworkReachStripProps> = ({ onOpenDist
         status: daemonStatus ?? 'unknown',
       });
 
-      if (feed?.isRunning) {
-        next.push({ id: 'feed', label: 'LAN feed', status: `live on :${feed.port}` });
-      } else {
-        next.push({ id: 'feed', label: 'LAN feed', status: 'stopped' });
-      }
+      next.push({
+        id: 'feed',
+        label: 'LAN feed',
+        status: feed ? (feed.isRunning ? `live on :${feed.port}` : 'stopped') : 'unknown',
+      });
 
+      // The sinkholes' own API paths never emit deploy reports (only the
+      // resolver recipes carry the phone-home tail), so their chips can only
+      // ever say 'configured'.
       if (cfg.piholeUrl) {
-        next.push({ id: 'pihole', label: 'Pi-hole', status: reportText(rep.pihole) ?? 'configured' });
+        next.push({ id: 'pihole', label: 'Pi-hole', status: 'configured' });
       }
       if (cfg.adguardHomeUrl) {
-        next.push({
-          id: 'adguard',
-          label: 'AdGuard Home',
-          status: reportText(rep['adguard-home']) ?? 'configured',
-        });
+        next.push({ id: 'adguard', label: 'AdGuard Home', status: 'configured' });
       }
       if (cfg.haWebhookUrl) {
-        next.push({
-          id: 'home-assistant',
-          label: 'Home Assistant',
-          status: reportText(rep['home-assistant']) ?? 'configured',
-        });
+        next.push({ id: 'home-assistant', label: 'Home Assistant', status: 'configured' });
       }
 
       const contact = svc.extension?.lastContactAt;
@@ -102,16 +108,17 @@ export const NetworkReachStrip: React.FC<NetworkReachStripProps> = ({ onOpenDist
       }
 
       // Recipe targets surface only through their own reports — the recipes
-      // carry a phone-home tail, so a report proves a live host ran them.
+      // carry a phone-home tail, so a report proves a live host ran them. The
+      // ids mirror DEPLOY_REFRESH_TARGETS; bind-null reports file under BIND.
       for (const [targetId, label] of [
         ['unbound', 'Unbound'],
         ['dnsmasq', 'dnsmasq'],
         ['bind', 'BIND'],
         ['privoxy', 'Privoxy'],
         ['shadowrocket', 'Shadowrocket'],
-        ['hosts', 'Hosts file'],
       ] as const) {
-        const text = reportText(rep[targetId]);
+        const report = rep[targetId] ?? (targetId === 'bind' ? rep['bind-null'] : undefined);
+        const text = reportText(report);
         if (text) next.push({ id: targetId, label, status: text });
       }
 
@@ -119,8 +126,12 @@ export const NetworkReachStrip: React.FC<NetworkReachStripProps> = ({ onOpenDist
     };
 
     void load();
+    // Poll on ProtectionCard's cadence — daemon/feed/contact state is live truth,
+    // not a mount-time snapshot.
+    const interval = setInterval(() => void load(), 10_000);
     return () => {
       isMounted = false;
+      clearInterval(interval);
     };
   }, []);
 

@@ -211,13 +211,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   // Delta calculation compared to previous compilation
   let ruleDeltaText: string | null = null;
-  let isPositiveDelta = true;
   if (history.length >= 2) {
     const currentCount = history[0].uniqueRuleCount;
     const prevCount = history[1].uniqueRuleCount;
     const diff = currentCount - prevCount;
     if (diff !== 0) {
-      isPositiveDelta = diff > 0;
       const pct = ((diff / prevCount) * 100).toFixed(1);
       ruleDeltaText = `${diff > 0 ? '+' : ''}${diff.toLocaleString()} rules (${diff > 0 ? '+' : ''}${pct}%) since previous run`;
     }
@@ -531,7 +529,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               className="primary-button deploy-next-btn"
               onClick={() => onNavigate?.('deploy')}
             >
-              <span>Open Distribute (⌘4)</span>
+              <span>Open Distribute</span>
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
               </svg>

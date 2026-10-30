@@ -26,7 +26,6 @@ function bridge(overrides: Record<string, unknown> = {}) {
     })),
     getDeployRefreshReports: jest.fn(async () => ({
       unbound: { lastOkAt: twoHoursAgo, lastOkPeer: 'router.lan' },
-      pihole: { lastOkAt: twoHoursAgo },
     })),
     ...overrides,
   };
@@ -38,7 +37,7 @@ describe('NetworkReachStrip', () => {
     await act(async () => {
       render(<NetworkReachStrip onOpenDistribute={jest.fn()} />);
     });
-    expect(screen.getByText(/Pi-hole/).textContent).toContain('ago');
+    expect(screen.getByText(/Pi-hole/).textContent).toContain('configured');
     expect(screen.getByText(/Unbound/).textContent).toContain('router.lan');
     expect(screen.getByText(/DNS daemon/i).textContent).toContain('running');
     expect(screen.getByText(/extension/i).textContent).toContain('ago');
@@ -54,7 +53,41 @@ describe('NetworkReachStrip', () => {
     expect(screen.queryByText(/Home Assistant/)).toBeNull();
   });
 
-  it('falls back to "recipe ready" for recipe targets with no report when the IPC exists but reports nothing', async () => {
+  it('says "configured" for sinkholes — their API paths never emit refresh reports', async () => {
+    bridge();
+    await act(async () => {
+      render(<NetworkReachStrip onOpenDistribute={jest.fn()} />);
+    });
+    expect(screen.getByText(/Pi-hole/).textContent).toContain('configured');
+  });
+
+  it('names a fresh failure even when an older success is on record', async () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    bridge({
+      getDeployRefreshReports: jest.fn(async () => ({
+        unbound: { lastOkAt: twoHoursAgo, lastFailAt: fiveMinutesAgo, lastFailPeer: 'router.lan' },
+      })),
+    });
+    await act(async () => {
+      render(<NetworkReachStrip onOpenDistribute={jest.fn()} />);
+    });
+    const chip = screen.getByText(/Unbound/);
+    expect(chip.textContent).toContain('refresh failed');
+    expect(chip.textContent).not.toContain('synced');
+  });
+
+  it('reports the feed as unknown rather than down when the aggregate read fails', async () => {
+    bridge({
+      getLiveServices: jest.fn(async () => { throw new Error('aggregate down'); }),
+      getFeedServerStatus: jest.fn(async () => ({ isRunning: true, port: 9191 })),
+    });
+    await act(async () => {
+      render(<NetworkReachStrip onOpenDistribute={jest.fn()} />);
+    });
+    expect(screen.getByText(/LAN feed/).textContent).toContain('9191');
+  });
+
+  it('renders no recipe-target chip when reports are empty — a report is the only proof they ran', async () => {
     bridge({ getDeployRefreshReports: jest.fn(async () => ({})) });
     await act(async () => {
       render(<NetworkReachStrip onOpenDistribute={jest.fn()} />);
