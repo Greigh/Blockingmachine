@@ -80,7 +80,7 @@ describe('DistributeView inner nav', () => {
     expect(document.querySelector('.inner-nav-item.active')?.textContent).toContain(
       'LAN feed & pairing',
     );
-    expect(await screen.findByText('LAN feed server')).toBeTruthy();
+    expect(await screen.findByText('LAN Access & Mobile Pairing')).toBeTruthy();
   });
 
   it('runs the registry select effect on select (daemon status refresh)', async () => {
