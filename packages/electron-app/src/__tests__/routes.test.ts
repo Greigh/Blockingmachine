@@ -55,7 +55,21 @@ describe('SECTIONS registry', () => {
       'engine',
       'inspect',
     ]);
-    expect(sectionById('distribute').tabs.map((t) => t.id)).toContain('network');
+    expect(sectionById('distribute').tabs.map((t) => t.id)).toEqual([
+      'browser-extension',
+      'adguard-home',
+      'pihole',
+      'home-assistant',
+      'system-daemon',
+      'adguard-desktop',
+      'hosts',
+      'dnsmasq',
+      'unbound',
+      'shadowrocket',
+      'privoxy',
+      'bind',
+      'network',
+    ]);
     expect(sectionById('home').tabs).toHaveLength(0);
     expect(sectionById('settings').tabs).toHaveLength(0);
   });
