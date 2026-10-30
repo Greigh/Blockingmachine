@@ -230,8 +230,6 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
     width: '100%',
   },
-  title: { color: colors.text, fontSize: 28, fontWeight: '800' },
-  subtitle: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md, marginTop: 2 },
   input: {
     backgroundColor: glass.surface,
     borderColor: glass.border,

@@ -1,7 +1,7 @@
 /**
  * Root layout: providers around the whole app — TanStack Query for server state,
  * ServerProvider for the saved-hub registry — then the Stack holding the tab
- * navigator plus the add-server modal.
+ * navigator plus the add-server and settings modals.
  */
 
 import React, { useMemo } from 'react';

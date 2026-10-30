@@ -66,10 +66,10 @@ import type { HubFilterSource } from '../src/api/types';
 import { ActionButton, Card, Grid, Pill, SectionTitle } from '../src/components/ui';
 import { describeError, UserError, type FriendlyError } from '../src/errors';
 import { GlassBackdrop } from '../src/components/GlassBackdrop';
-import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../src/hooks/useWidthTier';
+import { gridColumnsFor, useWidthTier } from '../src/hooks/useWidthTier';
 import { relativeTime } from '../src/format';
 import { haptics } from '../src/haptics';
-import { chrome, colors, glass, layout, spacing } from '../src/theme';
+import { colors, glass, layout, spacing } from '../src/theme';
 
 type FeedKey = keyof NonNullable<SavedServer['feedUrls']>;
 
@@ -1301,12 +1301,10 @@ export default function SettingsScreen() {
       <GlassBackdrop />
       <ScrollView
         style={styles.scroll}
-      contentContainerStyle={[styles.content, { maxWidth: tier === 'regular' ? layout.contentMaxWidthWide : layout.contentMaxWidth, paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + (tier === 'compact' && !hasEdgeUtilityStrip(insets.right) ? chrome.tabBarClearance : 0) }]}
+      contentContainerStyle={[styles.content, { maxWidth: tier === 'regular' ? layout.contentMaxWidthWide : layout.contentMaxWidth, paddingTop: spacing.lg, paddingBottom: spacing.xl + insets.bottom }]}
       keyboardShouldPersistTaps="handled"
       automaticallyAdjustKeyboardInsets
     >
-      <Text style={styles.title}>Settings</Text>
-
       <Grid columns={gridCols}>
       <Card>
         <View style={styles.rowBetween}>
@@ -1615,7 +1613,6 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
     width: '100%',
   },
-  title: { color: colors.text, fontSize: 28, fontWeight: '800', marginBottom: spacing.md },
   rowBetween: {
     alignItems: 'center',
     flexDirection: 'row',

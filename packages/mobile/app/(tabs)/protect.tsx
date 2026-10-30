@@ -47,7 +47,7 @@ export default function ProtectScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1, backgroundColor: 'transparent' },
   scroll: { flex: 1 },
   content: { paddingHorizontal: spacing.lg, alignSelf: 'center', width: '100%' },
   meta: { color: colors.textMuted, fontSize: 13 },

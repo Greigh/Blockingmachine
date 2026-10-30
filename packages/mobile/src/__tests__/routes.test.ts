@@ -3,7 +3,7 @@
  * labels, icons, and router paths consumed by the Tabs layout and SideNav.
  */
 
-import { TABS, SETTINGS_ROUTE, tabIcon, type TabId } from '../routes';
+import { TABS, SETTINGS_ROUTE } from '../routes';
 
 describe('TABS registry', () => {
   it('holds the five tabs in shell order', () => {
@@ -55,10 +55,3 @@ describe('SETTINGS_ROUTE', () => {
   });
 });
 
-describe('tabIcon', () => {
-  it('returns the icon for a known tab and falls back for unknown', () => {
-    const home = TABS.find((t) => t.id === 'home')!;
-    expect(tabIcon('home')).toBe(home.icon);
-    expect(tabIcon('nope' as TabId)).toBeUndefined();
-  });
-});

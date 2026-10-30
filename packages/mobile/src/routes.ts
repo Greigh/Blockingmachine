@@ -34,7 +34,3 @@ export const TABS: readonly TabSpec[] = [
 
 /** Pushed settings sheet — a stack route, not a tab. */
 export const SETTINGS_ROUTE = '/settings' as const;
-
-export function tabIcon(id: TabId): keyof typeof Ionicons.glyphMap | undefined {
-  return TABS.find((t) => t.id === id)?.icon;
-}

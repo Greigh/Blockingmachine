@@ -7,6 +7,7 @@ import React, { useEffect } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError } from '../../src/api/client';
 import { describeError, describeActionError } from '../../src/errors';
@@ -21,6 +22,7 @@ import { formatTimestamp, formatUptime, relativeTime } from '../../src/format';
 import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
 import { haptics } from '../../src/haptics';
 import { chrome, colors, layout, spacing } from '../../src/theme';
+import { SETTINGS_ROUTE } from '../../src/routes';
 
 // The hub stamps lastCompile with toLocaleString() (unparseable on Hermes) while
 // the add-on carries lastCompileMs — prefer the epoch, fall back to the raw
@@ -107,6 +109,18 @@ export default function DashboardScreen() {
     return (
       <View style={[styles.empty, { paddingTop: insets.top }]}>
         <GlassBackdrop />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
+          onPress={() => {
+            haptics.tap();
+            router.push(SETTINGS_ROUTE);
+          }}
+          style={[styles.emptyGear, { top: insets.top + spacing.lg }]}
+          hitSlop={8}
+        >
+          <Ionicons name="settings-outline" size={24} color={colors.textMuted} />
+        </Pressable>
         <Text style={styles.emptyTitle}>
           {filter.ready ? 'Standalone mode' : 'No server configured'}
         </Text>
@@ -416,13 +430,6 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
     width: '100%',
   },
-  headerRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    marginBottom: spacing.md,
-  },
-  title: { color: colors.text, fontSize: 28, fontWeight: '800' },
-  subtitle: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
   empty: {
     alignItems: 'center',
     backgroundColor: 'transparent',
@@ -438,6 +445,7 @@ const styles = StyleSheet.create({
     maxWidth: layout.emptyTextMaxWidth,
     textAlign: 'center',
   },
+  emptyGear: { position: 'absolute', right: spacing.lg, padding: spacing.xs },
   rowBetween: {
     alignItems: 'center',
     flexDirection: 'row',
