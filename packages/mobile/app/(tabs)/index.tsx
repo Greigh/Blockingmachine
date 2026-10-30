@@ -7,6 +7,7 @@ import React, { useEffect } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError } from '../../src/api/client';
 import { describeError, describeActionError } from '../../src/errors';
@@ -16,10 +17,15 @@ import { useServers } from '../../src/state/servers';
 import { useFilter } from '../../src/state/filter';
 import { ActionButton, Card, ErrorBanner, Grid, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
+import { ScreenHeader } from '../../src/components/ScreenHeader';
 import { formatTimestamp, formatUptime, relativeTime } from '../../src/format';
 import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
 import { haptics } from '../../src/haptics';
 import { chrome, colors, layout, spacing } from '../../src/theme';
+import { SETTINGS_ROUTE } from '../../src/routes';
+import { LocalVpn, isLocalVpnSupported } from '../../src/filter/localVpn';
+import { getIosTunnelStatus, isIosTunnelSupported } from '../../src/filter/iosTunnel';
+import { localDnsStatus, subscribeLocalDns } from '../../src/filter/localDns';
 
 // The hub stamps lastCompile with toLocaleString() (unparseable on Hermes) while
 // the add-on carries lastCompileMs — prefer the epoch, fall back to the raw
@@ -35,19 +41,95 @@ function formatLastCompile(data?: { lastCompile: string | null; lastCompileMs?: 
   return '—';
 }
 
+/**
+ * "This phone" status row — the on-device filtering surface at a glance:
+ * the platform filter (Android VPN/proxy or the iOS packet tunnel), the local
+ * DNS responder, and the synced standalone ruleset. The whole card opens the
+ * Protect tab, where the controls live.
+ */
+function ThisPhoneCard() {
+  const filter = useFilter();
+  // Same cache keys as the Protect cards — both surfaces share one poller.
+  const vpn = useQuery({
+    queryKey: ['localvpn'],
+    queryFn: () => (isLocalVpnSupported() ? LocalVpn.status() : null),
+    refetchInterval: 5_000,
+  });
+  const tunnel = useQuery({
+    queryKey: ['iostunnel'],
+    queryFn: () => (isIosTunnelSupported() ? getIosTunnelStatus() : null),
+    refetchInterval: 5_000,
+  });
+  const [, bumpDns] = React.useState(0);
+  React.useEffect(() => subscribeLocalDns(() => bumpDns((n) => n + 1)), []);
+  const dns = localDnsStatus();
+
+  const vpnOn = vpn.data?.vpnRunning === true;
+  const proxyOn = vpn.data?.proxyRunning === true;
+  // Honest scope, same convention as the tunnel card: enabled alone is not
+  // filtering — the OS reports the tunnel only once it connects.
+  const tunnelOn =
+    tunnel.data?.enabled === true && tunnel.data?.connection === 'connected';
+  const filtering = vpnOn || tunnelOn || dns.running;
+  const metaBits = [
+    filter.meta ? `${filter.meta.ruleCount.toLocaleString()} rules synced` : null,
+    filter.localMeta
+      ? `+${filter.localMeta.ruleCount.toLocaleString()} from feeds`
+      : null,
+    dns.running ? `dns :${dns.port}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <Card>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Open Protect"
+        onPress={() => {
+          haptics.tap();
+          router.push('/protect');
+        }}
+        style={({ pressed }) => [pressed && { opacity: 0.85 }]}
+      >
+        <View style={styles.rowBetween}>
+          <SectionTitle icon="phone-portrait-outline" label="This phone" />
+          <View style={[styles.rowBetween, { gap: spacing.xs }]}>
+            {vpnOn ? <Pill label="vpn on" tone="ok" /> : null}
+            {proxyOn ? <Pill label="proxy on" tone="info" /> : null}
+            {tunnelOn ? <Pill label="tunnel on" tone="ok" /> : null}
+            {dns.running ? <Pill label="dns on" tone="info" /> : null}
+            {filter.ready && !filtering ? (
+              <Pill label="rules ready" tone="info" />
+            ) : null}
+            <Pill
+              label={filtering ? 'filtering' : 'not filtering'}
+              tone={filtering ? 'ok' : 'muted'}
+            />
+            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+          </View>
+        </View>
+        <Text style={styles.metaLine}>
+          {metaBits || 'No on-device filtering — sync rules or start a filter on Protect.'}
+        </Text>
+      </Pressable>
+    </Card>
+  );
+}
+
 export default function DashboardScreen() {
   const client = useClient();
   const insets = useSafeAreaInsets();
   const tier = useWidthTier();
   const gridCols = gridColumnsFor(tier);
   const { connected, alert, dismissAlert } = useServerEvents();
-  const { activeServer, markOk } = useServers();
+  const { activeServer, activeToken, markOk, hydrated } = useServers();
   const filter = useFilter();
   const queryClient = useQueryClient();
   const baseUrl = activeServer?.baseUrl ?? 'none';
 
   const status = useQuery({
-    queryKey: ['status', baseUrl],
+    queryKey: ['status', baseUrl, activeToken],
     queryFn: () => client!.getStatus(),
     enabled: !!client,
     refetchInterval: 15_000,
@@ -102,10 +184,23 @@ export default function DashboardScreen() {
     daemon.reset();
   }, [baseUrl]);
 
+  if (!hydrated) return null;
   if (!activeServer) {
     return (
       <View style={[styles.empty, { paddingTop: insets.top }]}>
         <GlassBackdrop />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
+          onPress={() => {
+            haptics.tap();
+            router.push(SETTINGS_ROUTE);
+          }}
+          style={[styles.emptyGear, { top: insets.top + spacing.lg }]}
+          hitSlop={8}
+        >
+          <Ionicons name="settings-outline" size={24} color={colors.textMuted} />
+        </Pressable>
         <Text style={styles.emptyTitle}>
           {filter.ready ? 'Standalone mode' : 'No server configured'}
         </Text>
@@ -117,6 +212,9 @@ export default function DashboardScreen() {
         {filter.ready ? (
           <Pill label="on-device rules active" tone="ok" />
         ) : null}
+        <View style={styles.emptyPhoneCard}>
+          <ThisPhoneCard />
+        </View>
         <ActionButton label="Add server" onPress={() => router.push('/add-server')} />
       </View>
     );
@@ -151,19 +249,16 @@ export default function DashboardScreen() {
         />
       }
     >
-      <View style={styles.headerRow}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>{data?.service ?? 'Blockingmachine'}</Text>
-          <Text style={styles.subtitle}>
-            {activeServer.label || activeServer.baseUrl}
-            {data?.version ? ` · v${data.version}` : ''}
-          </Text>
-        </View>
-        <Pill
-          label={connected ? 'live' : 'polling'}
-          tone={connected ? 'ok' : 'muted'}
-        />
-      </View>
+      <ScreenHeader
+        title={data?.service ?? 'Blockingmachine'}
+        subtitle={`${activeServer.label || activeServer.baseUrl}${data?.version ? ` · v${data.version}` : ''}`}
+        trailing={
+          <Pill
+            label={connected ? 'live' : 'polling'}
+            tone={connected ? 'ok' : 'muted'}
+          />
+        }
+      />
 
       {alert?.event === 'quarantine_added' ? (
         <Pressable
@@ -172,6 +267,8 @@ export default function DashboardScreen() {
           // and the "new" pills on the telemetry rows. It clears via ✕, or when
           // the user leaves the telemetry tab (viewed = acknowledged).
           onPress={() => router.push('/(tabs)/telemetry')}
+          accessibilityRole="button"
+          accessibilityLabel="Review quarantined threats"
         >
           <Text style={styles.alertText}>
             {quarantineCount
@@ -223,6 +320,7 @@ export default function DashboardScreen() {
         <View style={styles.rowBetween}>
           <SectionTitle icon="shield-checkmark-outline" label="Protection" />
           <Switch
+            accessibilityLabel="Hub protection"
             value={Boolean(data?.protection?.enabled)}
             disabled={protection.isPending || daemonStopped}
             onValueChange={(v) => {
@@ -322,6 +420,8 @@ export default function DashboardScreen() {
       </Card>,
       ]}
 
+      <ThisPhoneCard />
+
       <Card>
         <SectionTitle icon="flash-outline" label="Actions" />
         <View style={styles.buttonRow}>
@@ -418,13 +518,6 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
     width: '100%',
   },
-  headerRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    marginBottom: spacing.md,
-  },
-  title: { color: colors.text, fontSize: 28, fontWeight: '800' },
-  subtitle: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
   empty: {
     alignItems: 'center',
     backgroundColor: 'transparent',
@@ -440,6 +533,8 @@ const styles = StyleSheet.create({
     maxWidth: layout.emptyTextMaxWidth,
     textAlign: 'center',
   },
+  emptyGear: { position: 'absolute', right: spacing.lg, padding: spacing.xs },
+  emptyPhoneCard: { alignSelf: 'stretch', maxWidth: layout.contentMaxWidth },
   rowBetween: {
     alignItems: 'center',
     flexDirection: 'row',

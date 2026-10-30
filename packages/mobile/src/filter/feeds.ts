@@ -129,6 +129,12 @@ export async function refreshLocalRules(
     throw new UserError('No feeds are enabled — turn one on or add a list.');
   }
   if (rules.size === 0) {
+    // Keep the failure detail — the card reads meta.errors to explain which
+    // feed URLs refused; throwing without it leaves only the aggregate title.
+    await FileSystem.writeAsStringAsync(
+      LOCAL_META_FILE,
+      JSON.stringify({ syncedAt: Date.now(), ruleCount: 0, feedCount: enabled.length, errors } satisfies LocalRulesMeta),
+    ).catch(() => {});
     throw new UserError(
       errors.length > 0
         ? `Every feed failed (${errors[0].error}) — check the list URLs and try again.`

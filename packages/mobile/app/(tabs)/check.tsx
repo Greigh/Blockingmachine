@@ -3,7 +3,7 @@
  * or matched host (add-on), whichever the server answered with.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useMutation } from '@tanstack/react-query';
@@ -16,6 +16,7 @@ import { useFilter } from '../../src/state/filter';
 import type { CheckResult } from '../../src/api/types';
 import { ActionButton, Card, Grid, Pill, SectionTitle } from '../../src/components/ui';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
+import { ScreenHeader } from '../../src/components/ScreenHeader';
 import { relativeTime } from '../../src/format';
 import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
 import { haptics } from '../../src/haptics';
@@ -41,6 +42,12 @@ export default function CheckScreen() {
   const trimmed = domain.trim().toLowerCase();
   const valid = DOMAIN_RE.test(trimmed) && trimmed.length <= 253;
 
+  // A verdict belongs to the hub that answered it — drop it when the
+  // active server (or its token, via client identity) changes.
+  useEffect(() => {
+    check.reset();
+  }, [client]);
+
   const check = useMutation({
     // Hub verdict when it's reachable — richer (verdict source, matched host).
     // When the hub is unreachable (or none is configured) a synced ruleset
@@ -58,7 +65,7 @@ export default function CheckScreen() {
       }
       const local = await filter.evaluate(d);
       if (local) return { ...local, source: 'on-device ruleset' };
-      throw new UserError('No server connected and no on-device rules — sync rules in Settings first.');
+      throw new UserError('No server connected and no on-device rules — sync rules on the Protect tab first.');
     },
     onSuccess: (res, d) => {
       haptics.success();
@@ -91,11 +98,12 @@ export default function CheckScreen() {
         style={styles.scroll}
       contentContainerStyle={[styles.content, { maxWidth: tier === 'regular' ? layout.contentMaxWidthWide : layout.contentMaxWidth, paddingTop: insets.top + spacing.lg, paddingBottom: spacing.xl + insets.bottom + (tier === 'compact' && !hasEdgeUtilityStrip(insets.right) ? chrome.tabBarClearance : 0) }]}
       keyboardShouldPersistTaps="handled"
+      automaticallyAdjustKeyboardInsets
     >
-      <Text style={styles.title}>Check a domain</Text>
-      <Text style={styles.subtitle}>
-        Ask the server whether a domain is covered by the compiled rules.
-      </Text>
+      <ScreenHeader
+        title="Check a domain"
+        subtitle="Ask the server whether a domain is covered by the compiled rules."
+      />
 
       <Grid columns={gridCols}>
       <Card>
@@ -108,7 +116,7 @@ export default function CheckScreen() {
           keyboardType="url"
           value={domain}
           onChangeText={setDomain}
-          onSubmitEditing={() => valid && client && runCheck(trimmed)}
+          onSubmitEditing={() => valid && (client || filter.ready) && runCheck(trimmed)}
           returnKeyType="search"
         />
         <ActionButton
@@ -189,7 +197,7 @@ export default function CheckScreen() {
               <Pressable
                 style={styles.historyRow}
                 android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
-                onPress={() => client && runCheck(h.domain)}
+                onPress={() => (client || filter.ready) && runCheck(h.domain)}
                 accessibilityRole="button"
               >
                 <Pill
@@ -229,8 +237,6 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
     width: '100%',
   },
-  title: { color: colors.text, fontSize: 28, fontWeight: '800' },
-  subtitle: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md, marginTop: 2 },
   input: {
     backgroundColor: glass.surface,
     borderColor: glass.border,

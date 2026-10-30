@@ -87,28 +87,31 @@ export const LocalVpn = {
     if (!isLocalVpnSupported()) return Promise.resolve(false);
     const m = get();
     return new Promise<boolean>((resolve, reject) => {
-      const sub = m.addListener('onVpnConsentResult', (e) => {
-        sub.remove();
-        resolve(e.granted);
+      let sub: { remove: () => void } | null = m.addListener('onVpnConsentResult', (e) => {
+        done(() => resolve(e.granted));
       });
+      // The dialog can die without firing the result (activity killed) — a
+      // hanging promise would pin the caller's busy state and leak the sub.
+      const timer = setTimeout(() => done(() => resolve(false)), 60_000);
+      const done = (fn: () => void) => {
+        clearTimeout(timer);
+        sub?.remove();
+        sub = null;
+        fn();
+      };
       m.requestVpnConsent()
         .then((already) => {
-          if (already) {
-            sub.remove();
-            resolve(true);
-          }
+          if (already) done(() => resolve(true));
         })
-        .catch((e) => {
-          sub.remove();
-          reject(e instanceof Error ? e : new Error(String(e)));
-        });
+        .catch((e) => done(() => reject(e instanceof Error ? e : new Error(String(e)))));
     });
   },
   startVpn: (rulesPath: string, upstreamDns = '8.8.8.8', label = 'Blockingmachine') =>
-    get().startVpn(rulesPath, upstreamDns, label),
-  stopVpn: () => get().stopVpn(),
-  startProxy: (rulesPath: string, port = 8890) => get().startProxy(rulesPath, port),
-  stopProxy: () => get().stopProxy(),
+    isLocalVpnSupported() ? get().startVpn(rulesPath, upstreamDns, label) : Promise.resolve(false),
+  stopVpn: () => (isLocalVpnSupported() ? get().stopVpn() : Promise.resolve(false)),
+  startProxy: (rulesPath: string, port = 8890) =>
+    isLocalVpnSupported() ? get().startProxy(rulesPath, port) : Promise.resolve(false),
+  stopProxy: () => (isLocalVpnSupported() ? get().stopProxy() : Promise.resolve(false)),
   /**
    * Arm hub HTTPS capture on the tunnel — the hub engine then owns :80/:443
    * verdicts. `hubToken` is the flag-127 data-port credential, emitted as the
@@ -116,7 +119,7 @@ export const LocalVpn = {
    */
   startHttpsCapture: (hubHost: string, hubToken: string | null = null, hubPort = 9294) =>
     isLocalVpnSupported() ? get().startHttpsCapture(hubHost, hubToken, hubPort) : Promise.resolve(false),
-  stopHttpsCapture: () => get().stopHttpsCapture(),
+  stopHttpsCapture: () => (isLocalVpnSupported() ? get().stopHttpsCapture() : Promise.resolve(false)),
   /**
    * Replace the per-app bypass set (flag 128) — excluded packages never
    * enter the tunnel. Resolves to the names actually stored (the native side

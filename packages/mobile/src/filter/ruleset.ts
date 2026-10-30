@@ -62,7 +62,7 @@ export function parseFeedRules(body: string): string[] {
       continue;
     }
     const m = /^(?:0\.0\.0\.0|127\.0\.0\.1)\s+([a-z0-9.-]+)$/i.exec(line);
-    if (m && m[1] !== 'localhost' && !m[1].endsWith('.local')) {
+    if (m && m[1] !== 'localhost' && !m[1].toLowerCase().endsWith('.local')) {
       rules.push(`||${m[1].toLowerCase()}^`);
     }
   }
@@ -81,7 +81,7 @@ export function toNativeRules(rules: string[]): string[] {
     const body = (exception ? r.slice(2) : r).replace(/^\|\|/, '');
     if (body.includes('$') || body.includes('/') || body.includes('*')) continue;
     const domain = body.replace(/\^+$/, '').toLowerCase();
-    if (!domain || !domain.includes('.')) continue;
+    if (!domain || domain.includes('^') || !domain.includes('.')) continue;
     out.push(exception ? `!${domain}` : domain);
   }
   return out;

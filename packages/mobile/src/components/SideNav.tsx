@@ -27,6 +27,7 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, usePathname } from 'expo-router';
+import { TABS } from '../routes';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GlassView, isGlassEffectAPIAvailable } from 'expo-glass-effect';
 import { useQuarantineBadge } from '../hooks/useEvents';
@@ -35,15 +36,16 @@ import { haptics } from '../haptics';
 import { colors, glass, layout, spacing } from '../theme';
 
 interface NavTab {
-  href: '/check' | '/telemetry' | '/settings' | '/';
+  href: '/' | '/protect' | '/check' | '/rules' | '/telemetry' | '/settings';
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
 }
 
-const TABS: NavTab[] = [
-  { href: '/', label: 'Dashboard', icon: 'shield-half-outline' },
-  { href: '/check', label: 'Check', icon: 'search-outline' },
-  { href: '/telemetry', label: 'Telemetry', icon: 'pulse-outline' },
+// Destinations come from the routes registry — the five tabs plus the
+// settings gear appended as the last item (settings is a pushed route, but
+// the rail/sidebar keeps it reachable like the gear on compact screens).
+const NAV_ITEMS: NavTab[] = [
+  ...TABS.map(({ href, label, icon }) => ({ href, label, icon })),
   { href: '/settings', label: 'Settings', icon: 'settings-outline' },
 ];
 
@@ -87,7 +89,7 @@ export function SideNav({
           },
         ]}
       >
-        {TABS.map((tab) => {
+        {NAV_ITEMS.map((tab) => {
           const active = isActive(pathname, tab.href);
           return (
             <Pressable
@@ -175,7 +177,7 @@ export function SideNav({
         <Ionicons name="shield-half" size={20} color={colors.accent} />
         <Text style={styles.brandText}>Blockingmachine</Text>
       </View>
-      {TABS.map((tab) => {
+      {NAV_ITEMS.map((tab) => {
         const active = isActive(pathname, tab.href);
         return (
           <Pressable

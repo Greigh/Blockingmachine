@@ -53,11 +53,13 @@ packages/mobile/
   jest.config.js           # jest-expo preset
   index.ts                 # expo-router entry
   app/
-    _layout.tsx            # QueryClientProvider + ServerProvider + ServerEventsProvider + GestureHandlerRootView + Tabs
-    (tabs)/index.tsx       # Dashboard
+    _layout.tsx            # QueryClientProvider + ServerProvider + FilterProvider + ServerEventsProvider + GestureHandlerRootView + Stack
+    (tabs)/index.tsx       # Home — hub protection + this-phone status
+    (tabs)/protect.tsx     # This-phone filtering (VPN/tunnel, ruleset, bypass, capture, local DNS)
     (tabs)/check.tsx       # Domain check (+ swipe-to-delete history)
+    (tabs)/rules.tsx       # Corpus — hub sources, custom rules, standalone feeds
     (tabs)/telemetry.tsx   # Threats + compile history + activity feed
-    (tabs)/settings.tsx    # Server list (swipe-to-delete), pairing, token
+    settings.tsx           # Pushed sheet (header gear): servers, token, feed URLs, pins, docs
     add-server.tsx         # Modal: manual / QR / discovered
   src/
     api/types.ts           # /v1 payload shapes (mirrored; shared-contract pkg is a later refactor)
@@ -105,7 +107,7 @@ Three cooperating layers let the phone filter without the hub:
 
 **Android native module** (`modules/local-vpn/` — an Expo local module, autolinked from `./modules` by default): `LocalVpnModule` bridges; `VpnFilterService` establishes a `tun0` interface with a single `/32` route for a virtual resolver (`10.0.0.53`), parses DNS packets (`DnsPacket`), NXDOMAINs blocked names and relays allowed ones to upstream UDP/53; `PacProxyService` serves `proxy.pac` and answers CONNECT/plain-HTTP as a forward proxy (domain-level HTTPS filtering, no MITM). `Blocklist` is the shared native matcher.
 
-The **Check tab** prefers the hub verdict and falls back to the on-device ruleset on `ApiError.kind === 'unreachable'` (or when no server is configured); the **Dashboard** shows standalone mode when a ruleset exists without a server; **Settings** gained the Standalone filter card (sync/status/clear) and the On-device filter card (VPN consent/start/stop, proxy start/stop, live counters).
+The **Check tab** prefers the hub verdict and falls back to the on-device ruleset on `ApiError.kind === 'unreachable'` (or when no server is configured); the **Dashboard** shows standalone mode when a ruleset exists without a server; **Protect tab** holds the Standalone filter card (sync/status/clear) and the On-device filter card (VPN consent/start/stop, proxy start/stop, live counters).
 
 **Local DNS service** (`src/filter/localDns.ts`, both platforms): a UDP DNS responder modeled on `system-daemon`'s `DnsServer` + `DohForwarder` — `react-native-udp` transport, `dns-packet` wire codec, the JS matcher for verdicts. Blocked A/AAAA queries sinkhole to `0.0.0.0`/`::`, other blocked types answer NXDOMAIN; allowed queries forward to a DoH upstream (default Quad9) with the daemon's timeout/in-flight/body bounds and SERVFAIL-on-failure behavior; the upstream URL is validated by `@blockingmachine/core/urlSafety` (`isSafeLanEndpointUrl`, a dedicated pure subpath export — the core barrel cannot bundle in Metro). Default port is 15353 since iOS owns 5353 via mDNSResponder. The service only lives while the app is foreground — it filters *other* devices that point their DNS at the phone's LAN address, or this phone via a manual Wi-Fi DNS entry; it does not make the phone a system resolver.
 

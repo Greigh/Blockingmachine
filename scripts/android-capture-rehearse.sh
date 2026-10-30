@@ -23,7 +23,7 @@
 #                exists precisely so the OS can demand the tap.
 #   MANUAL       starting capture — VpnFilterService is exported=false +
 #                BIND_VPN_SERVICE, so `am startservice` is refused outright;
-#                only the app itself can arm it (Settings → HTTPS capture →
+#                only the app itself can arm it (Protect → HTTPS capture →
 #                hub IP → Start → consent OK). The script prints the exact
 #                taps and POLLS for the service coming up while the
 #                operator performs them.
@@ -230,7 +230,7 @@ begin "capture — MANUAL leg: arm hub capture in the app (adb cannot drive it)"
 cat <<EOF
 
   ┌─ operator taps ──────────────────────────────────────────────────────┐
-  │  1. In the app: open the Settings tab.                                │
+  │  1. In the app: open the Protect tab.                                 │
   │  2. HTTPS capture card → enter hub address:  $HUB_HOST                │
   │  3. Tap "Start capture".                                              │
   │  4. If the system VPN-consent dialog appears, tap OK — it must be a   │

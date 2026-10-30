@@ -5,7 +5,7 @@
  * all, so nothing it does is DNS-filtered or spliced to the hub.
  *
  * This file is the pure-logic seam: package-name validation and the
- * free-text list parsing the settings card applies. The bridge calls live
+ * free-text list parsing the bypass card applies. The bridge calls live
  * on `LocalVpn` (`setDisallowedApps`/`getDisallowedApps`).
  */
 

@@ -228,13 +228,19 @@ describe('fetchHubCa', () => {
       .match(/../g)!
       .join(':');
     expect(ca.sha256Fingerprint).toBe(expected);
-    expect(fetchMock).toHaveBeenCalledWith('http://192.168.1.20:9294/v1/proxy/ca.pem');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://192.168.1.20:9294/v1/proxy/ca.pem',
+      { signal: expect.anything() },
+    );
   });
 
   it('honours a paired non-default data port', async () => {
     const fetchMock = pemFetch();
     await fetchHubCa('192.168.1.20', fetchMock, 8300);
-    expect(fetchMock).toHaveBeenCalledWith('http://192.168.1.20:8300/v1/proxy/ca.pem');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://192.168.1.20:8300/v1/proxy/ca.pem',
+      { signal: expect.anything() },
+    );
   });
 
   it('translates a non-ok answer into a friendly error', async () => {
@@ -294,15 +300,13 @@ describe('hub token + port persistence (flag 127/129 pairing material)', () => {
     jest.clearAllMocks();
   });
 
-  it('round-trips the data-port token', async () => {
-    store.getItem.mockResolvedValueOnce('s3cret-token');
-    await expect(loadHubToken()).resolves.toBe('s3cret-token');
-    expect(store.getItem).toHaveBeenCalledWith('bm.httpsCapture.hubToken');
-
-    await saveHubToken('another');
-    expect(store.setItem).toHaveBeenCalledWith('bm.httpsCapture.hubToken', 'another');
-    await saveHubToken(null);
-    expect(store.removeItem).toHaveBeenCalledWith('bm.httpsCapture.hubToken');
+  it('round-trips the data-port token per hub host (SecureStore)', async () => {
+    await saveHubToken('192.168.1.20', 's3cret-token');
+    await expect(loadHubToken('192.168.1.20')).resolves.toBe('s3cret-token');
+    // A different hub host must never see this hub's credential.
+    await expect(loadHubToken('192.168.1.99')).resolves.toBeNull();
+    await saveHubToken('192.168.1.20', null);
+    await expect(loadHubToken('192.168.1.20')).resolves.toBeNull();
   });
 
   it('round-trips the data-port override and rejects garbage', async () => {

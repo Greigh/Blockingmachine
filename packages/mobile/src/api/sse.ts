@@ -98,6 +98,8 @@ export interface SubscribeOptions {
   token?: string;
   baseDelayMs?: number;
   maxDelayMs?: number;
+  /** Inactivity abort — reconnects the stream when no bytes arrive within the bound. */
+  idleTimeoutMs?: number;
 }
 
 /**
@@ -118,7 +120,18 @@ export function subscribeEvents(
   let stopped = false;
   let abort: AbortController | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
   let attempt = 0;
+  // Mobile NAT severance delivers no FIN — a severed socket blocks read()
+  // forever while `connected` still reads true. Re-arm an inactivity abort on
+  // every byte (and during the connect fetch) so a dead stream feeds the retry
+  // loop instead of hanging. Hub keepalives (": ping") keep healthy streams
+  // under the bound.
+  const idleMs = opts.idleTimeoutMs ?? 90_000;
+  const armIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => abort?.abort(), idleMs);
+  };
 
   const connect = async () => {
     if (stopped) return;
@@ -130,6 +143,7 @@ export function subscribeEvents(
       if (opts.token && credentialAllowed(baseUrl)) {
         headers.Authorization = `Bearer ${opts.token}`;
       }
+      armIdle();
       const res = await fetchImpl(`${baseUrl}/v1/events`, {
         headers,
         signal: abort.signal,
@@ -149,12 +163,17 @@ export function subscribeEvents(
       const reader = body.getReader();
       const decoder = new TextDecoder();
       for (;;) {
+        armIdle();
         const { done, value } = await reader.read();
         if (done) break;
         if (value) parser(decoder.decode(value, { stream: true }));
       }
       throw new Error('Event stream closed');
     } catch (err) {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
       if (stopped) return;
       const error = err instanceof Error ? err : new Error(String(err));
       handlers.onError?.(error);
@@ -170,6 +189,7 @@ export function subscribeEvents(
     stop: () => {
       stopped = true;
       if (retryTimer) clearTimeout(retryTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       abort?.abort();
     },
   };

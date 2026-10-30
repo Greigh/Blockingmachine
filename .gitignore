@@ -144,3 +144,6 @@ ledger/last-tier-plan.json
 # Audit working papers — session-scoped evidence reports, not product docs.
 # The durable record lives in AUDIT.md, docs/open-flags.md and CHANGELOG.md.
 audit/
+
+# Brainstorming companion mockups — session scratch files.
+.superpowers/

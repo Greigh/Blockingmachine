@@ -14,6 +14,7 @@ import { useServers } from '../../src/state/servers';
 import { Card, ErrorBanner, Grid, Pill, SectionTitle, Skeleton } from '../../src/components/ui';
 import { describeError } from '../../src/errors';
 import { GlassBackdrop } from '../../src/components/GlassBackdrop';
+import { ScreenHeader } from '../../src/components/ScreenHeader';
 import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hooks/useWidthTier';
 import { formatTimestamp, relativeTime } from '../../src/format';
 import { chrome, colors, glass, layout, spacing } from '../../src/theme';
@@ -56,14 +57,18 @@ export default function TelemetryScreen() {
 
   // Leaving the tab acknowledges the quarantine alert — clears the tab badge
   // and stops the "new" pills. The banner's ✕ is the other dismissal path.
-  const focused = usePathname() === '/telemetry';
+  const path = usePathname();
+  const focused = path === '/telemetry';
+  // Only a tab-to-tab navigation acknowledges the alert — a pushed modal
+  // (/settings, /add-server) sits on top of telemetry, it doesn't leave it.
+  const TAB_PATHS = new Set(['/', '/protect', '/check', '/rules', '/telemetry']);
   const wasFocused = useRef(false);
   useEffect(() => {
-    if (wasFocused.current && !focused && alert?.event === 'quarantine_added') {
+    if (wasFocused.current && !focused && TAB_PATHS.has(path) && alert?.event === 'quarantine_added') {
       dismissAlert();
     }
     wasFocused.current = focused;
-  }, [focused, alert, dismissAlert]);
+  }, [focused, path, alert, dismissAlert]);
 
   // Domains carried by the latest quarantine_added broadcast get a "new" pill
   // until the alert is dismissed — the screen the dashboard banner routes to.
@@ -111,10 +116,10 @@ export default function TelemetryScreen() {
         />
       }
     >
-      <Text style={styles.title}>Telemetry</Text>
-      <Text style={styles.subtitle}>
-        Threat quarantine, compile history, and browser-reported counters.
-      </Text>
+      <ScreenHeader
+        title="Telemetry"
+        subtitle="Threat quarantine, compile history, and browser-reported counters."
+      />
 
       {telemetry.error ? (
         <ErrorBanner {...describeError(telemetry.error)} onRetry={() => void telemetry.refetch()} />
@@ -250,8 +255,6 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
     width: '100%',
   },
-  title: { color: colors.text, fontSize: 28, fontWeight: '800' },
-  subtitle: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md, marginTop: 2 },
   threatRow: {
     alignItems: 'center',
     borderTopColor: glass.border,
