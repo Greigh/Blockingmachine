@@ -44,6 +44,22 @@ import type { DeployPaneRenderer, HubPaneProps } from './panes/paneProps';
 export type DeploySelectEffect = 'refresh-daemon-status';
 
 /**
+ * The inner-list group a target sits under in the Distribute section: the LAN
+ * devices it pushes to ('dns'), the apps on them that subscribe ('apps'), and
+ * this machine's own enforcement ('local'). 'network' is deliberately absent —
+ * the LAN-feed row is appended by the view, not the registry, since it owns no
+ * deploy pane.
+ */
+export type DeployGroup = 'dns' | 'apps' | 'local';
+
+/** The groups in inner-list order, with their headings. */
+export const DEPLOY_GROUP_ORDER: readonly { id: DeployGroup; label: string }[] = [
+  { id: 'dns', label: 'DNS & routers' },
+  { id: 'apps', label: 'Apps & devices' },
+  { id: 'local', label: 'This Mac' },
+];
+
+/**
  * The shape a registry entry is *written* in.
  *
  * Deliberately looser than `DeployTargetSpec`: every id here is a plain string literal, because the
@@ -54,6 +70,8 @@ export type DeploySelectEffect = 'refresh-daemon-status';
 interface DeployTargetEntry {
   id: string;
   label: string;
+  /** The inner-list group this target sits under in the Distribute section. */
+  group: DeployGroup;
   summary: string;
   icon: ReactNode;
   /**
@@ -94,7 +112,8 @@ function tabIcon(children: ReactNode): ReactNode {
 const TARGETS = [
   {
     id: 'browser-extension',
-    label: 'Browser',
+    label: 'Browser ext',
+    group: 'apps',
     summary: 'The extension itself: build, download, and load it into the browser.',
     icon: tabIcon(
       <>
@@ -109,6 +128,7 @@ const TARGETS = [
   {
     id: 'adguard-home',
     label: 'AdGuard Home',
+    group: 'dns',
     summary: 'Sync through the AdGuard Home API, Home Assistant, or a webhook.',
     icon: tabIcon(<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />),
     paneKeys: adGuardHomePaneKeys,
@@ -117,6 +137,7 @@ const TARGETS = [
   {
     id: 'pihole',
     label: 'Pi-hole',
+    group: 'dns',
     summary: 'Push the compiled list into a Pi-hole gravity database.',
     icon: tabIcon(
       <>
@@ -134,6 +155,7 @@ const TARGETS = [
   {
     id: 'home-assistant',
     label: 'Home Assistant',
+    group: 'dns',
     summary: 'Add-on and integration: the Hub feed served from Home Assistant itself.',
     icon: tabIcon(
       <>
@@ -146,7 +168,8 @@ const TARGETS = [
   },
   {
     id: 'system-daemon',
-    label: 'Local System DNS',
+    label: 'System daemon',
+    group: 'local',
     summary: 'The bundled DNS daemon, installed as a launchd or systemd service.',
     icon: tabIcon(
       <>
@@ -164,7 +187,8 @@ const TARGETS = [
   },
   {
     id: 'adguard-desktop',
-    label: 'AdGuard App',
+    label: 'AdGuard desktop',
+    group: 'apps',
     summary: 'Subscribe the AdGuard desktop app to the local feed by URL or file path.',
     icon: tabIcon(
       <>
@@ -178,7 +202,8 @@ const TARGETS = [
   },
   {
     id: 'hosts',
-    label: 'System Hosts',
+    label: 'Hosts file',
+    group: 'local',
     summary: 'Apply the sinkhole directly to this machine through /etc/hosts.',
     icon: tabIcon(
       <>
@@ -192,6 +217,7 @@ const TARGETS = [
   {
     id: 'dnsmasq',
     label: 'Routers & DNS',
+    group: 'dns',
     summary: 'dnsmasq, Technitium, pfSense and OPNsense stream the feed over the LAN.',
     icon: tabIcon(
       <>
@@ -205,7 +231,8 @@ const TARGETS = [
   },
   {
     id: 'unbound',
-    label: 'Unbound DNS',
+    label: 'Unbound',
+    group: 'dns',
     summary: 'A local-zone drop-in feed for OPNsense, pfSense, Linux and OpenWrt.',
     icon: tabIcon(
       <>
@@ -220,6 +247,7 @@ const TARGETS = [
   {
     id: 'shadowrocket',
     label: 'Shadowrocket',
+    group: 'apps',
     summary: 'A Surge-style rule-set feed for the iOS client — and Surge itself.',
     icon: tabIcon(
       <>
@@ -235,6 +263,7 @@ const TARGETS = [
   {
     id: 'privoxy',
     label: 'Privoxy',
+    group: 'apps',
     summary: 'A section-based action file for the Privoxy filtering proxy, copied as a local file.',
     icon: tabIcon(
       <>
@@ -249,7 +278,8 @@ const TARGETS = [
   },
   {
     id: 'bind',
-    label: 'BIND DNS',
+    label: 'BIND',
+    group: 'dns',
     summary: 'A Response Policy Zone whose CNAME policy records do the blocking.',
     icon: tabIcon(
       <>
@@ -270,6 +300,8 @@ export interface DeployTargetSpec {
   id: DeployTargetId;
   /** Short text for the tab. */
   label: string;
+  /** The inner-list group this target sits under in the Distribute section. */
+  group: DeployGroup;
   /** One line about what the target is, used as the tab's tooltip. */
   summary: string;
   /** Inline icon, sized to match the strip. */
@@ -287,6 +319,24 @@ export interface DeployTargetSpec {
 
 /** The registry the UI reads, in tab order. */
 export const DEPLOY_TARGETS: readonly DeployTargetSpec[] = TARGETS;
+
+/**
+ * The targets bucketed by inner-list group, in `DEPLOY_GROUP_ORDER`, each
+ * group's targets keeping registry order. DistributeView renders this as its
+ * inner nav, then appends the 'network' row itself — it is not a group here
+ * because it owns no deploy pane.
+ */
+export function deployTargetsByGroup(): readonly {
+  id: DeployGroup;
+  label: string;
+  targets: readonly DeployTargetSpec[];
+}[] {
+  return DEPLOY_GROUP_ORDER.map(({ id, label }) => ({
+    id,
+    label,
+    targets: DEPLOY_TARGETS.filter((target) => target.group === id),
+  }));
+}
 
 /** The tab the Hub opens on — the extension is the install most users are here for. */
 export const DEFAULT_DEPLOY_TARGET_ID: DeployTargetId = 'browser-extension';
