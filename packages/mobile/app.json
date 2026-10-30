@@ -17,7 +17,7 @@
       "icon": "./assets/Blockingmachine.icon",
       "supportsTablet": true,
       "bundleIdentifier": "com.greighstudios.blockingmachine",
-      "buildNumber": "1000203",
+      "buildNumber": "1000204",
       "appleTeamId": "365KR8NF53",
       "infoPlist": {
         "NSBonjourServices": [

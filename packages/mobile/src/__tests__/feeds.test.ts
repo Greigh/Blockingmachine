@@ -121,7 +121,9 @@ describe('refreshLocalRules', () => {
     await saveFeeds([{ name: 'Dead', url: 'https://dead.example/list.txt', enabled: true }]);
     const fetchImpl = jest.fn(async () => bad(503)) as unknown as typeof fetch;
     await expect(refreshLocalRules(fetchImpl)).rejects.toThrow(/Every feed failed/);
-    expect(await readLocalRulesMeta()).toBeNull();
+    // The failure detail still lands — the card reads meta.errors to name the
+    // feed(s) that refused.
+    expect((await readLocalRulesMeta())?.errors?.[0]?.error).toBe('HTTP 503');
   });
 
   it('throws a useful error when nothing is enabled', async () => {

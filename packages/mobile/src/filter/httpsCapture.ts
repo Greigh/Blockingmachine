@@ -11,6 +11,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { Buffer } from 'buffer';
 import { UserError } from '../errors';
 import { sha256 } from './sha256';
@@ -22,7 +23,7 @@ export const HUB_CONTROL_PORT = 9293;
 
 const HUB_HOST_KEY = 'bm.httpsCapture.hubHost';
 const HUB_PORT_KEY = 'bm.httpsCapture.hubPort';
-const HUB_TOKEN_KEY = 'bm.httpsCapture.hubToken';
+const hubTokenKey = (host: string) => `bm.httpsCapture.hubToken.${host}`;
 const CA_FINGERPRINT_KEY = 'bm.httpsCapture.caFingerprint';
 const PAIRED_CA_PEM_KEY = 'bm.httpsCapture.pairedCaPem';
 const PAIRED_CA_SHA256_KEY = 'bm.httpsCapture.pairedCaSha256';
@@ -144,22 +145,23 @@ export async function saveHubPort(port: number | null): Promise<void> {
 /**
  * The flag-127 data-port token — the hub's splice listener requires it from
  * non-loopback peers when configured; it rides the QR as `httpsToken` and
- * goes into the PROXY-v2 auth TLV on every captured connection. Stored
- * plainly like the feed token's mobile copy — AsyncStorage is the device-
- * protected store the rest of the paired credentials use.
+ * goes into the PROXY-v2 auth TLV on every captured connection. It's a
+ * credential, so it lives in SecureStore like the feed token — and keyed by
+ * hub host so a retargeted capture can never send one hub's token to another
+ * machine.
  */
-export async function loadHubToken(): Promise<string | null> {
+export async function loadHubToken(host: string): Promise<string | null> {
   try {
-    return await AsyncStorage.getItem(HUB_TOKEN_KEY);
+    return await SecureStore.getItemAsync(hubTokenKey(host));
   } catch {
     return null;
   }
 }
 
-export async function saveHubToken(token: string | null): Promise<void> {
+export async function saveHubToken(host: string, token: string | null): Promise<void> {
   try {
-    if (token) await AsyncStorage.setItem(HUB_TOKEN_KEY, token);
-    else await AsyncStorage.removeItem(HUB_TOKEN_KEY);
+    if (token) await SecureStore.setItemAsync(hubTokenKey(host), token);
+    else await SecureStore.deleteItemAsync(hubTokenKey(host));
   } catch {
     // Convenience persistence — a lost token just means re-pairing.
   }
@@ -241,12 +243,16 @@ export async function fetchHubCa(
   port: number = HUB_DATA_PORT,
 ): Promise<HubCa> {
   let res: Response;
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), 20_000);
   try {
-    res = await fetchImpl(hubDataUrl(host, '/v1/proxy/ca.pem', port));
+    res = await fetchImpl(hubDataUrl(host, '/v1/proxy/ca.pem', port), { signal: timeout.signal });
   } catch {
     throw new UserError(
       'The hub didn\u2019t answer on its data port — is HTTPS filtering running there, and is this phone on the same network?',
     );
+  } finally {
+    clearTimeout(timer);
   }
   if (!res.ok) {
     throw new UserError(`The hub couldn\u2019t send its CA (error ${res.status}) — is HTTPS filtering running there?`);
@@ -295,7 +301,8 @@ export async function loadPairedCa(): Promise<PairedCa | null> {
     ]);
     if (!certPem || !declared) return null;
     const actual = fingerprintOfPem(certPem);
-    if (!actual || actual !== declared.trim().toUpperCase()) return null;
+    const norm = (v: string) => v.replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+    if (!actual || norm(actual) !== norm(declared)) return null;
     return { certPem, sha256Fingerprint: declared.trim().toUpperCase() };
   } catch {
     return null;

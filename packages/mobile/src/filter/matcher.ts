@@ -33,7 +33,7 @@ function ruleHostPattern(raw: string, exception: boolean): string | null {
   if (body.startsWith('*.')) body = body.slice(2);
   const d = body.toLowerCase().trim();
   // Path rules (contain '/') and bare wildcards can't be domain rules.
-  return d && !d.includes('/') && !d.includes('*') && d.includes('.') ? d : null;
+  return d && !d.includes('/') && !d.includes('*') && !d.includes('^') && d.includes('.') ? d : null;
 }
 
 export function compileMatcher(rules: string[]): CompiledRuleset {

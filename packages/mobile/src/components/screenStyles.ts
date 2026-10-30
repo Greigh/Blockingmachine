@@ -54,6 +54,7 @@ export const styles = StyleSheet.create({
   swipeDeleteText: { color: colors.text, fontSize: 13, fontWeight: '600' },
   serverTitleRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
   serverLabel: { color: colors.text, fontSize: 15, fontWeight: '600' },
+  editErr: { color: colors.danger, fontSize: 12, marginTop: 8 },
   meta: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
   input: {
     backgroundColor: glass.surface,

@@ -89,16 +89,19 @@ export function isDiscoveryAvailable(): boolean {
  * resolve there.
  */
 export function pickConnectHost(host: string, addresses: string[]): string {
-  const ipv4 = addresses.find((a) => /^\d{1,3}(\.\d{1,3}){3}$/.test(a));
+  const ipv4 = addresses.find(
+    (a) => /^\d{1,3}(\.\d{1,3}){3}$/.test(a) && a.split('.').every((o) => Number(o) <= 255),
+  );
   if (ipv4) return ipv4;
   const ipv6 = addresses.find((a) => a.includes(':'));
-  return ipv6 ? `[${ipv6}]` : host;
+  // Zone ids (%en0) aren't valid in a URL authority — drop the suffix.
+  return ipv6 ? `[${ipv6.replace(/%.*$/, '')}]` : host;
 }
 
 function toDiscovered(svc: ZeroconfService): DiscoveredServer | null {
   const addresses = (svc.addresses ?? []).filter((a) => typeof a === 'string' && a.length > 0);
   const host = svc.host ?? addresses[0];
-  if (!host || typeof svc.port !== 'number' || svc.port <= 0) return null;
+  if (!host || typeof svc.port !== 'number' || svc.port <= 0 || svc.port > 65535) return null;
   // TXT arrives either as a record or as [key, value] pairs depending on the
   // resolver path — normalize to a record before reading token/version.
   const rawTxt = svc.txt;

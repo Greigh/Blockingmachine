@@ -109,7 +109,7 @@ export default function CheckScreen() {
           keyboardType="url"
           value={domain}
           onChangeText={setDomain}
-          onSubmitEditing={() => valid && client && runCheck(trimmed)}
+          onSubmitEditing={() => valid && (client || filter.ready) && runCheck(trimmed)}
           returnKeyType="search"
         />
         <ActionButton
@@ -190,7 +190,7 @@ export default function CheckScreen() {
               <Pressable
                 style={styles.historyRow}
                 android_ripple={{ color: 'rgba(255,255,255,0.06)' }}
-                onPress={() => client && runCheck(h.domain)}
+                onPress={() => (client || filter.ready) && runCheck(h.domain)}
                 accessibilityRole="button"
               >
                 <Pill

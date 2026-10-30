@@ -43,6 +43,8 @@ export interface SecretStore {
   deleteItemAsync: (key: string) => Promise<void>;
 }
 
+import { normalizeBaseUrl } from '../api/client';
+
 const SERVERS_KEY = 'bm.servers';
 const ACTIVE_KEY = 'bm.activeServerId';
 const tokenKey = (id: string) => `bm.token.${id}`;
@@ -118,9 +120,14 @@ export function ServerProvider(props: {
       setActiveToken('');
       return;
     }
-    void secrets.getItemAsync(tokenKey(activeServerId)).then((t) => {
-      if (!cancelled) setActiveToken(t ?? '');
-    });
+    void secrets
+      .getItemAsync(tokenKey(activeServerId))
+      .then((t) => {
+        if (!cancelled) setActiveToken(t ?? '');
+      })
+      .catch(() => {
+        if (!cancelled) setActiveToken('');
+      });
     return () => {
       cancelled = true;
     };
@@ -155,9 +162,17 @@ export function ServerProvider(props: {
         id: newId(),
         addedAt: new Date().toISOString(),
       };
+      const displaced = serversRef.current.filter((s) => s.baseUrl === entry.baseUrl);
       const deduped = serversRef.current.filter((s) => s.baseUrl !== entry.baseUrl);
       await persistServers([...deduped, entry]);
-      if (token) await secrets.setItemAsync(tokenKey(entry.id), token);
+      const effective = token ?? null;
+      let carried: string | null = null;
+      for (const d of displaced) {
+        carried ??= await secrets.getItemAsync(tokenKey(d.id)).catch(() => null);
+        await secrets.deleteItemAsync(tokenKey(d.id)).catch(() => {});
+      }
+      const finalToken = effective ?? carried;
+      if (finalToken) await secrets.setItemAsync(tokenKey(entry.id), finalToken);
       if (!activeIdRef.current) await setActive(entry.id);
       return entry;
     },
@@ -178,13 +193,18 @@ export function ServerProvider(props: {
       id: string,
       patch: { label?: string; baseUrl?: string; feedUrls?: SavedServer['feedUrls'] },
     ) => {
+      // The REST client normalizes at construction, but SSE + ruleset sync join
+      // the stored URL raw — a scheme-less edit would silently kill both.
+      const normalized = patch.baseUrl
+        ? { ...patch, baseUrl: normalizeBaseUrl(patch.baseUrl) }
+        : patch;
       const next = serversRef.current.map((s) => {
         if (s.id !== id) return s;
-        const updated = { ...s, ...patch };
+        const updated = { ...s, ...normalized };
         // A new address invalidates the "seen" time recorded for the old one.
-        if (patch.baseUrl && patch.baseUrl !== s.baseUrl) delete updated.lastOkAt;
-        if (patch.feedUrls) {
-          const merged = { ...s.feedUrls, ...patch.feedUrls };
+        if (normalized.baseUrl && normalized.baseUrl !== s.baseUrl) delete updated.lastOkAt;
+        if (normalized.feedUrls) {
+          const merged = { ...s.feedUrls, ...normalized.feedUrls };
           for (const k of Object.keys(merged) as (keyof typeof merged)[]) {
             if (!merged[k]) delete merged[k];
           }

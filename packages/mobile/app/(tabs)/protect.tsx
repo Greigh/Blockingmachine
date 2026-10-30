@@ -246,7 +246,7 @@ function HttpsCaptureCard() {
       setSavedHub(host);
       // Flag 127/129: the paired data-port token + port ride the splice —
       // an unpaired hub on the open fallback just gets null/9294.
-      const [token, port] = await Promise.all([loadHubToken(), loadHubPort()]);
+      const [token, port] = await Promise.all([loadHubToken(host), loadHubPort()]);
       await LocalVpn.startHttpsCapture(host, token, port ?? HUB_DATA_PORT);
     });
 
@@ -444,6 +444,10 @@ function IosTunnelCard({ ready }: { ready: boolean }) {
           <Text style={styles.syncError}>{err.title}</Text>
           {err.detail ? <Text style={styles.syncErrorDetail}>{err.detail}</Text> : null}
         </>
+      ) : status.isError ? (
+        // Status polls every 4s — a silent failure leaves "Enable VPN filter"
+        // looking healthy while the extension can't be read.
+        <Text style={styles.syncError}>Can’t read the tunnel’s state — {describeError(status.error).title}</Text>
       ) : null}
       <View style={styles.buttonRow}>
         <View style={styles.buttonFlex}>
@@ -881,7 +885,7 @@ function StandaloneFilterCard() {
               onPress={() =>
                 Alert.alert('Clear on-device rules?', 'Checks will go back to asking the hub — and won\u2019t work while it\u2019s unreachable.', [
                   { text: 'Cancel', style: 'cancel' },
-                  { text: 'Clear', style: 'destructive', onPress: () => void filter.clear() },
+                  { text: 'Clear', style: 'destructive', onPress: () => void filter.clear().catch((e) => Alert.alert('Clear failed', describeError(e).title)) },
                 ])
               }
             />

@@ -16,3 +16,17 @@ jest.mock('react-native-reanimated', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('react-native-reanimated/mock'),
 );
+
+// httpsCapture stores the hub data-port token in expo-secure-store — an
+// in-memory store keeps those tests hermetic (name must start with "mock"
+// for the jest.mock factory to close over it).
+const mockSecureStore = new Map<string, string>();
+jest.mock('expo-secure-store', () => ({
+  getItemAsync: jest.fn(async (k: string) => mockSecureStore.get(k) ?? null),
+  setItemAsync: jest.fn(async (k: string, v: string) => {
+    mockSecureStore.set(k, v);
+  }),
+  deleteItemAsync: jest.fn(async (k: string) => {
+    mockSecureStore.delete(k);
+  }),
+}));

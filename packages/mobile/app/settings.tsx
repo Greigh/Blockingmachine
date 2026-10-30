@@ -108,8 +108,9 @@ function HubPinsCard() {
   const client = useClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<FriendlyError | null>(null);
+  const { activeServer } = useServers();
   const pins = useQuery({
-    queryKey: ['proxy-pins'],
+    queryKey: ['proxy-pins', activeServer?.baseUrl ?? 'none'],
     queryFn: () => client!.getProxyPins(),
     enabled: !!client,
     refetchInterval: 15_000,
@@ -197,6 +198,7 @@ export default function SettingsScreen() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
   const [editUrl, setEditUrl] = useState('');
+  const [editErr, setEditErr] = useState<string | null>(null);
 
   const status = useQuery({
     queryKey: ['status', activeServer?.baseUrl ?? 'none'],
@@ -272,17 +274,24 @@ export default function SettingsScreen() {
                   autoCorrect={false}
                   keyboardType="url"
                 />
+                {editErr ? <Text style={styles.editErr}>{editErr}</Text> : null}
                 <View style={styles.buttonRow}>
                   <View style={styles.buttonFlex}>
                     <ActionButton
                       label="Save"
                       disabled={!editUrl.trim()}
                       onPress={() => {
-                        void updateServer(s.id, {
+                        updateServer(s.id, {
                           label: editLabel.trim() || s.label,
                           baseUrl: editUrl.trim(),
-                        });
-                        setEditingId(null);
+                        })
+                          .then(() => {
+                            setEditErr(null);
+                            setEditingId(null);
+                          })
+                          .catch((e) =>
+                            setEditErr(describeError(e).detail ?? describeError(e).title),
+                          );
                       }}
                     />
                   </View>
@@ -290,7 +299,10 @@ export default function SettingsScreen() {
                     <ActionButton
                       label="Cancel"
                       tone="ghost"
-                      onPress={() => setEditingId(null)}
+                      onPress={() => {
+                        setEditErr(null);
+                        setEditingId(null);
+                      }}
                     />
                   </View>
                 </View>
@@ -372,8 +384,11 @@ export default function SettingsScreen() {
               <ActionButton
                 label="Save token"
                 onPress={() => {
-                  void setToken(activeServerId, (tokenDraft ?? '').trim());
-                  setTokenDraft(null);
+                  void setToken(activeServerId, (tokenDraft ?? '').trim())
+                    .then(() => setTokenDraft(null))
+                    .catch((e) =>
+                      Alert.alert('Couldn\u2019t save the token', describeError(e).title),
+                    );
                 }}
                 disabled={tokenDraft === null}
               />

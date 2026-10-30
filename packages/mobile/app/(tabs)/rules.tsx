@@ -29,6 +29,7 @@ import { gridColumnsFor, hasEdgeUtilityStrip, useWidthTier } from '../../src/hoo
 import { chrome, colors, layout, spacing } from '../../src/theme';
 import { ScreenHeader } from '../../src/components/ScreenHeader';
 import { useClient } from '../../src/api/useClient';
+import { useServers } from '../../src/state/servers';
 
 /**
  * On-device filter feeds — the standalone path: blocklist URLs the phone
@@ -165,13 +166,14 @@ function HubSourcesCard() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [err, setErr] = useState<FriendlyError | null>(null);
+  const { activeServer } = useServers();
   const sources = useQuery({
-    queryKey: ['hub-sources'],
+    queryKey: ['hub-sources', activeServer?.baseUrl ?? 'none'],
     queryFn: () => client!.getSources(),
     enabled: !!client,
   });
   const custom = useQuery({
-    queryKey: ['hub-custom-rules'],
+    queryKey: ['hub-custom-rules', activeServer?.baseUrl ?? 'none'],
     queryFn: () => client!.getCustomRules(),
     enabled: !!client,
   });

@@ -133,7 +133,7 @@ export default function AddServerScreen() {
     if (pending.https) {
       const hubHost = hostFromUrl(pending.baseUrl);
       if (hubHost && isValidIpLiteral(hubHost)) await saveHubHost(hubHost);
-      await saveHubToken(pending.https.token ?? null);
+      if (hubHost) await saveHubToken(hubHost, pending.https.token ?? null);
       await saveHubPort(pending.https.port ?? null);
       if (pending.https.caPem && pending.https.caSha256) {
         await savePairedCa({ certPem: pending.https.caPem, sha256Fingerprint: pending.https.caSha256 });
@@ -253,7 +253,7 @@ export default function AddServerScreen() {
           ) : null}
           <View style={styles.buttonRow}>
             <View style={styles.buttonFlex}>
-              <ActionButton label="Save" onPress={() => void save()} />
+              <ActionButton label="Save" onPress={() => void save().catch((e) => setError(describeError(e)))} />
             </View>
             <View style={styles.buttonFlex}>
               <ActionButton

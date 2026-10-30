@@ -304,5 +304,11 @@ export function isLocalNetworkHost(urlStr: string): boolean {
  * without the secret, and the server's own 401 surfaces the real problem.
  */
 export function credentialAllowed(urlStr: string): boolean {
-  return urlStr.startsWith('https:') || isLocalNetworkHost(urlStr);
+  let https = false;
+  try {
+    https = new URL(urlStr).protocol === 'https:';
+  } catch {
+    /* unparseable — the local-host check below decides */
+  }
+  return https || isLocalNetworkHost(urlStr);
 }

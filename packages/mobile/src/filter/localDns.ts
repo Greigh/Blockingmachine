@@ -166,6 +166,9 @@ async function handleQuery(msg: Buffer, rinfo: RemoteInfo): Promise<void> {
 }
 
 export async function startLocalDns(opts?: { port?: number; upstream?: string }): Promise<void> {
+  // Overlapping starts would double-bind (reusePort) and double-answer —
+  // the UI busy flag prevents it today; the module guards itself anyway.
+  if (socket) return;
   if (socket) return;
   const url = opts?.upstream ?? LOCAL_DNS_UPSTREAM;
   // Same policy the daemon applies to its upstream: a metadata/link-local
@@ -181,11 +184,19 @@ export async function startLocalDns(opts?: { port?: number; upstream?: string })
   const s = dgram.createSocket({ type: 'udp4', reusePort: true });
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    s.once('error', (e) => {
+    // Persistent handler — a post-bind socket error must not go unheard
+    // (unhandled 'error' throws) or leave `socket` pointing at a dead fd.
+    s.on('error', (e) => {
+      lastError = e instanceof Error ? e.message : String(e);
+      try {
+        s.close();
+      } catch {
+        /* already closed */
+      }
+      if (socket === s) socket = null;
+      emit();
       if (!settled) {
         settled = true;
-        lastError = e instanceof Error ? e.message : String(e);
-        emit();
         reject(e);
       }
     });

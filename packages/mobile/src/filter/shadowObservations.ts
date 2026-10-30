@@ -71,20 +71,30 @@ export async function collectObservations(): Promise<number> {
  * On any failure the unsent remainder stays buffered for the next tick —
  * the appex keeps accruing either way.
  */
+let reportInFlight = false;
+
 export async function reportObservations(
   client: BlockingmachineClient | null,
 ): Promise<{ pending: number; posted: number }> {
-  const pending = await collectObservations();
-  if (!client) return { pending, posted: 0 };
-  let buffer = await readBuffer();
-  let posted = 0;
-  while (buffer.length > 0) {
-    const batch = buffer.slice(0, BATCH_SIZE);
-    const res = await client.postShadowObservations(batch);
-    if (res.success === false) break; // hub refused — retry next tick
-    buffer = buffer.slice(batch.length);
-    posted += batch.length;
-    await writeBuffer(buffer);
+  // 60s tick + AppState + effect re-run can overlap — a second run would
+  // double-POST a batch and clobber records the first appended.
+  if (reportInFlight) return { pending: -1, posted: 0 };
+  reportInFlight = true;
+  try {
+    const pending = await collectObservations();
+    if (!client) return { pending, posted: 0 };
+    let buffer = await readBuffer();
+    let posted = 0;
+    while (buffer.length > 0) {
+      const batch = buffer.slice(0, BATCH_SIZE);
+      const res = await client.postShadowObservations(batch);
+      if (res.success === false) break; // hub refused — retry next tick
+      buffer = buffer.slice(batch.length);
+      posted += batch.length;
+      await writeBuffer(buffer);
+    }
+    return { pending: buffer.length, posted };
+  } finally {
+    reportInFlight = false;
   }
-  return { pending: buffer.length, posted };
 }
