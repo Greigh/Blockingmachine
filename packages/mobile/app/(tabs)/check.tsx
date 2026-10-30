@@ -59,7 +59,7 @@ export default function CheckScreen() {
       }
       const local = await filter.evaluate(d);
       if (local) return { ...local, source: 'on-device ruleset' };
-      throw new UserError('No server connected and no on-device rules — sync rules in Settings first.');
+      throw new UserError('No server connected and no on-device rules — sync rules on the Protect tab first.');
     },
     onSuccess: (res, d) => {
       haptics.success();

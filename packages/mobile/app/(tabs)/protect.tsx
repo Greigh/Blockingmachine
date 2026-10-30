@@ -839,59 +839,59 @@ function StandaloneFilterCard() {
   const [syncError, setSyncError] = useState<FriendlyError | null>(null);
   return (
     <Card>
-        <View style={styles.rowBetween}>
-          <SectionTitle icon="phone-portrait-outline" label="Standalone filter" style={{ marginBottom: 0 }} />
-          {filter.ready ? <Pill label="on-device" tone="ok" /> : null}
+      <View style={styles.rowBetween}>
+        <SectionTitle icon="phone-portrait-outline" label="Standalone filter" style={{ marginBottom: 0 }} />
+        {filter.ready ? <Pill label="on-device" tone="ok" /> : null}
+      </View>
+      <Text style={styles.meta}>
+        {filter.ready && filter.meta
+          ? `${filter.meta.ruleCount.toLocaleString()} rules stored on this device — synced ${relativeTime(filter.meta.syncedAt) ?? 'recently'} from ${filter.meta.sourceUrl}. Domain checks keep working when the hub is unreachable.`
+          : 'Download the hub\u2019s compiled rules once and the app answers domain checks on-device \u2014 even with the hub unreachable or no server configured.'}
+      </Text>
+      {syncError ? (
+        <>
+          <Text style={styles.syncError}>{syncError.title}</Text>
+          {syncError.detail ? <Text style={styles.syncErrorDetail}>{syncError.detail}</Text> : null}
+        </>
+      ) : null}
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonFlex}>
+          <ActionButton
+            label={filter.syncing ? 'Syncing…' : filter.ready ? 'Re-sync rules' : 'Sync rules from hub'}
+            loading={filter.syncing}
+            disabled={!activeServer}
+            onPress={() => {
+              if (!activeServer) return;
+              setSyncError(null);
+              filter
+                .sync(activeServer.baseUrl, activeToken)
+                .then(() => haptics.success())
+                .catch((e) => {
+                  haptics.error();
+                  setSyncError(describeError(e));
+                });
+            }}
+          />
         </View>
-        <Text style={styles.meta}>
-          {filter.ready && filter.meta
-            ? `${filter.meta.ruleCount.toLocaleString()} rules stored on this device — synced ${relativeTime(filter.meta.syncedAt) ?? 'recently'} from ${filter.meta.sourceUrl}. Domain checks keep working when the hub is unreachable.`
-            : 'Download the hub\u2019s compiled rules once and the app answers domain checks on-device \u2014 even with the hub unreachable or no server configured.'}
-        </Text>
-        {syncError ? (
-          <>
-            <Text style={styles.syncError}>{syncError.title}</Text>
-            {syncError.detail ? <Text style={styles.syncErrorDetail}>{syncError.detail}</Text> : null}
-          </>
-        ) : null}
-        <View style={styles.buttonRow}>
+        {filter.ready ? (
           <View style={styles.buttonFlex}>
             <ActionButton
-              label={filter.syncing ? 'Syncing…' : filter.ready ? 'Re-sync rules' : 'Sync rules from hub'}
-              loading={filter.syncing}
-              disabled={!activeServer}
-              onPress={() => {
-                if (!activeServer) return;
-                setSyncError(null);
-                filter
-                  .sync(activeServer.baseUrl, activeToken)
-                  .then(() => haptics.success())
-                  .catch((e) => {
-                    haptics.error();
-                    setSyncError(describeError(e));
-                  });
-              }}
+              label="Clear rules"
+              tone="ghost"
+              onPress={() =>
+                Alert.alert('Clear on-device rules?', 'Checks will go back to asking the hub — and won\u2019t work while it\u2019s unreachable.', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Clear', style: 'destructive', onPress: () => void filter.clear() },
+                ])
+              }
             />
           </View>
-          {filter.ready ? (
-            <View style={styles.buttonFlex}>
-              <ActionButton
-                label="Clear rules"
-                tone="ghost"
-                onPress={() =>
-                  Alert.alert('Clear on-device rules?', 'Checks will go back to asking the hub — and won\u2019t work while it\u2019s unreachable.', [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Clear', style: 'destructive', onPress: () => void filter.clear() },
-                  ])
-                }
-              />
-            </View>
-          ) : null}
-        </View>
-        {!activeServer && !filter.ready ? (
-          <Text style={styles.meta}>Add a server above first — the rules feed comes from a hub.</Text>
         ) : null}
-      </Card>
+      </View>
+      {!activeServer && !filter.ready ? (
+        <Text style={styles.meta}>Add a hub server in Settings first — the rules feed comes from a hub.</Text>
+      ) : null}
+    </Card>
   );
 }
 
@@ -906,6 +906,8 @@ export default function ProtectScreen() {
       <GlassBackdrop />
       <ScrollView
         style={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
         contentContainerStyle={[
           styles.content,
           {
